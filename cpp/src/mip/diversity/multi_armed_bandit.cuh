@@ -39,6 +39,22 @@ struct mab_ls_config_t {
     ls_config.ls_method                           = local_search;
     mab_ls_config_t<i_t, f_t>::last_ls_mab_option = config_id;
   }
+
+  // static void get_local_search_and_lm_from_config(i_t config_id, ls_config_t<i_t, f_t>&
+  // ls_config)
+  // {
+  //   ls_method_t local_search = ls_method_t(config_id % n_of_ls);
+  //   i_t lm_id                = config_id / n_of_ls;
+  //   if (local_search == ls_method_t::FJ_LINE_SEGMENT) {
+  //     ls_config.ls_method                     = ls_method_t::FJ_LINE_SEGMENT;
+  //     ls_config.n_local_mins_for_line_segment = ls_line_segment_local_mins[lm_id];
+  //   } else {
+  //     ls_config.ls_method    = ls_method_t::FJ_ANNEALING;
+  //     ls_config.n_local_mins = ls_local_mins[lm_id];
+  //   }
+  //   mab_ls_config_t<i_t, f_t>::last_lm_config     = lm_id;
+  //   mab_ls_config_t<i_t, f_t>::last_ls_mab_option = config_id;
+  // }
   static i_t last_lm_config;
   static i_t last_ls_mab_option;
 };
