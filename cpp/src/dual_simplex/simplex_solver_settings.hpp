@@ -20,11 +20,11 @@
 #include <dual_simplex/logger.hpp>
 #include <dual_simplex/types.hpp>
 
+#include <omp.h>
 #include <algorithm>
 #include <atomic>
 #include <functional>
 #include <limits>
-#include <thread>
 
 namespace cuopt::linear_programming::dual_simplex {
 
@@ -59,9 +59,9 @@ struct simplex_solver_settings_t {
       refactor_frequency(100),
       iteration_log_frequency(1000),
       first_iteration_log(2),
-      num_threads(std::thread::hardware_concurrency() > 8
-                    ? (std::thread::hardware_concurrency() / 8)
-                    : std::thread::hardware_concurrency()),
+      num_threads(omp_get_max_threads() - 1),
+      num_bfs_threads(std::min(num_threads / 4, 1)),
+      num_diving_threads(std::min(num_threads - num_bfs_threads, 1)),
       random_seed(0),
       inside_mip(0),
       solution_callback(nullptr),
@@ -97,15 +97,17 @@ struct simplex_solver_settings_t {
   bool use_bound_flip_ratio;       // true if using the bound flip ratio test
   bool scale_columns;              // true to scale the columns of A
   bool relaxation;                 // true to only solve the LP relaxation of a MIP
-  bool
-    use_left_looking_lu;  // true to use left looking LU factorization, false to use right looking
-  bool eliminate_singletons;    // true to eliminate singletons from the basis
-  bool print_presolve_stats;    // true to print presolve stats
-  i_t refactor_frequency;       // number of basis updates before refactorization
-  i_t iteration_log_frequency;  // number of iterations between log updates
-  i_t first_iteration_log;      // number of iterations to log at beginning of solve
-  i_t num_threads;              // number of threads to use
-  i_t random_seed;              // random seed
+  bool use_left_looking_lu;        // true to use left looking LU factorization,
+                                   // false to use right looking
+  bool eliminate_singletons;       // true to eliminate singletons from the basis
+  bool print_presolve_stats;       // true to print presolve stats
+  i_t refactor_frequency;          // number of basis updates before refactorization
+  i_t iteration_log_frequency;     // number of iterations between log updates
+  i_t first_iteration_log;         // number of iterations to log at beginning of solve
+  i_t num_threads;                 // number of threads to use
+  i_t num_bfs_threads;             // number of threads dedicated to the best-first search
+  i_t num_diving_threads;          // number of threads dedicated to diving
+  i_t random_seed;                 // random seed
   i_t inside_mip;  // 0 if outside MIP, 1 if inside MIP at root node, 2 if inside MIP at leaf node
   std::function<void(std::vector<f_t>&, f_t)> solution_callback;
   std::function<void()> heuristic_preemption_callback;
