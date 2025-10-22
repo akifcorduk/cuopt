@@ -414,7 +414,7 @@ void branch_and_bound_t<i_t, f_t>::repair_heuristic_solutions()
           std::string user_gap = user_mip_gap<f_t>(obj, lower);
 
           settings_.log.printf(
-            "H                        %+13.6e  %+10.6e                      %s %9.2f\n",
+            "H                           %+13.6e    %+10.6e                        %s %9.2f\n",
             obj,
             lower,
             user_gap.c_str(),
@@ -557,22 +557,16 @@ template <typename i_t, typename f_t>
 node_status_t branch_and_bound_t<i_t, f_t>::solve_node(search_tree_t<i_t, f_t>& search_tree,
                                                        mip_node_t<i_t, f_t>* node_ptr,
                                                        lp_problem_t<i_t, f_t>& leaf_problem,
-                                                       const csc_matrix_t<i_t, f_t>& Arow,
-                                                       f_t upper_bound,
-                                                       logger_t& log,
-                                                       char thread_type)
+                                                       node_presolve_t<i_t, f_t>& presolve,
+                                                       char thread_type,
+                                                       logger_t& log)
 {
-  f_t abs_fathom_tol = settings_.absolute_mip_gap_tol / 10;
+  const f_t abs_fathom_tol = settings_.absolute_mip_gap_tol / 10;
+  const f_t upper_bound    = get_upper_bound();
 
   lp_solution_t<i_t, f_t> leaf_solution(leaf_problem.num_rows, leaf_problem.num_cols);
   std::vector<variable_status_t>& leaf_vstatus = node_ptr->vstatus;
   assert(leaf_vstatus.size() == leaf_problem.num_cols);
-
-  std::vector<bool> bounds_changed(leaf_problem.num_cols, false);
-  // Technically, we can get the already strengthened bounds from the node/parent instead of
-  // getting it from the original problem and re-strengthening. But this requires storing
-  // two vectors at each node and potentially cause memory issues
-  node_ptr->get_variable_bounds(leaf_problem.lower, leaf_problem.upper, bounds_changed);
 
   simplex_solver_settings_t lp_settings = settings_;
   lp_settings.set_log(false);
@@ -580,10 +574,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node(search_tree_t<i_t, f_t>& 
   lp_settings.inside_mip = 2;
   lp_settings.time_limit = settings_.time_limit - toc(stats_.start_time);
 
-  // in B&B we only have equality constraints, leave it empty for default
-  std::vector<char> row_sense;
-  bool feasible =
-    bound_strengthening(row_sense, lp_settings, leaf_problem, Arow, var_types_, bounds_changed);
+  bool feasible = presolve.bound_strengthening(leaf_problem.lower, leaf_problem.upper, lp_settings);
 
   dual::status_t lp_status = dual::status_t::DUAL_UNBOUNDED;
 
@@ -617,7 +608,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node(search_tree_t<i_t, f_t>& 
     // Node was infeasible. Do not branch
     node_ptr->lower_bound = inf;
     search_tree.graphviz_node(log, node_ptr, "infeasible", 0.0);
-    search_tree.update_tree(node_ptr, node_status_t::INFEASIBLE);
+    search_tree.update(node_ptr, node_status_t::INFEASIBLE);
     return node_status_t::INFEASIBLE;
 
   } else if (lp_status == dual::status_t::CUTOFF) {
@@ -625,7 +616,7 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node(search_tree_t<i_t, f_t>& 
     node_ptr->lower_bound = upper_bound;
     f_t leaf_objective    = compute_objective(leaf_problem, leaf_solution.x);
     search_tree.graphviz_node(log, node_ptr, "cut off", leaf_objective);
-    search_tree.update_tree(node_ptr, node_status_t::FATHOMED);
+    search_tree.update(node_ptr, node_status_t::FATHOMED);
     return node_status_t::FATHOMED;
 
   } else if (lp_status == dual::status_t::OPTIMAL) {
@@ -649,28 +640,30 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node(search_tree_t<i_t, f_t>& 
       // Found a integer feasible solution
       add_feasible_solution(leaf_objective, leaf_solution.x, node_ptr->depth, thread_type);
       search_tree.graphviz_node(log, node_ptr, "integer feasible", leaf_objective);
-      search_tree.update_tree(node_ptr, node_status_t::INTEGER_FEASIBLE);
+      search_tree.update(node_ptr, node_status_t::INTEGER_FEASIBLE);
       return node_status_t::INTEGER_FEASIBLE;
 
     } else if (leaf_objective <= upper_bound + abs_fathom_tol) {
+      logger_t pc_log = log;
+      pc_log.log      = false;
+
       // Choose fractional variable to branch on
-      const i_t branch_var =
-        pc_.variable_selection(leaf_fractional, leaf_solution.x, lp_settings.log);
+      const i_t branch_var = pc_.variable_selection(leaf_fractional, leaf_solution.x, pc_log);
 
       assert(leaf_vstatus.size() == leaf_problem.num_cols);
       search_tree.branch(
-        node_ptr, branch_var, leaf_solution.x[branch_var], leaf_vstatus, original_lp_, log);
+        node_ptr, branch_var, leaf_solution.x[branch_var], leaf_vstatus, leaf_problem, log);
       node_ptr->status = node_status_t::HAS_CHILDREN;
       return node_status_t::HAS_CHILDREN;
 
     } else {
       search_tree.graphviz_node(log, node_ptr, "fathomed", leaf_objective);
-      search_tree.update_tree(node_ptr, node_status_t::FATHOMED);
+      search_tree.update(node_ptr, node_status_t::FATHOMED);
       return node_status_t::FATHOMED;
     }
   } else if (lp_status == dual::status_t::TIME_LIMIT) {
     search_tree.graphviz_node(log, node_ptr, "timeout", 0.0);
-    search_tree.update_tree(node_ptr, node_status_t::TIME_LIMIT);
+    search_tree.update(node_ptr, node_status_t::TIME_LIMIT);
     return node_status_t::TIME_LIMIT;
 
   } else {
@@ -686,8 +679,31 @@ node_status_t branch_and_bound_t<i_t, f_t>::solve_node(search_tree_t<i_t, f_t>& 
     }
 
     search_tree.graphviz_node(log, node_ptr, "numerical", 0.0);
-    search_tree.update_tree(node_ptr, node_status_t::NUMERICAL);
+    search_tree.update(node_ptr, node_status_t::NUMERICAL);
     return node_status_t::NUMERICAL;
+  }
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::set_variable_bounds(mip_node_t<i_t, f_t>* node,
+                                                       std::vector<f_t>& lower,
+                                                       std::vector<f_t>& upper,
+                                                       std::vector<bool>& bounds_changed,
+                                                       const std::vector<f_t>& root_lower,
+                                                       const std::vector<f_t>& root_upper,
+                                                       bool recompute)
+{
+  // Reset the bound_changed markers
+  std::fill(bounds_changed.begin(), bounds_changed.end(), false);
+
+  // Recompute the bounds
+  if (recompute) {
+    lower = root_lower;
+    upper = root_upper;
+    node->get_variable_bounds(lower, upper, bounds_changed);
+
+  } else {
+    node->update_variable_bound(lower, upper, bounds_changed);
   }
 }
 
@@ -715,7 +731,7 @@ void branch_and_bound_t<i_t, f_t>::exploration_ramp_up(search_tree_t<i_t, f_t>* 
 
   if (lower_bound > upper_bound || rel_gap < settings_.relative_mip_gap_tol) {
     search_tree->graphviz_node(settings_.log, node, "cutoff", node->lower_bound);
-    search_tree->update_tree(node, node_status_t::FATHOMED);
+    search_tree->update(node, node_status_t::FATHOMED);
     return;
   }
 
@@ -752,12 +768,20 @@ void branch_and_bound_t<i_t, f_t>::exploration_ramp_up(search_tree_t<i_t, f_t>* 
     return;
   }
 
+  std::vector<char> row_sense;
+  node_presolve_t<i_t, f_t> presolve(leaf_problem, row_sense, Arow, var_types_);
+
   // Set the correct bounds for the leaf problem
-  leaf_problem.lower = original_lp_.lower;
-  leaf_problem.upper = original_lp_.upper;
+  set_variable_bounds(node,
+                      leaf_problem.lower,
+                      leaf_problem.upper,
+                      presolve.bounds_changed,
+                      original_lp_.lower,
+                      original_lp_.upper,
+                      true);
 
   node_status_t node_status =
-    solve_node(*search_tree, node, leaf_problem, Arow, upper_bound, settings_.log, 'B');
+    solve_node(*search_tree, node, leaf_problem, presolve, 'B', settings_.log);
 
   if (node_status == node_status_t::TIME_LIMIT) {
     status_ = mip_exploration_status_t::TIME_LIMIT;
@@ -790,8 +814,9 @@ void branch_and_bound_t<i_t, f_t>::explore_subtree(i_t task_id,
                                                    search_tree_t<i_t, f_t>& search_tree,
                                                    mip_node_t<i_t, f_t>* start_node,
                                                    lp_problem_t<i_t, f_t>& leaf_problem,
-                                                   const csc_matrix_t<i_t, f_t>& Arow)
+                                                   node_presolve_t<i_t, f_t>& presolve)
 {
+  bool recompute = true;
   std::deque<mip_node_t<i_t, f_t>*> stack;
   stack.push_front(start_node);
 
@@ -820,7 +845,8 @@ void branch_and_bound_t<i_t, f_t>::explore_subtree(i_t task_id,
 
     if (lower_bound > upper_bound || rel_gap < settings_.relative_mip_gap_tol) {
       search_tree.graphviz_node(settings_.log, node_ptr, "cutoff", node_ptr->lower_bound);
-      search_tree.update_tree(node_ptr, node_status_t::FATHOMED);
+      search_tree.update(node_ptr, node_status_t::FATHOMED);
+      recompute = true;
       continue;
     }
 
@@ -859,11 +885,17 @@ void branch_and_bound_t<i_t, f_t>::explore_subtree(i_t task_id,
     }
 
     // Set the correct bounds for the leaf problem
-    leaf_problem.lower = original_lp_.lower;
-    leaf_problem.upper = original_lp_.upper;
+    set_variable_bounds(node_ptr,
+                        leaf_problem.lower,
+                        leaf_problem.upper,
+                        presolve.bounds_changed,
+                        original_lp_.lower,
+                        original_lp_.upper,
+                        recompute);
 
     node_status_t node_status =
-      solve_node(search_tree, node_ptr, leaf_problem, Arow, upper_bound, settings_.log, 'B');
+      solve_node(search_tree, node_ptr, leaf_problem, presolve, 'B', settings_.log);
+    recompute = node_status != node_status_t::HAS_CHILDREN;
 
     if (node_status == node_status_t::TIME_LIMIT) {
       status_ = mip_exploration_status_t::TIME_LIMIT;
@@ -908,7 +940,7 @@ template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::best_first_thread(i_t id,
                                                      search_tree_t<i_t, f_t>& search_tree,
                                                      lp_problem_t<i_t, f_t>& leaf_problem,
-                                                     const csc_matrix_t<i_t, f_t>& Arow)
+                                                     node_presolve_t<i_t, f_t>& presolve)
 {
   f_t lower_bound = -inf;
   f_t upper_bound = inf;
@@ -934,13 +966,13 @@ void branch_and_bound_t<i_t, f_t>::best_first_thread(i_t id,
         // This node was put on the heap earlier but its lower bound is now greater than the
         // current upper bound
         search_tree.graphviz_node(settings_.log, node_ptr, "cutoff", node_ptr->lower_bound);
-        search_tree.update_tree(node_ptr, node_status_t::FATHOMED);
+        search_tree.update(node_ptr, node_status_t::FATHOMED);
         active_subtrees_--;
         continue;
       }
 
       // Best-first search with plunging
-      explore_subtree(id, search_tree, node_ptr, leaf_problem, Arow);
+      explore_subtree(id, search_tree, node_ptr, leaf_problem, presolve);
       active_subtrees_--;
     }
 
@@ -963,7 +995,7 @@ void branch_and_bound_t<i_t, f_t>::best_first_thread(i_t id,
 
 template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::diving_thread(lp_problem_t<i_t, f_t>& leaf_problem,
-                                                 const csc_matrix_t<i_t, f_t>& Arow)
+                                                 node_presolve_t<i_t, f_t>& presolve)
 {
   logger_t log;
   log.log = false;
@@ -979,6 +1011,7 @@ void branch_and_bound_t<i_t, f_t>::diving_thread(lp_problem_t<i_t, f_t>& leaf_pr
     if (start_node.has_value()) {
       if (get_upper_bound() < start_node->node.lower_bound) { continue; }
 
+      bool recompute = true;
       search_tree_t<i_t, f_t> subtree(std::move(start_node->node));
       std::deque<mip_node_t<i_t, f_t>*> stack;
       stack.push_front(&subtree.root);
@@ -990,17 +1023,22 @@ void branch_and_bound_t<i_t, f_t>::diving_thread(lp_problem_t<i_t, f_t>& leaf_pr
         f_t rel_gap     = user_relative_gap(original_lp_, upper_bound, node_ptr->lower_bound);
 
         if (node_ptr->lower_bound > upper_bound || rel_gap < settings_.relative_mip_gap_tol) {
+          recompute = true;
           continue;
         }
 
         if (toc(stats_.start_time) > settings_.time_limit) { return; }
 
         // Set the correct bounds for the leaf problem
-        leaf_problem.lower = start_node->lp_lower;
-        leaf_problem.upper = start_node->lp_upper;
+        set_variable_bounds(node_ptr,
+                            leaf_problem.lower,
+                            leaf_problem.upper,
+                            presolve.bounds_changed,
+                            start_node->lower,
+                            start_node->upper,
+                            recompute);
 
-        node_status_t node_status =
-          solve_node(subtree, node_ptr, leaf_problem, Arow, upper_bound, log, 'D');
+        node_status_t node_status = solve_node(subtree, node_ptr, leaf_problem, presolve, 'D', log);
 
         if (node_status == node_status_t::TIME_LIMIT) {
           return;
@@ -1066,6 +1104,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     original_lp_, stats_.start_time, lp_settings, root_relax_soln_, root_vstatus_, edge_norms_);
   stats_.total_lp_iters      = root_relax_soln_.iterations;
   stats_.total_lp_solve_time = toc(stats_.start_time);
+
   if (root_status == lp_status_t::INFEASIBLE) {
     settings_.log.printf("MIP Infeasible\n");
     // FIXME: rarely dual simplex detects infeasible whereas it is feasible.
@@ -1193,6 +1232,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   {
     // Make a copy of the original LP. We will modify its bounds at each leaf
     lp_problem_t leaf_problem = original_lp_;
+    std::vector<char> row_sense;
+    node_presolve_t<i_t, f_t> presolve(leaf_problem, row_sense, Arow, var_types_);
 
 #pragma omp master
     {
@@ -1215,12 +1256,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
           (active_subtrees_ > 0 || get_heap_size() > 0)) {
         for (i_t i = 0; i < settings_.num_bfs_threads; i++) {
 #pragma omp task
-          best_first_thread(i, search_tree, leaf_problem, Arow);
+          best_first_thread(i, search_tree, leaf_problem, presolve);
         }
 
         for (i_t i = 0; i < settings_.num_diving_threads; i++) {
 #pragma omp task
-          diving_thread(leaf_problem, Arow);
+          diving_thread(leaf_problem, presolve);
         }
       }
     }

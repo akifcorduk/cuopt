@@ -87,24 +87,33 @@ class mip_node_t {
                            std::vector<f_t>& upper,
                            std::vector<bool>& bounds_changed) const
   {
-    std::fill(bounds_changed.begin(), bounds_changed.end(), false);
-    // Apply the bounds at the current node
+    update_variable_bound(lower, upper, bounds_changed);
+
+    mip_node_t<i_t, f_t>* parent_ptr = parent;
+    while (parent_ptr != nullptr && parent_ptr->node_id != 0) {
+      parent_ptr->update_variable_bound(lower, upper, bounds_changed);
+      parent_ptr = parent_ptr->parent;
+    }
+  }
+
+  // Here we assume that we are traversing from the deepest node to the
+  // root of the tree
+  void update_variable_bound(std::vector<f_t>& lower,
+                             std::vector<f_t>& upper,
+                             std::vector<bool>& bounds_changed) const
+  {
+    assert(branch_var >= 0);
     assert(lower.size() > branch_var);
     assert(upper.size() > branch_var);
-    lower[branch_var]                = branch_var_lower;
-    upper[branch_var]                = branch_var_upper;
-    bounds_changed[branch_var]       = true;
-    mip_node_t<i_t, f_t>* parent_ptr = parent;
-    while (parent_ptr != nullptr) {
-      if (parent_ptr->node_id == 0) { break; }
-      assert(parent_ptr->branch_var >= 0);
-      assert(lower.size() > parent_ptr->branch_var);
-      assert(upper.size() > parent_ptr->branch_var);
-      lower[parent_ptr->branch_var]          = parent_ptr->branch_var_lower;
-      upper[parent_ptr->branch_var]          = parent_ptr->branch_var_upper;
-      bounds_changed[parent_ptr->branch_var] = true;
-      parent_ptr                             = parent_ptr->parent;
-    }
+
+    // If the bounds have already been updated on another node,
+    // skip this node as it contains a less tight bounds.
+    if (bounds_changed[branch_var]) { return; }
+
+    // Apply the bounds at the current node
+    lower[branch_var]          = branch_var_lower;
+    upper[branch_var]          = branch_var_upper;
+    bounds_changed[branch_var] = true;
   }
 
   mip_node_t* get_down_child() const { return children[0].get(); }
@@ -203,9 +212,8 @@ class mip_node_t {
   }
 
   // This method creates a copy of the current node
-  // with its parent set to `nullptr`, `node_id = 0`
-  // and `depth = 0` such that it is the root
-  // of a separated tree.
+  // with its parent set to `nullptr` and `depth = 0`.
+  // This detaches the node from the tree.
   mip_node_t<i_t, f_t> detach_copy() const
   {
     mip_node_t<i_t, f_t> copy(lower_bound, vstatus);
@@ -270,7 +278,7 @@ class search_tree_t {
 
   search_tree_t(mip_node_t<i_t, f_t>&& node) : root(std::move(node)), num_nodes(0) {}
 
-  void update_tree(mip_node_t<i_t, f_t>* node_ptr, node_status_t status)
+  void update(mip_node_t<i_t, f_t>* node_ptr, node_status_t status)
   {
     mutex.lock();
     std::vector<mip_node_t<i_t, f_t>*> stack;
