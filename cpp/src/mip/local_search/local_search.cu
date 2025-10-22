@@ -645,12 +645,12 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   solution_copy.problem_ptr = old_problem_ptr;
   solution_copy.resize_to_problem();
   population_ptr->add_solution(std::move(solution_copy));
-  constexpr i_t iterations_for_stagnation = 3;
-  if (population_ptr->current_size() > 1 &&
-      i - last_unimproved_iteration > iterations_for_stagnation) {
-    solution_t<i_t, f_t> best_feasible_copy(population_ptr->best_feasible());
-    population_ptr->run_all_recombiners(best_feasible_copy);
-  }
+  // constexpr i_t iterations_for_stagnation = 3;
+  // if (population_ptr->current_size() > 1 &&
+  //     i - last_unimproved_iteration > iterations_for_stagnation) {
+  //   solution_t<i_t, f_t> best_feasible_copy(population_ptr->best_feasible());
+  //   population_ptr->run_all_recombiners(best_feasible_copy);
+  // }
   auto new_sol_vector = population_ptr->get_external_solutions();
   population_ptr->add_solutions_from_vec(std::move(new_sol_vector));
   if (!cutting_plane_added_for_active_run) {
