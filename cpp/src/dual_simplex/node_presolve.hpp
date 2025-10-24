@@ -22,13 +22,12 @@
 namespace cuopt::linear_programming::dual_simplex {
 
 template <typename i_t, typename f_t>
-class node_presolve_t {
+class node_presolver_t {
  public:
   // For pure LP bounds strengthening, var_types should be defaulted (i.e. left empty)
-  node_presolve_t(const lp_problem_t<i_t, f_t>& problem,
-                  const std::vector<char>& row_sense,
-                  const csc_matrix_t<i_t, f_t>& Arow,
-                  const std::vector<variable_type_t>& var_types);
+  node_presolver_t(const lp_problem_t<i_t, f_t>& problem,
+                   const std::vector<char>& row_sense,
+                   const std::vector<variable_type_t>& var_types);
 
   bool bound_strengthening(std::vector<f_t>& lower_bounds,
                            std::vector<f_t>& upper_bounds,
@@ -37,9 +36,16 @@ class node_presolve_t {
   std::vector<bool> bounds_changed;
 
  private:
-  const lp_problem_t<i_t, f_t>& problem;
+  const csc_matrix_t<i_t, f_t>& A;
   const csc_matrix_t<i_t, f_t>& Arow;
   const std::vector<variable_type_t>& var_types;
+
+  std::vector<bool> constraint_changed;
+  std::vector<bool> variable_changed;
+  std::vector<bool> constraint_changed_next;
+
+  std::vector<f_t> lower;
+  std::vector<f_t> upper;
 
   std::vector<f_t> delta_min_activity;
   std::vector<f_t> delta_max_activity;

@@ -87,20 +87,20 @@ class mip_node_t {
                            std::vector<f_t>& upper,
                            std::vector<bool>& bounds_changed) const
   {
-    update_variable_bound(lower, upper, bounds_changed);
+    update_branched_variable_bounds(lower, upper, bounds_changed);
 
     mip_node_t<i_t, f_t>* parent_ptr = parent;
     while (parent_ptr != nullptr && parent_ptr->node_id != 0) {
-      parent_ptr->update_variable_bound(lower, upper, bounds_changed);
+      parent_ptr->update_branched_variable_bounds(lower, upper, bounds_changed);
       parent_ptr = parent_ptr->parent;
     }
   }
 
   // Here we assume that we are traversing from the deepest node to the
   // root of the tree
-  void update_variable_bound(std::vector<f_t>& lower,
-                             std::vector<f_t>& upper,
-                             std::vector<bool>& bounds_changed) const
+  void update_branched_variable_bounds(std::vector<f_t>& lower,
+                                       std::vector<f_t>& upper,
+                                       std::vector<bool>& bounds_changed) const
   {
     assert(branch_var >= 0);
     assert(lower.size() > branch_var);

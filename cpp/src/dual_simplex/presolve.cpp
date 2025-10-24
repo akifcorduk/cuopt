@@ -576,15 +576,7 @@ void convert_user_problem(const user_problem_t<i_t, f_t>& user_problem,
     convert_greater_to_less(user_problem, row_sense, problem, greater_rows, less_rows);
   }
 
-  // At this point the problem representation is in the form: A*x {<=, =} b
-  // This is the time to run bound strengthening
-  constexpr bool run_bound_strengthening = false;
-  if constexpr (run_bound_strengthening) {
-    settings.log.printf("Running bound strengthening\n");
-    csc_matrix_t<i_t, f_t> Arow(1, 1, 1);
-    problem.A.transpose(Arow);
-    bound_strengthening(row_sense, settings, problem, Arow);
-  }
+  // bounds strengthening was moved to node_presolve.hpp
 
   settings.log.debug(
     "equality rows %d less rows %d columns %d\n", equal_rows, less_rows, problem.num_cols);

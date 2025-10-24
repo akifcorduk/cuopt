@@ -17,9 +17,9 @@
 
 #pragma once
 
+#include <dual_simplex/diving_queue.hpp>
 #include <dual_simplex/initial_basis.hpp>
 #include <dual_simplex/mip_node.hpp>
-#include <dual_simplex/node_presolve.hpp>
 #include <dual_simplex/phase2.hpp>
 #include <dual_simplex/pseudo_costs.hpp>
 #include <dual_simplex/simplex_solver_settings.hpp>
@@ -52,69 +52,20 @@ enum class mip_exploration_status_t {
   COMPLETED  = 5,  // The solver finished exploring the tree
 };
 
+// Indicate the search and variable selection algorithms used by the thread (See [1]).
+//
+// [1] T. Achterberg, “Constraint Integer Programming,” PhD, Technischen Universität Berlin,
+// Berlin, 2007. doi: 10.14279/depositonce-1634.
+enum class thread_type_t {
+  EXPLORATION = 0,  // Best-First + Plunging. Pseudocost branching + Martin's criteria.
+  DIVING      = 1,
+};
+
+template <typename i_t, typename f_t>
+class node_presolver_t;
+
 template <typename i_t, typename f_t>
 void upper_bound_callback(f_t upper_bound);
-
-template <typename i_t, typename f_t>
-struct diving_root_t {
-  mip_node_t<i_t, f_t> node;
-  std::vector<f_t> lower;
-  std::vector<f_t> upper;
-
-  diving_root_t(mip_node_t<i_t, f_t>&& node,
-                const std::vector<f_t>& lower,
-                const std::vector<f_t>& upper)
-    : node(std::move(node)), upper(upper), lower(lower)
-  {
-  }
-
-  friend bool operator>(const diving_root_t<i_t, f_t>& a, const diving_root_t<i_t, f_t>& b)
-  {
-    return a.node.lower_bound > b.node.lower_bound;
-  }
-};
-
-// A min-heap for storing the starting nodes for the dives.
-// This has a maximum size of 256, such that the container
-// will discard the least promising node if the queue is full.
-template <typename i_t, typename f_t>
-class dive_queue_t {
- private:
-  std::vector<diving_root_t<i_t, f_t>> buffer;
-  static constexpr i_t max_size_ = 256;
-
- public:
-  dive_queue_t() { buffer.reserve(max_size_); }
-
-  void push(diving_root_t<i_t, f_t>&& node)
-  {
-    buffer.push_back(std::move(node));
-    std::push_heap(buffer.begin(), buffer.end(), std::greater<>());
-    if (buffer.size() > max_size()) { buffer.pop_back(); }
-  }
-
-  void emplace(mip_node_t<i_t, f_t>&& node,
-               const std::vector<f_t>& lower,
-               const std::vector<f_t>& upper)
-  {
-    buffer.emplace_back(std::move(node), lower, upper);
-    std::push_heap(buffer.begin(), buffer.end(), std::greater<>());
-    if (buffer.size() > max_size()) { buffer.pop_back(); }
-  }
-
-  diving_root_t<i_t, f_t> pop()
-  {
-    std::pop_heap(buffer.begin(), buffer.end(), std::greater<>());
-    diving_root_t<i_t, f_t> node = std::move(buffer.back());
-    buffer.pop_back();
-    return node;
-  }
-
-  i_t size() const { return buffer.size(); }
-  constexpr i_t max_size() const { return max_size_; }
-  const diving_root_t<i_t, f_t>& top() const { return buffer.front(); }
-  void clear() { buffer.clear(); }
-};
 
 template <typename i_t, typename f_t>
 class branch_and_bound_t {
@@ -203,7 +154,7 @@ class branch_and_bound_t {
 
   // Queue for storing the promising node for performing dives.
   omp_mutex_t mutex_dive_queue_;
-  dive_queue_t<i_t, f_t> dive_queue_;
+  diving_queue_t<i_t, f_t> dive_queue_;
   i_t min_diving_queue_size_;
 
   // Global status of the solver.
@@ -221,51 +172,41 @@ class branch_and_bound_t {
   void add_feasible_solution(f_t leaf_objective,
                              const std::vector<f_t>& leaf_solution,
                              i_t leaf_depth,
-                             char thread_type);
+                             thread_type_t thread_type);
 
   // Repairs low-quality solutions from the heuristics, if it is applicable.
   void repair_heuristic_solutions();
 
-  void set_variable_bounds(mip_node_t<i_t, f_t>* node,
-                           std::vector<f_t>& lower,
-                           std::vector<f_t>& upper,
-                           std::vector<bool>& bounds_changed,
-                           const std::vector<f_t>& root_lower,
-                           const std::vector<f_t>& root_upper,
-                           bool recompute);
-
   // Ramp-up phase of the solver, where we greedily expand the tree until
   // there is enough unexplored nodes. This is done recursively using OpenMP tasks.
-  void exploration_ramp_up(search_tree_t<i_t, f_t>* search_tree,
-                           mip_node_t<i_t, f_t>* node,
-                           lp_problem_t<i_t, f_t>& leaf_problem,
-                           const csc_matrix_t<i_t, f_t>& Arow,
+  void exploration_ramp_up(mip_node_t<i_t, f_t>* node,
+                           search_tree_t<i_t, f_t>* search_tree,
                            i_t initial_heap_size);
 
   // Explore the search tree using the best-first search with plunging strategy.
   void explore_subtree(i_t task_id,
-                       search_tree_t<i_t, f_t>& search_tree,
                        mip_node_t<i_t, f_t>* start_node,
+                       search_tree_t<i_t, f_t>& search_tree,
                        lp_problem_t<i_t, f_t>& leaf_problem,
-                       node_presolve_t<i_t, f_t>& presolve);
+                       node_presolver_t<i_t, f_t>& presolver);
 
   // Each "main" thread pops a node from the global heap and then performs a plunge
   // (i.e., a shallow dive) into the subtree determined by the node.
-  void best_first_thread(i_t id,
-                         search_tree_t<i_t, f_t>& search_tree,
-                         lp_problem_t<i_t, f_t>& leaf_problem,
-                         node_presolve_t<i_t, f_t>& presolve);
+  void best_first_thread(i_t id, search_tree_t<i_t, f_t>& search_tree);
 
   // Each diving thread pops the first node from the dive queue and then performs
   // a deep dive into the subtree determined by the node.
-  void diving_thread(lp_problem_t<i_t, f_t>& leaf_problem, node_presolve_t<i_t, f_t>& presolve);
+  void diving_thread();
 
   // Solve the LP relaxation of a leaf node and update the tree.
-  node_status_t solve_node(search_tree_t<i_t, f_t>& search_tree,
-                           mip_node_t<i_t, f_t>* node_ptr,
+  node_status_t solve_node(mip_node_t<i_t, f_t>* node_ptr,
+                           search_tree_t<i_t, f_t>& search_tree,
                            lp_problem_t<i_t, f_t>& leaf_problem,
-                           node_presolve_t<i_t, f_t>& presolve,
-                           char thread_type,
+                           node_presolver_t<i_t, f_t>& presolver,
+                           thread_type_t thread_type,
+                           bool recompute,
+                           const std::vector<f_t>& root_lower,
+                           const std::vector<f_t>& root_upper,
                            logger_t& log);
 
   // Sort the children based on the Martin's criteria.

@@ -33,6 +33,7 @@ struct lp_problem_t {
       num_cols(n),
       objective(n),
       A(m, n, nz),
+      Arow(1, 1, 1),
       rhs(m),
       lower(n),
       upper(n),
@@ -44,6 +45,7 @@ struct lp_problem_t {
   i_t num_cols;
   std::vector<f_t> objective;
   csc_matrix_t<i_t, f_t> A;
+  csc_matrix_t<i_t, f_t> Arow;
   std::vector<f_t> rhs;
   std::vector<f_t> lower;
   std::vector<f_t> upper;

@@ -17,6 +17,9 @@
 
 #include <dual_simplex/node_presolve.hpp>
 
+#include <algorithm>
+#include <cmath>
+
 namespace cuopt::linear_programming::dual_simplex {
 
 template <typename f_t>
@@ -61,13 +64,12 @@ void print_bounds_stats(const std::vector<f_t>& lower,
 }
 
 template <typename i_t, typename f_t>
-node_presolve_t<i_t, f_t>::node_presolve_t(const lp_problem_t<i_t, f_t>& problem,
-                                           const std::vector<char>& row_sense,
-                                           const csc_matrix_t<i_t, f_t>& Arow,
-                                           const std::vector<variable_type_t>& var_types)
+node_presolver_t<i_t, f_t>::node_presolver_t(const lp_problem_t<i_t, f_t>& problem,
+                                             const std::vector<char>& row_sense,
+                                             const std::vector<variable_type_t>& var_types)
   : bounds_changed(problem.num_cols, false),
-    problem(problem),
-    Arow(Arow),
+    A(problem.A),
+    Arow(problem.Arow),
     var_types(var_types),
     delta_min_activity(problem.num_rows),
     delta_max_activity(problem.num_rows),
@@ -96,31 +98,31 @@ node_presolve_t<i_t, f_t>::node_presolve_t(const lp_problem_t<i_t, f_t>& problem
 }
 
 template <typename i_t, typename f_t>
-bool node_presolve_t<i_t, f_t>::bound_strengthening(
+bool node_presolver_t<i_t, f_t>::bound_strengthening(
   std::vector<f_t>& lower_bounds,
   std::vector<f_t>& upper_bounds,
   const simplex_solver_settings_t<i_t, f_t>& settings)
 {
-  const i_t m = problem.num_rows;
-  const i_t n = problem.num_cols;
+  const i_t m = A.m;
+  const i_t n = A.n;
 
-  std::vector<bool> constraint_changed(m, false);
-  std::vector<bool> variable_changed(n, false);
-  std::vector<bool> constraint_changed_next(m, false);
+  constraint_changed.assign(m, false);
+  variable_changed.assign(n, false);
+  constraint_changed_next.assign(m, false);
 
   for (i_t i = 0; i < bounds_changed.size(); ++i) {
     if (bounds_changed[i]) {
-      const i_t row_start = problem.A.col_start[i];
-      const i_t row_end   = problem.A.col_start[i + 1];
+      const i_t row_start = A.col_start[i];
+      const i_t row_end   = A.col_start[i + 1];
       for (i_t p = row_start; p < row_end; ++p) {
-        const i_t j           = problem.A.i[p];
+        const i_t j           = A.i[p];
         constraint_changed[j] = true;
       }
     }
   }
 
-  std::vector<f_t> lower = lower_bounds;
-  std::vector<f_t> upper = upper_bounds;
+  lower = lower_bounds;
+  upper = upper_bounds;
   print_bounds_stats(lower, upper, settings, "Initial bounds");
 
   i_t iter             = 0;
@@ -182,13 +184,13 @@ bool node_presolve_t<i_t, f_t>::bound_strengthening(
       f_t new_lb = old_lb;
       f_t new_ub = old_ub;
 
-      const i_t row_start = problem.A.col_start[k];
-      const i_t row_end   = problem.A.col_start[k + 1];
+      const i_t row_start = A.col_start[k];
+      const i_t row_end   = A.col_start[k + 1];
       for (i_t p = row_start; p < row_end; ++p) {
-        const i_t i = problem.A.i[p];
+        const i_t i = A.i[p];
 
         if (!constraint_changed[i]) { continue; }
-        const f_t a_ik = problem.A.x[p];
+        const f_t a_ik = A.x[p];
 
         f_t delta_min_act = delta_min_activity[i];
         f_t delta_max_act = delta_max_activity[i];
@@ -207,8 +209,8 @@ bool node_presolve_t<i_t, f_t>::bound_strengthening(
         new_ub = std::floor(new_ub + settings.integer_tol);
       }
 
-      bool lb_updated = abs(new_lb - old_lb) > 1e3 * settings.primal_tol;
-      bool ub_updated = abs(new_ub - old_ub) > 1e3 * settings.primal_tol;
+      bool lb_updated = std::abs(new_lb - old_lb) > 1e3 * settings.primal_tol;
+      bool ub_updated = std::abs(new_ub - old_ub) > 1e3 * settings.primal_tol;
 
       new_lb = std::max(new_lb, lower_bounds[k]);
       new_ub = std::min(new_ub, upper_bounds[k]);
@@ -220,7 +222,7 @@ bool node_presolve_t<i_t, f_t>::bound_strengthening(
       }
       if (new_lb != old_lb || new_ub != old_ub) {
         for (i_t p = row_start; p < row_end; ++p) {
-          const i_t i                = problem.A.i[p];
+          const i_t i                = A.i[p];
           constraint_changed_next[i] = true;
         }
       }
@@ -287,7 +289,7 @@ bool node_presolve_t<i_t, f_t>::bound_strengthening(
 }
 
 #ifdef DUAL_SIMPLEX_INSTANTIATE_DOUBLE
-template class node_presolve_t<int, double>;
+template class node_presolver_t<int, double>;
 #endif
 
 }  // namespace cuopt::linear_programming::dual_simplex
