@@ -207,9 +207,10 @@ int run_single_file(std::string file_path,
   settings.determinism_mode = deterministic ? CUOPT_MODE_DETERMINISTIC : CUOPT_MODE_OPPORTUNISTIC;
   settings.tolerances.relative_tolerance = 1e-12;
   settings.tolerances.absolute_tolerance = 1e-6;
-  settings.presolver                     = cuopt::linear_programming::presolver_t::Default;
-  settings.reliability_branching         = reliability_branching;
-  settings.seed                          = 42;
+  // try various presolve options
+  settings.presolver             = cuopt::linear_programming::presolver_t::Default;
+  settings.reliability_branching = reliability_branching;
+  settings.seed                  = 42;
   cuopt::linear_programming::benchmark_info_t benchmark_info;
   settings.benchmark_info_ptr = &benchmark_info;
   auto start_run_solver       = std::chrono::high_resolution_clock::now();
