@@ -25,6 +25,8 @@
 
 // #define PHASE2_NVTX_RANGES
 
+#define CHECK_PRIMAL_INFEASIBILITIES 1
+
 #ifdef PHASE2_NVTX_RANGES
 #define PHASE2_NVTX_RANGE(name) raft::common::nvtx::range NVTX_UNIQUE_NAME(nvtx_scope_)(name)
 #define NVTX_UNIQUE_NAME(base)  NVTX_CONCAT(base, __LINE__)
@@ -2029,8 +2031,8 @@ void check_primal_infeasibilities(const lp_problem_t<i_t, f_t>& lp,
                                   const simplex_solver_settings_t<i_t, f_t>& settings,
                                   const std::vector<i_t>& basic_list,
                                   const std::vector<f_t>& x,
-                                  const ins_vector<f_t>& squared_infeasibilities,
-                                  const ins_vector<i_t>& infeasibility_indices)
+                                  const std::vector<f_t>& squared_infeasibilities,
+                                  const std::vector<i_t>& infeasibility_indices)
 {
   const i_t m = basic_list.size();
   for (i_t k = 0; k < m; ++k) {

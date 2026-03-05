@@ -131,6 +131,417 @@ bool check_guess(const lp_problem_t<i_t, f_t>& original_lp,
 }
 
 template <typename i_t, typename f_t>
+struct lp_feasibility_diagnostics_t {
+  bool feasible{false};
+  bool size_mismatch{false};
+  i_t expected_size{0};
+  i_t actual_size{0};
+  f_t primal_error{std::numeric_limits<f_t>::infinity()};
+  f_t bound_error{std::numeric_limits<f_t>::infinity()};
+  i_t num_fractional{0};
+  i_t num_row_violations{0};
+  i_t num_bound_violations{0};
+  i_t worst_row{-1};
+  f_t worst_row_violation{0.0};
+  f_t worst_row_activity{0.0};
+  f_t worst_row_rhs{0.0};
+  i_t worst_bound_var{-1};
+  f_t worst_bound_violation{0.0};
+  f_t worst_bound_value{0.0};
+  f_t worst_bound_lower{0.0};
+  f_t worst_bound_upper{0.0};
+  bool worst_bound_is_lower{false};
+  i_t worst_fractional_var{-1};
+  f_t worst_fractional_violation{0.0};
+  f_t worst_fractional_value{0.0};
+  f_t worst_fractional_rounded{0.0};
+};
+
+template <typename i_t, typename f_t>
+lp_feasibility_diagnostics_t<i_t, f_t> analyze_lp_guess_feasibility(
+  const lp_problem_t<i_t, f_t>& lp,
+  const simplex_solver_settings_t<i_t, f_t>& settings,
+  const std::vector<variable_type_t>& var_types,
+  const std::vector<f_t>& guess)
+{
+  lp_feasibility_diagnostics_t<i_t, f_t> diagnostics;
+  diagnostics.expected_size = lp.num_cols;
+  diagnostics.actual_size   = static_cast<i_t>(guess.size());
+
+  std::vector<f_t> adjusted_guess;
+  const std::vector<f_t>* guess_ptr = &guess;
+  if (guess.size() != static_cast<size_t>(lp.num_cols)) {
+    diagnostics.size_mismatch = true;
+    adjusted_guess.assign(lp.num_cols, 0.0);
+    const i_t common_size = std::min(lp.num_cols, static_cast<i_t>(guess.size()));
+    if (common_size > 0) {
+      std::copy(guess.begin(), guess.begin() + common_size, adjusted_guess.begin());
+    }
+    guess_ptr = &adjusted_guess;
+  }
+
+  std::vector<variable_type_t> adjusted_var_types = var_types;
+  if (adjusted_var_types.size() < static_cast<size_t>(lp.num_cols)) {
+    adjusted_var_types.resize(lp.num_cols, variable_type_t::CONTINUOUS);
+  }
+
+  std::vector<f_t> residual(lp.num_rows);
+  residual = lp.rhs;
+  matrix_vector_multiply(lp.A, 1.0, *guess_ptr, -1.0, residual);
+  diagnostics.primal_error = vector_norm_inf<i_t, f_t>(residual);
+
+  diagnostics.bound_error = 0.0;
+  for (i_t j = 0; j < lp.num_cols; ++j) {
+    const f_t value         = (*guess_ptr)[j];
+    const f_t low_bound_err = std::max(0.0, lp.lower[j] - value);
+    const f_t up_bound_err  = std::max(0.0, value - lp.upper[j]);
+    const f_t bound_err     = std::max(low_bound_err, up_bound_err);
+    diagnostics.bound_error = std::max(diagnostics.bound_error, bound_err);
+
+    if (bound_err > settings.primal_tol) { ++diagnostics.num_bound_violations; }
+    if (bound_err > diagnostics.worst_bound_violation) {
+      diagnostics.worst_bound_var       = j;
+      diagnostics.worst_bound_violation = bound_err;
+      diagnostics.worst_bound_value     = value;
+      diagnostics.worst_bound_lower     = lp.lower[j];
+      diagnostics.worst_bound_upper     = lp.upper[j];
+      diagnostics.worst_bound_is_lower  = low_bound_err > up_bound_err;
+    }
+
+    if (is_fractional(value, adjusted_var_types[j], settings.integer_tol)) {
+      ++diagnostics.num_fractional;
+      const f_t rounded              = std::round(value);
+      const f_t fractional_violation = std::abs(rounded - value);
+      if (fractional_violation > diagnostics.worst_fractional_violation) {
+        diagnostics.worst_fractional_var       = j;
+        diagnostics.worst_fractional_violation = fractional_violation;
+        diagnostics.worst_fractional_value     = value;
+        diagnostics.worst_fractional_rounded   = rounded;
+      }
+    }
+  }
+
+  for (i_t i = 0; i < lp.num_rows; ++i) {
+    const f_t row_violation = std::abs(residual[i]);
+    if (row_violation > 2 * settings.primal_tol) { ++diagnostics.num_row_violations; }
+    if (row_violation > diagnostics.worst_row_violation) {
+      diagnostics.worst_row           = i;
+      diagnostics.worst_row_violation = row_violation;
+      diagnostics.worst_row_rhs       = lp.rhs[i];
+      diagnostics.worst_row_activity  = lp.rhs[i] - residual[i];
+    }
+  }
+
+  diagnostics.feasible =
+    !diagnostics.size_mismatch && diagnostics.bound_error < settings.primal_tol &&
+    diagnostics.primal_error < 2 * settings.primal_tol && diagnostics.num_fractional == 0;
+  return diagnostics;
+}
+
+template <typename i_t, typename f_t>
+void log_lp_infeasibility_diagnostics(const char* stage,
+                                      const lp_feasibility_diagnostics_t<i_t, f_t>& diagnostics,
+                                      const simplex_solver_settings_t<i_t, f_t>& settings,
+                                      i_t num_original_cols)
+{
+  if (diagnostics.feasible) { return; }
+
+  settings.log.printf(
+    "[%s] infeasible solution diagnostics: size=%d expected=%d primal_error=%e (tol=%e) "
+    "bound_error=%e (tol=%e) integer_infeasible=%d (tol=%e) row_violations=%d "
+    "bound_violations=%d\n",
+    stage,
+    diagnostics.actual_size,
+    diagnostics.expected_size,
+    diagnostics.primal_error,
+    2 * settings.primal_tol,
+    diagnostics.bound_error,
+    settings.primal_tol,
+    diagnostics.num_fractional,
+    settings.integer_tol,
+    diagnostics.num_row_violations,
+    diagnostics.num_bound_violations);
+
+  if (diagnostics.size_mismatch) {
+    settings.log.printf("[%s] warning: solution size mismatch may invalidate exact diagnostics.\n",
+                        stage);
+  }
+
+  if (diagnostics.worst_row >= 0) {
+    settings.log.printf("[%s] worst row violation: row=%d activity=%e rhs=%e abs_violation=%e\n",
+                        stage,
+                        diagnostics.worst_row,
+                        diagnostics.worst_row_activity,
+                        diagnostics.worst_row_rhs,
+                        diagnostics.worst_row_violation);
+  }
+
+  if (diagnostics.worst_bound_var >= 0 && diagnostics.worst_bound_violation > 0.0) {
+    settings.log.printf(
+      "[%s] worst bound violation: var=%d (%s) value=%e bounds=[%e,%e] violation=%e side=%s\n",
+      stage,
+      diagnostics.worst_bound_var,
+      diagnostics.worst_bound_var < num_original_cols ? "original" : "added_slack_or_aux",
+      diagnostics.worst_bound_value,
+      diagnostics.worst_bound_lower,
+      diagnostics.worst_bound_upper,
+      diagnostics.worst_bound_violation,
+      diagnostics.worst_bound_is_lower ? "lower" : "upper");
+  }
+
+  if (diagnostics.worst_fractional_var >= 0 && diagnostics.worst_fractional_violation > 0.0) {
+    settings.log.printf(
+      "[%s] worst integrality violation: var=%d (%s) value=%e nearest_integer=%e abs_distance=%e\n",
+      stage,
+      diagnostics.worst_fractional_var,
+      diagnostics.worst_fractional_var < num_original_cols ? "original" : "added_slack_or_aux",
+      diagnostics.worst_fractional_value,
+      diagnostics.worst_fractional_rounded,
+      diagnostics.worst_fractional_violation);
+  }
+}
+
+template <typename i_t, typename f_t>
+struct user_feasibility_diagnostics_t {
+  bool feasible{false};
+  bool size_mismatch{false};
+  i_t expected_size{0};
+  i_t actual_size{0};
+  f_t max_constraint_violation{std::numeric_limits<f_t>::infinity()};
+  i_t num_constraint_violations{0};
+  i_t worst_row{-1};
+  f_t worst_row_violation{0.0};
+  f_t worst_row_activity{0.0};
+  char worst_row_sense{'E'};
+  f_t worst_row_lower{-std::numeric_limits<f_t>::infinity()};
+  f_t worst_row_upper{std::numeric_limits<f_t>::infinity()};
+  f_t bound_error{std::numeric_limits<f_t>::infinity()};
+  i_t num_bound_violations{0};
+  i_t worst_bound_var{-1};
+  f_t worst_bound_violation{0.0};
+  f_t worst_bound_value{0.0};
+  f_t worst_bound_lower{0.0};
+  f_t worst_bound_upper{0.0};
+  bool worst_bound_is_lower{false};
+  i_t num_fractional{0};
+  i_t worst_fractional_var{-1};
+  f_t worst_fractional_violation{0.0};
+  f_t worst_fractional_value{0.0};
+  f_t worst_fractional_rounded{0.0};
+};
+
+template <typename i_t, typename f_t>
+user_feasibility_diagnostics_t<i_t, f_t> analyze_user_guess_feasibility(
+  const user_problem_t<i_t, f_t>& user_problem,
+  const simplex_solver_settings_t<i_t, f_t>& settings,
+  const std::vector<f_t>& guess)
+{
+  user_feasibility_diagnostics_t<i_t, f_t> diagnostics;
+  diagnostics.expected_size = user_problem.num_cols;
+  diagnostics.actual_size   = static_cast<i_t>(guess.size());
+
+  std::vector<f_t> adjusted_guess;
+  const std::vector<f_t>* guess_ptr = &guess;
+  if (guess.size() != static_cast<size_t>(user_problem.num_cols)) {
+    diagnostics.size_mismatch = true;
+    adjusted_guess.assign(user_problem.num_cols, 0.0);
+    const i_t common_size = std::min(user_problem.num_cols, static_cast<i_t>(guess.size()));
+    if (common_size > 0) {
+      std::copy(guess.begin(), guess.begin() + common_size, adjusted_guess.begin());
+    }
+    guess_ptr = &adjusted_guess;
+  }
+
+  std::vector<variable_type_t> user_var_types = user_problem.var_types;
+  if (user_var_types.size() < static_cast<size_t>(user_problem.num_cols)) {
+    user_var_types.resize(user_problem.num_cols, variable_type_t::CONTINUOUS);
+  }
+
+  const f_t negative_infinity = -std::numeric_limits<f_t>::infinity();
+  const f_t positive_infinity = std::numeric_limits<f_t>::infinity();
+
+  diagnostics.bound_error = 0.0;
+  for (i_t j = 0; j < user_problem.num_cols; ++j) {
+    const f_t value = (*guess_ptr)[j];
+    const f_t lower =
+      j < static_cast<i_t>(user_problem.lower.size()) ? user_problem.lower[j] : negative_infinity;
+    const f_t upper =
+      j < static_cast<i_t>(user_problem.upper.size()) ? user_problem.upper[j] : positive_infinity;
+    const f_t low_bound_err = std::max(0.0, lower - value);
+    const f_t up_bound_err  = std::max(0.0, value - upper);
+    const f_t bound_err     = std::max(low_bound_err, up_bound_err);
+    diagnostics.bound_error = std::max(diagnostics.bound_error, bound_err);
+
+    if (bound_err > settings.primal_tol) { ++diagnostics.num_bound_violations; }
+    if (bound_err > diagnostics.worst_bound_violation) {
+      diagnostics.worst_bound_var       = j;
+      diagnostics.worst_bound_violation = bound_err;
+      diagnostics.worst_bound_value     = value;
+      diagnostics.worst_bound_lower     = lower;
+      diagnostics.worst_bound_upper     = upper;
+      diagnostics.worst_bound_is_lower  = low_bound_err > up_bound_err;
+    }
+
+    if (is_fractional(value, user_var_types[j], settings.integer_tol)) {
+      ++diagnostics.num_fractional;
+      const f_t rounded              = std::round(value);
+      const f_t fractional_violation = std::abs(rounded - value);
+      if (fractional_violation > diagnostics.worst_fractional_violation) {
+        diagnostics.worst_fractional_var       = j;
+        diagnostics.worst_fractional_violation = fractional_violation;
+        diagnostics.worst_fractional_value     = value;
+        diagnostics.worst_fractional_rounded   = rounded;
+      }
+    }
+  }
+
+  std::vector<bool> is_range_row(user_problem.num_rows, false);
+  std::vector<f_t> range_row_values(user_problem.num_rows, 0.0);
+  const i_t num_range_rows = std::min(static_cast<i_t>(user_problem.range_rows.size()),
+                                      static_cast<i_t>(user_problem.range_value.size()));
+  for (i_t k = 0; k < num_range_rows; ++k) {
+    const i_t i = user_problem.range_rows[k];
+    if (i >= 0 && i < user_problem.num_rows) {
+      is_range_row[i]     = true;
+      range_row_values[i] = user_problem.range_value[k];
+    }
+  }
+
+  std::vector<f_t> row_activity(user_problem.num_rows, 0.0);
+  matrix_vector_multiply(user_problem.A, 1.0, *guess_ptr, 0.0, row_activity);
+
+  diagnostics.max_constraint_violation = 0.0;
+  for (i_t i = 0; i < user_problem.num_rows; ++i) {
+    const f_t rhs =
+      i < static_cast<i_t>(user_problem.rhs.size()) ? user_problem.rhs[i] : static_cast<f_t>(0.0);
+    const f_t lhs = row_activity[i];
+    const char sense =
+      i < static_cast<i_t>(user_problem.row_sense.size()) ? user_problem.row_sense[i] : 'E';
+
+    f_t row_lower         = negative_infinity;
+    f_t row_upper         = positive_infinity;
+    f_t row_violation     = 0.0;
+    f_t row_violation_tol = settings.primal_tol;
+    char row_type         = sense;
+
+    if (is_range_row[i]) {
+      const f_t range = range_row_values[i];
+      if (sense == 'L') {
+        row_lower = rhs - std::abs(range);
+        row_upper = rhs;
+      } else if (sense == 'G') {
+        row_lower = rhs;
+        row_upper = rhs + std::abs(range);
+      } else {
+        if (range > 0) {
+          row_lower = rhs;
+          row_upper = rhs + std::abs(range);
+        } else {
+          row_lower = rhs - std::abs(range);
+          row_upper = rhs;
+        }
+      }
+      row_violation = std::max(std::max(0.0, row_lower - lhs), std::max(0.0, lhs - row_upper));
+      row_type      = 'R';
+    } else if (sense == 'L') {
+      row_upper     = rhs;
+      row_violation = std::max(0.0, lhs - rhs);
+    } else if (sense == 'G') {
+      row_lower     = rhs;
+      row_violation = std::max(0.0, rhs - lhs);
+    } else {
+      row_lower         = rhs;
+      row_upper         = rhs;
+      row_violation     = std::abs(lhs - rhs);
+      row_violation_tol = 2 * settings.primal_tol;
+      row_type          = 'E';
+    }
+
+    diagnostics.max_constraint_violation =
+      std::max(diagnostics.max_constraint_violation, row_violation);
+    if (row_violation > row_violation_tol) { ++diagnostics.num_constraint_violations; }
+
+    if (row_violation > diagnostics.worst_row_violation) {
+      diagnostics.worst_row           = i;
+      diagnostics.worst_row_violation = row_violation;
+      diagnostics.worst_row_activity  = lhs;
+      diagnostics.worst_row_sense     = row_type;
+      diagnostics.worst_row_lower     = row_lower;
+      diagnostics.worst_row_upper     = row_upper;
+    }
+  }
+
+  diagnostics.feasible = !diagnostics.size_mismatch && diagnostics.num_constraint_violations == 0 &&
+                         diagnostics.bound_error < settings.primal_tol &&
+                         diagnostics.num_fractional == 0;
+  return diagnostics;
+}
+
+template <typename i_t, typename f_t>
+void log_user_infeasibility_diagnostics(const char* stage,
+                                        const user_feasibility_diagnostics_t<i_t, f_t>& diagnostics,
+                                        const simplex_solver_settings_t<i_t, f_t>& settings)
+{
+  if (diagnostics.feasible) { return; }
+
+  settings.log.printf(
+    "[%s] infeasible uncrushed solution diagnostics: size=%d expected=%d "
+    "max_constraint_violation=%e "
+    "(tol~%e) bound_error=%e (tol=%e) integer_infeasible=%d (tol=%e) "
+    "constraint_violations=%d bound_violations=%d\n",
+    stage,
+    diagnostics.actual_size,
+    diagnostics.expected_size,
+    diagnostics.max_constraint_violation,
+    settings.primal_tol,
+    diagnostics.bound_error,
+    settings.primal_tol,
+    diagnostics.num_fractional,
+    settings.integer_tol,
+    diagnostics.num_constraint_violations,
+    diagnostics.num_bound_violations);
+
+  if (diagnostics.size_mismatch) {
+    settings.log.printf(
+      "[%s] warning: uncrushed solution size mismatch may invalidate diagnostics.\n", stage);
+  }
+
+  if (diagnostics.worst_row >= 0) {
+    settings.log.printf(
+      "[%s] worst constraint violation: row=%d sense=%c activity=%e bounds=[%e,%e] violation=%e\n",
+      stage,
+      diagnostics.worst_row,
+      diagnostics.worst_row_sense,
+      diagnostics.worst_row_activity,
+      diagnostics.worst_row_lower,
+      diagnostics.worst_row_upper,
+      diagnostics.worst_row_violation);
+  }
+
+  if (diagnostics.worst_bound_var >= 0 && diagnostics.worst_bound_violation > 0.0) {
+    settings.log.printf(
+      "[%s] worst bound violation: var=%d value=%e bounds=[%e,%e] violation=%e side=%s\n",
+      stage,
+      diagnostics.worst_bound_var,
+      diagnostics.worst_bound_value,
+      diagnostics.worst_bound_lower,
+      diagnostics.worst_bound_upper,
+      diagnostics.worst_bound_violation,
+      diagnostics.worst_bound_is_lower ? "lower" : "upper");
+  }
+
+  if (diagnostics.worst_fractional_var >= 0 && diagnostics.worst_fractional_violation > 0.0) {
+    settings.log.printf(
+      "[%s] worst integrality violation: var=%d value=%e nearest_integer=%e abs_distance=%e\n",
+      stage,
+      diagnostics.worst_fractional_var,
+      diagnostics.worst_fractional_value,
+      diagnostics.worst_fractional_rounded,
+      diagnostics.worst_fractional_violation);
+  }
+}
+
+template <typename i_t, typename f_t>
 void set_uninitialized_steepest_edge_norms(const lp_problem_t<i_t, f_t>& lp,
                                            const std::vector<i_t>& basic_list,
                                            std::vector<f_t>& edge_norms)
@@ -771,8 +1182,21 @@ void branch_and_bound_t<i_t, f_t>::add_feasible_solution(f_t leaf_objective,
   }
 
   if (send_solution && settings_.solution_callback != nullptr) {
+    const auto pre_uncrush_diagnostics =
+      analyze_lp_guess_feasibility(original_lp_, settings_, var_types_, incumbent_.x);
+    log_lp_infeasibility_diagnostics("solution_callback/pre_uncrush",
+                                     pre_uncrush_diagnostics,
+                                     settings_,
+                                     original_problem_.num_cols);
+
     std::vector<f_t> original_x;
     uncrush_primal_solution(original_problem_, original_lp_, incumbent_.x, original_x);
+
+    const auto post_uncrush_diagnostics =
+      analyze_user_guess_feasibility(original_problem_, settings_, original_x);
+    log_user_infeasibility_diagnostics(
+      "solution_callback/post_uncrush_user", post_uncrush_diagnostics, settings_);
+
     settings_.solution_callback(original_x, upper_bound_);
   }
   mutex_upper_.unlock();

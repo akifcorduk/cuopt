@@ -164,13 +164,13 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
     external_solution_queue_cpufj.erase(worst_obj_it);
   }
 
-  CUOPT_LOG_DEBUG("%s added a solution to population, solution queue size %lu with objective %g",
-                  solution_origin_to_string(origin),
-                  external_solution_queue.size(),
-                  problem_ptr->get_user_obj_from_solver_obj(objective));
+  CUOPT_LOG_INFO("%s added a solution to population, solution queue size %lu with objective %g",
+                 solution_origin_to_string(origin),
+                 external_solution_queue.size(),
+                 problem_ptr->get_user_obj_from_solver_obj(objective));
   if (objective < best_feasible_objective) {
-    CUOPT_LOG_DEBUG("Found new best solution %g in external queue",
-                    problem_ptr->get_user_obj_from_solver_obj(objective));
+    CUOPT_LOG_INFO("Found new best solution %g in external queue",
+                   problem_ptr->get_user_obj_from_solver_obj(objective));
   }
   if (external_solution_queue.size() >= 5) { early_exit_primal_generation = true; }
   solutions_in_external_queue_ = true;
@@ -218,7 +218,7 @@ std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::get_external_solutions
       sol.copy_new_assignment(h_entry.solution);
       sol.compute_feasibility();
       if (!sol.get_feasible()) {
-        CUOPT_LOG_DEBUG(
+        CUOPT_LOG_INFO(
           "External solution %d is infeasible, excess %g, obj %g, int viol %g, var viol %g, cstr "
           "viol %g, n_feasible %d/%d, integers %d/%d",
           counter,
@@ -231,6 +231,35 @@ std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::get_external_solutions
           problem_ptr->n_constraints,
           sol.compute_number_of_integers(),
           problem_ptr->n_integer_vars);
+        // INSERT_YOUR_CODE
+        // Print which constraint is infeasible whenever we find an external solution that is
+        // infeasible. We'll iterate through the infeasibility vector and report constraints that
+        // are violated. Since we are inside a template, do not assume a specific type for
+        // infeasibility_cost but expect solution_t to provide relevant methods. Print the most
+        // informative output we can.
+        auto sol_stream = sol.handle_ptr->get_stream();
+        // Assume that problem_ptr->n_constraints holds the count of constraints.
+        // Compute infeasibility from lower_excess and upper_excess
+        std::vector<f_t> lower_excess_vec(problem_ptr->n_constraints, 0.0);
+        std::vector<f_t> upper_excess_vec(problem_ptr->n_constraints, 0.0);
+        raft::copy(
+          lower_excess_vec.data(), sol.lower_excess.data(), problem_ptr->n_constraints, sol_stream);
+        raft::copy(
+          upper_excess_vec.data(), sol.upper_excess.data(), problem_ptr->n_constraints, sol_stream);
+        sol.handle_ptr->sync_stream();  // Ensure data is copied
+
+        for (size_t cidx = 0; cidx < lower_excess_vec.size(); ++cidx) {
+          f_t infeas = std::max(lower_excess_vec[cidx], upper_excess_vec[cidx]);
+          if (infeas > 1e-6) {
+            CUOPT_LOG_INFO(
+              "Infeasible constraint at index %zu: lower_excess = %g, upper_excess = %g, "
+              "max_violation = %g",
+              cidx,
+              lower_excess_vec[cidx],
+              upper_excess_vec[cidx],
+              infeas);
+          }
+        }
       }
       sol.handle_ptr->sync_stream();
       return_vector.emplace_back(std::move(sol));
