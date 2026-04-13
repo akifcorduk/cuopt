@@ -9,6 +9,7 @@
 
 #include <mip_heuristics/diversity/population.cuh>
 #include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
+#include <mip_heuristics/local_search/feasibility_pump/batched_feasibility_pump.cuh>
 #include <mip_heuristics/local_search/feasibility_pump/feasibility_pump.cuh>
 #include <mip_heuristics/local_search/line_segment_search/line_segment_search.cuh>
 #include <mip_heuristics/solution/solution.cuh>
@@ -84,6 +85,9 @@ class local_search_t {
   bool run_fp(solution_t<i_t, f_t>& solution,
               timer_t timer,
               population_t<i_t, f_t>* population_ptr = nullptr);
+  bool run_batched_fp(solution_t<i_t, f_t>& solution,
+                      timer_t timer,
+                      population_t<i_t, f_t>* population_ptr);
   void resize_vectors(problem_t<i_t, f_t>& problem, const raft::handle_t* handle_ptr);
 
   bool do_fj_solve(solution_t<i_t, f_t>& solution,
@@ -124,6 +128,7 @@ class local_search_t {
   constraint_prop_t<i_t, f_t> constraint_prop;
   line_segment_search_t<i_t, f_t> line_segment_search;
   feasibility_pump_t<i_t, f_t> fp;
+  batched_feasibility_pump_t<i_t, f_t> batched_fp;
   std::mt19937 rng;
 
   std::vector<std::unique_ptr<cpu_fj_thread_t<i_t, f_t>>> ls_cpu_fj;

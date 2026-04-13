@@ -33,6 +33,8 @@ set(MIP_NON_LP_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/rounding/constraint_prop.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/rounding/simple_rounding.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/feasibility_pump/feasibility_pump.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/local_search/feasibility_pump/batched_feasibility_pump.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/relaxed_lp/batched_relaxed_lp.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/line_segment_search/line_segment_search.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/presolve/bounds_presolve.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/presolve/bounds_update_data.cu

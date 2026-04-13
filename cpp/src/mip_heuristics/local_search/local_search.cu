@@ -43,6 +43,7 @@ local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context
        constraint_prop,
        line_segment_search,
        lp_optimal_solution_),
+    batched_fp(context, fj, constraint_prop, line_segment_search, lp_optimal_solution_),
     rng(cuopt::seed_generator::get_seed()),
     problem_with_objective_cut(*context.problem_ptr, context.problem_ptr->handle_ptr)
 {
@@ -868,6 +869,21 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   is_feasible = run_staged_fp(solution, timer, population_ptr);
   // is_feasible = run_fp(solution, timer);
   CUOPT_LOG_DEBUG("Solution generated with FP: is_feasible %d", is_feasible);
+  return is_feasible;
+}
+
+template <typename i_t, typename f_t>
+bool local_search_t<i_t, f_t>::run_batched_fp(solution_t<i_t, f_t>& solution,
+                                              timer_t timer,
+                                              population_t<i_t, f_t>* population_ptr)
+{
+  raft::common::nvtx::range fun_scope("run_batched_fp");
+  cuopt_assert(population_ptr != nullptr, "Population pointer must not be null");
+  batched_fp.timer = timer;
+  batched_fp.reset();
+  batched_fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
+  bool is_feasible = batched_fp.run(solution, timer, population_ptr);
+  CUOPT_LOG_DEBUG("Batched FP done: is_feasible %d", is_feasible);
   return is_feasible;
 }
 
