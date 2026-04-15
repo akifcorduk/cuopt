@@ -83,8 +83,9 @@ class batched_feasibility_pump_t {
   void build_augmented_problem(solution_t<i_t, f_t>& solution);
 
   /**
-   * Fill per-path objectives, bounds, RHS, and initial primals into a
-   * batched_lp_input_t. Does NOT rebuild the constraint matrix.
+   * Fill per-path objectives, constraint RHS, and initial primals into a
+   * batched_lp_input_t on the GPU. Invariant data (variable bounds, constraint
+   * upper bounds) is written once from cached device buffers.
    */
   batched_lp_input_t<i_t, f_t> update_batched_input(solution_t<i_t, f_t>& solution);
 
@@ -127,6 +128,18 @@ class batched_feasibility_pump_t {
   i_t n_orig_vars_{0};
   // Index in augmented problem where distance constraints start
   i_t dist_cstr_base_{0};
+
+  // --- Cached device buffers (filled once in build_augmented_problem) ---
+  rmm::device_uvector<i_t> d_dist_var_id_;
+  rmm::device_uvector<f_t> d_orig_obj_padded_;  // [n_aug_vars], padded with 0 for dist vars
+  f_t l2_orig_obj_{0};
+  // Invariant batched arrays: written once, D->D copied each iteration
+  rmm::device_uvector<f_t> cached_vlb_batch_;  // [B * n_aug_vars]
+  rmm::device_uvector<f_t> cached_vub_batch_;  // [B * n_aug_vars]
+  rmm::device_uvector<f_t> cached_cub_batch_;  // [B * n_aug_cstr]
+  rmm::device_uvector<f_t> cached_clb_base_;   // [n_aug_cstr] base constraint lower bounds
+  // Per-path objective offsets on device (B scalars, accumulated via atomicAdd)
+  rmm::device_uvector<f_t> d_obj_offsets_;
 
   std::mt19937 rng;
 };

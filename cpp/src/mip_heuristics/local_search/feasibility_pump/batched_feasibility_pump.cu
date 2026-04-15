@@ -49,6 +49,13 @@ batched_feasibility_pump_t<i_t, f_t>::batched_feasibility_pump_t(
     lp_optimal_solution(lp_optimal_solution_),
     path_roundings(0, context.handle_ptr->get_stream()),
     path_projections(0, context.handle_ptr->get_stream()),
+    d_dist_var_id_(0, context.handle_ptr->get_stream()),
+    d_orig_obj_padded_(0, context.handle_ptr->get_stream()),
+    cached_vlb_batch_(0, context.handle_ptr->get_stream()),
+    cached_vub_batch_(0, context.handle_ptr->get_stream()),
+    cached_cub_batch_(0, context.handle_ptr->get_stream()),
+    cached_clb_base_(0, context.handle_ptr->get_stream()),
+    d_obj_offsets_(0, context.handle_ptr->get_stream()),
     rng(cuopt::seed_generator::get_seed()),
     timer(20.)
 {
@@ -59,10 +66,6 @@ void batched_feasibility_pump_t<i_t, f_t>::reset()
 {
   path_distances.clear();
   path_alphas.clear();
-  augmented_problem_.reset();
-  dist_var_id_.clear();
-  n_orig_vars_    = 0;
-  dist_cstr_base_ = 0;
 }
 
 template <typename i_t, typename f_t>
@@ -126,36 +129,7 @@ void batched_feasibility_pump_t<i_t, f_t>::initialize_paths(solution_t<i_t, f_t>
                      });
 }
 
-// ──────────────────────────────────────────────────────────────
-//  Objective blending helper (same logic as single-path FP)
-// ──────────────────────────────────────────────────────────────
-namespace {
-template <typename f_t>
-f_t vector_norm_host(const std::vector<f_t>& v)
-{
-  long double sum = 0;
-  for (auto x : v)
-    sum += static_cast<long double>(x) * x;
-  return static_cast<f_t>(std::sqrt(sum));
-}
-
-template <typename i_t, typename f_t>
-void blend_objective_with_original(std::vector<f_t>& dist_obj,
-                                   const std::vector<f_t>& orig_obj,
-                                   double alpha)
-{
-  f_t l2_orig = vector_norm_host(orig_obj);
-  f_t l2_dist = vector_norm_host(dist_obj);
-  f_t orig_w  = static_cast<f_t>(alpha) / l2_orig;
-  f_t dist_w  = static_cast<f_t>(1.0 - alpha) / l2_dist;
-  if (!std::isfinite(orig_w)) orig_w = f_t{0};
-  cuopt_expects(std::isfinite(dist_w), error_type_t::RuntimeError, "Distance weight not finite");
-  for (size_t i = 0; i < dist_obj.size(); ++i) {
-    f_t ow      = (i < orig_obj.size()) ? orig_obj[i] : f_t{0};
-    dist_obj[i] = dist_obj[i] * dist_w + orig_w * ow;
-  }
-}
-}  // namespace
+// (Objective blending is now done on the GPU inside update_batched_input.)
 
 // ──────────────────────────────────────────────────────────────
 //  build_augmented_problem
@@ -215,16 +189,77 @@ void batched_feasibility_pump_t<i_t, f_t>::build_augmented_problem(solution_t<i_
 
   dist_cstr_base_ = solution.problem_ptr->n_constraints;
 
+  // --- Cache invariant device data for update_batched_input ---
+  auto& aug_p          = *augmented_problem_;
+  const i_t n_aug_vars = aug_p.n_variables;
+  const i_t n_aug_cstr = aug_p.n_constraints;
+  const i_t B          = config.batch_size;
+
+  // dist_var_id on device
+  d_dist_var_id_.resize(dist_var_id_.size(), stream);
+  raft::copy(d_dist_var_id_.data(), dist_var_id_.data(), dist_var_id_.size(), stream);
+
+  // Original objective padded to n_aug_vars (zeros for distance variables)
+  auto h_orig_obj = cuopt::host_copy(solution.problem_ptr->objective_coefficients, stream);
+  solution.handle_ptr->sync_stream();
+  std::vector<f_t> h_orig_obj_padded(n_aug_vars, f_t{0});
+  for (i_t j = 0; j < n_orig_vars_; ++j)
+    h_orig_obj_padded[j] = h_orig_obj[j];
+  d_orig_obj_padded_.resize(n_aug_vars, stream);
+  raft::copy(d_orig_obj_padded_.data(), h_orig_obj_padded.data(), n_aug_vars, stream);
+
+  // Precompute L2 norm of original objective
+  long double sum_sq = 0;
+  for (auto x : h_orig_obj)
+    sum_sq += static_cast<long double>(x) * x;
+  l2_orig_obj_ = static_cast<f_t>(std::sqrt(sum_sq));
+
+  // Build invariant batched variable bounds
+  auto h_aug_var_bounds = cuopt::host_copy(aug_p.variable_bounds, stream);
+  solution.handle_ptr->sync_stream();
+  const size_t vb_len = static_cast<size_t>(B) * n_aug_vars;
+  std::vector<f_t> h_vlb(vb_len), h_vub(vb_len);
+  for (i_t k = 0; k < B; ++k) {
+    for (i_t j = 0; j < n_aug_vars; ++j) {
+      h_vlb[k + static_cast<size_t>(j) * B] = get_lower(h_aug_var_bounds[j]);
+      h_vub[k + static_cast<size_t>(j) * B] = get_upper(h_aug_var_bounds[j]);
+    }
+  }
+  cached_vlb_batch_.resize(vb_len, stream);
+  cached_vub_batch_.resize(vb_len, stream);
+  raft::copy(cached_vlb_batch_.data(), h_vlb.data(), vb_len, stream);
+  raft::copy(cached_vub_batch_.data(), h_vub.data(), vb_len, stream);
+
+  // Build invariant batched constraint upper bounds + base constraint lower bounds
+  auto h_cstr_ub = cuopt::host_copy(aug_p.constraint_upper_bounds, stream);
+  auto h_cstr_lb = cuopt::host_copy(aug_p.constraint_lower_bounds, stream);
+  solution.handle_ptr->sync_stream();
+  const size_t cb_len = static_cast<size_t>(B) * n_aug_cstr;
+  std::vector<f_t> h_cub(cb_len);
+  for (i_t k = 0; k < B; ++k) {
+    for (i_t c = 0; c < n_aug_cstr; ++c)
+      h_cub[k + static_cast<size_t>(c) * B] = h_cstr_ub[c];
+  }
+  cached_cub_batch_.resize(cb_len, stream);
+  raft::copy(cached_cub_batch_.data(), h_cub.data(), cb_len, stream);
+
+  cached_clb_base_.resize(n_aug_cstr, stream);
+  raft::copy(cached_clb_base_.data(), h_cstr_lb.data(), n_aug_cstr, stream);
+
+  d_obj_offsets_.resize(B, stream);
+
   CUOPT_LOG_DEBUG("Batched FP: augmented problem built once: %d vars (%d orig), %d constraints",
-                  augmented_problem_->n_variables,
+                  n_aug_vars,
                   n_orig_vars_,
-                  augmented_problem_->n_constraints);
+                  n_aug_cstr);
 }
 
 // ──────────────────────────────────────────────────────────────
-//  update_batched_input
-//  Fill per-path objectives, bounds, RHS, and initial primals
-//  into a batched_lp_input_t.  Does NOT touch the A matrix.
+//  update_batched_input (GPU-based)
+//  Invariant data (variable bounds, constraint upper bounds) is D->D
+//  copied from cached buffers built once in build_augmented_problem.
+//  Per-path objectives, constraint RHS, and initial primals are
+//  computed entirely on the GPU — no D->H->D round-trips.
 // ──────────────────────────────────────────────────────────────
 template <typename i_t, typename f_t>
 batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batched_input(
@@ -239,106 +274,202 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
   auto& aug_p          = *augmented_problem_;
   const i_t n_aug_vars = aug_p.n_variables;
   const i_t n_aug_cstr = aug_p.n_constraints;
-
-  auto h_variable_bounds = cuopt::host_copy(solution.problem_ptr->variable_bounds, stream);
-  auto h_integer_indices = cuopt::host_copy(solution.problem_ptr->integer_indices, stream);
-  auto h_orig_obj        = cuopt::host_copy(solution.problem_ptr->objective_coefficients, stream);
-  auto h_roundings       = cuopt::host_copy(path_roundings, stream);
-  auto h_projections     = cuopt::host_copy(path_projections, stream);
-
-  auto h_cstr_lb        = cuopt::host_copy(aug_p.constraint_lower_bounds, stream);
-  auto h_cstr_ub        = cuopt::host_copy(aug_p.constraint_upper_bounds, stream);
-  auto h_aug_var_bounds = cuopt::host_copy(aug_p.variable_bounds, stream);
-  solution.handle_ptr->sync_stream();
+  const i_t n_int_vars = solution.problem_ptr->n_integer_vars;
 
   batched_lp_input_t<i_t, f_t> input(B, aug_p, stream);
 
-  std::vector<f_t> h_obj_batch(static_cast<size_t>(B) * n_aug_vars, f_t{0});
-  std::vector<f_t> h_vlb_batch(static_cast<size_t>(B) * n_aug_vars);
-  std::vector<f_t> h_vub_batch(static_cast<size_t>(B) * n_aug_vars);
-  std::vector<f_t> h_clb_batch(static_cast<size_t>(B) * n_aug_cstr);
-  std::vector<f_t> h_cub_batch(static_cast<size_t>(B) * n_aug_cstr);
-  std::vector<f_t> h_init_primal(static_cast<size_t>(B) * n_aug_vars, f_t{0});
-
-  for (i_t k = 0; k < B; ++k) {
-    for (i_t j = 0; j < n_aug_vars; ++j) {
-      h_vlb_batch[k + static_cast<size_t>(j) * B] = get_lower(h_aug_var_bounds[j]);
-      h_vub_batch[k + static_cast<size_t>(j) * B] = get_upper(h_aug_var_bounds[j]);
-    }
-  }
-
-  for (i_t k = 0; k < B; ++k) {
-    for (i_t c = 0; c < n_aug_cstr; ++c) {
-      h_clb_batch[k + static_cast<size_t>(c) * B] = h_cstr_lb[c];
-      h_cub_batch[k + static_cast<size_t>(c) * B] = h_cstr_ub[c];
-    }
-  }
-
-  for (i_t k = 0; k < B; ++k) {
-    std::vector<f_t> obj_coefficients(n_aug_vars, f_t{0});
-    f_t obj_offset    = f_t{0};
-    i_t dist_cstr_idx = 0;
-
-    for (size_t ii = 0; ii < h_integer_indices.size(); ++ii) {
-      i_t i         = h_integer_indices[ii];
-      auto h_bounds = h_variable_bounds[i];
-      f_t lb        = get_lower(h_bounds);
-      f_t ub        = get_upper(h_bounds);
-      if (std::abs(ub - lb) < int_tol) continue;
-
-      f_t val = h_roundings[k + static_cast<size_t>(i) * B];
-
-      if (solution.problem_ptr->integer_equal(val, ub)) {
-        obj_offset += ub;
-        obj_coefficients[i] = f_t{-1};
-      } else if (solution.problem_ptr->integer_equal(val, lb)) {
-        obj_offset -= lb;
-        obj_coefficients[i] = f_t{1};
-      } else {
-        i_t var_id = dist_var_id_[ii];
-        cuopt_assert(var_id >= 0, "Expected distance variable for interior integer");
-        obj_coefficients[var_id] = f_t{1};
-
-        f_t proj_val = h_projections[k + static_cast<size_t>(i) * B];
-        f_t dist_val = std::abs(val - proj_val);
-        if (!std::isfinite(dist_val)) dist_val = f_t{0};
-        h_init_primal[k + static_cast<size_t>(var_id) * B] = dist_val;
-      }
-
-      if (dist_var_id_[ii] >= 0) {
-        i_t c1                                       = dist_cstr_base_ + dist_cstr_idx * 2;
-        i_t c2                                       = dist_cstr_base_ + dist_cstr_idx * 2 + 1;
-        h_clb_batch[k + static_cast<size_t>(c1) * B] = -val;
-        h_clb_batch[k + static_cast<size_t>(c2) * B] = val;
-        dist_cstr_idx++;
-      }
-    }
-
-    for (i_t j = 0; j < n_vars; ++j) {
-      f_t proj                                      = h_projections[k + static_cast<size_t>(j) * B];
-      f_t rnd                                       = h_roundings[k + static_cast<size_t>(j) * B];
-      h_init_primal[k + static_cast<size_t>(j) * B] = std::isfinite(proj) ? proj : rnd;
-    }
-
-    path_alphas[k] *= config.alpha_decrease_factor;
-    blend_objective_with_original<i_t, f_t>(obj_coefficients, h_orig_obj, path_alphas[k]);
-
-    input.objective_offsets[k] = obj_offset;
-
-    for (i_t j = 0; j < n_aug_vars; ++j) {
-      h_obj_batch[k + static_cast<size_t>(j) * B] = obj_coefficients[j];
-    }
-  }
-
-  raft::copy(input.objective_coefficients.data(), h_obj_batch.data(), h_obj_batch.size(), stream);
-  raft::copy(input.variable_lower_bounds.data(), h_vlb_batch.data(), h_vlb_batch.size(), stream);
-  raft::copy(input.variable_upper_bounds.data(), h_vub_batch.data(), h_vub_batch.size(), stream);
-  raft::copy(input.constraint_lower_bounds.data(), h_clb_batch.data(), h_clb_batch.size(), stream);
-  raft::copy(input.constraint_upper_bounds.data(), h_cub_batch.data(), h_cub_batch.size(), stream);
+  // ── Invariant data: D->D copy from cached buffers ──
   raft::copy(
-    input.initial_primal_solutions.data(), h_init_primal.data(), h_init_primal.size(), stream);
-  input.has_initial_primal = true;
+    input.variable_lower_bounds.data(), cached_vlb_batch_.data(), cached_vlb_batch_.size(), stream);
+  raft::copy(
+    input.variable_upper_bounds.data(), cached_vub_batch_.data(), cached_vub_batch_.size(), stream);
+  raft::copy(input.constraint_upper_bounds.data(),
+             cached_cub_batch_.data(),
+             cached_cub_batch_.size(),
+             stream);
 
+  // ── Broadcast base constraint lower bounds to all paths ──
+  {
+    const f_t* clb_base = cached_clb_base_.data();
+    f_t* clb_dst        = input.constraint_lower_bounds.data();
+    thrust::for_each_n(rmm::exec_policy(stream),
+                       thrust::make_counting_iterator<i_t>(0),
+                       static_cast<i_t>(B) * n_aug_cstr,
+                       [clb_base, clb_dst, B] __device__(i_t flat) {
+                         i_t c         = flat / B;
+                         clb_dst[flat] = clb_base[c];
+                       });
+  }
+
+  // ── Zero-fill per-path objectives and initial primals ──
+  thrust::fill(rmm::exec_policy(stream),
+               input.objective_coefficients.begin(),
+               input.objective_coefficients.end(),
+               f_t{0});
+  thrust::fill(rmm::exec_policy(stream),
+               input.initial_primal_solutions.begin(),
+               input.initial_primal_solutions.end(),
+               f_t{0});
+
+  // ── Set initial primals for original variables: prefer projection, fall back to rounding ──
+  {
+    const f_t* proj_ptr = path_projections.data();
+    const f_t* rnd_ptr  = path_roundings.data();
+    f_t* primal_ptr     = input.initial_primal_solutions.data();
+    thrust::for_each_n(rmm::exec_policy(stream),
+                       thrust::make_counting_iterator<i_t>(0),
+                       static_cast<i_t>(B) * n_vars,
+                       [proj_ptr, rnd_ptr, primal_ptr, B] __device__(i_t flat) {
+                         i_t k                 = flat % B;
+                         i_t j                 = flat / B;
+                         f_t proj              = proj_ptr[k + j * B];
+                         f_t rnd               = rnd_ptr[k + j * B];
+                         primal_ptr[k + j * B] = isfinite(proj) ? proj : rnd;
+                       });
+  }
+
+  // ── Process integer variables on GPU:
+  //    set objectives, distance constraint RHS, distance variable primals,
+  //    and store per-element offset contributions for deterministic reduction. ──
+  {
+    const f_t* rnd_ptr  = path_roundings.data();
+    const f_t* proj_ptr = path_projections.data();
+    f_t* obj_ptr        = input.objective_coefficients.data();
+    f_t* clb_ptr        = input.constraint_lower_bounds.data();
+    f_t* primal_ptr     = input.initial_primal_solutions.data();
+    const i_t* dv_ptr   = d_dist_var_id_.data();
+    auto int_idx        = make_span(solution.problem_ptr->integer_indices);
+    auto vbounds        = make_span(solution.problem_ptr->variable_bounds);
+    const i_t dcb       = dist_cstr_base_;
+    const i_t n_orig    = n_orig_vars_;
+
+    const size_t contrib_len = static_cast<size_t>(B) * n_int_vars;
+    rmm::device_uvector<f_t> d_offset_contribs(contrib_len, stream);
+    f_t* contrib_ptr = d_offset_contribs.data();
+
+    thrust::for_each_n(rmm::exec_policy(stream),
+                       thrust::make_counting_iterator<i_t>(0),
+                       static_cast<i_t>(B) * n_int_vars,
+                       [rnd_ptr,
+                        proj_ptr,
+                        obj_ptr,
+                        clb_ptr,
+                        primal_ptr,
+                        contrib_ptr,
+                        dv_ptr,
+                        int_idx,
+                        vbounds,
+                        int_tol,
+                        B,
+                        n_orig,
+                        dcb] __device__(i_t flat) {
+                         i_t k     = flat % B;
+                         i_t ii    = flat / B;
+                         i_t i     = int_idx[ii];
+                         auto bnds = vbounds[i];
+                         f_t lb    = get_lower(bnds);
+                         f_t ub    = get_upper(bnds);
+                         if (abs(ub - lb) < int_tol) {
+                           contrib_ptr[flat] = f_t{0};
+                           return;
+                         }
+
+                         f_t val  = rnd_ptr[k + i * B];
+                         i_t dvid = dv_ptr[ii];
+
+                         f_t offset_contrib = f_t{0};
+                         if (integer_equal<f_t>(val, ub, int_tol)) {
+                           offset_contrib     = ub;
+                           obj_ptr[k + i * B] = f_t{-1};
+                         } else if (integer_equal<f_t>(val, lb, int_tol)) {
+                           offset_contrib     = -lb;
+                           obj_ptr[k + i * B] = f_t{1};
+                         } else {
+                           cuopt_assert(dvid >= 0,
+                                        "Expected distance variable for interior integer");
+                           obj_ptr[k + dvid * B] = f_t{1};
+                           f_t proj_val          = proj_ptr[k + i * B];
+                           f_t dist_val          = abs(val - proj_val);
+                           if (!isfinite(dist_val)) dist_val = f_t{0};
+                           primal_ptr[k + dvid * B] = dist_val;
+                         }
+                         contrib_ptr[flat] = offset_contrib;
+
+                         if (dvid >= 0) {
+                           i_t rank            = dvid - n_orig;
+                           i_t c1              = dcb + rank * 2;
+                           i_t c2              = dcb + rank * 2 + 1;
+                           clb_ptr[k + c1 * B] = -val;
+                           clb_ptr[k + c2 * B] = val;
+                         }
+                       });
+
+    // Deterministic per-path reduction: each thread sums its path in fixed order
+    f_t* offsets_ptr    = d_obj_offsets_.data();
+    const f_t* cptr     = d_offset_contribs.data();
+    const i_t n_int_loc = n_int_vars;
+    thrust::for_each_n(rmm::exec_policy(stream),
+                       thrust::make_counting_iterator<i_t>(0),
+                       B,
+                       [cptr, offsets_ptr, n_int_loc, B] __device__(i_t k) {
+                         f_t sum = f_t{0};
+                         for (i_t ii = 0; ii < n_int_loc; ++ii) {
+                           sum += cptr[k + static_cast<size_t>(ii) * B];
+                         }
+                         offsets_ptr[k] = sum;
+                       });
+  }
+
+  // ── Objective blending: decay alpha, compute per-path L2 norms, blend on GPU ──
+  {
+    f_t* obj_ptr = input.objective_coefficients.data();
+    std::vector<f_t> h_orig_w(B), h_dist_w(B);
+    for (i_t k = 0; k < B; ++k) {
+      path_alphas[k] *= config.alpha_decrease_factor;
+      f_t l2_dist_sq = thrust::transform_reduce(
+        rmm::exec_policy(stream),
+        thrust::make_counting_iterator<i_t>(0),
+        thrust::make_counting_iterator<i_t>(n_aug_vars),
+        [obj_ptr, k, B] __device__(i_t j) -> f_t {
+          f_t v = obj_ptr[k + j * B];
+          return v * v;
+        },
+        f_t{0},
+        thrust::plus<f_t>());
+      f_t l2_dist = std::sqrt(l2_dist_sq);
+      h_orig_w[k] = static_cast<f_t>(path_alphas[k]) / l2_orig_obj_;
+      h_dist_w[k] = static_cast<f_t>(1.0 - path_alphas[k]) / l2_dist;
+      if (!std::isfinite(h_orig_w[k])) h_orig_w[k] = f_t{0};
+      cuopt_expects(
+        std::isfinite(h_dist_w[k]), error_type_t::RuntimeError, "Distance weight not finite");
+    }
+
+    rmm::device_uvector<f_t> d_orig_w(B, stream);
+    rmm::device_uvector<f_t> d_dist_w(B, stream);
+    raft::copy(d_orig_w.data(), h_orig_w.data(), B, stream);
+    raft::copy(d_dist_w.data(), h_dist_w.data(), B, stream);
+
+    const f_t* orig_obj_ptr = d_orig_obj_padded_.data();
+    const f_t* ow_ptr       = d_orig_w.data();
+    const f_t* dw_ptr       = d_dist_w.data();
+    thrust::for_each_n(rmm::exec_policy(stream),
+                       thrust::make_counting_iterator<i_t>(0),
+                       static_cast<i_t>(B) * n_aug_vars,
+                       [obj_ptr, orig_obj_ptr, ow_ptr, dw_ptr, B] __device__(i_t flat) {
+                         i_t k         = flat % B;
+                         i_t j         = flat / B;
+                         obj_ptr[flat] = obj_ptr[flat] * dw_ptr[k] + ow_ptr[k] * orig_obj_ptr[j];
+                       });
+  }
+
+  // ── Copy per-path objective offsets back to host ──
+  std::vector<f_t> h_offsets(B);
+  raft::copy(h_offsets.data(), d_obj_offsets_.data(), B, stream);
+  solution.handle_ptr->sync_stream();
+  for (i_t k = 0; k < B; ++k)
+    input.objective_offsets[k] = h_offsets[k];
+
+  input.has_initial_primal = true;
   return input;
 }
 
@@ -595,10 +726,9 @@ bool batched_feasibility_pump_t<i_t, f_t>::run(solution_t<i_t, f_t>& solution,
   reset();
   initialize_paths(solution);
 
-  // Build the augmented problem (original + distance vars) ONCE.
-  // The A matrix is reused across all iterations; only per-path
-  // objectives, bounds, and RHS are updated each iteration.
-  build_augmented_problem(solution);
+  // Build the augmented problem once; reuse across iterations AND across runs.
+  // The base problem (A, integer indices, variable types) is stable.
+  if (!augmented_problem_) { build_augmented_problem(solution); }
 
   bool found_feasible = false;
   const f_t rlp_base  = context.settings.heuristic_params.relaxed_lp_time_limit;

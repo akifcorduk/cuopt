@@ -107,27 +107,29 @@ static batched_fp_result_t run_batched_fp(const std::string& test_instance,
 TEST(batched_fp, smoke_test_sct2)
 {
   auto result = run_batched_fp("sct2.mps", 60., 4);
-  // batched FP should run without crashing; feasibility is not guaranteed
-  // on every instance but sct2 is small and usually solvable
-  EXPECT_TRUE(result.found_feasible || !result.found_feasible);  // no crash
+  EXPECT_TRUE(result.found_feasible) << "sct2: batched FP did not find a feasible solution";
+  EXPECT_TRUE(result.solution_feasible) << "sct2: solution marked feasible but is not";
 }
 
 TEST(batched_fp, smoke_test_gen_ip054)
 {
   auto result = run_batched_fp("gen-ip054.mps", 60., 4);
-  EXPECT_TRUE(result.found_feasible || !result.found_feasible);
+  EXPECT_TRUE(result.found_feasible) << "gen-ip054: batched FP did not find a feasible solution";
+  EXPECT_TRUE(result.solution_feasible) << "gen-ip054: solution marked feasible but is not";
 }
 
 TEST(batched_fp, batch_size_1)
 {
   auto result = run_batched_fp("sct2.mps", 60., 1);
-  EXPECT_TRUE(result.found_feasible || !result.found_feasible);
+  EXPECT_TRUE(result.found_feasible) << "sct2 (B=1): batched FP did not find a feasible solution";
+  EXPECT_TRUE(result.solution_feasible) << "sct2 (B=1): solution marked feasible but is not";
 }
 
 TEST(batched_fp, batch_size_8)
 {
   auto result = run_batched_fp("sct2.mps", 60., 8);
-  EXPECT_TRUE(result.found_feasible || !result.found_feasible);
+  EXPECT_TRUE(result.found_feasible) << "sct2 (B=8): batched FP did not find a feasible solution";
+  EXPECT_TRUE(result.solution_feasible) << "sct2 (B=8): solution marked feasible but is not";
 }
 
 class BatchedFPParametricTest
@@ -137,9 +139,8 @@ TEST_P(BatchedFPParametricTest, batched_fp_run)
 {
   auto [instance, time_limit, batch_size] = GetParam();
   auto result                             = run_batched_fp(instance, time_limit, batch_size);
-  if (result.found_feasible) {
-    EXPECT_TRUE(result.solution_feasible) << instance << ": returned feasible but solution is not";
-  }
+  EXPECT_TRUE(result.found_feasible) << instance << ": batched FP did not find a feasible solution";
+  EXPECT_TRUE(result.solution_feasible) << instance << ": solution marked feasible but is not";
 }
 
 INSTANTIATE_TEST_SUITE_P(BatchedFPSuite,
