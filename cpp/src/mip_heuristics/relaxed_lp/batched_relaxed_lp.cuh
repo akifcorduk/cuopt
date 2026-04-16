@@ -22,10 +22,9 @@ namespace cuopt::linear_programming::detail {
  * (from shared_problem) but may have different objectives, variable bounds, and
  * constraint bounds.
  *
- * Per-subproblem vectors are stored column-major (subproblem-strided):
- *   element(subproblem_k, var_j) = data[k + j * batch_size]
- * This maps directly to dense matrix columns for SPMM: A * X where each column
- * of X is one subproblem's primal vector.
+ * Per-subproblem vectors are stored row-major (subproblem-contiguous):
+ *   element(subproblem_k, var_j) = data[k * n + j]
+ * Each subproblem's data occupies a contiguous block of n elements.
  */
 template <typename i_t, typename f_t>
 struct batched_lp_input_t {

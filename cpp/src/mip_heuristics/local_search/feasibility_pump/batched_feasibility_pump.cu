@@ -102,31 +102,19 @@ void batched_feasibility_pump_t<i_t, f_t>::initialize_paths(solution_t<i_t, f_t>
 
   // Path 0: nearest rounding of LP relaxation (the standard FP starting point)
   solution.round_nearest();
-  const f_t* src = solution.assignment.data();
-  f_t* rnd_dst   = path_roundings.data();
-  thrust::for_each_n(rmm::exec_policy(stream),
-                     thrust::make_counting_iterator<i_t>(0),
-                     n_vars,
-                     [src, rnd_dst, B] __device__(i_t j) { rnd_dst[0 + j * B] = src[j]; });
+  f_t* rnd_dst = path_roundings.data();
+  raft::copy(rnd_dst, solution.assignment.data(), n_vars, stream);
 
   // Paths 1..B-1: random rounding within bounds (integer vars get random integer)
   for (i_t k = 1; k < B; ++k) {
     solution.assign_random_within_bounds(1.0, true);
     solution.round_nearest();
-    const f_t* rsrc = solution.assignment.data();
-    thrust::for_each_n(rmm::exec_policy(stream),
-                       thrust::make_counting_iterator<i_t>(0),
-                       n_vars,
-                       [rsrc, rnd_dst, k, B] __device__(i_t j) { rnd_dst[k + j * B] = rsrc[j]; });
+    raft::copy(
+      rnd_dst + static_cast<size_t>(k) * n_vars, solution.assignment.data(), n_vars, stream);
   }
 
   // Restore solution to the LP relaxation (path 0 source) for subsequent use
-  thrust::for_each_n(rmm::exec_policy(stream),
-                     thrust::make_counting_iterator<i_t>(0),
-                     n_vars,
-                     [rnd_dst, src = solution.assignment.data(), B] __device__(i_t j) {
-                       src[j] = rnd_dst[0 + j * B];
-                     });
+  raft::copy(solution.assignment.data(), rnd_dst, n_vars, stream);
 }
 
 // (Objective blending is now done on the GPU inside update_batched_input.)
@@ -214,15 +202,15 @@ void batched_feasibility_pump_t<i_t, f_t>::build_augmented_problem(solution_t<i_
     sum_sq += static_cast<long double>(x) * x;
   l2_orig_obj_ = static_cast<f_t>(std::sqrt(sum_sq));
 
-  // Build invariant batched variable bounds
+  // Build invariant batched variable bounds (row-major: path k at offset k * n_aug_vars)
   auto h_aug_var_bounds = cuopt::host_copy(aug_p.variable_bounds, stream);
   solution.handle_ptr->sync_stream();
   const size_t vb_len = static_cast<size_t>(B) * n_aug_vars;
   std::vector<f_t> h_vlb(vb_len), h_vub(vb_len);
   for (i_t k = 0; k < B; ++k) {
     for (i_t j = 0; j < n_aug_vars; ++j) {
-      h_vlb[k + static_cast<size_t>(j) * B] = get_lower(h_aug_var_bounds[j]);
-      h_vub[k + static_cast<size_t>(j) * B] = get_upper(h_aug_var_bounds[j]);
+      h_vlb[static_cast<size_t>(k) * n_aug_vars + j] = get_lower(h_aug_var_bounds[j]);
+      h_vub[static_cast<size_t>(k) * n_aug_vars + j] = get_upper(h_aug_var_bounds[j]);
     }
   }
   cached_vlb_batch_.resize(vb_len, stream);
@@ -238,7 +226,7 @@ void batched_feasibility_pump_t<i_t, f_t>::build_augmented_problem(solution_t<i_
   std::vector<f_t> h_cub(cb_len);
   for (i_t k = 0; k < B; ++k) {
     for (i_t c = 0; c < n_aug_cstr; ++c)
-      h_cub[k + static_cast<size_t>(c) * B] = h_cstr_ub[c];
+      h_cub[static_cast<size_t>(k) * n_aug_cstr + c] = h_cstr_ub[c];
   }
   cached_cub_batch_.resize(cb_len, stream);
   raft::copy(cached_cub_batch_.data(), h_cub.data(), cb_len, stream);
@@ -295,8 +283,8 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
     thrust::for_each_n(rmm::exec_policy(stream),
                        thrust::make_counting_iterator<i_t>(0),
                        static_cast<i_t>(B) * n_aug_cstr,
-                       [clb_base, clb_dst, B] __device__(i_t flat) {
-                         i_t c         = flat / B;
+                       [clb_base, clb_dst, n_aug_cstr] __device__(i_t flat) {
+                         i_t c         = flat % n_aug_cstr;
                          clb_dst[flat] = clb_base[c];
                        });
   }
@@ -319,12 +307,13 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
     thrust::for_each_n(rmm::exec_policy(stream),
                        thrust::make_counting_iterator<i_t>(0),
                        static_cast<i_t>(B) * n_vars,
-                       [proj_ptr, rnd_ptr, primal_ptr, B] __device__(i_t flat) {
-                         i_t k                 = flat % B;
-                         i_t j                 = flat / B;
-                         f_t proj              = proj_ptr[k + j * B];
-                         f_t rnd               = rnd_ptr[k + j * B];
-                         primal_ptr[k + j * B] = isfinite(proj) ? proj : rnd;
+                       [proj_ptr, rnd_ptr, primal_ptr, n_vars, n_aug_vars] __device__(i_t flat) {
+                         i_t k    = flat / n_vars;
+                         i_t j    = flat % n_vars;
+                         f_t proj = proj_ptr[static_cast<size_t>(k) * n_vars + j];
+                         f_t rnd  = rnd_ptr[static_cast<size_t>(k) * n_vars + j];
+                         primal_ptr[static_cast<size_t>(k) * n_aug_vars + j] =
+                           isfinite(proj) ? proj : rnd;
                        });
   }
 
@@ -341,7 +330,6 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
     auto int_idx        = make_span(solution.problem_ptr->integer_indices);
     auto vbounds        = make_span(solution.problem_ptr->variable_bounds);
     const i_t dcb       = dist_cstr_base_;
-    const i_t n_orig    = n_orig_vars_;
 
     const size_t contrib_len = static_cast<size_t>(B) * n_int_vars;
     rmm::device_uvector<f_t> d_offset_contribs(contrib_len, stream);
@@ -360,11 +348,13 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
                         int_idx,
                         vbounds,
                         int_tol,
-                        B,
-                        n_orig,
+                        n_vars,
+                        n_aug_vars,
+                        n_aug_cstr,
+                        n_int_vars,
                         dcb] __device__(i_t flat) {
-                         i_t k     = flat % B;
-                         i_t ii    = flat / B;
+                         i_t k     = flat / n_int_vars;
+                         i_t ii    = flat % n_int_vars;
                          i_t i     = int_idx[ii];
                          auto bnds = vbounds[i];
                          f_t lb    = get_lower(bnds);
@@ -374,33 +364,33 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
                            return;
                          }
 
-                         f_t val  = rnd_ptr[k + i * B];
+                         f_t val  = rnd_ptr[static_cast<size_t>(k) * n_vars + i];
                          i_t dvid = dv_ptr[ii];
 
                          f_t offset_contrib = f_t{0};
                          if (integer_equal<f_t>(val, ub, int_tol)) {
-                           offset_contrib     = ub;
-                           obj_ptr[k + i * B] = f_t{-1};
+                           offset_contrib                                   = ub;
+                           obj_ptr[static_cast<size_t>(k) * n_aug_vars + i] = f_t{-1};
                          } else if (integer_equal<f_t>(val, lb, int_tol)) {
-                           offset_contrib     = -lb;
-                           obj_ptr[k + i * B] = f_t{1};
+                           offset_contrib                                   = -lb;
+                           obj_ptr[static_cast<size_t>(k) * n_aug_vars + i] = f_t{1};
                          } else {
                            cuopt_assert(dvid >= 0,
                                         "Expected distance variable for interior integer");
-                           obj_ptr[k + dvid * B] = f_t{1};
-                           f_t proj_val          = proj_ptr[k + i * B];
-                           f_t dist_val          = abs(val - proj_val);
+                           obj_ptr[static_cast<size_t>(k) * n_aug_vars + dvid] = f_t{1};
+                           f_t proj_val = proj_ptr[static_cast<size_t>(k) * n_vars + i];
+                           f_t dist_val = abs(val - proj_val);
                            if (!isfinite(dist_val)) dist_val = f_t{0};
-                           primal_ptr[k + dvid * B] = dist_val;
+                           primal_ptr[static_cast<size_t>(k) * n_aug_vars + dvid] = dist_val;
                          }
                          contrib_ptr[flat] = offset_contrib;
 
                          if (dvid >= 0) {
-                           i_t rank            = dvid - n_orig;
-                           i_t c1              = dcb + rank * 2;
-                           i_t c2              = dcb + rank * 2 + 1;
-                           clb_ptr[k + c1 * B] = -val;
-                           clb_ptr[k + c2 * B] = val;
+                           i_t rank                                          = dvid - n_vars;
+                           i_t c1                                            = dcb + rank * 2;
+                           i_t c2                                            = dcb + rank * 2 + 1;
+                           clb_ptr[static_cast<size_t>(k) * n_aug_cstr + c1] = -val;
+                           clb_ptr[static_cast<size_t>(k) * n_aug_cstr + c2] = val;
                          }
                        });
 
@@ -411,10 +401,10 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
     thrust::for_each_n(rmm::exec_policy(stream),
                        thrust::make_counting_iterator<i_t>(0),
                        B,
-                       [cptr, offsets_ptr, n_int_loc, B] __device__(i_t k) {
+                       [cptr, offsets_ptr, n_int_loc] __device__(i_t k) {
                          f_t sum = f_t{0};
                          for (i_t ii = 0; ii < n_int_loc; ++ii) {
-                           sum += cptr[k + static_cast<size_t>(ii) * B];
+                           sum += cptr[static_cast<size_t>(k) * n_int_loc + ii];
                          }
                          offsets_ptr[k] = sum;
                        });
@@ -426,14 +416,12 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
     std::vector<f_t> h_orig_w(B), h_dist_w(B);
     for (i_t k = 0; k < B; ++k) {
       path_alphas[k] *= config.alpha_decrease_factor;
-      f_t l2_dist_sq = thrust::transform_reduce(
+      const f_t* path_obj = obj_ptr + static_cast<size_t>(k) * n_aug_vars;
+      f_t l2_dist_sq      = thrust::transform_reduce(
         rmm::exec_policy(stream),
-        thrust::make_counting_iterator<i_t>(0),
-        thrust::make_counting_iterator<i_t>(n_aug_vars),
-        [obj_ptr, k, B] __device__(i_t j) -> f_t {
-          f_t v = obj_ptr[k + j * B];
-          return v * v;
-        },
+        path_obj,
+        path_obj + n_aug_vars,
+        [] __device__(f_t v) -> f_t { return v * v; },
         f_t{0},
         thrust::plus<f_t>());
       f_t l2_dist = std::sqrt(l2_dist_sq);
@@ -455,9 +443,9 @@ batched_lp_input_t<i_t, f_t> batched_feasibility_pump_t<i_t, f_t>::update_batche
     thrust::for_each_n(rmm::exec_policy(stream),
                        thrust::make_counting_iterator<i_t>(0),
                        static_cast<i_t>(B) * n_aug_vars,
-                       [obj_ptr, orig_obj_ptr, ow_ptr, dw_ptr, B] __device__(i_t flat) {
-                         i_t k         = flat % B;
-                         i_t j         = flat / B;
+                       [obj_ptr, orig_obj_ptr, ow_ptr, dw_ptr, n_aug_vars] __device__(i_t flat) {
+                         i_t k         = flat / n_aug_vars;
+                         i_t j         = flat % n_aug_vars;
                          obj_ptr[flat] = obj_ptr[flat] * dw_ptr[k] + ow_ptr[k] * orig_obj_ptr[j];
                        });
   }
@@ -486,17 +474,15 @@ void batched_feasibility_pump_t<i_t, f_t>::extract_projections(
   auto stream          = context.handle_ptr->get_stream();
   const i_t n_aug_vars = output.primal_solutions.size() / B;
 
-  // Copy only original variables from output (skip distance vars)
+  // Copy only original variables from each path (skip distance vars)
   const f_t* out_src = output.primal_solutions.data();
   f_t* proj_dst      = path_projections.data();
-  thrust::for_each_n(rmm::exec_policy(stream),
-                     thrust::make_counting_iterator<i_t>(0),
-                     static_cast<i_t>(B) * n_orig_vars,
-                     [out_src, proj_dst, B, n_aug_vars, n_orig_vars] __device__(i_t flat) {
-                       i_t k               = flat % B;
-                       i_t j               = flat / B;
-                       proj_dst[k + j * B] = out_src[k + j * B];
-                     });
+  for (i_t k = 0; k < B; ++k) {
+    raft::copy(proj_dst + static_cast<size_t>(k) * n_orig_vars,
+               out_src + static_cast<size_t>(k) * n_aug_vars,
+               n_orig_vars,
+               stream);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -517,33 +503,26 @@ void batched_feasibility_pump_t<i_t, f_t>::round_all_paths(solution_t<i_t, f_t>&
   auto var_bounds   = make_span(solution.problem_ptr->variable_bounds);
   const f_t int_tol = context.settings.tolerances.integrality_tolerance;
 
-  // For each path and each variable, copy projection to rounding.
-  // For integer variables, round to nearest integer within bounds.
-  thrust::for_each_n(rmm::exec_policy(stream),
-                     thrust::make_counting_iterator<i_t>(0),
-                     B * n_vars,
-                     [proj_ptr, rnd_ptr, var_bounds, B, n_vars] __device__(i_t flat) {
-                       i_t k              = flat % B;
-                       i_t j              = flat / B;
-                       f_t val            = proj_ptr[k + j * B];
-                       rnd_ptr[k + j * B] = val;
-                     });
+  // Copy all projections to roundings
+  raft::copy(rnd_ptr, proj_ptr, static_cast<size_t>(B) * n_vars, stream);
 
   // Round integer variables
-  thrust::for_each_n(rmm::exec_policy(stream),
-                     thrust::make_counting_iterator<i_t>(0),
-                     B * solution.problem_ptr->n_integer_vars,
-                     [rnd_ptr, int_indices, var_bounds, B, int_tol] __device__(i_t flat) {
-                       i_t k              = flat % B;
-                       i_t ii             = flat / B;
-                       i_t j              = int_indices[ii];
-                       f_t val            = rnd_ptr[k + j * B];
-                       f_t lb             = get_lower(var_bounds[j]);
-                       f_t ub             = get_upper(var_bounds[j]);
-                       f_t rounded        = rint(val);
-                       rounded            = max(lb, min(ub, rounded));
-                       rnd_ptr[k + j * B] = rounded;
-                     });
+  const i_t n_int = solution.problem_ptr->n_integer_vars;
+  thrust::for_each_n(
+    rmm::exec_policy(stream),
+    thrust::make_counting_iterator<i_t>(0),
+    B * n_int,
+    [rnd_ptr, int_indices, var_bounds, n_vars, n_int, int_tol] __device__(i_t flat) {
+      i_t k                                        = flat / n_int;
+      i_t ii                                       = flat % n_int;
+      i_t j                                        = int_indices[ii];
+      f_t val                                      = rnd_ptr[static_cast<size_t>(k) * n_vars + j];
+      f_t lb                                       = get_lower(var_bounds[j]);
+      f_t ub                                       = get_upper(var_bounds[j]);
+      f_t rounded                                  = rint(val);
+      rounded                                      = max(lb, min(ub, rounded));
+      rnd_ptr[static_cast<size_t>(k) * n_vars + j] = rounded;
+    });
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -562,18 +541,15 @@ std::vector<bool> batched_feasibility_pump_t<i_t, f_t>::check_path_cycles(
   std::vector<bool> cycling(B, false);
 
   // Compute L1 distance between projection and rounding for each path
-  // We do this on device per-path using a transform_reduce
   for (i_t k = 0; k < B; ++k) {
-    const f_t* proj_ptr = path_projections.data();
-    const f_t* rnd_ptr  = path_roundings.data();
+    const f_t* proj_k = path_projections.data() + static_cast<size_t>(k) * n_vars;
+    const f_t* rnd_k  = path_roundings.data() + static_cast<size_t>(k) * n_vars;
 
     f_t distance = thrust::transform_reduce(
       rmm::exec_policy(stream),
       solution.problem_ptr->integer_indices.begin(),
       solution.problem_ptr->integer_indices.end(),
-      [proj_ptr, rnd_ptr, k, B] __device__(i_t j) -> f_t {
-        return abs(proj_ptr[k + j * B] - rnd_ptr[k + j * B]);
-      },
+      [proj_k, rnd_k] __device__(i_t j) -> f_t { return abs(proj_k[j] - rnd_k[j]); },
       f_t{0},
       thrust::plus<f_t>());
 
@@ -618,12 +594,10 @@ void batched_feasibility_pump_t<i_t, f_t>::replace_cycling_paths(
     solution.assign_random_within_bounds(config.perturbation_ratio, true);
     solution.round_nearest();
 
-    const f_t* src = solution.assignment.data();
-    f_t* rnd_dst   = path_roundings.data();
-    thrust::for_each_n(rmm::exec_policy(stream),
-                       thrust::make_counting_iterator<i_t>(0),
-                       n_vars,
-                       [src, rnd_dst, k, B] __device__(i_t j) { rnd_dst[k + j * B] = src[j]; });
+    raft::copy(path_roundings.data() + static_cast<size_t>(k) * n_vars,
+               solution.assignment.data(),
+               n_vars,
+               stream);
   }
 }
 
@@ -644,13 +618,11 @@ i_t batched_feasibility_pump_t<i_t, f_t>::check_and_submit_feasible(
   i_t best_n_ints   = -1;
 
   for (i_t k = 0; k < B; ++k) {
-    // Load this path's rounding into the solution
-    const f_t* rnd_src = path_roundings.data();
-    f_t* dst           = solution.assignment.data();
-    thrust::for_each_n(rmm::exec_policy(stream),
-                       thrust::make_counting_iterator<i_t>(0),
-                       n_vars,
-                       [rnd_src, dst, k, B] __device__(i_t j) { dst[j] = rnd_src[k + j * B]; });
+    // Load this path's rounding into the solution (contiguous in row-major)
+    raft::copy(solution.assignment.data(),
+               path_roundings.data() + static_cast<size_t>(k) * n_vars,
+               n_vars,
+               stream);
 
     bool is_feasible = solution.compute_feasibility();
     i_t n_ints       = solution.compute_number_of_integers();
@@ -684,14 +656,11 @@ bool batched_feasibility_pump_t<i_t, f_t>::try_fj_repair(solution_t<i_t, f_t>& s
   const i_t n_vars = solution.problem_ptr->n_variables;
   auto stream      = solution.handle_ptr->get_stream();
 
-  // Load the path's rounding into solution
-  const f_t* rnd_src = path_roundings.data();
-  f_t* dst           = solution.assignment.data();
-  thrust::for_each_n(
-    rmm::exec_policy(stream),
-    thrust::make_counting_iterator<i_t>(0),
-    n_vars,
-    [rnd_src, dst, path_idx, B] __device__(i_t j) { dst[j] = rnd_src[path_idx + j * B]; });
+  // Load the path's rounding into solution (contiguous in row-major)
+  raft::copy(solution.assignment.data(),
+             path_roundings.data() + static_cast<size_t>(path_idx) * n_vars,
+             n_vars,
+             stream);
 
   fj.settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;
   fj.settings.update_weights         = true;
@@ -775,15 +744,11 @@ bool batched_feasibility_pump_t<i_t, f_t>::run(solution_t<i_t, f_t>& solution,
     if (feasible_path >= 0) {
       CUOPT_LOG_DEBUG("Batched FP: feasible path %d at iteration %d", feasible_path, iter);
 
-      // Load best feasible path into solution
-      const f_t* rnd_src = path_roundings.data();
-      f_t* dst           = solution.assignment.data();
-      thrust::for_each_n(rmm::exec_policy(stream),
-                         thrust::make_counting_iterator<i_t>(0),
-                         n_vars,
-                         [rnd_src, dst, feasible_path, B] __device__(i_t j) {
-                           dst[j] = rnd_src[feasible_path + j * B];
-                         });
+      // Load best feasible path into solution (contiguous in row-major)
+      raft::copy(solution.assignment.data(),
+                 path_roundings.data() + static_cast<size_t>(feasible_path) * n_vars,
+                 n_vars,
+                 stream);
       solution.compute_feasibility();
       found_feasible = true;
       break;
@@ -795,12 +760,10 @@ bool batched_feasibility_pump_t<i_t, f_t>::run(solution_t<i_t, f_t>& solution,
       i_t best_path   = 0;
       i_t best_n_ints = 0;
       for (i_t k = 0; k < B; ++k) {
-        const f_t* rnd_src = path_roundings.data();
-        f_t* dst           = solution.assignment.data();
-        thrust::for_each_n(rmm::exec_policy(stream),
-                           thrust::make_counting_iterator<i_t>(0),
-                           n_vars,
-                           [rnd_src, dst, k, B] __device__(i_t j) { dst[j] = rnd_src[k + j * B]; });
+        raft::copy(solution.assignment.data(),
+                   path_roundings.data() + static_cast<size_t>(k) * n_vars,
+                   n_vars,
+                   stream);
         i_t n_ints = solution.compute_number_of_integers();
         if (n_ints > best_n_ints) {
           best_n_ints = n_ints;
@@ -821,13 +784,10 @@ bool batched_feasibility_pump_t<i_t, f_t>::run(solution_t<i_t, f_t>& solution,
         break;
       } else {
         // Restore from last rounding (FJ may have modified it)
-        const f_t* rnd_src = path_roundings.data();
-        f_t* dst           = solution.assignment.data();
-        thrust::for_each_n(
-          rmm::exec_policy(stream),
-          thrust::make_counting_iterator<i_t>(0),
-          n_vars,
-          [rnd_src, dst, best_path, B] __device__(i_t j) { dst[j] = rnd_src[best_path + j * B]; });
+        raft::copy(solution.assignment.data(),
+                   path_roundings.data() + static_cast<size_t>(best_path) * n_vars,
+                   n_vars,
+                   stream);
       }
     }
 
@@ -841,16 +801,13 @@ bool batched_feasibility_pump_t<i_t, f_t>::run(solution_t<i_t, f_t>& solution,
 
   if (!found_feasible) {
     // Return the best path's rounding as the solution even if infeasible
-    // (closest to feasible by most integers)
     i_t best_path   = 0;
     i_t best_n_ints = 0;
     for (i_t k = 0; k < B; ++k) {
-      const f_t* rnd_src = path_roundings.data();
-      f_t* dst           = solution.assignment.data();
-      thrust::for_each_n(rmm::exec_policy(stream),
-                         thrust::make_counting_iterator<i_t>(0),
-                         n_vars,
-                         [rnd_src, dst, k, B] __device__(i_t j) { dst[j] = rnd_src[k + j * B]; });
+      raft::copy(solution.assignment.data(),
+                 path_roundings.data() + static_cast<size_t>(k) * n_vars,
+                 n_vars,
+                 stream);
       i_t n_ints = solution.compute_number_of_integers();
       if (n_ints > best_n_ints) {
         best_n_ints = n_ints;
@@ -858,13 +815,10 @@ bool batched_feasibility_pump_t<i_t, f_t>::run(solution_t<i_t, f_t>& solution,
       }
     }
     // Load best into solution
-    const f_t* rnd_src = path_roundings.data();
-    f_t* dst           = solution.assignment.data();
-    thrust::for_each_n(
-      rmm::exec_policy(stream),
-      thrust::make_counting_iterator<i_t>(0),
-      n_vars,
-      [rnd_src, dst, best_path, B] __device__(i_t j) { dst[j] = rnd_src[best_path + j * B]; });
+    raft::copy(solution.assignment.data(),
+               path_roundings.data() + static_cast<size_t>(best_path) * n_vars,
+               n_vars,
+               stream);
     solution.compute_feasibility();
   }
 

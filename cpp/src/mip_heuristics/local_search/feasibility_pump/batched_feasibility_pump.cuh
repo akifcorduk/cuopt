@@ -108,8 +108,8 @@ class batched_feasibility_pump_t {
   line_segment_search_t<i_t, f_t>& line_segment_search;
   rmm::device_uvector<f_t>& lp_optimal_solution;
 
-  // Per-path state: column-major [batch_size x n_vars]
-  // Element (path k, var j) is at index [k + j * batch_size]
+  // Per-path state: row-major [batch_size x n_vars]
+  // Element (path k, var j) is at index [k * n_vars + j]
   rmm::device_uvector<f_t> path_roundings;
   rmm::device_uvector<f_t> path_projections;
 

@@ -54,36 +54,25 @@ batched_lp_output_t<i_t, f_t> solve_batched_lp(batched_lp_input_t<i_t, f_t>& inp
 
     problem_t<i_t, f_t> temp_p(*input.shared_problem_ptr);
 
-    // Strided copy: src[k + j*B] -> dst[j] for j in [0, n_vars)
-    const f_t* obj_src = input.objective_coefficients.data();
-    f_t* obj_dst       = temp_p.objective_coefficients.data();
-    thrust::tabulate(
-      rmm::exec_policy(stream), obj_dst, obj_dst + n_vars, [obj_src, k, B] __device__(i_t j) {
-        return obj_src[k + j * B];
-      });
+    // Row-major copy: src[k * n + j] -> dst[j] for j in [0, n)
+    const f_t* obj_src = input.objective_coefficients.data() + static_cast<size_t>(k) * n_vars;
+    raft::copy(temp_p.objective_coefficients.data(), obj_src, n_vars, stream);
 
     // Copy per-subproblem variable bounds
-    const f_t* vlb_src = input.variable_lower_bounds.data();
-    const f_t* vub_src = input.variable_upper_bounds.data();
+    const f_t* vlb_src = input.variable_lower_bounds.data() + static_cast<size_t>(k) * n_vars;
+    const f_t* vub_src = input.variable_upper_bounds.data() + static_cast<size_t>(k) * n_vars;
     using f_t2         = typename type_2<f_t>::type;
-    thrust::tabulate(rmm::exec_policy(stream),
-                     temp_p.variable_bounds.data(),
-                     temp_p.variable_bounds.data() + n_vars,
-                     [vlb_src, vub_src, k, B] __device__(i_t j) -> f_t2 {
-                       return f_t2{vlb_src[k + j * B], vub_src[k + j * B]};
-                     });
+    thrust::tabulate(
+      rmm::exec_policy(stream),
+      temp_p.variable_bounds.data(),
+      temp_p.variable_bounds.data() + n_vars,
+      [vlb_src, vub_src] __device__(i_t j) -> f_t2 { return f_t2{vlb_src[j], vub_src[j]}; });
 
     // Copy per-subproblem constraint bounds
-    const f_t* clb_src = input.constraint_lower_bounds.data();
-    const f_t* cub_src = input.constraint_upper_bounds.data();
-    thrust::tabulate(rmm::exec_policy(stream),
-                     temp_p.constraint_lower_bounds.data(),
-                     temp_p.constraint_lower_bounds.data() + n_cstr,
-                     [clb_src, k, B] __device__(i_t j) { return clb_src[k + j * B]; });
-    thrust::tabulate(rmm::exec_policy(stream),
-                     temp_p.constraint_upper_bounds.data(),
-                     temp_p.constraint_upper_bounds.data() + n_cstr,
-                     [cub_src, k, B] __device__(i_t j) { return cub_src[k + j * B]; });
+    const f_t* clb_src = input.constraint_lower_bounds.data() + static_cast<size_t>(k) * n_cstr;
+    const f_t* cub_src = input.constraint_upper_bounds.data() + static_cast<size_t>(k) * n_cstr;
+    raft::copy(temp_p.constraint_lower_bounds.data(), clb_src, n_cstr, stream);
+    raft::copy(temp_p.constraint_upper_bounds.data(), cub_src, n_cstr, stream);
 
     temp_p.presolve_data.objective_offset = input.objective_offsets[k];
     temp_p.check_problem_representation(true);
@@ -91,12 +80,9 @@ batched_lp_output_t<i_t, f_t> solve_batched_lp(batched_lp_input_t<i_t, f_t>& inp
     // Build per-subproblem assignment for warm start
     rmm::device_uvector<f_t> assignment(n_vars, stream);
     if (input.has_initial_primal) {
-      const f_t* primal_src = input.initial_primal_solutions.data();
-      f_t* primal_dst       = assignment.data();
-      thrust::tabulate(rmm::exec_policy(stream),
-                       primal_dst,
-                       primal_dst + n_vars,
-                       [primal_src, k, B] __device__(i_t j) { return primal_src[k + j * B]; });
+      const f_t* primal_src =
+        input.initial_primal_solutions.data() + static_cast<size_t>(k) * n_vars;
+      raft::copy(assignment.data(), primal_src, n_vars, stream);
     } else {
       thrust::fill(rmm::exec_policy(stream), assignment.begin(), assignment.end(), f_t{0});
     }
@@ -114,15 +100,10 @@ batched_lp_output_t<i_t, f_t> solve_batched_lp(batched_lp_input_t<i_t, f_t>& inp
                                        ? solver_response.get_objective_value()
                                        : std::numeric_limits<f_t>::infinity();
 
-    // Copy solution back into batched output (column-major)
+    // Copy solution back into batched output (row-major)
     if (solver_response.get_primal_solution().size() > 0) {
-      const f_t* sol_src = assignment.data();
-      f_t* out_dst       = output.primal_solutions.data();
-      thrust::for_each_n(
-        rmm::exec_policy(stream),
-        thrust::make_counting_iterator<i_t>(0),
-        n_vars,
-        [sol_src, out_dst, k, B] __device__(i_t j) { out_dst[k + j * B] = sol_src[j]; });
+      f_t* out_dst = output.primal_solutions.data() + static_cast<size_t>(k) * n_vars;
+      raft::copy(out_dst, assignment.data(), n_vars, stream);
     }
   }
 
