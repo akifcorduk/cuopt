@@ -890,14 +890,14 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
   // are visible before any per-thread kernel can reference that memory.
   problem.handle_ptr->sync_stream();
 
+  for (size_t step_start = 0; step_start < priority_indices.size(); step_start += step_size) {
+    if (timer.check_time_limit() || early_exit || problem_is_infeasible.load()) { break; }
+    size_t step_end = std::min(step_start + step_size, priority_indices.size());
 // Main parallel loop
 #pragma omp parallel num_threads(num_threads)
-  {
-    for (size_t step_start = 0; step_start < priority_indices.size(); step_start += step_size) {
-      if (timer.check_time_limit() || early_exit || problem_is_infeasible.load()) { break; }
-      size_t step_end = std::min(step_start + step_size, priority_indices.size());
+    {
+#pragma omp for schedule(static, 4)
 
-#pragma omp for
       for (size_t i = step_start; i < step_end; ++i) {
         auto var_idx = priority_indices[i];
         if (timer.check_time_limit()) { continue; }
