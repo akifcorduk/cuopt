@@ -6,6 +6,9 @@
 /* clang-format on */
 
 #include <mip_heuristics/mip_constants.hpp>
+#include <utilities/event_handler.cuh>
+
+#include <chrono>
 
 #include <thrust/count.h>
 #include <thrust/extrema.h>
@@ -108,10 +111,15 @@ void multi_probe_t<i_t, f_t>::ensure_clique_data(problem_t<i_t, f_t>& pb)
     clique_data_built    = false;
     return;
   }
+  const auto build_start = std::chrono::steady_clock::now();
   clique_data.build_from_host(pb, context.problem_ptr->reverse_original_ids, *current_ct);
   auto stream = pb.handle_ptr->get_stream();
   upd_0.resize_clique_buffers(clique_data.n_groups, stream);
   upd_1.resize_clique_buffers(clique_data.n_groups, stream);
+  const double build_ms =
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - build_start)
+      .count();
+  clique_stats.add_build_time_ms(build_ms);
   last_built_problem       = &pb;
   last_built_clique_table  = current_ct;
   last_built_n_variables   = pb.n_variables;
@@ -179,7 +187,17 @@ bool multi_probe_t<i_t, f_t>::calculate_bounds_update(problem_t<i_t, f_t>& pb,
   auto stream = handle_ptr->get_stream();
 
   // Per-probe clique-aware update; static group table is shared via `clique_data`.
+  // Each call records events between the three kernels so the per-stage GPU
+  // cost can be attributed individually. The synchronize on the trailing
+  // event is amortized against the existing per-probe
+  // `bounds_changed.value(stream)` sync that follows.
   auto run_clique_update_for_probe = [&](bounds_update_data_t<i_t, f_t>& upd) {
+    cuopt::event_handler_t evt_start;
+    cuopt::event_handler_t evt_after_compute;
+    cuopt::event_handler_t evt_after_apply;
+    cuopt::event_handler_t evt_after_update;
+    evt_start.record(stream);
+
     constexpr i_t warp = raft::WarpSize;
     compute_clique_corrections_kernel<i_t, f_t, warp>
       <<<clique_data.n_groups, warp, 0, stream>>>(make_span(clique_data.group_member_offsets),
@@ -197,6 +215,7 @@ bool multi_probe_t<i_t, f_t>::calculate_bounds_update(problem_t<i_t, f_t>& pb,
                                                   make_span(upd.group_second_min_neg),
                                                   pb.tolerances.integrality_tolerance);
     RAFT_CHECK_CUDA(stream);
+    evt_after_compute.record(stream);
 
     constexpr i_t apply_tpb = 128;
     const i_t apply_blocks  = (pb.n_constraints + apply_tpb - 1) / apply_tpb;
@@ -209,10 +228,24 @@ bool multi_probe_t<i_t, f_t>::calculate_bounds_update(problem_t<i_t, f_t>& pb,
                                                make_span(upd.max_activity),
                                                pb.n_constraints);
     RAFT_CHECK_CUDA(stream);
+    evt_after_apply.record(stream);
 
     update_bounds_kernel_cliq<i_t, f_t, n_threads>
       <<<pb.n_variables, n_threads, 0, stream>>>(pb.view(), upd.view(), clique_data.view());
     RAFT_CHECK_CUDA(stream);
+    evt_after_update.record(stream);
+    evt_after_update.synchronize();
+
+    const double t_compute =
+      static_cast<double>(evt_after_compute.elapsed_time_since_ms(evt_start));
+    const double t_apply =
+      static_cast<double>(evt_after_apply.elapsed_time_since_ms(evt_after_compute));
+    const double t_update =
+      static_cast<double>(evt_after_update.elapsed_time_since_ms(evt_after_apply));
+    clique_stats.add_compute_corr_ms(t_compute);
+    clique_stats.add_apply_corr_ms(t_apply);
+    clique_stats.add_update_bounds_cliq_ms(t_update);
+    clique_stats.add_prop_call(t_compute + t_apply + t_update);
   };
 
   const bool use_cliques = !clique_data.empty();
@@ -373,6 +406,7 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
     // reset for the next calls on the same object
     init_changed_constraints = true;
   }
+  clique_stats.reset_run();
   ensure_clique_data(pb);
   for (i_t iter = 0; iter < settings.iteration_limit; ++iter) {
     if (timer.check_time_limit()) {
@@ -402,6 +436,28 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
     upd_1.init_changed_constraints(handle_ptr);
     calculate_activity(pb, handle_ptr);
     constraint_stats(pb, handle_ptr);
+  }
+
+  if (clique_stats.prop_run_calls > 0 || clique_stats.build_run_calls > 0) {
+    CUOPT_LOG_DEBUG(
+      "[clique-mp] run: prop=%.3f ms over %d probe-iters "
+      "(compute=%.3f, apply=%.3f, update_bounds=%.3f), build=%.3f ms over %d builds | "
+      "total: prop=%.3f ms over %d probe-iters "
+      "(compute=%.3f, apply=%.3f, update_bounds=%.3f), build=%.3f ms over %d builds",
+      clique_stats.prop_run_time_ms,
+      static_cast<int>(clique_stats.prop_run_calls),
+      clique_stats.compute_corr_run_time_ms,
+      clique_stats.apply_corr_run_time_ms,
+      clique_stats.update_bounds_cliq_run_time_ms,
+      clique_stats.build_run_time_ms,
+      static_cast<int>(clique_stats.build_run_calls),
+      clique_stats.prop_total_time_ms,
+      static_cast<int>(clique_stats.prop_total_calls),
+      clique_stats.compute_corr_total_time_ms,
+      clique_stats.apply_corr_total_time_ms,
+      clique_stats.update_bounds_cliq_total_time_ms,
+      clique_stats.build_total_time_ms,
+      static_cast<int>(clique_stats.build_total_calls));
   }
 
   return criteria;

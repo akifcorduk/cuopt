@@ -28,6 +28,93 @@
 
 namespace cuopt::linear_programming::detail {
 
+// Lightweight timing counters for the clique-aware bound-propagation path.
+// One instance lives on each owner (bound_presolve_t / multi_probe_t).
+//
+// "Run" stats are cleared at the start of every bound_update_loop and reflect
+// the work attributable to that single solve invocation. "Total" stats are
+// never cleared and accumulate over the lifetime of the owning object, which
+// is useful when the same instance is reused across many probes / solves.
+//
+// Times are reported in milliseconds. Build time covers
+// `clique_group_table_t::build_from_host` plus the per-probe correction-buffer
+// resize. Propagation time covers the three GPU kernels in the clique branch
+// of `calculate_bounds_update`, broken down into:
+//   * compute_corr  — `compute_clique_corrections_kernel`
+//   * apply_corr    — `apply_clique_corrections_to_activity_kernel`
+//   * update_bounds — `update_bounds_kernel_cliq`
+// `prop_*` is the sum of the three sub-stages. The non-clique fallback path
+// is not measured.
+template <typename i_t>
+struct clique_propagation_stats_t {
+  double prop_run_time_ms{0.0};
+  i_t prop_run_calls{0};
+  double build_run_time_ms{0.0};
+  i_t build_run_calls{0};
+
+  double compute_corr_run_time_ms{0.0};
+  double apply_corr_run_time_ms{0.0};
+  double update_bounds_cliq_run_time_ms{0.0};
+
+  double prop_total_time_ms{0.0};
+  i_t prop_total_calls{0};
+  double build_total_time_ms{0.0};
+  i_t build_total_calls{0};
+
+  double compute_corr_total_time_ms{0.0};
+  double apply_corr_total_time_ms{0.0};
+  double update_bounds_cliq_total_time_ms{0.0};
+
+  void reset_run() noexcept
+  {
+    prop_run_time_ms               = 0.0;
+    prop_run_calls                 = 0;
+    build_run_time_ms              = 0.0;
+    build_run_calls                = 0;
+    compute_corr_run_time_ms       = 0.0;
+    apply_corr_run_time_ms         = 0.0;
+    update_bounds_cliq_run_time_ms = 0.0;
+  }
+
+  // Per-kernel adders. Caller is expected to invoke all three for the same
+  // iteration; the rolled-up `prop_*` counter is updated by `add_prop_call`.
+  void add_compute_corr_ms(double ms) noexcept
+  {
+    compute_corr_run_time_ms += ms;
+    compute_corr_total_time_ms += ms;
+  }
+
+  void add_apply_corr_ms(double ms) noexcept
+  {
+    apply_corr_run_time_ms += ms;
+    apply_corr_total_time_ms += ms;
+  }
+
+  void add_update_bounds_cliq_ms(double ms) noexcept
+  {
+    update_bounds_cliq_run_time_ms += ms;
+    update_bounds_cliq_total_time_ms += ms;
+  }
+
+  // Records one full clique-aware iteration of total `ms` and bumps the
+  // per-iteration call counters. Use after the three per-kernel adders.
+  void add_prop_call(double ms) noexcept
+  {
+    prop_run_time_ms += ms;
+    prop_total_time_ms += ms;
+    ++prop_run_calls;
+    ++prop_total_calls;
+  }
+
+  void add_build_time_ms(double ms) noexcept
+  {
+    build_run_time_ms += ms;
+    build_total_time_ms += ms;
+    ++build_run_calls;
+    ++build_total_calls;
+  }
+};
+
 // Static CSR of non-overlapping clique groups per constraint. Built once on the
 // host from clique_table_t and copied to device. Groups are sorted by
 // constraint_id for deterministic per-constraint summation. Dynamic correction

@@ -80,6 +80,9 @@ class bound_presolve_t {
   mip_solver_context_t<i_t, f_t>& context;
   bounds_update_data_t<i_t, f_t> upd;
   clique_group_table_t<i_t, f_t> clique_data;
+  // Per-run + cumulative timings for the clique-aware bound-propagation path.
+  // `bound_update_loop` resets the run stats and logs them at exit.
+  clique_propagation_stats_t<i_t> clique_stats;
   bool clique_data_built{false};
   // Fingerprint detecting problem swaps (local_search alternates between
   // *problem_ptr and problem_with_objective_cut, which can share dims).

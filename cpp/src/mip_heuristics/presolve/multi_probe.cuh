@@ -78,6 +78,10 @@ class multi_probe_t {
   bounds_update_data_t<i_t, f_t> upd_1;
 
   clique_group_table_t<i_t, f_t> clique_data;
+  // Per-run + cumulative timings for the clique-aware bound-propagation path.
+  // `bound_update_loop` resets the run stats and logs them at exit. Each
+  // probe contributes its own propagation iteration to the call counters.
+  clique_propagation_stats_t<i_t> clique_stats;
   bool clique_data_built{false};
   // See bound_presolve_t for fingerprint rationale.
   const problem_t<i_t, f_t>* last_built_problem           = nullptr;
