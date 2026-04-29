@@ -26,7 +26,7 @@ namespace cuopt::linear_programming::dual_simplex {
 
 namespace {
 
-#define DEBUG_CLIQUE_CUTS 0
+#define DEBUG_CLIQUE_CUTS 1
 #define CHECK_WORKSPACE   0
 
 enum class clique_cut_build_status_t : int8_t { NO_CUT = 0, CUT_ADDED = 1, INFEASIBLE = 2 };
@@ -383,10 +383,17 @@ void extend_clique_vertices(std::vector<i_t>& clique_vertices,
                             f_t start_time,
                             f_t time_limit,
                             f_t* work_estimate,
-                            f_t max_work_estimate)
+                            f_t max_work_estimate,
+                            i_t max_clique_size)
 {
   if (toc(start_time) >= time_limit) { return; }
   if (clique_vertices.empty()) { return; }
+  // Hard density cap: once the clique already meets or exceeds the size cap
+  // there is nothing extension can do. Return early to avoid bloating cuts
+  // that slow down downstream Gomory/MIR aggregation.
+  if (max_clique_size > 0 && static_cast<i_t>(clique_vertices.size()) >= max_clique_size) {
+    return;
+  }
 #if DEBUG_CLIQUE_CUTS
   const size_t initial_clique_vertices = clique_vertices.size();
 #endif
@@ -463,6 +470,12 @@ void extend_clique_vertices(std::vector<i_t>& clique_vertices,
   });
 
   for (const auto candidate : candidates) {
+    if (max_clique_size > 0 && static_cast<i_t>(clique_vertices.size()) >= max_clique_size) {
+      CLIQUE_CUTS_DEBUG("extend_clique_vertices size_cap_hit size=%lld cap=%lld",
+                        static_cast<long long>(clique_vertices.size()),
+                        static_cast<long long>(max_clique_size));
+      break;
+    }
     bool add   = true;
     i_t checks = 0;
     for (const auto v : clique_vertices) {
@@ -1826,59 +1839,125 @@ bool cut_generation_t<i_t, f_t>::generate_cuts(const lp_problem_t<i_t, f_t>& lp,
                                                variable_bounds_t<i_t, f_t>& variable_bounds,
                                                f_t start_time)
 {
+  // === Per-pass diagnostics ====================================================
+  // Activated to investigate why Gomory/MIR slow down after dense clique cuts
+  // are added. We log per-block timing, # cuts added, and avg/max nz of the
+  // cuts added in that block. We also log LP row-length stats so we can see
+  // how the LP+cut tableau density grows pass over pass.
+  auto pool_added_stats = [&](i_t pool_before) -> std::tuple<i_t, f_t, i_t> {
+    const i_t pool_after = cut_pool_.pool_size();
+    if (pool_after <= pool_before) { return {0, 0.0, 0}; }
+    i_t total_nz = 0;
+    i_t max_nz   = 0;
+    for (i_t r = pool_before; r < pool_after; ++r) {
+      const i_t nz = cut_pool_.cut_nz(r);
+      total_nz += nz;
+      max_nz = std::max(max_nz, nz);
+    }
+    const i_t added  = pool_after - pool_before;
+    const f_t avg_nz = static_cast<f_t>(total_nz) / static_cast<f_t>(added);
+    return {added, avg_nz, max_nz};
+  };
+
+  {
+    // LP+previous-pass cuts row-length stats. This is the table Gomory and MIR
+    // operate on, so dense rows here directly slow them down.
+    i_t arow_total_nz = 0;
+    i_t arow_max_nz   = 0;
+    i_t arow_dense_64 = 0;  // rows with >= 64 nonzeros
+    for (i_t r = 0; r < Arow.m; ++r) {
+      const i_t nz = Arow.row_length(r);
+      arow_total_nz += nz;
+      arow_max_nz = std::max(arow_max_nz, nz);
+      if (nz >= 64) { arow_dense_64++; }
+    }
+    const f_t arow_avg_nz =
+      Arow.m > 0 ? static_cast<f_t>(arow_total_nz) / static_cast<f_t>(Arow.m) : 0.0;
+    settings.log.printf(
+      "Cut pass start: rows=%d cols=%d Arow_nnz=%d avg_row_nz=%.2f max_row_nz=%d "
+      "rows_with_nz>=64=%d cut_pool_size=%d\n",
+      lp.num_rows,
+      lp.num_cols,
+      arow_total_nz,
+      static_cast<double>(arow_avg_nz),
+      arow_max_nz,
+      arow_dense_64,
+      cut_pool_.pool_size());
+  }
+
   // Generate Gomory and CG Cuts
   if (settings.mixed_integer_gomory_cuts != 0 || settings.strong_chvatal_gomory_cuts != 0) {
-    f_t cut_start_time = tic();
+    const i_t pool_before = cut_pool_.pool_size();
+    f_t cut_start_time    = tic();
     generate_gomory_cuts(
       lp, settings, Arow, new_slacks, var_types, basis_update, xstar, basic_list, nonbasic_list);
-    f_t cut_generation_time = toc(cut_start_time);
-    if (cut_generation_time > 1.0) {
-      settings.log.debug("Gomory and CG cut generation time %.2f seconds\n", cut_generation_time);
-    }
+    f_t cut_generation_time      = toc(cut_start_time);
+    auto [added, avg_nz, max_nz] = pool_added_stats(pool_before);
+    settings.log.printf("Gomory/CG cuts: time=%.3fs added=%d avg_nz=%.2f max_nz=%d\n",
+                        static_cast<double>(cut_generation_time),
+                        added,
+                        static_cast<double>(avg_nz),
+                        max_nz);
   }
 
   // Generate Knapsack cuts
   if (settings.knapsack_cuts != 0) {
-    f_t cut_start_time = tic();
+    const i_t pool_before = cut_pool_.pool_size();
+    f_t cut_start_time    = tic();
     generate_knapsack_cuts(lp, settings, Arow, new_slacks, var_types, xstar, start_time);
-    f_t cut_generation_time = toc(cut_start_time);
-    if (cut_generation_time > 1.0) {
-      settings.log.debug("Knapsack cut generation time %.2f seconds\n", cut_generation_time);
-    }
+    f_t cut_generation_time      = toc(cut_start_time);
+    auto [added, avg_nz, max_nz] = pool_added_stats(pool_before);
+    settings.log.printf("Knapsack cuts: time=%.3fs added=%d avg_nz=%.2f max_nz=%d\n",
+                        static_cast<double>(cut_generation_time),
+                        added,
+                        static_cast<double>(avg_nz),
+                        max_nz);
   }
 
   // Generate MIR and CG cuts
   if (settings.mir_cuts != 0 || settings.strong_chvatal_gomory_cuts != 0) {
-    f_t cut_start_time = tic();
+    const i_t pool_before = cut_pool_.pool_size();
+    f_t cut_start_time    = tic();
     generate_mir_cuts(lp, settings, Arow, new_slacks, var_types, xstar, ystar, variable_bounds);
-    f_t cut_generation_time = toc(cut_start_time);
-    if (cut_generation_time > 1.0) {
-      settings.log.debug("MIR and CG cut generation time %.2f seconds\n", cut_generation_time);
-    }
+    f_t cut_generation_time      = toc(cut_start_time);
+    auto [added, avg_nz, max_nz] = pool_added_stats(pool_before);
+    settings.log.printf("MIR/CG cuts: time=%.3fs added=%d avg_nz=%.2f max_nz=%d\n",
+                        static_cast<double>(cut_generation_time),
+                        added,
+                        static_cast<double>(avg_nz),
+                        max_nz);
   }
 
   // Generate implied bound cuts
   if (settings.implied_bound_cuts != 0) {
-    f_t cut_start_time = tic();
+    const i_t pool_before = cut_pool_.pool_size();
+    f_t cut_start_time    = tic();
     generate_implied_bound_cuts(lp, settings, var_types, xstar, start_time);
-    f_t cut_generation_time = toc(cut_start_time);
-    if (cut_generation_time > 1.0) {
-      settings.log.debug("Implied bounds cut generation time %.2f seconds\n", cut_generation_time);
-    }
+    f_t cut_generation_time      = toc(cut_start_time);
+    auto [added, avg_nz, max_nz] = pool_added_stats(pool_before);
+    settings.log.printf("ImpliedBound cuts: time=%.3fs added=%d avg_nz=%.2f max_nz=%d\n",
+                        static_cast<double>(cut_generation_time),
+                        added,
+                        static_cast<double>(avg_nz),
+                        max_nz);
   }
 
   // Generate Clique cuts (last to give background clique table generation maximum time)
   if (settings.clique_cuts != 0) {
-    f_t cut_start_time = tic();
-    bool feasible      = generate_clique_cuts(lp, settings, var_types, xstar, zstar, start_time);
+    const i_t pool_before = cut_pool_.pool_size();
+    f_t cut_start_time    = tic();
+    bool feasible         = generate_clique_cuts(lp, settings, var_types, xstar, zstar, start_time);
     if (!feasible) {
       settings.log.printf("Clique cuts proved infeasible\n");
       return false;
     }
-    f_t cut_generation_time = toc(cut_start_time);
-    if (cut_generation_time > 1.0) {
-      settings.log.debug("Clique cut generation time %.2f seconds\n", cut_generation_time);
-    }
+    f_t cut_generation_time      = toc(cut_start_time);
+    auto [added, avg_nz, max_nz] = pool_added_stats(pool_before);
+    settings.log.printf("Clique cuts: time=%.3fs added=%d avg_nz=%.2f max_nz=%d\n",
+                        static_cast<double>(cut_generation_time),
+                        added,
+                        static_cast<double>(avg_nz),
+                        max_nz);
   }
   return true;
 }
@@ -1959,6 +2038,12 @@ bool cut_generation_t<i_t, f_t>::generate_clique_cuts(
   const i_t max_calls         = 100000;
   f_t work_estimate           = 0.0;
   const f_t max_work_estimate = 1e8;
+  // Hard cap on the final clique-cut size (literals per cut). Dense clique cuts
+  // bloat tableau rows and dramatically slow down downstream Gomory/MIR/Knapsack
+  // generators that aggregate over them. Empirically 32 retains essentially all
+  // tightening since extension candidates have x* in {0,1} and contribute zero
+  // to current LP violation; if they ever turn fractional they can be re-cut.
+  const i_t max_clique_cut_size = 32;
 
   cuopt_assert(user_problem_.var_types.size() == static_cast<size_t>(num_vars),
                "User problem var_types size mismatch");
@@ -2125,7 +2210,8 @@ bool cut_generation_t<i_t, f_t>::generate_clique_cuts(
                                      start_time,
                                      settings.time_limit,
                                      &work_estimate,
-                                     max_work_estimate);
+                                     max_work_estimate,
+                                     max_clique_cut_size);
 #if DEBUG_CLIQUE_CUTS
     extension_gain += clique_vertices.size() - size_before_extension;
 #endif
@@ -2221,12 +2307,22 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
   const i_t max_cuts = std::min(lp.num_rows, 100000);
   f_t work_estimate  = 0.0;
   i_t num_cuts       = 0;
+  // Diagnostics
+  i_t total_aggregations = 0;
+  i_t cg_cuts_added      = 0;
+  i_t mir_cuts_added     = 0;
+  i_t skipped_score      = 0;
+  i_t skipped_negate     = 0;
+  i_t exit_reason        = 0;  // 0=queue empty, 1=max_cuts, 2=score<=0, 3=work_estimate
   while (num_cuts < max_cuts && !score_queue.empty()) {
     // Get the row with the highest score from the queue
     auto [max_score, i] = score_queue.top();
     score_queue.pop();
     // skip stale score entries
-    if (max_score != scores[i]) { continue; }
+    if (max_score != scores[i]) {
+      skipped_score++;
+      continue;
+    }
 
     // Add the current row to the aggregated set
     aggregated_mark[i] = 1;
@@ -2236,8 +2332,14 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
     const i_t slack       = complemented_mir.slack_cols(i);
     const f_t slack_value = xstar[slack];
 
-    if (max_score <= 0.0) { break; }
-    if (work_estimate > 2e9) { break; }
+    if (max_score <= 0.0) {
+      exit_reason = 2;
+      break;
+    }
+    if (work_estimate > 2e9) {
+      exit_reason = 3;
+      break;
+    }
 
     inequality_t<i_t, f_t> inequality(Arow, i, lp.rhs[i]);
     work_estimate += inequality.size();
@@ -2255,7 +2357,10 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
       inequality_t<i_t, f_t> cg_cut;
       i_t cg_status =
         cg.generate_strong_cg_cut(lp, settings, var_types, cg_inequality, xstar, cg_cut);
-      if (cg_status == 0) { cut_pool_.add_cut(cut_type_t::CHVATAL_GOMORY, cg_cut); }
+      if (cg_status == 0) {
+        cut_pool_.add_cut(cut_type_t::CHVATAL_GOMORY, cg_cut);
+        cg_cuts_added++;
+      }
     }
 
     if (settings.mir_cuts == 0) { continue; }
@@ -2283,7 +2388,10 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
       }
     }
 
-    if (negate_inequality == -1) { continue; }
+    if (negate_inequality == -1) {
+      skipped_negate++;
+      continue;
+    }
 
     if (negate_inequality) {
       // inequaility'*x <= inequality_rhs
@@ -2337,7 +2445,10 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
       }
 
       if (add_cut) {
-        if (settings.mir_cuts != 0) { cut_pool_.add_cut(cut_type_t::MIXED_INTEGER_ROUNDING, cut); }
+        if (settings.mir_cuts != 0) {
+          cut_pool_.add_cut(cut_type_t::MIXED_INTEGER_ROUNDING, cut);
+          mir_cuts_added++;
+        }
         break;
       } else {
         // Perform aggregation to try and find a cut
@@ -2418,6 +2529,7 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
               aggregated_mark[pivot_row] = 1;
               work_estimate += inequality.size() + pivot_row_inequality.size();
               did_aggregate = true;
+              total_aggregations++;
               break;
             }
 
@@ -2454,6 +2566,18 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
     score_queue.push(std::make_pair(scores[i], i));
     work_estimate += std::log2(std::max(1, static_cast<i_t>(score_queue.size())));
   }
+  settings.log.printf(
+    "  MIR diag: cg_added=%d mir_added=%d total_aggregations=%d skipped_score=%d "
+    "skipped_negate=%d work_estimate=%.2e exit_reason=%d (0=queue 1=max_cuts 2=score<=0 "
+    "3=work_limit) elapsed=%.3fs\n",
+    cg_cuts_added,
+    mir_cuts_added,
+    total_aggregations,
+    skipped_score,
+    skipped_negate,
+    static_cast<double>(work_estimate),
+    exit_reason,
+    static_cast<double>(toc(mir_start_time)));
 }
 
 template <typename i_t, typename f_t>
@@ -2478,16 +2602,32 @@ void cut_generation_t<i_t, f_t>::generate_gomory_cuts(
   std::vector<f_t> transformed_xstar;
   complemented_mir.bound_substitution(lp, variable_bounds, var_types, xstar, transformed_xstar);
 
+  // Diagnostics
+  f_t gomory_start_time = tic();
+  i_t int_basic_rows    = 0;
+  i_t fractional_rows   = 0;
+  i_t tableau_ok_rows   = 0;
+  i_t cg_cuts_added     = 0;
+  i_t mig_cuts_added    = 0;
+  i_t tableau_total_nz  = 0;
+  i_t tableau_max_nz    = 0;
+
   for (i_t i = 0; i < lp.num_rows; i++) {
     inequality_t<i_t, f_t> inequality(lp.num_cols);
     const i_t j = basic_list[i];
     if (var_types[j] != variable_type_t::INTEGER) { continue; }
+    int_basic_rows++;
     const f_t x_j = xstar[j];
     if (fractional_part(x_j) < 0.05 || fractional_part(x_j) > 0.95) { continue; }
+    fractional_rows++;
 
     i_t tableau_status = tableau.generate_base_equality(
       lp, settings, Arow, var_types, basis_update, xstar, basic_list, nonbasic_list, i, inequality);
     if (tableau_status == 0) {
+      tableau_ok_rows++;
+      const i_t tab_nz = inequality.size();
+      tableau_total_nz += tab_nz;
+      tableau_max_nz = std::max(tableau_max_nz, tab_nz);
       // Generate a CG cut
       const bool generate_cg_cut = settings.strong_chvatal_gomory_cuts != 0;
       if (generate_cg_cut) {
@@ -2500,7 +2640,10 @@ void cut_generation_t<i_t, f_t>::generate_gomory_cuts(
         inequality_t<i_t, f_t> cg_cut(lp.num_cols);
         i_t cg_status =
           cg.generate_strong_cg_cut(lp, settings, var_types, cg_inequality, xstar, cg_cut);
-        if (cg_status == 0) { cut_pool_.add_cut(cut_type_t::CHVATAL_GOMORY, cg_cut); }
+        if (cg_status == 0) {
+          cut_pool_.add_cut(cut_type_t::CHVATAL_GOMORY, cg_cut);
+          cg_cuts_added++;
+        }
       }
 
       if (settings.mixed_integer_gomory_cuts == 0) { continue; }
@@ -2579,11 +2722,27 @@ void cut_generation_t<i_t, f_t>::generate_gomory_cuts(
 
       if ((cut_A_distance > cut_B_distance) && A_valid) {
         cut_pool_.add_cut(cut_type_t::MIXED_INTEGER_GOMORY, cut_A);
+        mig_cuts_added++;
       } else if (B_valid) {
         cut_pool_.add_cut(cut_type_t::MIXED_INTEGER_GOMORY, cut_B);
+        mig_cuts_added++;
       }
     }
   }
+  const f_t tab_avg_nz = tableau_ok_rows > 0
+                           ? static_cast<f_t>(tableau_total_nz) / static_cast<f_t>(tableau_ok_rows)
+                           : 0.0;
+  settings.log.printf(
+    "  Gomory diag: int_basic=%d fractional=%d tableau_ok=%d cg_added=%d mig_added=%d "
+    "tableau_avg_nz=%.2f tableau_max_nz=%d elapsed=%.3fs\n",
+    int_basic_rows,
+    fractional_rows,
+    tableau_ok_rows,
+    cg_cuts_added,
+    mig_cuts_added,
+    static_cast<double>(tab_avg_nz),
+    tableau_max_nz,
+    static_cast<double>(toc(gomory_start_time)));
 }
 
 template <typename i_t, typename f_t>

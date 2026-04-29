@@ -2270,7 +2270,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       }
       f_t cut_generation_time = toc(cut_start_time);
       if (cut_generation_time > 1.0) {
-        settings_.log.debug("Cut generation time %.2f seconds\n", cut_generation_time);
+        settings_.log.printf("Cut generation time %.2f seconds\n", cut_generation_time);
       }
       // Score the cuts
       f_t score_start_time = tic();
@@ -2403,7 +2403,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       exploration_stats_.total_lp_iters += iter;
       f_t dual_phase2_time = toc(dual_phase2_start_time);
       if (dual_phase2_time > 1.0) {
-        settings_.log.debug("Dual phase2 time %.2f seconds\n", dual_phase2_time);
+        settings_.log.printf("Dual phase2 time %.2f seconds\n", dual_phase2_time);
       }
       if (cut_status == dual::status_t::TIME_LIMIT) {
         solver_status_ = mip_status_t::TIME_LIMIT;

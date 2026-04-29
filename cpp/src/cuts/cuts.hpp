@@ -301,6 +301,9 @@ class cut_pool_t {
 
   i_t pool_size() const { return cut_storage_.m; }
 
+  // Number of nonzeros in the cut at row `row` of the cut pool.
+  i_t cut_nz(i_t row) const { return cut_storage_.row_length(row); }
+
   void print_cutpool_types() { print_cut_types("In cut pool", cut_type_, settings_); }
 
   void check_for_duplicate_cuts();
