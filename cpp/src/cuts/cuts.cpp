@@ -2043,7 +2043,7 @@ bool cut_generation_t<i_t, f_t>::generate_clique_cuts(
   // generators that aggregate over them. Empirically 32 retains essentially all
   // tightening since extension candidates have x* in {0,1} and contribute zero
   // to current LP violation; if they ever turn fractional they can be re-cut.
-  const i_t max_clique_cut_size = 32;
+  const i_t max_clique_cut_size = 64;
 
   cuopt_assert(user_problem_.var_types.size() == static_cast<size_t>(num_vars),
                "User problem var_types size mismatch");
