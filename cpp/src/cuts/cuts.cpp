@@ -606,7 +606,7 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
   // index sets) because clique cuts have unit coefficients, so two cuts with
   // identical support are functionally the same constraint regardless of rhs.
   if (cut_type == cut_type_t::CLIQUE) {
-    constexpr f_t max_clique_jaccard = 0.85;
+    constexpr f_t max_clique_jaccard = 0.70;
     const i_t new_nz                 = cut_squeezed.size();
     std::unordered_set<i_t> new_support;
     new_support.reserve(static_cast<size_t>(new_nz) * 2);
