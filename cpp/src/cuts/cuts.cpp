@@ -584,6 +584,67 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
     settings_.log.printf("Cut has no coefficients\n");
     return;
   }
+  // // Reject excessively dense cuts: too many nonzeros makes downstream LP
+  // // re-solves and bounds propagation disproportionately expensive.
+  {
+    const i_t cut_nz = cut_squeezed.size();
+    if (cut_nz > 1024 || 4 * cut_nz > original_vars_) {
+      settings_.log.printf("Skipping dense cut type=%d nz=%d original_vars=%d\n",
+                           static_cast<int>(cut_type),
+                           static_cast<int>(cut_nz),
+                           static_cast<int>(original_vars_));
+      return;
+    }
+  }
+  // Reject clique cuts whose variable support is nearly identical to an
+  // existing clique cut already in the pool. Bron-Kerbosch frequently emits
+  // many maximal cliques sharing most vertices, which after build_clique_cut
+  // turn into rows with very similar nz patterns. Even with the orthogonality
+  // cascade in score_cuts, near-duplicates inflate the pool, slow down
+  // duplicate detection and orthogonality checks, and waste downstream LP
+  // solve work. We compare on the unweighted variable support (Jaccard of
+  // index sets) because clique cuts have unit coefficients, so two cuts with
+  // identical support are functionally the same constraint regardless of rhs.
+  if (cut_type == cut_type_t::CLIQUE) {
+    constexpr f_t max_clique_jaccard = 0.85;
+    const i_t new_nz                 = cut_squeezed.size();
+    std::unordered_set<i_t> new_support;
+    new_support.reserve(static_cast<size_t>(new_nz) * 2);
+    for (i_t p = 0; p < new_nz; p++) {
+      new_support.insert(cut_squeezed.vector.i[p]);
+    }
+    for (i_t k = 0; k < cut_storage_.m; k++) {
+      if (cut_type_[k] != cut_type_t::CLIQUE) { continue; }
+      const i_t k_start = cut_storage_.row_start[k];
+      const i_t k_end   = cut_storage_.row_start[k + 1];
+      const i_t k_nz    = k_end - k_start;
+      const i_t min_nz  = std::min(new_nz, k_nz);
+      const i_t max_nz  = std::max(new_nz, k_nz);
+      // Quick reject: even full containment of the smaller into the larger
+      // gives Jaccard = min_nz / max_nz, so skip the probe when that ceiling
+      // is already below the threshold.
+      if (max_nz > 0 && static_cast<f_t>(min_nz) < max_clique_jaccard * static_cast<f_t>(max_nz)) {
+        continue;
+      }
+      i_t intersection = 0;
+      for (i_t p = k_start; p < k_end; p++) {
+        if (new_support.count(cut_storage_.j[p]) != 0) { intersection++; }
+      }
+      const i_t union_size = new_nz + k_nz - intersection;
+      if (union_size == 0) { continue; }
+      const f_t jaccard = static_cast<f_t>(intersection) / static_cast<f_t>(union_size);
+      if (jaccard >= max_clique_jaccard) {
+        settings_.log.debug(
+          "Skipping near-duplicate clique cut: jaccard=%.3f new_nz=%d existing_nz=%d (row %d)\n",
+          static_cast<double>(jaccard),
+          static_cast<int>(new_nz),
+          static_cast<int>(k_nz),
+          static_cast<int>(k));
+        return;
+      }
+    }
+  }
+
   cut_storage_.append_row(cut_squeezed.vector);
   rhs_storage_.push_back(cut_squeezed.rhs);
   cut_type_.push_back(cut_type);
@@ -782,24 +843,48 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
   check_for_duplicate_cuts();
   cut_distances_.resize(cut_storage_.m, 0.0);
   cut_norms_.resize(cut_storage_.m, 0.0);
+  cut_scores_.resize(cut_storage_.m, 0.0);
 
-  const bool verbose = false;
+  // The score used for ranking is the raw geometric cut distance multiplied by
+  // an nnz penalty: every extra nz makes the LP re-solves and bounds propagation
+  // more expensive, so for two cuts with similar violation we prefer the
+  // sparser one. Penalty is smooth and bounded in (0, 1]:
+  //   penalty(d) = 1 / (1 + alpha * d),   d = cut_nz / original_vars
+  // With alpha = 4, a cut whose nz equals 25% of the original variables is
+  // ranked at 1/2 of an equally-violated cut with negligible density.
+  // We deliberately keep cut_distances_ as the raw geometric distance so the
+  // min_cut_distance_ threshold retains its geometric meaning.
+  const f_t nnz_penalty_alpha = 4.0;
+  const bool verbose          = false;
   for (i_t i = 0; i < cut_storage_.m; i++) {
     f_t violation;
-    f_t cut_dist      = cut_distance(i, x_relax, violation, cut_norms_[i]);
-    cut_distances_[i] = cut_dist <= min_cut_distance_ ? 0.0 : cut_dist;
+    const f_t cut_dist = cut_distance(i, x_relax, violation, cut_norms_[i]);
+    cut_distances_[i]  = cut_dist;
+    if (cut_dist <= min_cut_distance_) {
+      cut_scores_[i] = 0.0;
+      continue;
+    }
+    const f_t density     = cut_density(i);
+    const f_t nnz_penalty = 1.0 / (1.0 + nnz_penalty_alpha * density);
+    cut_scores_[i]        = cut_dist * nnz_penalty;
     if (verbose) {
-      settings_.log.printf("Cut %d type %d distance %+e violation %+e cut_norm %e\n",
-                           i,
-                           static_cast<int>(cut_type_[i]),
-                           cut_distances_[i],
-                           violation,
-                           cut_norms_[i]);
+      settings_.log.printf(
+        "Cut %d type %d distance %+e violation %+e cut_norm %e nz %d density %.3f penalty %.3f "
+        "score %+e\n",
+        i,
+        static_cast<int>(cut_type_[i]),
+        cut_dist,
+        violation,
+        cut_norms_[i],
+        static_cast<int>(cut_nz(i)),
+        density,
+        nnz_penalty,
+        cut_scores_[i]);
     }
   }
 
   std::vector<i_t> sorted_indices;
-  best_score_last_permutation(cut_distances_, sorted_indices);
+  best_score_last_permutation(cut_scores_, sorted_indices);
 
   const i_t max_cuts          = 2000;
   const f_t min_orthogonality = settings_.cut_min_orthogonality;
@@ -818,7 +903,12 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
 
-    if (cut_distances_[i] <= min_cut_distance_) { break; }
+    // Disqualify only on raw geometric distance. The nnz penalty affects the
+    // score (and therefore the order in which cuts are considered) but must
+    // never drop an otherwise valid cut. We can't `break` here because the
+    // sort is by score, not distance, so a sub-threshold cut may sit anywhere
+    // in the order; subsequent indices may still be valid.
+    if (cut_distances_[i] <= 0.0) { continue; }
 
     f_t cut_ortho            = 1.0;
     const i_t best_cuts_size = best_cuts_.size();
