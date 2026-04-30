@@ -2272,9 +2272,17 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       if (cut_generation_time > 1.0) {
         settings_.log.printf("Cut generation time %.2f seconds\n", cut_generation_time);
       }
-      // Score the cuts
+      // Score the cuts (HiGHS-like active-support score with adaptive
+      // threshold, adaptive parallelism filter, family caps, and
+      // violation-based aging). Bounds, variable types, and feasibility
+      // tolerance are passed so the active-support and integral-support
+      // score is computed instead of the legacy fallback.
       f_t score_start_time = tic();
-      cut_pool.score_cuts(root_relax_soln_.x);
+      cut_pool.score_cuts(root_relax_soln_.x,
+                          original_lp_.lower,
+                          original_lp_.upper,
+                          var_types_,
+                          settings_.primal_tol);
       f_t score_time = toc(score_start_time);
       if (score_time > 1.0) { settings_.log.debug("Cut scoring time %.2f seconds\n", score_time); }
       // Get the best cuts from the cut pool

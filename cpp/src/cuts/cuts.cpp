@@ -567,8 +567,6 @@ std::vector<std::vector<int>> find_maximal_cliques_for_test(
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, f_t>& cut)
 {
-  // TODO: Add fast duplicate check and only add if the cut is not already in the pool
-
   for (i_t p = 0; p < cut.size(); p++) {
     const i_t j = cut.index(p);
     if (j >= original_vars_) {
@@ -584,8 +582,20 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
     settings_.log.printf("Cut has no coefficients\n");
     return;
   }
-  // // Reject excessively dense cuts: too many nonzeros makes downstream LP
-  // // re-solves and bounds propagation disproportionately expensive.
+  // Reject NaN / inf coefficients or rhs early.
+  {
+    if (!std::isfinite(cut_squeezed.rhs)) { return; }
+    bool finite_coefs = true;
+    for (i_t p = 0; p < cut_squeezed.size(); p++) {
+      if (!std::isfinite(cut_squeezed.coeff(p))) {
+        finite_coefs = false;
+        break;
+      }
+    }
+    if (!finite_coefs) { return; }
+  }
+  // Reject excessively dense cuts: too many nonzeros makes downstream LP
+  // re-solves and bounds propagation disproportionately expensive.
   {
     const i_t cut_nz = cut_squeezed.size();
     if (cut_nz > 1024 || 4 * cut_nz > original_vars_) {
@@ -594,6 +604,63 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
                            static_cast<int>(cut_nz),
                            static_cast<int>(original_vars_));
       return;
+    }
+  }
+
+  // Compute full row norm and max abs coefficient. These are stored per-row
+  // and used for active-support scoring, parallelism checks, and normalized
+  // duplicate detection.
+  f_t full_norm2   = 0.0;
+  f_t max_abs_coef = 0.0;
+  for (i_t p = 0; p < cut_squeezed.size(); p++) {
+    const f_t v = cut_squeezed.coeff(p);
+    full_norm2 += v * v;
+    const f_t av = std::abs(v);
+    if (av > max_abs_coef) { max_abs_coef = av; }
+  }
+  if (!(full_norm2 > 0.0)) { return; }
+  const f_t inv_norm = 1.0 / std::sqrt(full_norm2);
+
+  // Normalized duplicate detection. Two cuts are considered duplicates only
+  // when they have the same support, same direction, and the existing row is
+  // at least as strong. Stronger rows are kept so the full Tomlin/Welch
+  // detector can remove the weaker row later.
+  const uint64_t new_support_hash = support_hash(cut_squeezed.vector.i.data(), cut_squeezed.size());
+  {
+    const i_t new_nz           = cut_squeezed.size();
+    constexpr f_t parallel_tol = static_cast<f_t>(1e-6);
+    const auto bucket_it       = support_hash_buckets_.find(new_support_hash);
+    if (bucket_it != support_hash_buckets_.end()) {
+      for (i_t k : bucket_it->second) {
+        if (k < 0 || k >= cut_storage_.m) { continue; }
+        const i_t k_start = cut_storage_.row_start[k];
+        const i_t k_end   = cut_storage_.row_start[k + 1];
+        const i_t k_nz    = k_end - k_start;
+        if (k_nz != new_nz) { continue; }
+        // Same support? Both are stored in column-sorted order.
+        bool same_indices = true;
+        for (i_t p = 0; p < new_nz; p++) {
+          if (cut_storage_.j[k_start + p] != cut_squeezed.vector.i[p]) {
+            same_indices = false;
+            break;
+          }
+        }
+        if (!same_indices) { continue; }
+        f_t dot = 0.0;
+        for (i_t p = 0; p < new_nz; p++) {
+          dot += cut_storage_.x[k_start + p] * cut_squeezed.vector.x[p];
+        }
+        const f_t signed_cosine = dot * cut_inv_norm_[k] * inv_norm;
+        if (signed_cosine >= 1.0 - parallel_tol) {
+          const f_t existing_normalized_rhs = rhs_storage_[k] * cut_inv_norm_[k];
+          const f_t new_normalized_rhs      = cut_squeezed.rhs * inv_norm;
+          const f_t rhs_scale               = std::max<f_t>(
+            static_cast<f_t>(1.0),
+            std::max(std::abs(existing_normalized_rhs), std::abs(new_normalized_rhs)));
+          constexpr f_t rhs_tol = static_cast<f_t>(1e-9);
+          if (new_normalized_rhs <= existing_normalized_rhs + rhs_tol * rhs_scale) { return; }
+        }
+      }
     }
   }
   // Reject clique cuts whose variable support is nearly identical to an
@@ -605,7 +672,7 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
   // solve work. We compare on the unweighted variable support (Jaccard of
   // index sets) because clique cuts have unit coefficients, so two cuts with
   // identical support are functionally the same constraint regardless of rhs.
-  if (cut_type == cut_type_t::CLIQUE) {
+  if (cut_type == cut_type_t::CLIQUE && false) {
     constexpr f_t max_clique_jaccard = 0.70;
     const i_t new_nz                 = cut_squeezed.size();
     std::unordered_set<i_t> new_support;
@@ -648,7 +715,14 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
   cut_storage_.append_row(cut_squeezed.vector);
   rhs_storage_.push_back(cut_squeezed.rhs);
   cut_type_.push_back(cut_type);
-  cut_age_.push_back(0);
+  // Initial age: newly generated cuts are not immediately ancient, but are
+  // also not necessarily age zero until they are actually violated in the
+  // next separation. This mirrors the HiGHS-like initialization.
+  const i_t initial_age = std::max<i_t>(0, pool_age_limit_ - 5);
+  cut_age_.push_back(initial_age);
+  cut_inv_norm_.push_back(inv_norm);
+  cut_max_abs_coef_.push_back(max_abs_coef);
+  support_hash_buckets_[new_support_hash].push_back(cut_storage_.m - 1);
 }
 
 template <typename i_t, typename f_t>
@@ -825,101 +899,394 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
     i_t write    = 0;
     for (i_t i = 0; i < m; i++) {
       if (cuts_to_remove[i] == 0) {
-        rhs_storage_[write] = rhs_storage_[i];
-        cut_type_[write]    = cut_type_[i];
-        cut_age_[write]     = cut_age_[i];
+        rhs_storage_[write]      = rhs_storage_[i];
+        cut_type_[write]         = cut_type_[i];
+        cut_age_[write]          = cut_age_[i];
+        cut_inv_norm_[write]     = cut_inv_norm_[i];
+        cut_max_abs_coef_[write] = cut_max_abs_coef_[i];
         write++;
       }
     }
     rhs_storage_.resize(write);
     cut_type_.resize(write);
     cut_age_.resize(write);
+    cut_inv_norm_.resize(write);
+    cut_max_abs_coef_.resize(write);
+    rebuild_support_hash_buckets();
   }
+}
+
+template <typename i_t, typename f_t>
+bool cut_pool_t<i_t, f_t>::compute_active_support_score(
+  i_t row,
+  const std::vector<f_t>& x,
+  const std::vector<f_t>& lower,
+  const std::vector<f_t>& upper,
+  const std::vector<variable_type_t>& var_types,
+  f_t feastol,
+  f_t& violation,
+  f_t& score) const
+{
+  // Cuts are stored in form  a^T x >= rhs.
+  // Violation = rhs - a^T x* > feastol  ->  cut is currently violated.
+  //
+  // Active-support rationale (in stored a^T x >= rhs form, equivalent to
+  // -a^T x <= -rhs after global sign flip):
+  //   - a_j > 0: variable can reduce violation by increasing. Active when
+  //              x_j < upper_j - feastol (room to grow).
+  //   - a_j < 0: variable can reduce violation by decreasing. Active when
+  //              x_j > lower_j + feastol (room to shrink).
+  // The active-support score uses only the active subset to avoid penalizing
+  // cuts (notably clique cuts) whose support contains many variables that
+  // are currently at their bounds and therefore cannot move.
+  const i_t row_start       = cut_storage_.row_start[row];
+  const i_t row_end         = cut_storage_.row_start[row + 1];
+  const i_t row_nnz         = row_end - row_start;
+  const bool have_var_types = static_cast<i_t>(var_types.size()) >= cut_storage_.n;
+
+  f_t a_dot_x      = 0.0;
+  i_t integral_nnz = 0;
+  for (i_t p = row_start; p < row_end; p++) {
+    const i_t j         = cut_storage_.j[p];
+    const f_t cut_coeff = cut_storage_.x[p];
+    a_dot_x += cut_coeff * x[j];
+    if (have_var_types && is_integral_type(var_types[j])) { integral_nnz++; }
+  }
+  violation = rhs_storage_[row] - a_dot_x;
+  if (violation <= feastol) { return false; }
+
+  const bool have_bounds = static_cast<i_t>(lower.size()) >= cut_storage_.n &&
+                           static_cast<i_t>(upper.size()) >= cut_storage_.n;
+  i_t active_nnz       = 0;
+  f_t active_row_norm2 = 0.0;
+  if (have_bounds) {
+    for (i_t p = row_start; p < row_end; p++) {
+      const i_t j         = cut_storage_.j[p];
+      const f_t cut_coeff = cut_storage_.x[p];
+      bool active         = false;
+      if (cut_coeff > 0.0) {
+        active = (x[j] < upper[j] - feastol);
+      } else if (cut_coeff < 0.0) {
+        active = (x[j] > lower[j] + feastol);
+      }
+      if (active) {
+        active_row_norm2 += cut_coeff * cut_coeff;
+        active_nnz += 1;
+      }
+    }
+  }
+  if (active_nnz == 0 || active_row_norm2 <= 0.0) {
+    // Fallback: a violated cut with no "active" coefficients is unusual.
+    // Use full row to avoid producing a zero/Inf score.
+    active_nnz         = row_nnz;
+    const f_t inv_norm = cut_inv_norm_[row];
+    active_row_norm2   = inv_norm > 0.0 ? 1.0 / (inv_norm * inv_norm) : 0.0;
+  }
+
+  // HiGHS-like active-support score:
+  //   score = violation / (activeNnz * sqrt(activeRowNorm2))
+  // Different from the standard efficacy violation / sqrt(fullNorm2) because
+  // we divide by the active row norm and additionally penalize the active
+  // support count. This favours dense-but-strongly-violated rows over many
+  // weakly-violated rows of similar support.
+  score = violation / (static_cast<f_t>(active_nnz) * std::sqrt(active_row_norm2));
+  if (have_var_types && row_nnz > 0) {
+    const f_t integer_support = static_cast<f_t>(integral_nnz) / static_cast<f_t>(row_nnz);
+    score *= (static_cast<f_t>(1.0) + integer_support_weight_ * integer_support);
+  }
+  if (row_nnz > 0) {
+    // Mildly down-weight long rows. Active support keeps useful clique rows
+    // competitive, but full support still predicts LP factorization and pivot
+    // cost, especially for Gomory/MIR rows with hundreds of nonzeros.
+    score /= (static_cast<f_t>(1.0) +
+              full_support_penalty_ * std::log2(static_cast<f_t>(row_nnz) + static_cast<f_t>(1.0)));
+  }
+  return true;
+}
+
+template <typename i_t, typename f_t>
+f_t cut_pool_t<i_t, f_t>::parallelism_abs(i_t i, i_t j) const
+{
+  // Two-pointer sparse dot product over column-sorted rows. We avoid the
+  // sparse_dot helper because the const-pointer overload there has a
+  // scatter-style signature, while we just need a merge over two sorted
+  // sparse vectors.
+  const i_t i_start = cut_storage_.row_start[i];
+  const i_t i_end   = cut_storage_.row_start[i + 1];
+  const i_t j_start = cut_storage_.row_start[j];
+  const i_t j_end   = cut_storage_.row_start[j + 1];
+  const i_t* col_i  = cut_storage_.j.data();
+  const i_t* col_j  = cut_storage_.j.data();
+  const f_t* val_i  = cut_storage_.x.data();
+  const f_t* val_j  = cut_storage_.x.data();
+  i_t pi            = i_start;
+  i_t pj            = j_start;
+  f_t dot           = 0.0;
+  while (pi < i_end && pj < j_end) {
+    const i_t ci = col_i[pi];
+    const i_t cj = col_j[pj];
+    if (ci < cj) {
+      pi++;
+    } else if (cj < ci) {
+      pj++;
+    } else {
+      dot += val_i[pi] * val_j[pj];
+      pi++;
+      pj++;
+    }
+  }
+  return std::abs(dot) * cut_inv_norm_[i] * cut_inv_norm_[j];
+}
+
+template <typename i_t, typename f_t>
+uint64_t cut_pool_t<i_t, f_t>::support_hash(const i_t* indices, i_t size) const
+{
+  uint64_t hash = 1469598103934665603ULL;
+  auto mix      = [&hash](uint64_t value) {
+    hash ^= value + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+    hash *= 1099511628211ULL;
+  };
+  mix(static_cast<uint64_t>(size));
+  for (i_t p = 0; p < size; p++) {
+    mix(static_cast<uint64_t>(indices[p]));
+  }
+  return hash;
+}
+
+template <typename i_t, typename f_t>
+void cut_pool_t<i_t, f_t>::rebuild_support_hash_buckets()
+{
+  support_hash_buckets_.clear();
+  support_hash_buckets_.reserve(static_cast<size_t>(cut_storage_.m));
+  for (i_t row = 0; row < cut_storage_.m; row++) {
+    const i_t row_start = cut_storage_.row_start[row];
+    const i_t row_end   = cut_storage_.row_start[row + 1];
+    const uint64_t hash = support_hash(cut_storage_.j.data() + row_start, row_end - row_start);
+    support_hash_buckets_[hash].push_back(row);
+  }
+}
+
+template <typename i_t, typename f_t>
+void cut_pool_t<i_t, f_t>::compact_pool(const std::vector<i_t>& keep_row)
+{
+  const i_t m = cut_storage_.m;
+  if (static_cast<i_t>(keep_row.size()) != m) { return; }
+  // Build remove marker (1 = remove) for csr_matrix_t::remove_rows.
+  std::vector<i_t> remove_marker(m, 0);
+  i_t num_removed = 0;
+  for (i_t i = 0; i < m; i++) {
+    if (keep_row[i] == 0) {
+      remove_marker[i] = 1;
+      num_removed++;
+    }
+  }
+  if (num_removed == 0) { return; }
+  csr_matrix_t<i_t, f_t> new_cut_storage(0, 0, 0);
+  cut_storage_.remove_rows(remove_marker, new_cut_storage);
+  cut_storage_ = new_cut_storage;
+
+  i_t write = 0;
+  for (i_t i = 0; i < m; i++) {
+    if (remove_marker[i] == 0) {
+      rhs_storage_[write]      = rhs_storage_[i];
+      cut_type_[write]         = cut_type_[i];
+      cut_age_[write]          = cut_age_[i];
+      cut_inv_norm_[write]     = cut_inv_norm_[i];
+      cut_max_abs_coef_[write] = cut_max_abs_coef_[i];
+      write++;
+    }
+  }
+  rhs_storage_.resize(write);
+  cut_type_.resize(write);
+  cut_age_.resize(write);
+  cut_inv_norm_.resize(write);
+  cut_max_abs_coef_.resize(write);
+  rebuild_support_hash_buckets();
 }
 
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
 {
+  // Backward-compatible entry: no bound information available, so the
+  // active-support fallback uses the full row norm (i.e., classical
+  // efficacy). Adaptive threshold and hard parallelism filtering still run.
+  static const std::vector<f_t> empty;
+  static const std::vector<variable_type_t> empty_var_types;
+  score_cuts(x_relax, empty, empty, empty_var_types, settings_.primal_tol);
+}
+
+template <typename i_t, typename f_t>
+void cut_pool_t<i_t, f_t>::score_cuts(const std::vector<f_t>& x_relax,
+                                      const std::vector<f_t>& lower,
+                                      const std::vector<f_t>& upper,
+                                      f_t feastol)
+{
+  static const std::vector<variable_type_t> empty_var_types;
+  score_cuts(x_relax, lower, upper, empty_var_types, feastol);
+}
+
+template <typename i_t, typename f_t>
+void cut_pool_t<i_t, f_t>::score_cuts(const std::vector<f_t>& x_relax,
+                                      const std::vector<f_t>& lower,
+                                      const std::vector<f_t>& upper,
+                                      const std::vector<variable_type_t>& var_types,
+                                      f_t feastol)
+{
   check_for_duplicate_cuts();
-  cut_distances_.resize(cut_storage_.m, 0.0);
-  cut_norms_.resize(cut_storage_.m, 0.0);
-  cut_scores_.resize(cut_storage_.m, 0.0);
 
-  // The score used for ranking is the raw geometric cut distance multiplied by
-  // an nnz penalty: every extra nz makes the LP re-solves and bounds propagation
-  // more expensive, so for two cuts with similar violation we prefer the
-  // sparser one. Penalty is smooth and bounded in (0, 1]:
-  //   penalty(d) = 1 / (1 + alpha * d),   d = cut_nz / original_vars
-  // With alpha = 4, a cut whose nz equals 25% of the original variables is
-  // ranked at 1/2 of an equally-violated cut with negligible density.
-  // We deliberately keep cut_distances_ as the raw geometric distance so the
-  // min_cut_distance_ threshold retains its geometric meaning.
-  const f_t nnz_penalty_alpha = 4.0;
-  const bool verbose          = false;
-  for (i_t i = 0; i < cut_storage_.m; i++) {
-    f_t violation;
-    const f_t cut_dist = cut_distance(i, x_relax, violation, cut_norms_[i]);
-    cut_distances_[i]  = cut_dist;
-    if (cut_dist <= min_cut_distance_) {
-      cut_scores_[i] = 0.0;
-      continue;
-    }
-    const f_t density     = cut_density(i);
-    const f_t nnz_penalty = 1.0 / (1.0 + nnz_penalty_alpha * density);
-    cut_scores_[i]        = cut_dist * nnz_penalty;
-    if (verbose) {
-      settings_.log.printf(
-        "Cut %d type %d distance %+e violation %+e cut_norm %e nz %d density %.3f penalty %.3f "
-        "score %+e\n",
-        i,
-        static_cast<int>(cut_type_[i]),
-        cut_dist,
-        violation,
-        cut_norms_[i],
-        static_cast<int>(cut_nz(i)),
-        density,
-        nnz_penalty,
-        cut_scores_[i]);
-    }
-  }
-
-  std::vector<i_t> sorted_indices;
-  best_score_last_permutation(cut_scores_, sorted_indices);
-
-  const i_t max_cuts          = 2000;
-  const f_t min_orthogonality = settings_.cut_min_orthogonality;
-  best_cuts_.reserve(std::min(max_cuts, cut_storage_.m));
+  const i_t m = cut_storage_.m;
+  cut_distances_.assign(m, 0.0);
+  cut_norms_.assign(m, 0.0);
+  cut_scores_.assign(m, 0.0);
   best_cuts_.clear();
   scored_cuts_ = 0;
 
-  if (!sorted_indices.empty()) {
-    const i_t i = sorted_indices.back();
-    sorted_indices.pop_back();
-    best_cuts_.push_back(i);
-    scored_cuts_++;
+  // Determine effective age limit: tighten if pool exceeds soft limit.
+  i_t available_cuts = 0;
+  std::vector<i_t> age_distribution(pool_age_limit_ + 2, 0);
+  for (i_t i = 0; i < m; i++) {
+    if (cut_age_[i] >= 0) {
+      available_cuts++;
+      const i_t bucket = std::min<i_t>(cut_age_[i], pool_age_limit_ + 1);
+      age_distribution[bucket]++;
+    }
+  }
+  i_t effective_age_limit = pool_age_limit_;
+  while (effective_age_limit > 1 && available_cuts > pool_soft_limit_) {
+    available_cuts -= age_distribution[effective_age_limit];
+    effective_age_limit--;
   }
 
-  while (scored_cuts_ < max_cuts && !sorted_indices.empty()) {
-    const i_t i = sorted_indices.back();
-    sorted_indices.pop_back();
+  // First pass: compute violation + score for each cut, age the non-violated
+  // ones, and mark cuts for deletion when age >= effective limit.
+  std::vector<i_t> keep_row(m, 1);
+  std::vector<std::pair<f_t, i_t>> candidates;
+  candidates.reserve(m);
 
-    // Disqualify only on raw geometric distance. The nnz penalty affects the
-    // score (and therefore the order in which cuts are considered) but must
-    // never drop an otherwise valid cut. We can't `break` here because the
-    // sort is by score, not distance, so a sub-threshold cut may sit anywhere
-    // in the order; subsequent indices may still be valid.
-    if (cut_distances_[i] <= 0.0) { continue; }
+  for (i_t i = 0; i < m; i++) {
+    f_t violation = 0.0;
+    f_t score     = 0.0;
+    const bool violated =
+      compute_active_support_score(i, x_relax, lower, upper, var_types, feastol, violation, score);
+    cut_distances_[i] = violation;
+    cut_scores_[i]    = score;
+    if (!violated) {
+      cut_age_[i] += 1;
+      if (cut_age_[i] >= effective_age_limit) { keep_row[i] = 0; }
+    } else {
+      cut_age_[i] = 0;
+      candidates.emplace_back(score, i);
+    }
+  }
 
-    f_t cut_ortho            = 1.0;
-    const i_t best_cuts_size = best_cuts_.size();
-    for (i_t k = 0; k < best_cuts_size; k++) {
-      const i_t j = best_cuts_[k];
-      cut_ortho   = std::min(cut_ortho, cut_orthogonality(i, j));
+  // Sort candidates by descending score. Tie-break on cut index for
+  // determinism (no reliance on pointer addresses or hash iteration order).
+  std::sort(candidates.begin(),
+            candidates.end(),
+            [](const std::pair<f_t, i_t>& a, const std::pair<f_t, i_t>& b) {
+              if (a.first != b.first) { return a.first > b.first; }
+              return a.second < b.second;
+            });
+
+  // Adaptive score threshold.
+  i_t num_efficacious = 0;
+  if (!candidates.empty()) {
+    if (candidates.front().first > best_observed_score_) {
+      best_observed_score_ = candidates.front().first;
     }
-    if (cut_ortho >= min_orthogonality) {
-      best_cuts_.push_back(i);
-      scored_cuts_++;
+    if (best_observed_score_ > 0.0) {
+      const f_t min_score = min_score_factor_ * best_observed_score_;
+      for (const auto& c : candidates) {
+        if (c.first >= min_score) {
+          num_efficacious++;
+        } else {
+          break;
+        }
+      }
+      const i_t lower_threshold = static_cast<i_t>(candidates.size()) / 20;
+      const i_t upper_threshold = static_cast<i_t>(candidates.size()) - 1;
+      if (num_efficacious <= lower_threshold) {
+        num_efficacious = std::max<i_t>(static_cast<i_t>(candidates.size()) / 2, 1);
+        min_score_factor_ =
+          candidates[num_efficacious - 1].first / std::max(best_observed_score_, feastol);
+      } else if (num_efficacious > upper_threshold) {
+        num_efficacious = static_cast<i_t>(candidates.size());
+        if (upper_threshold >= 0 && static_cast<i_t>(candidates.size()) > 0) {
+          min_score_factor_ =
+            candidates[upper_threshold].first / std::max(best_observed_score_, feastol);
+        }
+      }
+    } else {
+      // bestObservedScore <= 0 (degenerate): keep at least the top half.
+      num_efficacious = std::max<i_t>(static_cast<i_t>(candidates.size()) / 2, 1);
     }
+  }
+
+  // Greedy hard parallelism rejection with family caps. Cosine parallelism
+  // strictly above max_parallelism_ is rejected outright; this is the key
+  // HiGHS-like behavior to avoid flooding the LP with near-duplicate cuts.
+  std::array<i_t, MAX_CUT_TYPE> family_selected{};
+  for (i_t k = 0; k < MAX_CUT_TYPE; k++) {
+    family_selected[k] = 0;
+  }
+  const auto& caps         = is_root_ ? family_cap_root_ : family_cap_node_;
+  const i_t max_total_cuts = 2000;
+  const f_t good_score = candidates.empty() ? 0.0 : min_score_factor_ * candidates.front().first;
+
+  best_cuts_.reserve(std::min<i_t>(num_efficacious, max_total_cuts));
+  for (i_t k = 0; k < num_efficacious && static_cast<i_t>(best_cuts_.size()) < max_total_cuts;
+       k++) {
+    const i_t cand       = candidates[k].second;
+    const cut_type_t fam = cut_type_[cand];
+    const i_t fam_idx    = static_cast<i_t>(fam);
+    if (fam_idx >= 0 && fam_idx < MAX_CUT_TYPE && caps[fam_idx] > 0 &&
+        family_selected[fam_idx] >= caps[fam_idx]) {
+      continue;
+    }
+
+    bool reject = false;
+    const f_t max_parallelism_for_cut =
+      candidates[k].first >= good_score ? good_max_parallelism_ : max_parallelism_;
+    for (i_t sel : best_cuts_) {
+      const f_t p = parallelism_abs(cand, sel);
+      if (p > max_parallelism_for_cut) {
+        reject = true;
+        break;
+      }
+    }
+    if (reject) { continue; }
+
+    best_cuts_.push_back(cand);
+    if (fam_idx >= 0 && fam_idx < MAX_CUT_TYPE) { family_selected[fam_idx]++; }
+  }
+  scored_cuts_ = static_cast<i_t>(best_cuts_.size());
+
+  // Compact: drop pool rows aged out beyond the effective limit. Selected
+  // rows have age 0 because they are violated, so they are kept. We rebuild
+  // best_cuts_ to remap to the new row indices after compaction.
+  bool needs_compaction = false;
+  for (i_t i = 0; i < m; i++) {
+    if (keep_row[i] == 0) {
+      needs_compaction = true;
+      break;
+    }
+  }
+  if (needs_compaction) {
+    std::vector<i_t> new_index(m, -1);
+    i_t write = 0;
+    for (i_t i = 0; i < m; i++) {
+      if (keep_row[i] == 1) { new_index[i] = write++; }
+    }
+    for (i_t& sel : best_cuts_) {
+      sel = new_index[sel];
+    }
+    compact_pool(keep_row);
+    // After compaction, cut_distances_/cut_scores_ are no longer aligned to
+    // pool rows; consumers should not read them after score_cuts(). Resize
+    // them to match the new pool size to keep invariants tidy.
+    cut_distances_.assign(cut_storage_.m, 0.0);
+    cut_norms_.assign(cut_storage_.m, 0.0);
+    cut_scores_.assign(cut_storage_.m, 0.0);
   }
 }
 
@@ -940,16 +1307,17 @@ i_t cut_pool_t<i_t, f_t>::get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
   best_cut_types.clear();
   best_cut_types.reserve(scored_cuts_);
 
+  // best_cuts_ has already been filtered for violation, adaptive threshold,
+  // hard parallelism, and family caps inside score_cuts(). Aging of pool rows
+  // also happens in score_cuts(), so we must not call age_cuts() here.
   for (i_t i : best_cuts_) {
-    if (cut_distances_[i] <= min_cut_distance_) { continue; }
+    if (i < 0 || i >= cut_storage_.m) { continue; }
     sparse_vector_t<i_t, f_t> cut(cut_storage_, i);
     cut.negate();
     best_cuts.append_row(cut);
     best_rhs.push_back(-rhs_storage_[i]);
     best_cut_types.push_back(cut_type_[i]);
   }
-
-  age_cuts();
 
   return static_cast<i_t>(best_rhs.size());
 }
