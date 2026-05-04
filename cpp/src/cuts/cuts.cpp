@@ -2907,7 +2907,7 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
         // Multiply by -1 to force the fractional part to be greater than 0.5
         cg_inequality.negate();
       }
-      inequality_t<i_t, f_t> cg_cut;
+      inequality_t<i_t, f_t> cg_cut(lp.num_cols);
       i_t cg_status =
         cg.generate_strong_cg_cut(lp, settings, var_types, cg_inequality, xstar, cg_cut);
       if (cg_status == 0) {
