@@ -2297,7 +2297,7 @@ void cut_generation_t<i_t, f_t>::generate_implied_bound_cuts(
         const f_t lhs_val = -y_i + coeff_j * xstar_j;
         const f_t rhs_val = -b_ub;
         if (lhs_val < rhs_val - tol) {
-          inequality_t<i_t, f_t> cut;
+          inequality_t<i_t, f_t> cut(lp.num_cols);
           cut.push_back(i, -1.0);
           cut.push_back(j, coeff_j);
           cut.rhs = -b_ub;
@@ -2315,7 +2315,7 @@ void cut_generation_t<i_t, f_t>::generate_implied_bound_cuts(
         const f_t lhs_val = y_i + coeff_j * xstar_j;
         const f_t rhs_val = b_lb;
         if (lhs_val < rhs_val - tol) {
-          inequality_t<i_t, f_t> cut;
+          inequality_t<i_t, f_t> cut(lp.num_cols);
           cut.push_back(i, 1.0);
           cut.push_back(j, coeff_j);
           cut.rhs = b_lb;
@@ -2343,7 +2343,7 @@ void cut_generation_t<i_t, f_t>::generate_implied_bound_cuts(
         const f_t lhs_val = -y_i + coeff_j * xstar_j;
         const f_t rhs_val = -u_i;
         if (lhs_val < rhs_val - tol) {
-          inequality_t<i_t, f_t> cut;
+          inequality_t<i_t, f_t> cut(lp.num_cols);
           cut.push_back(i, -1.0);
           cut.push_back(j, coeff_j);
           cut.rhs = -u_i;
@@ -2360,7 +2360,7 @@ void cut_generation_t<i_t, f_t>::generate_implied_bound_cuts(
         const f_t lhs_val = xstar[i] + coeff_j * xstar_j;
         const f_t rhs_val = l_i;
         if (lhs_val < rhs_val - tol) {
-          inequality_t<i_t, f_t> cut;
+          inequality_t<i_t, f_t> cut(lp.num_cols);
           cut.push_back(i, 1.0);
           cut.push_back(j, coeff_j);
           cut.rhs = rhs_val;
