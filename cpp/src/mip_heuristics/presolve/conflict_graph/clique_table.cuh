@@ -176,6 +176,10 @@ struct clique_table_t {
   std::unordered_set<i_t> get_adj_set_of_var(i_t var_idx) const;
   i_t get_degree_of_var(i_t var_idx);
   bool check_adjacency(i_t var_idx1, i_t var_idx2) const;
+  bool empty() const
+  {
+    return first.empty() && addtl_cliques.empty() && small_clique_adj.indices.empty();
+  }
 
   void set_small_clique_adj_for_test(const std::unordered_map<i_t, std::unordered_set<i_t>>& edges);
 

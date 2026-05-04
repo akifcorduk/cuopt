@@ -106,7 +106,7 @@ void multi_probe_t<i_t, f_t>::ensure_clique_data(problem_t<i_t, f_t>& pb)
                          && last_built_nnz == pb.nnz;
   if (cache_hit) return;
 
-  if (!current_ct) {
+  if (!current_ct || current_ct->empty()) {
     clique_data.n_groups = 0;
     clique_data_built    = false;
     return;

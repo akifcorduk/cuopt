@@ -594,18 +594,18 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
     }
     if (!finite_coefs) { return; }
   }
-  // Reject excessively dense cuts: too many nonzeros makes downstream LP
-  // re-solves and bounds propagation disproportionately expensive.
-  {
-    const i_t cut_nz = cut_squeezed.size();
-    if (cut_nz > 1024 || 4 * cut_nz > original_vars_) {
-      settings_.log.printf("Skipping dense cut type=%d nz=%d original_vars=%d\n",
-                           static_cast<int>(cut_type),
-                           static_cast<int>(cut_nz),
-                           static_cast<int>(original_vars_));
-      return;
-    }
-  }
+  // // Reject excessively dense cuts: too many nonzeros makes downstream LP
+  // // re-solves and bounds propagation disproportionately expensive.
+  // {
+  //   const i_t cut_nz = cut_squeezed.size();
+  //   if (cut_nz > 1024 || 4 * cut_nz > original_vars_) {
+  //     settings_.log.printf("Skipping dense cut type=%d nz=%d original_vars=%d\n",
+  //                          static_cast<int>(cut_type),
+  //                          static_cast<int>(cut_nz),
+  //                          static_cast<int>(original_vars_));
+  //     return;
+  //   }
+  // }
 
   // Compute full row norm and max abs coefficient. These are stored per-row
   // and used for active-support scoring, parallelism checks, and normalized
