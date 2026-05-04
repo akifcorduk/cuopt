@@ -1031,13 +1031,14 @@ bool cut_pool_t<i_t, f_t>::compute_active_support_score(
     const f_t integer_support = static_cast<f_t>(integral_nnz) / static_cast<f_t>(row_nnz);
     score *= (static_cast<f_t>(1.0) + integer_support_weight_ * integer_support);
   }
-  if (row_nnz > 0) {
-    // Mildly down-weight long rows. Active support keeps useful clique rows
-    // competitive, but full support still predicts LP factorization and pivot
-    // cost, especially for Gomory/MIR rows with hundreds of nonzeros.
-    score /= (static_cast<f_t>(1.0) +
-              full_support_penalty_ * std::log2(static_cast<f_t>(row_nnz) + static_cast<f_t>(1.0)));
-  }
+  // if (row_nnz > 0) {
+  //   // Mildly down-weight long rows. Active support keeps useful clique rows
+  //   // competitive, but full support still predicts LP factorization and pivot
+  //   // cost, especially for Gomory/MIR rows with hundreds of nonzeros.
+  //   score /= (static_cast<f_t>(1.0) +
+  //             full_support_penalty_ * std::log2(static_cast<f_t>(row_nnz) +
+  //             static_cast<f_t>(1.0)));
+  // }
   return true;
 }
 
