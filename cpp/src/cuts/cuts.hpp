@@ -389,10 +389,10 @@ class cut_pool_t {
   const f_t min_cut_distance_{1e-4};
 
   // HiGHS-like cut-pool configuration
-  i_t pool_age_limit_{30};
+  i_t pool_age_limit_{5};
   i_t pool_soft_limit_{10000};
   f_t max_parallelism_{0.1};
-  f_t min_score_factor_{0.9};
+  f_t min_score_factor_{0.6};
   f_t best_observed_score_{0.0};
   f_t integer_support_weight_{0.1};
   f_t full_support_penalty_{0.01};
