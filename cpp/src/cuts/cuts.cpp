@@ -579,21 +579,40 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
   inequality_t<i_t, f_t> cut_squeezed;
   cut.squeeze(cut_squeezed);
   if (cut_squeezed.size() == 0) {
-    settings_.log.printf("Cut has no coefficients\n");
+    settings_.log.printf("Reject cut type=%d reason=empty_support\n", static_cast<int>(cut_type));
     return;
   }
   // Reject NaN / inf coefficients or rhs early.
   {
-    if (!std::isfinite(cut_squeezed.rhs)) { return; }
+    if (!std::isfinite(cut_squeezed.rhs)) {
+      settings_.log.printf("Reject cut type=%d reason=nonfinite_rhs rhs=%g\n",
+                           static_cast<int>(cut_type),
+                           static_cast<double>(cut_squeezed.rhs));
+      return;
+    }
     bool finite_coefs = true;
+    i_t nonfinite_pos = -1;
     for (i_t p = 0; p < cut_squeezed.size(); p++) {
       if (!std::isfinite(cut_squeezed.coeff(p))) {
-        finite_coefs = false;
+        finite_coefs  = false;
+        nonfinite_pos = p;
         break;
       }
     }
-    if (!finite_coefs) { return; }
+    if (!finite_coefs) {
+      settings_.log.printf(
+        "Reject cut type=%d reason=nonfinite_coeff nz=%d pos=%d col=%d coeff=%g\n",
+        static_cast<int>(cut_type),
+        static_cast<int>(cut_squeezed.size()),
+        static_cast<int>(nonfinite_pos),
+        static_cast<int>(cut_squeezed.index(nonfinite_pos)),
+        static_cast<double>(cut_squeezed.coeff(nonfinite_pos)));
+      return;
+    }
   }
+  // Duplicate detection and parallelism checks assume canonical column order.
+  cut_squeezed.sort();
+
   // // Reject excessively dense cuts: too many nonzeros makes downstream LP
   // // re-solves and bounds propagation disproportionately expensive.
   // {
@@ -618,7 +637,13 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
     const f_t av = std::abs(v);
     if (av > max_abs_coef) { max_abs_coef = av; }
   }
-  if (!(full_norm2 > 0.0)) { return; }
+  if (!(full_norm2 > 0.0)) {
+    settings_.log.printf("Reject cut type=%d reason=degenerate_norm nz=%d rhs=%g\n",
+                         static_cast<int>(cut_type),
+                         static_cast<int>(cut_squeezed.size()),
+                         static_cast<double>(cut_squeezed.rhs));
+    return;
+  }
   const f_t inv_norm = 1.0 / std::sqrt(full_norm2);
 
   // Normalized duplicate detection. Two cuts are considered duplicates only
@@ -658,7 +683,18 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
             static_cast<f_t>(1.0),
             std::max(std::abs(existing_normalized_rhs), std::abs(new_normalized_rhs)));
           constexpr f_t rhs_tol = static_cast<f_t>(1e-9);
-          if (new_normalized_rhs <= existing_normalized_rhs + rhs_tol * rhs_scale) { return; }
+          if (new_normalized_rhs <= existing_normalized_rhs + rhs_tol * rhs_scale) {
+            settings_.log.printf(
+              "Reject cut type=%d reason=duplicate_or_weaker nz=%d existing_row=%d "
+              "signed_cosine=%.6f new_norm_rhs=%g existing_norm_rhs=%g\n",
+              static_cast<int>(cut_type),
+              static_cast<int>(new_nz),
+              static_cast<int>(k),
+              static_cast<double>(signed_cosine),
+              static_cast<double>(new_normalized_rhs),
+              static_cast<double>(existing_normalized_rhs));
+            return;
+          }
         }
       }
     }
@@ -989,18 +1025,20 @@ bool cut_pool_t<i_t, f_t>::compute_active_support_score(
   // we divide by the active row norm and additionally penalize the active
   // support count. This favours dense-but-strongly-violated rows over many
   // weakly-violated rows of similar support.
-  score = violation / (static_cast<f_t>(active_nnz) * std::sqrt(active_row_norm2));
+  // score = violation / (static_cast<f_t>(active_nnz) * std::sqrt(active_row_norm2));
+  score = violation;
   if (have_var_types && row_nnz > 0) {
     const f_t integer_support = static_cast<f_t>(integral_nnz) / static_cast<f_t>(row_nnz);
     score *= (static_cast<f_t>(1.0) + integer_support_weight_ * integer_support);
   }
-  if (row_nnz > 0) {
-    // Mildly down-weight long rows. Active support keeps useful clique rows
-    // competitive, but full support still predicts LP factorization and pivot
-    // cost, especially for Gomory/MIR rows with hundreds of nonzeros.
-    score /= (static_cast<f_t>(1.0) +
-              full_support_penalty_ * std::log2(static_cast<f_t>(row_nnz) + static_cast<f_t>(1.0)));
-  }
+  // if (row_nnz > 0) {
+  //   // Mildly down-weight long rows. Active support keeps useful clique rows
+  //   // competitive, but full support still predicts LP factorization and pivot
+  //   // cost, especially for Gomory/MIR rows with hundreds of nonzeros.
+  //   score /= (static_cast<f_t>(1.0) +
+  //             full_support_penalty_ * std::log2(static_cast<f_t>(row_nnz) +
+  //             static_cast<f_t>(1.0)));
+  // }
   return true;
 }
 
@@ -1172,7 +1210,24 @@ void cut_pool_t<i_t, f_t>::score_cuts(const std::vector<f_t>& x_relax,
     cut_scores_[i]    = score;
     if (!violated) {
       cut_age_[i] += 1;
-      if (cut_age_[i] >= effective_age_limit) { keep_row[i] = 0; }
+      if (cut_age_[i] >= effective_age_limit) {
+        keep_row[i] = 0;
+        settings_.log.printf(
+          "Reject cut row=%d type=%d reason=aged_out violation=%g age=%d age_limit=%d\n",
+          static_cast<int>(i),
+          static_cast<int>(cut_type_[i]),
+          static_cast<double>(violation),
+          static_cast<int>(cut_age_[i]),
+          static_cast<int>(effective_age_limit));
+      } else {
+        settings_.log.printf(
+          "Reject cut row=%d type=%d reason=not_violated violation=%g age=%d age_limit=%d\n",
+          static_cast<int>(i),
+          static_cast<int>(cut_type_[i]),
+          static_cast<double>(violation),
+          static_cast<int>(cut_age_[i]),
+          static_cast<int>(effective_age_limit));
+      }
     } else {
       cut_age_[i] = 0;
       candidates.emplace_back(score, i);
@@ -1222,42 +1277,82 @@ void cut_pool_t<i_t, f_t>::score_cuts(const std::vector<f_t>& x_relax,
     }
   }
 
-  // Greedy hard parallelism rejection with family caps. Cosine parallelism
-  // strictly above max_parallelism_ is rejected outright; this is the key
-  // HiGHS-like behavior to avoid flooding the LP with near-duplicate cuts.
-  std::array<i_t, MAX_CUT_TYPE> family_selected{};
-  for (i_t k = 0; k < MAX_CUT_TYPE; k++) {
-    family_selected[k] = 0;
+  for (i_t k = num_efficacious; k < static_cast<i_t>(candidates.size()); ++k) {
+    const i_t cand = candidates[k].second;
+    settings_.log.printf(
+      "Reject cut row=%d type=%d reason=score_threshold score=%g threshold_factor=%g "
+      "best_observed=%g violation=%g\n",
+      static_cast<int>(cand),
+      static_cast<int>(cut_type_[cand]),
+      static_cast<double>(candidates[k].first),
+      static_cast<double>(min_score_factor_),
+      static_cast<double>(best_observed_score_),
+      static_cast<double>(cut_distances_[cand]));
   }
-  const auto& caps         = is_root_ ? family_cap_root_ : family_cap_node_;
+
+  // Greedy hard parallelism rejection. Cosine parallelism strictly above
+  // max_parallelism_ is rejected outright; this is the key HiGHS-like
+  // behavior to avoid flooding the LP with near-duplicate cuts.
   const i_t max_total_cuts = 2000;
   const f_t good_score = candidates.empty() ? 0.0 : min_score_factor_ * candidates.front().first;
+  f_t best_violation   = 0.0;
+  for (const auto& candidate : candidates) {
+    best_violation = std::max(best_violation, cut_distances_[candidate.second]);
+  }
+  const f_t good_violation = min_score_factor_ * best_violation;
 
   best_cuts_.reserve(std::min<i_t>(num_efficacious, max_total_cuts));
-  for (i_t k = 0; k < num_efficacious && static_cast<i_t>(best_cuts_.size()) < max_total_cuts;
-       k++) {
-    const i_t cand       = candidates[k].second;
-    const cut_type_t fam = cut_type_[cand];
-    const i_t fam_idx    = static_cast<i_t>(fam);
-    if (fam_idx >= 0 && fam_idx < MAX_CUT_TYPE && caps[fam_idx] > 0 &&
-        family_selected[fam_idx] >= caps[fam_idx]) {
+  i_t considered_candidates = 0;
+  for (i_t k = 0; k < num_efficacious; k++) {
+    if (static_cast<i_t>(best_cuts_.size()) >= max_total_cuts) { break; }
+    considered_candidates = k + 1;
+    const i_t cand        = candidates[k].second;
+    const bool high_quality =
+      candidates[k].first >= good_score || cut_distances_[cand] >= good_violation;
+
+    bool reject               = false;
+    i_t rejecting_row         = -1;
+    f_t rejecting_parallelism = 0.0;
+    if (!high_quality) {
+      for (i_t sel : best_cuts_) {
+        const f_t p = parallelism_abs(cand, sel);
+        if (p > max_parallelism_) {
+          reject                = true;
+          rejecting_row         = sel;
+          rejecting_parallelism = p;
+          break;
+        }
+      }
+    }
+    if (reject) {
+      settings_.log.printf(
+        "Reject cut row=%d type=%d reason=parallelism score=%g violation=%g "
+        "parallelism=%g max_parallelism=%g selected_row=%d selected_type=%d "
+        "good_score=%g good_violation=%g\n",
+        static_cast<int>(cand),
+        static_cast<int>(cut_type_[cand]),
+        static_cast<double>(candidates[k].first),
+        static_cast<double>(cut_distances_[cand]),
+        static_cast<double>(rejecting_parallelism),
+        static_cast<double>(max_parallelism_),
+        static_cast<int>(rejecting_row),
+        rejecting_row >= 0 ? static_cast<int>(cut_type_[rejecting_row]) : -1,
+        static_cast<double>(good_score),
+        static_cast<double>(good_violation));
       continue;
     }
 
-    bool reject = false;
-    const f_t max_parallelism_for_cut =
-      candidates[k].first >= good_score ? good_max_parallelism_ : max_parallelism_;
-    for (i_t sel : best_cuts_) {
-      const f_t p = parallelism_abs(cand, sel);
-      if (p > max_parallelism_for_cut) {
-        reject = true;
-        break;
-      }
-    }
-    if (reject) { continue; }
-
     best_cuts_.push_back(cand);
-    if (fam_idx >= 0 && fam_idx < MAX_CUT_TYPE) { family_selected[fam_idx]++; }
+  }
+  for (i_t k = considered_candidates; k < num_efficacious; ++k) {
+    const i_t cand = candidates[k].second;
+    settings_.log.printf(
+      "Reject cut row=%d type=%d reason=max_total_cuts score=%g violation=%g max_total=%d\n",
+      static_cast<int>(cand),
+      static_cast<int>(cut_type_[cand]),
+      static_cast<double>(candidates[k].first),
+      static_cast<double>(cut_distances_[cand]),
+      static_cast<int>(max_total_cuts));
   }
   scored_cuts_ = static_cast<i_t>(best_cuts_.size());
 
@@ -1308,7 +1403,7 @@ i_t cut_pool_t<i_t, f_t>::get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
   best_cut_types.reserve(scored_cuts_);
 
   // best_cuts_ has already been filtered for violation, adaptive threshold,
-  // hard parallelism, and family caps inside score_cuts(). Aging of pool rows
+  // and hard parallelism inside score_cuts(). Aging of pool rows
   // also happens in score_cuts(), so we must not call age_cuts() here.
   for (i_t i : best_cuts_) {
     if (i < 0 || i >= cut_storage_.m) { continue; }

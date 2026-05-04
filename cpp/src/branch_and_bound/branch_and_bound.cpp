@@ -2505,7 +2505,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   }
 
   print_cut_info(settings_, cut_info);
-  f_t cut_generation_time = toc(cut_generation_start_time);
+  f_t cut_generation_time         = toc(cut_generation_start_time);
+  const f_t post_cut_lp_objective = compute_user_objective(original_lp_, root_objective_);
+  const std::string post_cut_mip_gap =
+    user_mip_gap<i_t, f_t>(original_lp_, upper_bound_.load(), root_objective_);
+  settings_.log.printf("Post-cut LP relaxation objective: %+.16e, MIP gap: %s\n",
+                       post_cut_lp_objective,
+                       post_cut_mip_gap.c_str());
   if (cut_info.has_cuts()) {
     settings_.log.printf("Cut generation time: %.2f seconds\n", cut_generation_time);
     settings_.log.printf("Cut pool size  : %d\n", cut_pool_size);

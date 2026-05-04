@@ -284,21 +284,6 @@ class cut_pool_t {
       cut_max_abs_coef_(0),
       scored_cuts_(0)
   {
-    // Default family caps (root). HiGHS-like extension: tuned to avoid the LP
-    // being flooded by a single family (notably implied bounds).
-    family_cap_root_[MIXED_INTEGER_GOMORY]   = 40;
-    family_cap_root_[MIXED_INTEGER_ROUNDING] = 20;
-    family_cap_root_[KNAPSACK]               = 40;
-    family_cap_root_[CHVATAL_GOMORY]         = 40;
-    family_cap_root_[CLIQUE]                 = 40;
-    family_cap_root_[IMPLIED_BOUND]          = 100;
-
-    family_cap_node_[MIXED_INTEGER_GOMORY]   = 10;
-    family_cap_node_[MIXED_INTEGER_ROUNDING] = 10;
-    family_cap_node_[KNAPSACK]               = 10;
-    family_cap_node_[CHVATAL_GOMORY]         = 10;
-    family_cap_node_[CLIQUE]                 = 20;
-    family_cap_node_[IMPLIED_BOUND]          = 30;
   }
 
   // Add a cut in the form: cut'*x >= rhs.
@@ -311,7 +296,7 @@ class cut_pool_t {
   void score_cuts(std::vector<f_t>& x_relax);
 
   // HiGHS-like active-support scoring with adaptive threshold, adaptive
-  // parallelism rejection, family caps, and violation-based aging. Selected
+  // parallelism rejection, and violation-based aging. Selected
   // rows remain in the pool so they can be reconsidered if later removed
   // from the LP and violated again.
   void score_cuts(const std::vector<f_t>& x_relax,
@@ -347,10 +332,6 @@ class cut_pool_t {
   void set_pool_age_limit(i_t v) { pool_age_limit_ = v; }
   void set_pool_soft_limit(i_t v) { pool_soft_limit_ = v; }
   void set_max_parallelism(f_t v) { max_parallelism_ = v; }
-  void set_good_max_parallelism(f_t v) { good_max_parallelism_ = v; }
-  void set_is_root(bool v) { is_root_ = v; }
-  void set_family_cap_root(cut_type_t t, i_t cap) { family_cap_root_[t] = cap; }
-  void set_family_cap_node(cut_type_t t, i_t cap) { family_cap_node_[t] = cap; }
 
  private:
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
@@ -411,14 +392,10 @@ class cut_pool_t {
   i_t pool_age_limit_{30};
   i_t pool_soft_limit_{10000};
   f_t max_parallelism_{0.1};
-  f_t good_max_parallelism_{0.5};
   f_t min_score_factor_{0.9};
   f_t best_observed_score_{0.0};
   f_t integer_support_weight_{0.1};
   f_t full_support_penalty_{0.01};
-  bool is_root_{true};
-  std::array<i_t, MAX_CUT_TYPE> family_cap_root_{};
-  std::array<i_t, MAX_CUT_TYPE> family_cap_node_{};
   std::unordered_map<uint64_t, std::vector<i_t>> support_hash_buckets_;
 };
 
