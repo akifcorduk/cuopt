@@ -405,13 +405,13 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
     // Publish the async-built clique_table onto context.problem_ptr so
     // heuristics pick it up via the atomic snapshot accessor.
-    {
-      auto* pb = context.problem_ptr;
-      branch_and_bound->set_clique_publish_callback(
-        [pb](std::shared_ptr<clique_table_t<i_t, f_t>> ct) {
-          pb->publish_clique_table(std::move(ct));
-        });
-    }
+    // {
+    //   auto* pb = context.problem_ptr;
+    //   branch_and_bound->set_clique_publish_callback(
+    //     [pb](std::shared_ptr<clique_table_t<i_t, f_t>> ct) {
+    //       pb->publish_clique_table(std::move(ct));
+    //     });
+    // }
 
     // Convert the best external upper bound from user-space to B&B's internal objective space.
     // context.problem_ptr is the post-trivial-presolve problem, whose get_solver_obj_from_user_obj
