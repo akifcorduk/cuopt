@@ -613,6 +613,49 @@ f_t cut_pool_t<i_t, f_t>::cut_density(i_t row)
 }
 
 template <typename i_t, typename f_t>
+f_t cut_pool_t<i_t, f_t>::cut_integer_support_fraction(
+  i_t row, const std::vector<variable_type_t>& var_types) const
+{
+  // Paper Eq 25: fraction of cut nonzeros on integer-constrained variables.
+  // Used as one term of the SCIP/Mops Achterberg-style composite.
+  const i_t row_start = cut_storage_.row_start[row];
+  const i_t row_end   = cut_storage_.row_start[row + 1];
+  const i_t cut_nz    = row_end - row_start;
+  if (cut_nz == 0) { return 0.0; }
+  const i_t var_count = static_cast<i_t>(var_types.size());
+  i_t int_count       = 0;
+  for (i_t p = row_start; p < row_end; p++) {
+    const i_t j = cut_storage_.j[p];
+    if (j < 0 || j >= var_count) { continue; }
+    if (var_types[j] != variable_type_t::CONTINUOUS) { int_count++; }
+  }
+  return static_cast<f_t>(int_count) / static_cast<f_t>(cut_nz);
+}
+
+template <typename i_t, typename f_t>
+f_t cut_pool_t<i_t, f_t>::cut_obj_parallelism(i_t row,
+                                              const std::vector<f_t>& objective,
+                                              f_t cut_norm,
+                                              f_t obj_norm) const
+{
+  // Paper Eq 19: |aᵀc| / (‖a‖ ‖c‖). Cosine similarity between cut and the
+  // LP objective, in [0, 1]. Score is 0 when either norm is zero (degenerate
+  // cut or pure feasibility problem) so the composite collapses to the
+  // remaining terms.
+  if (!(cut_norm > 0.0) || !(obj_norm > 0.0)) { return 0.0; }
+  const i_t row_start = cut_storage_.row_start[row];
+  const i_t row_end   = cut_storage_.row_start[row + 1];
+  const i_t obj_size  = static_cast<i_t>(objective.size());
+  f_t dot             = 0.0;
+  for (i_t p = row_start; p < row_end; p++) {
+    const i_t j = cut_storage_.j[p];
+    if (j < 0 || j >= obj_size) { continue; }
+    dot += cut_storage_.x[p] * objective[j];
+  }
+  return std::abs(dot) / (cut_norm * obj_norm);
+}
+
+template <typename i_t, typename f_t>
 f_t cut_pool_t<i_t, f_t>::cut_orthogonality(i_t i, i_t j)
 {
   const i_t i_start = cut_storage_.row_start[i];
@@ -770,7 +813,9 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
 }
 
 template <typename i_t, typename f_t>
-void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
+void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
+                                      const std::vector<variable_type_t>* var_types,
+                                      const std::vector<f_t>* objective)
 {
   // P0-1: clear stats so log_score_stats_summary() reflects only this round.
   // SCORE_DUP events are bumped inside check_for_duplicate_cuts; SCORE_AGED
@@ -783,23 +828,66 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
   cut_distances_.resize(cut_storage_.m, 0.0);
   cut_norms_.resize(cut_storage_.m, 0.0);
 
+  // P1-2: enable composite-score components only when callers passed the
+  // matching problem context. var_types must cover the pool's variable
+  // space; objective is sized like the LP cost vector. Each guard collapses
+  // its term to 0 so the score reduces gracefully to pure efficacy.
+  const bool use_int_supp = (var_types != nullptr) &&
+                            (static_cast<i_t>(var_types->size()) >= original_vars_) &&
+                            (integer_support_weight_ > 0.0);
+  const bool has_objective =
+    (objective != nullptr) && (objective->size() > 0) && (obj_parallelism_weight_ > 0.0);
+  // Precompute ‖c‖ once per pass (paper Eq 19 denominator).
+  f_t obj_norm = 0.0;
+  if (has_objective) {
+    for (size_t k = 0; k < objective->size(); k++) {
+      const f_t cj = (*objective)[k];
+      obj_norm += cj * cj;
+    }
+    obj_norm = std::sqrt(obj_norm);
+  }
+  const bool use_obj_par = has_objective && (obj_norm > 0.0);
+
   const bool verbose = false;
   for (i_t i = 0; i < cut_storage_.m; i++) {
     f_t violation;
-    f_t cut_dist = cut_distance(i, x_relax, violation, cut_norms_[i]);
-    if (cut_dist <= min_cut_distance_) {
+    const f_t efficacy = cut_distance(i, x_relax, violation, cut_norms_[i]);
+    if (efficacy <= min_cut_distance_) {
+      // Hard floor on raw efficacy: cut is essentially not violated. Reject
+      // upfront — integer-support and objective-parallelism boosts can't
+      // rescue a cut that doesn't separate the relaxation point.
       cut_distances_[i] = 0.0;
       stats_.inc(cut_type_[i], CUT_EVENT_SCORE_THRESHOLD);
-    } else {
-      cut_distances_[i] = cut_dist;
+      if (verbose) {
+        settings_.log.printf(
+          "Cut %d type %d efficacy %+e violation %+e cut_norm %e (below floor)\n",
+          i,
+          static_cast<int>(cut_type_[i]),
+          efficacy,
+          violation,
+          cut_norms_[i]);
+      }
+      continue;
     }
+    const f_t int_supp =
+      use_int_supp ? cut_integer_support_fraction(i, *var_types) : static_cast<f_t>(0.0);
+    const f_t obj_par = use_obj_par ? cut_obj_parallelism(i, *objective, cut_norms_[i], obj_norm)
+                                    : static_cast<f_t>(0.0);
+    // Additive composite (SCIP/Mops), not multiplicative — see IMPROVEMENTS.md
+    // P1-2 "Convention" note. Composite >= efficacy_weight_ * efficacy when
+    // weights and components are non-negative, so the sort key never falls
+    // below the efficacy floor on accepted cuts.
+    const f_t score = efficacy_weight_ * efficacy + integer_support_weight_ * int_supp +
+                      obj_parallelism_weight_ * obj_par;
+    cut_distances_[i] = score;
     if (verbose) {
-      settings_.log.printf("Cut %d type %d distance %+e violation %+e cut_norm %e\n",
+      settings_.log.printf("Cut %d type %d efficacy %+e int_supp %.3f obj_par %.3f score %+e\n",
                            i,
                            static_cast<int>(cut_type_[i]),
-                           cut_distances_[i],
-                           violation,
-                           cut_norms_[i]);
+                           efficacy,
+                           int_supp,
+                           obj_par,
+                           score);
     }
   }
 

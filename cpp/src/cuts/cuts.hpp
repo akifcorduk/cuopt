@@ -331,7 +331,22 @@ class cut_pool_t {
   // cut'*xstart < rhs
   void add_cut(cut_type_t cut_type, const inequality_t<i_t, f_t>& cut);
 
-  void score_cuts(std::vector<f_t>& x_relax);
+  // P1-2: when var_types and objective are non-null, the per-cut sort key
+  // becomes the SCIP/Mops Achterberg-style additive composite:
+  //
+  //   score = efficacy_weight_       * efficacy
+  //         + integer_support_weight_ * integer_support_fraction
+  //         + obj_parallelism_weight_ * objective_parallelism
+  //
+  // where each component is paper §2.2 / Eq 6 / Eq 19 / Eq 25. When either
+  // pointer is null, or sizes don't match the pool's variable space, the
+  // corresponding term collapses to 0 and the score reduces to pure
+  // efficacy (= the pre-P1-2 baseline). The hard `min_cut_distance_` floor
+  // is still applied to raw efficacy so cuts that are barely violated are
+  // rejected regardless of integer-support / obj-parallelism contribution.
+  void score_cuts(std::vector<f_t>& x_relax,
+                  const std::vector<variable_type_t>* var_types = nullptr,
+                  const std::vector<f_t>* objective             = nullptr);
 
   // We return the cuts in the form best_cuts*x <= best_rhs
   i_t get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
@@ -383,10 +398,31 @@ class cut_pool_t {
   i_t pool_age_limit() const { return pool_age_limit_; }
   i_t pool_soft_limit() const { return pool_soft_limit_; }
 
+  // P1-2: composite-score weights. Defaults match SCIP `sepa_cutsel_hybrid`
+  // and the Achterberg-style composite that Wesselmann–Suhl Table 4
+  // validates as fastest at 50% of instances and 89% solved.
+  // Set obj_parallelism_weight_ to 0.0 to mirror SCIP `objparalfac=0.0` for
+  // categories where objective parallelism is uninformative.
+  void set_efficacy_weight(f_t v) { efficacy_weight_ = v; }
+  void set_integer_support_weight(f_t v) { integer_support_weight_ = v; }
+  void set_obj_parallelism_weight(f_t v) { obj_parallelism_weight_ = v; }
+  f_t efficacy_weight() const { return efficacy_weight_; }
+  f_t integer_support_weight() const { return integer_support_weight_; }
+  f_t obj_parallelism_weight() const { return obj_parallelism_weight_; }
+
  private:
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
   f_t cut_density(i_t row);
   f_t cut_orthogonality(i_t i, i_t j);
+  // P1-2: composite-score components.
+  // integer_support_fraction = |supp(a) ∩ NI| / |supp(a)|   (paper Eq 25)
+  // obj_parallelism          = |aᵀc| / (‖a‖ ‖c‖)            (paper Eq 19)
+  // Both return 0 when the relevant input is missing or sizes don't match.
+  f_t cut_integer_support_fraction(i_t row, const std::vector<variable_type_t>& var_types) const;
+  f_t cut_obj_parallelism(i_t row,
+                          const std::vector<f_t>& objective,
+                          f_t cut_norm,
+                          f_t obj_norm) const;
 
   i_t original_vars_;
   const simplex_solver_settings_t<i_t, f_t>& settings_;
@@ -411,6 +447,14 @@ class cut_pool_t {
   // `mip_pool_soft_limit` = 30000).
   i_t pool_age_limit_{5};
   i_t pool_soft_limit_{30000};
+
+  // P1-2: SCIP `sepa_cutsel_hybrid` defaults — `efficacyfac=1.0`,
+  // `intsupportfac=0.1`, `objparalfac=0.1`. Paper §4 / Figure 4: this
+  // composite (the Achterberg-style scorer) is fastest on 50% of instances
+  // and solves 89% to optimality vs 46% / 85% for plain distance.
+  f_t efficacy_weight_{1.0};
+  f_t integer_support_weight_{0.1};
+  f_t obj_parallelism_weight_{0.1};
 };
 
 template <typename i_t, typename f_t>

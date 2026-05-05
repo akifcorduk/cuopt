@@ -2270,8 +2270,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         settings_.log.debug("Cut generation time %.2f seconds\n", cut_generation_time);
       }
       // Score the cuts
+      // P1-2: pass variable types and the LP objective so score_cuts can
+      // compute the SCIP/Mops Achterberg-style composite (efficacy + integer-
+      // support fraction + objective parallelism). Both arguments default to
+      // null in cuts.hpp so unit tests that drive score_cuts directly still
+      // get pure-efficacy behavior without modification.
       f_t score_start_time = tic();
-      cut_pool.score_cuts(root_relax_soln_.x);
+      cut_pool.score_cuts(root_relax_soln_.x, &var_types_, &original_lp_.objective);
       f_t score_time = toc(score_start_time);
       if (score_time > 1.0) { settings_.log.debug("Cut scoring time %.2f seconds\n", score_time); }
       // Get the best cuts from the cut pool
