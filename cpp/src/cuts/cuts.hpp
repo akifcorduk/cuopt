@@ -390,7 +390,7 @@ class cut_pool_t {
 
   // HiGHS-like cut-pool configuration
   i_t pool_age_limit_{5};
-  i_t pool_soft_limit_{10000};
+  i_t pool_soft_limit_{30000};
   f_t max_parallelism_{0.3};
   f_t min_score_factor_{0.6};
   f_t best_observed_score_{0.0};

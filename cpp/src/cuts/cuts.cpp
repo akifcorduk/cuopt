@@ -1289,10 +1289,7 @@ void cut_pool_t<i_t, f_t>::score_cuts(const std::vector<f_t>& x_relax,
       static_cast<double>(cut_distances_[cand]));
   }
 
-  // Greedy hard parallelism rejection. Cosine parallelism strictly above
-  // max_parallelism_ is rejected outright; this is the key HiGHS-like
-  // behavior to avoid flooding the LP with near-duplicate cuts.
-  const i_t max_total_cuts = 2000;
+  const i_t max_total_cuts = 300000;
   const f_t good_score = candidates.empty() ? 0.0 : min_score_factor_ * candidates.front().first;
   f_t best_violation   = 0.0;
   for (const auto& candidate : candidates) {
