@@ -80,13 +80,46 @@ clique_cut_build_status_t build_clique_cut(const std::vector<i_t>& clique_vertic
 
   cut.i.clear();
   cut.x.clear();
-  i_t num_complements = 0;
+
+  // P0-3 (1): two-pass complement-pair detection. The baseline returned
+  // NO_CUT on the first variable that appeared both as itself and as its
+  // complement; that hides how many such conflicts a candidate clique has
+  // and makes it impossible to attribute infeasibility events to specific
+  // clique generators. Pre-pass collects every original/complement
+  // occurrence per variable, counts the actual complement pairs, and only
+  // then decides. Accept/reject behavior matches baseline (a complement
+  // pair still aborts cut construction); only the diagnostics change.
   std::unordered_set<i_t> seen_original;
   std::unordered_set<i_t> seen_complement;
   seen_original.reserve(clique_vertices.size());
   seen_complement.reserve(clique_vertices.size());
   for (const auto vertex_idx : clique_vertices) {
     cuopt_assert(vertex_idx >= 0 && vertex_idx < 2 * num_vars, "Clique vertex out of range");
+    const i_t var_idx     = vertex_idx % num_vars;
+    const bool complement = vertex_idx >= num_vars;
+    if (complement) {
+      seen_complement.insert(var_idx);
+    } else {
+      seen_original.insert(var_idx);
+    }
+  }
+  i_t complement_pairs = 0;
+  for (const auto var_idx : seen_original) {
+    if (seen_complement.count(var_idx) > 0) { complement_pairs++; }
+  }
+  if (complement_pairs > 0) {
+    CLIQUE_CUTS_DEBUG("build_clique_cut infeasible: %lld complement-pairs",
+                      static_cast<long long>(complement_pairs));
+    return clique_cut_build_status_t::NO_CUT;
+  }
+
+  // Second pass: emit cut coefficients. We already know there are no
+  // complement-pair conflicts so the lookups against seen_original /
+  // seen_complement that the baseline performed are now redundant.
+  i_t num_complements       = 0;
+  const bool has_original   = !seen_original.empty();
+  const bool has_complement = !seen_complement.empty();
+  for (const auto vertex_idx : clique_vertices) {
     const i_t var_idx     = vertex_idx % num_vars;
     const bool complement = vertex_idx >= num_vars;
     const f_t lower_bound = lower_bounds[var_idx];
@@ -96,32 +129,17 @@ clique_cut_build_status_t build_clique_cut(const std::vector<i_t>& clique_vertic
                  "Clique contains continuous variable");
     cuopt_assert(lower_bound >= -bound_tol, "Clique variable lower bound below zero");
     cuopt_assert(upper_bound <= 1 + bound_tol, "Clique variable upper bound above one");
+    static_cast<void>(lower_bound);
+    static_cast<void>(upper_bound);
 
-    // we store the cut in the form of >= 1, for easy violation check with dot product
-    // that's why compelements have 1 as coeff and normal vars have -1
+    // Cut is stored in form sum_j a_j x_j >= rhs for direct dot-product
+    // violation checks. Complemented literals (1 - x_j) contribute +1*x_j
+    // to the inequality and originals contribute -1*x_j.
     if (complement) {
-      if (seen_original.count(var_idx) > 0) {
-        // FIXME: this is temporary, fix all the vars of all other vars in the clique
-        return clique_cut_build_status_t::NO_CUT;
-        CLIQUE_CUTS_DEBUG("build_clique_cut infeasible var=%lld appears as variable and complement",
-                          static_cast<long long>(var_idx));
-        return clique_cut_build_status_t::INFEASIBLE;
-      }
-      cuopt_assert(seen_complement.count(var_idx) == 0, "Duplicate complement in clique");
-      seen_complement.insert(var_idx);
       num_complements++;
       cut.i.push_back(var_idx);
       cut.x.push_back(1.0);
     } else {
-      if (seen_complement.count(var_idx) > 0) {
-        // FIXME: this is temporary, fix all the vars of all other vars in the clique
-        return clique_cut_build_status_t::NO_CUT;
-        CLIQUE_CUTS_DEBUG("build_clique_cut infeasible var=%lld appears as variable and complement",
-                          static_cast<long long>(var_idx));
-        return clique_cut_build_status_t::INFEASIBLE;
-      }
-      cuopt_assert(seen_original.count(var_idx) == 0, "Duplicate variable in clique");
-      seen_original.insert(var_idx);
       cut.i.push_back(var_idx);
       cut.x.push_back(-1.0);
     }
@@ -135,27 +153,36 @@ clique_cut_build_status_t build_clique_cut(const std::vector<i_t>& clique_vertic
   cut_rhs = static_cast<f_t>(num_complements - 1);
   cut.sort();
 
+  // P0-3 (4): has_pair distinguishes pure (all originals OR all
+  // complements) from mixed cliques in the accepted-cut log line so
+  // post-mortem analysis can attribute gap closure to one variant or
+  // the other.
+  const int has_pair  = (has_original && has_complement) ? 1 : 0;
   const f_t dot       = cut.dot(xstar);
   const f_t violation = cut_rhs - dot;
   if (violation > min_violation) {
     CLIQUE_CUTS_DEBUG(
-      "build_clique_cut accepted nz=%lld rhs=%g dot=%g violation=%g threshold=%g complements=%lld",
+      "build_clique_cut accepted nz=%lld rhs=%g dot=%g violation=%g threshold=%g complements=%lld "
+      "has_pair=%d",
       static_cast<long long>(cut.i.size()),
       static_cast<double>(cut_rhs),
       static_cast<double>(dot),
       static_cast<double>(violation),
       static_cast<double>(min_violation),
-      static_cast<long long>(num_complements));
+      static_cast<long long>(num_complements),
+      has_pair);
     return clique_cut_build_status_t::CUT_ADDED;
   }
   CLIQUE_CUTS_DEBUG(
-    "build_clique_cut rejected nz=%lld rhs=%g dot=%g violation=%g threshold=%g complements=%lld",
+    "build_clique_cut rejected nz=%lld rhs=%g dot=%g violation=%g threshold=%g complements=%lld "
+    "has_pair=%d",
     static_cast<long long>(cut.i.size()),
     static_cast<double>(cut_rhs),
     static_cast<double>(dot),
     static_cast<double>(violation),
     static_cast<double>(min_violation),
-    static_cast<long long>(num_complements));
+    static_cast<long long>(num_complements),
+    has_pair);
   return clique_cut_build_status_t::NO_CUT;
 }
 
@@ -388,11 +415,20 @@ void extend_clique_vertices(std::vector<i_t>& clique_vertices,
   const f_t candidate_size = static_cast<f_t>(candidates.size());
   const f_t sort_work =
     candidate_size > 0.0 ? 2.0 * candidate_size * std::log2(candidate_size + 1.0) : 0.0;
-  const f_t adj_set_build_cost     = 2.0 * static_cast<f_t>(adj_set.size());
-  const f_t adj_check_cost         = 5.0;
-  const f_t estimated_preloop_work = 2.0 * initial_clique_size + adj_set_build_cost +
-                                     3.0 * static_cast<f_t>(adj_set.size()) + sort_work +
-                                     2.0 * candidate_size;
+  const f_t adj_set_build_cost = 2.0 * static_cast<f_t>(adj_set.size());
+  // P0-3 (2): account for the addtl_cliques scan that
+  // clique_table_t::check_adjacency performs on every adjacency probe.
+  // Baseline ignored this, so on instances with many addtl_clique entries
+  // the extension loop dominated cut-generation wall time without being
+  // attributed to clique cuts. avg_slice_size of var_clique_addtl is a
+  // robust proxy for the per-call addtl scan cost.
+  const f_t addtl_cliques_scan_cost =
+    1.0 + static_cast<f_t>(graph.var_clique_addtl.avg_slice_size());
+  const f_t adj_check_cost = 5.0 + addtl_cliques_scan_cost;
+  const f_t estimated_preloop_work =
+    2.0 * initial_clique_size + adj_set_build_cost + 3.0 * static_cast<f_t>(adj_set.size()) +
+    sort_work + 2.0 * candidate_size + addtl_cliques_scan_cost * initial_clique_size +
+    addtl_cliques_scan_cost;
   if (add_work_estimate(estimated_preloop_work, work_estimate, max_work_estimate)) {
     CLIQUE_CUTS_DEBUG("extend_clique_vertices skip work_limit work=%g limit=%g",
                       work_estimate == nullptr ? -1.0 : static_cast<double>(*work_estimate),
@@ -428,6 +464,8 @@ void extend_clique_vertices(std::vector<i_t>& clique_vertices,
         break;
       }
     }
+    // Each check_adjacency now charges its own addtl_cliques_scan_cost
+    // term so the per-iteration budget reflects the addtl scan cost.
     if (add_work_estimate(
           adj_check_cost * static_cast<f_t>(checks), work_estimate, max_work_estimate)) {
       break;
