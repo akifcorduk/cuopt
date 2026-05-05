@@ -515,8 +515,13 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
   for (i_t p = 0; p < cut.size(); p++) {
     const i_t j = cut.index(p);
     if (j >= original_vars_) {
-      settings_.log.printf(
-        "Cut has variable %d that is greater than original_vars_ %d\n", j, original_vars_);
+      stats_.inc(cut_type, CUT_EVENT_ADD_VARS_OOR);
+      if (log_rejects_) {
+        settings_.log.printf("Reject cut type=%d reason=var_oor j=%d original_vars=%d\n",
+                             static_cast<int>(cut_type),
+                             j,
+                             original_vars_);
+      }
       return;
     }
   }
@@ -524,13 +529,17 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
   inequality_t<i_t, f_t> cut_squeezed;
   cut.squeeze(cut_squeezed);
   if (cut_squeezed.size() == 0) {
-    settings_.log.printf("Cut has no coefficients\n");
+    stats_.inc(cut_type, CUT_EVENT_ADD_EMPTY);
+    if (log_rejects_) {
+      settings_.log.printf("Reject cut type=%d reason=empty_support\n", static_cast<int>(cut_type));
+    }
     return;
   }
   cut_storage_.append_row(cut_squeezed.vector);
   rhs_storage_.push_back(cut_squeezed.rhs);
   cut_type_.push_back(cut_type);
   cut_age_.push_back(0);
+  stats_.inc(cut_type, CUT_EVENT_ADD_ACCEPT);
 }
 
 template <typename i_t, typename f_t>
@@ -711,6 +720,9 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
         cut_type_[write]    = cut_type_[i];
         cut_age_[write]     = cut_age_[i];
         write++;
+      } else {
+        // P0-1: attribute the dup-removal to the originating cut type.
+        stats_.inc(cut_type_[i], CUT_EVENT_SCORE_DUP);
       }
     }
     rhs_storage_.resize(write);
@@ -722,6 +734,9 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
 {
+  // P0-1: clear stats so log_score_stats_summary() reflects only this round.
+  // SCORE_DUP events are bumped inside check_for_duplicate_cuts.
+  reset_stats();
   check_for_duplicate_cuts();
   cut_distances_.resize(cut_storage_.m, 0.0);
   cut_norms_.resize(cut_storage_.m, 0.0);
@@ -729,8 +744,13 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
   const bool verbose = false;
   for (i_t i = 0; i < cut_storage_.m; i++) {
     f_t violation;
-    f_t cut_dist      = cut_distance(i, x_relax, violation, cut_norms_[i]);
-    cut_distances_[i] = cut_dist <= min_cut_distance_ ? 0.0 : cut_dist;
+    f_t cut_dist = cut_distance(i, x_relax, violation, cut_norms_[i]);
+    if (cut_dist <= min_cut_distance_) {
+      cut_distances_[i] = 0.0;
+      stats_.inc(cut_type_[i], CUT_EVENT_SCORE_THRESHOLD);
+    } else {
+      cut_distances_[i] = cut_dist;
+    }
     if (verbose) {
       settings_.log.printf("Cut %d type %d distance %+e violation %+e cut_norm %e\n",
                            i,
@@ -755,6 +775,7 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
     sorted_indices.pop_back();
     best_cuts_.push_back(i);
     scored_cuts_++;
+    stats_.inc(cut_type_[i], CUT_EVENT_SCORE_ACCEPT);
   }
 
   while (scored_cuts_ < max_cuts && !sorted_indices.empty()) {
@@ -772,8 +793,20 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
     if (cut_ortho >= min_orthogonality) {
       best_cuts_.push_back(i);
       scored_cuts_++;
+      stats_.inc(cut_type_[i], CUT_EVENT_SCORE_ACCEPT);
+    } else {
+      stats_.inc(cut_type_[i], CUT_EVENT_SCORE_PARALLEL);
+      if (log_rejects_) {
+        settings_.log.printf("Reject cut row=%d type=%d reason=parallel ortho=%g threshold=%g\n",
+                             i,
+                             static_cast<int>(cut_type_[i]),
+                             cut_ortho,
+                             min_orthogonality);
+      }
     }
   }
+
+  log_score_stats_summary("score_cuts");
 }
 
 template <typename i_t, typename f_t>
@@ -819,6 +852,67 @@ template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::drop_cuts()
 {
   // TODO: Implement this
+}
+
+namespace {
+constexpr const char* cut_type_short_names[MAX_CUT_TYPE] = {
+  "Gomory", "MIR", "Knapsack", "StrongCG", "Clique", "ImpBnd"};
+}  // namespace
+
+template <typename i_t, typename f_t>
+void cut_pool_t<i_t, f_t>::log_add_stats_summary(const char* label) const
+{
+  // P0-1: one line per cut type that saw at least one add-related event.
+  // ADD_DUP / ADD_NF_RHS / ADD_NF_COEF / ADD_DEGEN are reserved for P2-1 /
+  // P2-2; they're zero today and that's intentional.
+  for (i_t t = 0; t < MAX_CUT_TYPE; t++) {
+    const auto cut_type    = static_cast<cut_type_t>(t);
+    const int64_t acc      = stats_.get(cut_type, CUT_EVENT_ADD_ACCEPT);
+    const int64_t vars_oor = stats_.get(cut_type, CUT_EVENT_ADD_VARS_OOR);
+    const int64_t empty    = stats_.get(cut_type, CUT_EVENT_ADD_EMPTY);
+    const int64_t dup      = stats_.get(cut_type, CUT_EVENT_ADD_DUP);
+    const int64_t nf_rhs   = stats_.get(cut_type, CUT_EVENT_ADD_NF_RHS);
+    const int64_t nf_coef  = stats_.get(cut_type, CUT_EVENT_ADD_NF_COEF);
+    const int64_t degen    = stats_.get(cut_type, CUT_EVENT_ADD_DEGEN);
+    if ((acc | vars_oor | empty | dup | nf_rhs | nf_coef | degen) == 0) { continue; }
+    settings_.log.debug(
+      "CutPoolAdd[%s] %s: acc=%lld vars_oor=%lld empty=%lld dup=%lld "
+      "nf_rhs=%lld nf_coef=%lld degen=%lld\n",
+      label,
+      cut_type_short_names[t],
+      static_cast<long long>(acc),
+      static_cast<long long>(vars_oor),
+      static_cast<long long>(empty),
+      static_cast<long long>(dup),
+      static_cast<long long>(nf_rhs),
+      static_cast<long long>(nf_coef),
+      static_cast<long long>(degen));
+  }
+}
+
+template <typename i_t, typename f_t>
+void cut_pool_t<i_t, f_t>::log_score_stats_summary(const char* label) const
+{
+  // P0-1: one line per cut type that saw at least one score-related event.
+  // SCORE_AGED is reserved for P1-1; zero today.
+  for (i_t t = 0; t < MAX_CUT_TYPE; t++) {
+    const auto cut_type     = static_cast<cut_type_t>(t);
+    const int64_t acc       = stats_.get(cut_type, CUT_EVENT_SCORE_ACCEPT);
+    const int64_t threshold = stats_.get(cut_type, CUT_EVENT_SCORE_THRESHOLD);
+    const int64_t parallel  = stats_.get(cut_type, CUT_EVENT_SCORE_PARALLEL);
+    const int64_t aged      = stats_.get(cut_type, CUT_EVENT_SCORE_AGED);
+    const int64_t dup       = stats_.get(cut_type, CUT_EVENT_SCORE_DUP);
+    if ((acc | threshold | parallel | aged | dup) == 0) { continue; }
+    settings_.log.debug(
+      "CutPoolScore[%s] %s: acc=%lld threshold=%lld parallel=%lld aged=%lld dup=%lld\n",
+      label,
+      cut_type_short_names[t],
+      static_cast<long long>(acc),
+      static_cast<long long>(threshold),
+      static_cast<long long>(parallel),
+      static_cast<long long>(aged),
+      static_cast<long long>(dup));
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -1785,8 +1879,10 @@ bool cut_generation_t<i_t, f_t>::generate_cuts(const lp_problem_t<i_t, f_t>& lp,
   // Generate Gomory and CG Cuts
   if (settings.mixed_integer_gomory_cuts != 0 || settings.strong_chvatal_gomory_cuts != 0) {
     f_t cut_start_time = tic();
+    cut_pool_.reset_stats();
     generate_gomory_cuts(
       lp, settings, Arow, new_slacks, var_types, basis_update, xstar, basic_list, nonbasic_list);
+    cut_pool_.log_add_stats_summary("gomory");
     f_t cut_generation_time = toc(cut_start_time);
     if (cut_generation_time > 1.0) {
       settings.log.debug("Gomory and CG cut generation time %.2f seconds\n", cut_generation_time);
@@ -1796,7 +1892,9 @@ bool cut_generation_t<i_t, f_t>::generate_cuts(const lp_problem_t<i_t, f_t>& lp,
   // Generate Knapsack cuts
   if (settings.knapsack_cuts != 0) {
     f_t cut_start_time = tic();
+    cut_pool_.reset_stats();
     generate_knapsack_cuts(lp, settings, Arow, new_slacks, var_types, xstar, start_time);
+    cut_pool_.log_add_stats_summary("knapsack");
     f_t cut_generation_time = toc(cut_start_time);
     if (cut_generation_time > 1.0) {
       settings.log.debug("Knapsack cut generation time %.2f seconds\n", cut_generation_time);
@@ -1806,7 +1904,9 @@ bool cut_generation_t<i_t, f_t>::generate_cuts(const lp_problem_t<i_t, f_t>& lp,
   // Generate MIR and CG cuts
   if (settings.mir_cuts != 0 || settings.strong_chvatal_gomory_cuts != 0) {
     f_t cut_start_time = tic();
+    cut_pool_.reset_stats();
     generate_mir_cuts(lp, settings, Arow, new_slacks, var_types, xstar, ystar, variable_bounds);
+    cut_pool_.log_add_stats_summary("mir");
     f_t cut_generation_time = toc(cut_start_time);
     if (cut_generation_time > 1.0) {
       settings.log.debug("MIR and CG cut generation time %.2f seconds\n", cut_generation_time);
@@ -1816,7 +1916,9 @@ bool cut_generation_t<i_t, f_t>::generate_cuts(const lp_problem_t<i_t, f_t>& lp,
   // Generate Clique cuts (last to give background clique table generation maximum time)
   if (settings.clique_cuts != 0) {
     f_t cut_start_time = tic();
-    bool feasible      = generate_clique_cuts(lp, settings, var_types, xstar, zstar, start_time);
+    cut_pool_.reset_stats();
+    bool feasible = generate_clique_cuts(lp, settings, var_types, xstar, zstar, start_time);
+    cut_pool_.log_add_stats_summary("clique");
     if (!feasible) {
       settings.log.printf("Clique cuts proved infeasible\n");
       return false;
@@ -1830,7 +1932,9 @@ bool cut_generation_t<i_t, f_t>::generate_cuts(const lp_problem_t<i_t, f_t>& lp,
   // Generate implied bound cuts
   if (settings.implied_bound_cuts != 0) {
     f_t cut_start_time = tic();
+    cut_pool_.reset_stats();
     generate_implied_bound_cuts(lp, settings, var_types, xstar, start_time);
+    cut_pool_.log_add_stats_summary("implied_bounds");
     f_t cut_generation_time = toc(cut_start_time);
     if (cut_generation_time > 1.0) {
       settings.log.debug("Implied bounds cut generation time %.2f seconds\n", cut_generation_time);

@@ -42,6 +42,49 @@ enum cut_type_t : int8_t {
   MAX_CUT_TYPE           = 6
 };
 
+// P0-1: Per-cut-type per-event aggregate counters. Bumped at every accept /
+// reject site in cut_pool_t::add_cut and cut_pool_t::score_cuts so generation
+// and selection can be inspected per cut type per phase. See
+// cpp/src/cuts/IMPROVEMENTS.md (Tier P0 / P0-1).
+enum cut_pool_event_t : int8_t {
+  // Events recorded inside add_cut (one bump per call to add_cut).
+  CUT_EVENT_ADD_ACCEPT   = 0,  // cut stored in the pool
+  CUT_EVENT_ADD_VARS_OOR = 1,  // cut had a column index >= original_vars_
+  CUT_EVENT_ADD_EMPTY    = 2,  // cut had empty support after squeeze
+  CUT_EVENT_ADD_DUP      = 3,  // P2-2: at-insert duplicate detection
+  CUT_EVENT_ADD_NF_RHS   = 4,  // P2-1: non-finite rhs
+  CUT_EVENT_ADD_NF_COEF  = 5,  // P2-1: non-finite coefficient
+  CUT_EVENT_ADD_DEGEN    = 6,  // P2-1: degenerate (zero) norm
+  // Events recorded inside score_cuts (per pool entry per call).
+  CUT_EVENT_SCORE_ACCEPT    = 7,   // cut selected into best_cuts_
+  CUT_EVENT_SCORE_THRESHOLD = 8,   // score below min_cut_distance_
+  CUT_EVENT_SCORE_PARALLEL  = 9,   // rejected by orthogonality filter
+  CUT_EVENT_SCORE_AGED      = 10,  // P1-1: dropped by drop_cuts
+  CUT_EVENT_SCORE_DUP       = 11,  // removed by check_for_duplicate_cuts
+  MAX_CUT_EVENT             = 12
+};
+
+struct cut_pool_stats_t {
+  std::array<std::array<int64_t, MAX_CUT_EVENT>, MAX_CUT_TYPE> counts{};
+
+  void reset()
+  {
+    for (auto& row : counts) {
+      row.fill(0);
+    }
+  }
+
+  void inc(cut_type_t cut_type, cut_pool_event_t event)
+  {
+    counts[static_cast<int>(cut_type)][static_cast<int>(event)]++;
+  }
+
+  int64_t get(cut_type_t cut_type, cut_pool_event_t event) const
+  {
+    return counts[static_cast<int>(cut_type)][static_cast<int>(event)];
+  }
+};
+
 template <typename f_t>
 struct cut_gap_closure_t {
   f_t initial_gap{0.0};
@@ -305,6 +348,19 @@ class cut_pool_t {
 
   void check_for_duplicate_cuts();
 
+  // P0-1: stats lifecycle. Callers reset around each generation phase / each
+  // score_cuts call and then call the matching log_*_stats_summary helper.
+  void reset_stats() { stats_.reset(); }
+  const cut_pool_stats_t& stats() const { return stats_; }
+  void log_add_stats_summary(const char* label) const;
+  void log_score_stats_summary(const char* label) const;
+
+  // P0-2: gate per-cut "Reject cut row=... reason=..." log lines in add_cut /
+  // score_cuts. Default off — these fire millions of times per solve and
+  // fflush makes them very expensive on NFS-backed log files.
+  void set_log_rejects(bool flag) { log_rejects_ = flag; }
+  bool log_rejects() const { return log_rejects_; }
+
  private:
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
   f_t cut_density(i_t row);
@@ -325,6 +381,9 @@ class cut_pool_t {
   std::vector<f_t> cut_scores_;
   std::vector<i_t> best_cuts_;
   const f_t min_cut_distance_{1e-4};
+
+  cut_pool_stats_t stats_{};
+  bool log_rejects_{false};
 };
 
 template <typename i_t, typename f_t>
