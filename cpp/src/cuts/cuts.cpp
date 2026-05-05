@@ -773,8 +773,12 @@ template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
 {
   // P0-1: clear stats so log_score_stats_summary() reflects only this round.
-  // SCORE_DUP events are bumped inside check_for_duplicate_cuts.
+  // SCORE_DUP events are bumped inside check_for_duplicate_cuts; SCORE_AGED
+  // events are bumped inside drop_cuts.
   reset_stats();
+  // P1-1: age out old cuts before dedup so the (quadratic-ish) duplicate scan
+  // operates on the smaller surviving pool.
+  drop_cuts();
   check_for_duplicate_cuts();
   cut_distances_.resize(cut_storage_.m, 0.0);
   cut_norms_.resize(cut_storage_.m, 0.0);
@@ -871,6 +875,11 @@ i_t cut_pool_t<i_t, f_t>::get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
     best_cuts.append_row(cut);
     best_rhs.push_back(-rhs_storage_[i]);
     best_cut_types.push_back(cut_type_[i]);
+    // P1-1: touched-on-selection lifecycle (HiGHS / Wesselmann–Suhl).
+    // Reset the age of every emitted cut to 0; age_cuts() then bumps every
+    // pool entry by 1, so a just-selected cut enters the next round at
+    // age=1 while a cut not selected for k rounds enters at age=k+1.
+    cut_age_[i] = 0;
   }
 
   age_cuts();
@@ -889,7 +898,103 @@ void cut_pool_t<i_t, f_t>::age_cuts()
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::drop_cuts()
 {
-  // TODO: Implement this
+  // P1-1: adaptive aging + soft pool cap, matching HiGHS
+  // (`HighsCutPool::performAging` + `mip_pool_age_limit` /
+  // `mip_pool_soft_limit`) and the §3 lifecycle in Wesselmann–Suhl 2012.
+  //
+  // Lifecycle (touched-on-selection, see get_best_cuts / age_cuts):
+  //   - newly added cut: age = 0
+  //   - cut emitted to LP this round: age reset to 0 in get_best_cuts
+  //   - end of round: age_cuts() bumps every surviving cut by 1
+  // So a cut whose last selection was N rounds ago has age = N at the top of
+  // the next score_cuts call, where this routine runs.
+  //
+  // Eviction policy:
+  //   1) Compute an effective age limit. Start at pool_age_limit_; if the
+  //      projected post-eviction pool size still exceeds pool_soft_limit_,
+  //      walk the per-age histogram downward until the cap is met or the
+  //      limit reaches 1. We never evict cuts with age 0 — those are either
+  //      freshly added by add_cut this round or freshly selected last round
+  //      and just bumped to 0 by the touch step; both represent work we
+  //      should not throw away unconditionally.
+  //   2) Evict every cut whose age is >= the effective limit, attribute one
+  //      SCORE_AGED stat event to its originating type, and compact
+  //      cut_storage_ / rhs_storage_ / cut_age_ / cut_type_ in lockstep
+  //      (matching the compaction pattern in check_for_duplicate_cuts).
+  const i_t pool_size = cut_storage_.m;
+  if (pool_size == 0) { return; }
+  cuopt_assert(static_cast<i_t>(cut_age_.size()) == pool_size,
+               "cut_age_ size out of sync with cut_storage_");
+  cuopt_assert(static_cast<i_t>(cut_type_.size()) == pool_size,
+               "cut_type_ size out of sync with cut_storage_");
+  cuopt_assert(static_cast<i_t>(rhs_storage_.size()) == pool_size,
+               "rhs_storage_ size out of sync with cut_storage_");
+
+  // Build per-age histogram. max_age is bounded by the longest gap between
+  // drop_cuts calls; in steady state with this routine wired into
+  // score_cuts it stays ≤ pool_age_limit_, so the histogram is tiny.
+  i_t max_age = 0;
+  for (i_t i = 0; i < pool_size; i++) {
+    if (cut_age_[i] > max_age) { max_age = cut_age_[i]; }
+  }
+  std::vector<i_t> hist(max_age + 1, 0);
+  for (i_t i = 0; i < pool_size; i++) {
+    hist[cut_age_[i]]++;
+  }
+
+  // Effective age limit walk-down. The "for" loop strips the cuts that are
+  // unconditionally over the limit; the "while" loop tightens the limit
+  // further until the projected pool fits under the soft cap.
+  i_t effective_age_limit = pool_age_limit_;
+  i_t projected_size      = pool_size;
+  if (pool_age_limit_ <= max_age) {
+    for (i_t a = pool_age_limit_; a <= max_age; a++) {
+      projected_size -= hist[a];
+    }
+  }
+  while (effective_age_limit > 1 && projected_size > pool_soft_limit_) {
+    effective_age_limit--;
+    projected_size -= hist[effective_age_limit];
+  }
+
+  // Mark + attribute. We bump SCORE_AGED here (rather than during
+  // compaction below) so the stat is exact even if remove_rows is a no-op.
+  std::vector<i_t> remove_mask(pool_size, 0);
+  i_t num_to_remove = 0;
+  for (i_t i = 0; i < pool_size; i++) {
+    if (cut_age_[i] >= effective_age_limit) {
+      remove_mask[i] = 1;
+      num_to_remove++;
+      stats_.inc(cut_type_[i], CUT_EVENT_SCORE_AGED);
+    }
+  }
+  if (num_to_remove == 0) { return; }
+
+  csr_matrix_t<i_t, f_t> new_cut_storage(0, 0, 0);
+  cut_storage_.remove_rows(remove_mask, new_cut_storage);
+  cut_storage_ = new_cut_storage;
+  i_t write    = 0;
+  for (i_t i = 0; i < pool_size; i++) {
+    if (remove_mask[i] == 0) {
+      rhs_storage_[write] = rhs_storage_[i];
+      cut_age_[write]     = cut_age_[i];
+      cut_type_[write]    = cut_type_[i];
+      write++;
+    }
+  }
+  rhs_storage_.resize(write);
+  cut_age_.resize(write);
+  cut_type_.resize(write);
+
+  settings_.log.printf(
+    "CutPoolDrop pool=%d evicted=%d kept=%d effective_age_limit=%d "
+    "pool_age_limit=%d pool_soft_limit=%d\n",
+    static_cast<int>(pool_size),
+    static_cast<int>(num_to_remove),
+    static_cast<int>(write),
+    static_cast<int>(effective_age_limit),
+    static_cast<int>(pool_age_limit_),
+    static_cast<int>(pool_soft_limit_));
 }
 
 namespace {

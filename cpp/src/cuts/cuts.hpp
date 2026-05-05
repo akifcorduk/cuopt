@@ -361,6 +361,28 @@ class cut_pool_t {
   void set_log_rejects(bool flag) { log_rejects_ = flag; }
   bool log_rejects() const { return log_rejects_; }
 
+  // P1-1: aging knobs.
+  //
+  // pool_age_limit_  — cuts whose age has reached this value (or the
+  //                    effective limit derived from it under overflow) are
+  //                    evicted at the top of score_cuts. Mirrors HiGHS
+  //                    `mip_pool_age_limit`. Default 5 (HiGHS default; the
+  //                    Mops paper uses 3).
+  // pool_soft_limit_ — soft cap on pool size; when exceeded, drop_cuts walks
+  //                    the per-age histogram downward (never below 1) until
+  //                    the post-eviction pool is at or below the cap.
+  //                    Mirrors HiGHS `mip_pool_soft_limit`. Default 30000
+  //                    (HiGHS default).
+  //
+  // Lifecycle convention follows HiGHS / Wesselmann–Suhl §3: every selected
+  // cut is "touched" (age reset to 0) inside get_best_cuts, then age_cuts
+  // increments every cut by one. A cut whose last selection was N rounds
+  // ago has age N going into score_cuts.
+  void set_pool_age_limit(i_t v) { pool_age_limit_ = v; }
+  void set_pool_soft_limit(i_t v) { pool_soft_limit_ = v; }
+  i_t pool_age_limit() const { return pool_age_limit_; }
+  i_t pool_soft_limit() const { return pool_soft_limit_; }
+
  private:
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
   f_t cut_density(i_t row);
@@ -384,6 +406,11 @@ class cut_pool_t {
 
   cut_pool_stats_t stats_{};
   bool log_rejects_{false};
+
+  // P1-1: defaults match HiGHS (`mip_pool_age_limit` = 5,
+  // `mip_pool_soft_limit` = 30000).
+  i_t pool_age_limit_{5};
+  i_t pool_soft_limit_{30000};
 };
 
 template <typename i_t, typename f_t>
