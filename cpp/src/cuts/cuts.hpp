@@ -43,6 +43,57 @@ enum cut_type_t : int8_t {
   MAX_CUT_TYPE           = 6
 };
 
+// Per-pass diagnostic counters maintained by cut_pool_t. Counters are
+// indexed by [cut_type][event] and incremented at every accept / reject
+// site in add_cut() and score_cuts(). Designed for cheap aggregation: the
+// caller resets between phases and prints a compact summary at the end.
+enum class cut_pool_event_t : int {
+  // add_cut() outcomes
+  ADD_ACCEPTED = 0,
+  ADD_EMPTY_SUPPORT,
+  ADD_NONFINITE_RHS,
+  ADD_NONFINITE_COEFF,
+  ADD_DEGENERATE_NORM,
+  ADD_DUPLICATE_OR_WEAKER,
+  // score_cuts() outcomes
+  SCORE_SELECTED,
+  SCORE_AGED_OUT,
+  SCORE_NOT_VIOLATED,
+  SCORE_THRESHOLD,
+  SCORE_PARALLELISM,
+  SCORE_MAX_TOTAL,
+  COUNT
+};
+
+struct cut_pool_stats_t {
+  static constexpr int num_events = static_cast<int>(cut_pool_event_t::COUNT);
+  static constexpr int num_types  = static_cast<int>(cut_type_t::MAX_CUT_TYPE);
+
+  std::array<std::array<int64_t, num_events>, num_types> counts{};
+
+  void reset()
+  {
+    for (auto& row : counts) {
+      row.fill(0);
+    }
+  }
+
+  void inc(cut_type_t ct, cut_pool_event_t ev, int64_t by = 1)
+  {
+    const auto i = static_cast<int>(ct);
+    const auto j = static_cast<int>(ev);
+    if (i >= 0 && i < num_types && j >= 0 && j < num_events) { counts[i][j] += by; }
+  }
+
+  int64_t get(cut_type_t ct, cut_pool_event_t ev) const
+  {
+    const auto i = static_cast<int>(ct);
+    const auto j = static_cast<int>(ev);
+    if (i >= 0 && i < num_types && j >= 0 && j < num_events) { return counts[i][j]; }
+    return 0;
+  }
+};
+
 template <typename f_t>
 struct cut_gap_closure_t {
   f_t initial_gap{0.0};
@@ -332,6 +383,24 @@ class cut_pool_t {
   void set_pool_age_limit(i_t v) { pool_age_limit_ = v; }
   void set_pool_soft_limit(i_t v) { pool_soft_limit_ = v; }
   void set_max_parallelism(f_t v) { max_parallelism_ = v; }
+  // Per-cut reject diagnostics are extremely high volume (one printf per
+  // rejected candidate, fired millions of times in dense pools). They are
+  // off by default and can be enabled for debugging when investigating
+  // why specific cuts are not making it into the LP.
+  void set_log_rejects(bool v) { log_rejects_ = v; }
+
+  // Aggregate per-cut-type reject/accept counters. Cheap (a few atomic-free
+  // increments per add_cut/score_cuts call) and always on. Use these to
+  // observe what fraction of generated cuts is being rejected and why,
+  // without paying the per-cut printf cost.
+  void reset_stats() { stats_.reset(); }
+  const cut_pool_stats_t& stats() const { return stats_; }
+  // Print a one-line-per-cut-type summary of the current counters. Only
+  // events from add_cut() (ADD_*) are printed by log_add_stats_summary;
+  // log_score_stats_summary covers events from score_cuts() (SCORE_*).
+  // Lines for cut types with zero activity are suppressed.
+  void log_add_stats_summary(const char* label) const;
+  void log_score_stats_summary(const char* label) const;
 
  private:
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
@@ -391,11 +460,14 @@ class cut_pool_t {
   // HiGHS-like cut-pool configuration
   i_t pool_age_limit_{5};
   i_t pool_soft_limit_{30000};
-  f_t max_parallelism_{0.3};
-  f_t min_score_factor_{0.6};
+  f_t max_parallelism_{0.1};
+  f_t min_score_factor_{0.9};
   f_t best_observed_score_{0.0};
   f_t integer_support_weight_{0.1};
   f_t full_support_penalty_{0.01};
+  bool log_rejects_{false};
+
+  cut_pool_stats_t stats_{};
   std::unordered_map<uint64_t, std::vector<i_t>> support_hash_buckets_;
 };
 
