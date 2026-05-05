@@ -709,7 +709,7 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
   }
 
   if (num_cuts_to_remove > 0) {
-    settings_.log.debug("Removing %d duplicate cuts\n", num_cuts_to_remove);
+    settings_.log.printf("Removing %d duplicate cuts\n", num_cuts_to_remove);
     csr_matrix_t<i_t, f_t> new_cut_storage(0, 0, 0);
     cut_storage_.remove_rows(cuts_to_remove, new_cut_storage);
     cut_storage_ = new_cut_storage;
@@ -903,7 +903,7 @@ void cut_pool_t<i_t, f_t>::log_score_stats_summary(const char* label) const
     const int64_t aged      = stats_.get(cut_type, CUT_EVENT_SCORE_AGED);
     const int64_t dup       = stats_.get(cut_type, CUT_EVENT_SCORE_DUP);
     if ((acc | threshold | parallel | aged | dup) == 0) { continue; }
-    settings_.log.debug(
+    settings_.log.printf(
       "CutPoolScore[%s] %s: acc=%lld threshold=%lld parallel=%lld aged=%lld dup=%lld\n",
       label,
       cut_type_short_names[t],
