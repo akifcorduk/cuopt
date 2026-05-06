@@ -109,7 +109,11 @@ class mip_solver_settings_t {
   i_t strong_chvatal_gomory_cuts = -1;
   i_t reduced_cost_strengthening = -1;
   f_t cut_change_threshold       = -1.0;
-  f_t cut_min_orthogonality      = 0.5;
+  // P1-3: tightened from 0.5 to 0.9 (paper 1-p_max=0.9, SCIP minortho=0.9).
+  // High-quality cuts use the relaxed good_min_orthogonality tier inside
+  // cut_pool_t so the tighter base threshold does not starve correlated
+  // dense families (e.g. MIR on aggregated rows).
+  f_t cut_min_orthogonality = 0.9;
   i_t mip_batch_pdlp_strong_branching{
     0};  // 0 = DS only, 1 = cooperative DS + PDLP, 2 = batch PDLP only
   i_t mip_batch_pdlp_reliability_branching{

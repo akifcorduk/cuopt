@@ -894,11 +894,21 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
   std::vector<i_t> sorted_indices;
   best_score_last_permutation(cut_distances_, sorted_indices);
 
-  const i_t max_cuts          = 2000;
-  const f_t min_orthogonality = settings_.cut_min_orthogonality;
+  const i_t max_cuts = 2000;
   best_cuts_.reserve(std::min(max_cuts, cut_storage_.m));
   best_cuts_.clear();
   scored_cuts_ = 0;
+
+  // P1-3: score-tiered orthogonality. Compute the round's top score once and
+  // derive the "good" threshold; a candidate's effective min_orthogonality is
+  // the relaxed good_min_orthogonality_ for cuts at or above
+  // good_cut_factor_ * top_score, and the strict settings_.cut_min_orthogonality
+  // otherwise. The first cut is always accepted (it is by definition the top
+  // of the round and has nothing to be parallel to).
+  const f_t strict_min_orthogonality = settings_.cut_min_orthogonality;
+  const f_t good_min_orthogonality   = good_min_orthogonality_;
+  const f_t top_score = sorted_indices.empty() ? f_t(0) : cut_distances_[sorted_indices.back()];
+  const f_t good_score_threshold = good_cut_factor_ * top_score;
 
   if (!sorted_indices.empty()) {
     const i_t i = sorted_indices.back();
@@ -914,6 +924,9 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
 
     if (cut_distances_[i] <= min_cut_distance_) { break; }
 
+    const bool is_good          = cut_distances_[i] >= good_score_threshold;
+    const f_t min_orthogonality = is_good ? good_min_orthogonality : strict_min_orthogonality;
+
     f_t cut_ortho            = 1.0;
     const i_t best_cuts_size = best_cuts_.size();
     for (i_t k = 0; k < best_cuts_size; k++) {
@@ -927,11 +940,13 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
     } else {
       stats_.inc(cut_type_[i], CUT_EVENT_SCORE_PARALLEL);
       if (log_rejects_) {
-        settings_.log.printf("Reject cut row=%d type=%d reason=parallel ortho=%g threshold=%g\n",
-                             i,
-                             static_cast<int>(cut_type_[i]),
-                             cut_ortho,
-                             min_orthogonality);
+        settings_.log.printf(
+          "Reject cut row=%d type=%d reason=parallel ortho=%g threshold=%g tier=%s\n",
+          i,
+          static_cast<int>(cut_type_[i]),
+          cut_ortho,
+          min_orthogonality,
+          is_good ? "good" : "ordinary");
       }
     }
   }

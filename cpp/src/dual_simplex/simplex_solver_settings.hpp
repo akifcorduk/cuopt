@@ -105,7 +105,10 @@ struct simplex_solver_settings_t {
       strong_chvatal_gomory_cuts(-1),
       reduced_cost_strengthening(-1),
       cut_change_threshold(1e-3),
-      cut_min_orthogonality(0.5),
+      // P1-3: tightened from 0.5 to 0.9 (paper 1-p_max=0.9, SCIP minortho=0.9).
+      // The relaxed tier (good_min_orthogonality_) inside cut_pool_t protects
+      // high-quality cuts from being starved by the tighter base threshold.
+      cut_min_orthogonality(0.9),
       mip_batch_pdlp_strong_branching(0),
       mip_batch_pdlp_reliability_branching(0),
       strong_branching_simplex_iteration_limit(-1),

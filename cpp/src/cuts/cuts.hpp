@@ -410,6 +410,37 @@ class cut_pool_t {
   f_t integer_support_weight() const { return integer_support_weight_; }
   f_t obj_parallelism_weight() const { return obj_parallelism_weight_; }
 
+  // P1-3: score-tiered orthogonality filter. Unified on min_orthogonality
+  // (= 1 - max_parallelism) so both tiers share the same units as the
+  // existing settings_.cut_min_orthogonality knob.
+  //
+  // settings_.cut_min_orthogonality
+  //                       — strict tier; applies to "ordinary" candidate
+  //                         cuts. Equivalent to SCIP `minortho`, paper
+  //                         `1 - p_max`. Default 0.9 (= max parallelism 0.1).
+  //                         Read directly from settings_, so the user-facing
+  //                         CLI/proto knob `mip_cut_min_orthogonality`
+  //                         controls it without duplication here.
+  // good_min_orthogonality_
+  //                       — relaxed tier; applies when a candidate is "good"
+  //                         (score >= good_cut_factor_ * top_round_score).
+  //                         Equivalent to SCIP `1 - goodmaxparall`. Default
+  //                         0.5 (matches the pre-P1-3 single threshold so
+  //                         high-quality cuts in dense correlated families
+  //                         aren't starved).
+  // good_cut_factor_      — fractional threshold defining "good": a cut is
+  //                         good iff its composite score is at least this
+  //                         fraction of the top score in the round. SCIP
+  //                         `GOODSCORE`, paper `skip_factor`. Default 0.9.
+  //
+  // The orthogonality scan runs for both tiers; only the threshold differs.
+  // Good cuts must still satisfy the relaxed constraint — there is no
+  // unconditional bypass.
+  void set_good_min_orthogonality(f_t v) { good_min_orthogonality_ = v; }
+  void set_good_cut_factor(f_t v) { good_cut_factor_ = v; }
+  f_t good_min_orthogonality() const { return good_min_orthogonality_; }
+  f_t good_cut_factor() const { return good_cut_factor_; }
+
  private:
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
   f_t cut_density(i_t row);
@@ -455,6 +486,22 @@ class cut_pool_t {
   f_t efficacy_weight_{1.0};
   f_t integer_support_weight_{0.1};
   f_t obj_parallelism_weight_{0.1};
+
+  // P1-3: score-tiered orthogonality. Defaults (unified on min_orthogonality):
+  //   strict tier            = settings_.cut_min_orthogonality (default 0.9,
+  //                            SCIP minortho, paper 1-p_max). Read live from
+  //                            settings_ on every score round.
+  //   good_min_orthogonality_ = 0.5  (SCIP 1-goodmaxparall; equals the
+  //                                   pre-P1-3 single threshold so the
+  //                                   relaxed tier reproduces baseline
+  //                                   behaviour for the top scoring cuts)
+  //   good_cut_factor_        = 0.9  (SCIP GOODSCORE, paper skip_factor)
+  // See score_cuts in cuts.cpp for how these combine: a candidate's
+  // effective min_orthogonality is good_min_orthogonality_ when its score is
+  // at least good_cut_factor_ * top_round_score, otherwise the strict
+  // settings_.cut_min_orthogonality.
+  f_t good_min_orthogonality_{0.5};
+  f_t good_cut_factor_{0.9};
 };
 
 template <typename i_t, typename f_t>
