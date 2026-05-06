@@ -947,6 +947,16 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
   const f_t top_score = sorted_indices.empty() ? f_t(0) : cut_distances_[sorted_indices.back()];
   const f_t good_score_threshold = good_cut_factor_ * top_score;
 
+  // P1-4: adaptive minimum-quality gate. Replaces the constant
+  // min_cut_distance_ floor with min(min_qual_ub_runtime_,
+  // min_score_factor_ * top_score). The hard min_cut_distance_ remains as
+  // a numerical safety floor (cuts below it have essentially zero
+  // efficacy and were already zeroed by the per-cut loop above). The
+  // first cut is always accepted: by construction top_score >= min_qual,
+  // so the seed always passes — the gate only matters for what follows.
+  const f_t adaptive_min_qual   = std::min(min_qual_ub_runtime_, min_score_factor_ * top_score);
+  const f_t effective_min_score = std::max(min_cut_distance_, adaptive_min_qual);
+
   if (!sorted_indices.empty()) {
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
@@ -954,6 +964,18 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
     scored_cuts_++;
     stats_.inc(cut_type_[i], CUT_EVENT_SCORE_ACCEPT);
   }
+
+  // P1-4: track gate outcome.
+  //   gate_pass_count   — candidates whose composite score cleared the
+  //                       gate (regardless of orthogonality outcome).
+  //   stopped_by_gate   — true iff we exited the loop because the next
+  //                       candidate's score dropped under the gate.
+  // The hysteresis below treats `stopped_by_gate && gate_pass_count == 0`
+  // as a "fail" (gate tripped on the very first post-seed candidate).
+  // Empty pools and time-limit exits are neutral and leave fail_count_
+  // alone.
+  i_t gate_pass_count  = 0;
+  bool stopped_by_gate = false;
 
   // Time-budget guard. The orthogonality scan is the heaviest loop in
   // score_cuts (O(pool * best_cuts * nnz)) and on pathological pools
@@ -973,7 +995,20 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
 
-    if (cut_distances_[i] <= min_cut_distance_) { break; }
+    if (cut_distances_[i] <= effective_min_score) {
+      // P1-4: cut and every remaining sorted candidate are at or below
+      // the adaptive gate (sorted_indices is descending). Attribute the
+      // current cut and the entire suffix to SCORE_THRESHOLD so the
+      // P0-1 stats reflect what the gate filtered.
+      stopped_by_gate = true;
+      stats_.inc(cut_type_[i], CUT_EVENT_SCORE_THRESHOLD);
+      for (i_t k = 0; k < static_cast<i_t>(sorted_indices.size()); k++) {
+        stats_.inc(cut_type_[sorted_indices[k]], CUT_EVENT_SCORE_THRESHOLD);
+      }
+      break;
+    }
+
+    gate_pass_count++;
 
     const bool is_good          = cut_distances_[i] >= good_score_threshold;
     const f_t min_orthogonality = is_good ? good_min_orthogonality : strict_min_orthogonality;
@@ -1000,6 +1035,36 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
           is_good ? "good" : "ordinary");
       }
     }
+  }
+
+  // P1-4: hysteresis update. We only adjust state when the gate had a
+  // real opportunity to pass or fail:
+  //   - stopped_by_gate && gate_pass_count == 0 -> the very first
+  //     post-seed candidate fell under the gate. Count one failure;
+  //     halve the runtime ceiling after fail_threshold_ consecutive
+  //     fails (clamped at min_cut_distance_ to keep the safety floor).
+  //   - gate_pass_count > 0 -> at least one candidate cleared the gate.
+  //     Reset the consecutive-fail counter.
+  //   - otherwise (empty pool, time-limit exit, full max_cuts before
+  //     reaching the gate) -> leave the state untouched.
+  // The user-facing min_qual_ub_ is left alone; only min_qual_ub_runtime_
+  // moves, so set_min_qual_ub() (or re-instantiating the pool) restores
+  // the configured ceiling.
+  const f_t prev_min_qual_ub_runtime = min_qual_ub_runtime_;
+  if (stopped_by_gate && gate_pass_count == 0) {
+    fail_count_++;
+    if (fail_count_ >= fail_threshold_) {
+      min_qual_ub_runtime_ = std::max(min_qual_ub_runtime_ * f_t(0.5), min_cut_distance_);
+      fail_count_          = 0;
+    }
+  } else if (gate_pass_count > 0) {
+    fail_count_ = 0;
+  }
+  if (min_qual_ub_runtime_ != prev_min_qual_ub_runtime) {
+    settings_.log.debug("CutPoolGate min_qual_ub_runtime: %.3e -> %.3e (fail_threshold=%d hit)\n",
+                        static_cast<double>(prev_min_qual_ub_runtime),
+                        static_cast<double>(min_qual_ub_runtime_),
+                        static_cast<int>(fail_threshold_));
   }
 
   log_score_stats_summary("score_cuts");
@@ -1195,7 +1260,11 @@ template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::log_score_stats_summary(const char* label) const
 {
   // P0-1: one line per cut type that saw at least one score-related event.
-  // SCORE_AGED is reserved for P1-1; zero today.
+  // `threshold` mixes two filter sources by design:
+  //   - per-cut efficacy floor (raw efficacy <= min_cut_distance_), and
+  //   - P1-4 adaptive min-quality gate (composite score <= effective_min_score)
+  //     applied at the head of the orthogonality scan; the latter
+  //     attributes the current cut and the entire descending suffix.
   for (i_t t = 0; t < MAX_CUT_TYPE; t++) {
     const auto cut_type     = static_cast<cut_type_t>(t);
     const int64_t acc       = stats_.get(cut_type, CUT_EVENT_SCORE_ACCEPT);

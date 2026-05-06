@@ -443,6 +443,44 @@ class cut_pool_t {
   f_t good_min_orthogonality() const { return good_min_orthogonality_; }
   f_t good_cut_factor() const { return good_cut_factor_; }
 
+  // P1-4: adaptive minimum-quality gate (paper §3 / §4 Mops min_qual).
+  //
+  // Replaces the constant `min_cut_distance_` floor for the orthogonality
+  // scan with an adaptive threshold derived from the round's top score:
+  //
+  //   effective_floor = max(min_cut_distance_,
+  //                         min(min_qual_ub_runtime_,
+  //                             min_score_factor_ * top_round_score))
+  //
+  // Cuts whose composite score falls below `effective_floor` are not
+  // considered for orthogonality (they are attributed to
+  // CUT_EVENT_SCORE_THRESHOLD).
+  //
+  // Hysteresis. When the gate trips immediately (no candidate after the
+  // seed survives it) we count a "fail". After `fail_threshold_`
+  // consecutive fails we halve the runtime upper bound so weaker cuts can
+  // qualify in the next round; on success we reset `fail_count_` to 0.
+  // The user-facing `min_qual_ub_` is the configured ceiling; the
+  // setter resets the runtime value back to it (and clears fail_count_).
+  //
+  // Knobs (paper defaults):
+  //   min_qual_ub_       0.01 — upper bound on the gate.
+  //   min_score_factor_  0.5  — fraction of top score used per round.
+  //   fail_threshold_    2    — consecutive fails before relaxing.
+  void set_min_qual_ub(f_t v)
+  {
+    min_qual_ub_         = v;
+    min_qual_ub_runtime_ = v;
+    fail_count_          = 0;
+  }
+  void set_min_score_factor(f_t v) { min_score_factor_ = v; }
+  void set_fail_threshold(i_t v) { fail_threshold_ = v; }
+  f_t min_qual_ub() const { return min_qual_ub_; }
+  f_t min_qual_ub_runtime() const { return min_qual_ub_runtime_; }
+  f_t min_score_factor() const { return min_score_factor_; }
+  i_t fail_threshold() const { return fail_threshold_; }
+  i_t fail_count() const { return fail_count_; }
+
   // Wall-clock deadline. The cut pool's heaviest loops are
   // `check_for_duplicate_cuts` (Tomlin-Welch O(m^2) in the worst case) and
   // `score_cuts` (orthogonality scan O(pool * best_cuts * nnz)). On
@@ -556,6 +594,17 @@ class cut_pool_t {
   // 6 cut types, so drop_cuts can still bring the pool under cap between
   // rounds. <= 0 disables the cap.
   i_t max_cuts_per_type_per_pass_{5000};
+
+  // P1-4: adaptive min-quality gate. min_qual_ub_ is the configured
+  // ceiling (paper 0.01); min_qual_ub_runtime_ is the value the gate
+  // actually uses, halved on `fail_threshold_` consecutive failures and
+  // reset by set_min_qual_ub. fail_count_ is the consecutive-fail
+  // counter, cleared on a successful round.
+  f_t min_qual_ub_{0.01};
+  f_t min_qual_ub_runtime_{0.01};
+  f_t min_score_factor_{0.5};
+  i_t fail_threshold_{2};
+  i_t fail_count_{0};
 };
 
 template <typename i_t, typename f_t>
