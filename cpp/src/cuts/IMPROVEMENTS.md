@@ -93,6 +93,10 @@ something that exists, or assume something that doesn't.
   monotonically until end of solve. → P1-1.
 - No at-insert duplicate / parallelism / NaN / degenerate-norm checks
   in `add_cut`. → P2-1, P2-2.
+- No at-insert cousin filter for Bron-Kerbosch clique-cut families
+  (cuts whose support sets overlap heavily but aren't equal-support).
+  Cousins pay full insert + dedup + score cost and are only filtered
+  at selection by the orthogonality scan. → P2-4.
 - No `cut_inv_norm_`, `cut_max_abs_coef_` precomputation. (Currently
   `cut_orthogonality` recomputes from `cut_norms_` populated lazily.)
 - No score multipliers (no integer-support boost, no objective-
@@ -225,11 +229,14 @@ particularly benefit from the pool aging in P1-1.
   density penalty proper is disproven by the paper, see Evidence base
   above) — and tends to drop genuinely strong large cliques on dense
   problems. Skip it.
-- Jaccard near-duplicate clique-cut filter in `add_cut`. Defer to P2:
-  the existing orthogonality filter in `score_cuts` already removes
-  near-duplicates at selection time, and the at-insert hash dedup in
-  P2-2 will catch exact duplicates much more cheaply than Jaccard
-  scanning would.
+- Jaccard near-duplicate clique-cut filter in `add_cut`. Defer to
+  **P2-4**. The existing orthogonality filter in `score_cuts` only
+  removes near-duplicates at selection time — *after* every cousin has
+  paid the full insert + dedup + score cost. The at-insert hash dedup
+  in P2-2 catches *exact-support* duplicates (e.g. permuted vertex
+  order) but not cousins (different vertex sets with high overlap,
+  which is what Bron-Kerbosch produces). P2-4 is the at-insert cousin
+  filter that picks up this deferral.
 
 **Touches.** `cuts.cpp`:
 - `build_clique_cut` (~25 lines: pre-pass complement counting, log
@@ -537,8 +544,158 @@ safe.
 
 **Touches.** `score_cuts` (counter + conditional invocation).
 
-**Dependency.** Apply only after P2-2; without at-insert hash dedup,
-deferring Tomlin-Welch lets duplicates accumulate.
+**Dependency.** Apply only after P2-2 **and P2-4**: without at-insert
+hash dedup *and* at-insert cousin filtering, deferring Tomlin-Welch
+lets exact duplicates and BK cousin families accumulate across rounds.
+
+---
+
+### P2-4. At-insert Jaccard cousin filter for clique-cut family
+
+**What.** During the clique-cut phase only (gated by
+`cut_type == CLIQUE`), `add_cut` consults a per-round support-min-hash
+sketch and, for any new cut whose support has Jaccard overlap ≥
+`clique_cousin_jaccard_tau_` with an already-pooled clique cut from
+this round, **keeps only the higher-scoring representative** (or, when
+the round-side score isn't yet computed, the higher-violation one
+using `xstar` already in scope inside `generate_clique_cuts`).
+
+Mechanism, two stages:
+
+1. **Cheap signature.** Compute a `k`-min-hash sketch
+   (`clique_cousin_minhash_k_`, default 8, 64-bit hashes) over the
+   cut's support indices. Store one signature per pool row, scoped to
+   `cut_type_t::CLIQUE`. Min-hash agreement count ≈ `k · Jaccard`, so
+   sketch comparison estimates Jaccard in `O(k)`.
+2. **Decision.** Hash the new cut's signature to a coarse bucket
+   (e.g. min-element prefix); compare against existing rows in the
+   bucket; on collisions above `tau`, replace the loser in-place
+   (or skip the insert, depending on whether the existing entry
+   should be evicted). Cousin-replacement preserves the bucket
+   invariant: at any time, no two clique cuts in the pool have
+   pairwise Jaccard ≥ tau.
+
+**Why.** Bron-Kerbosch on a fractional-binary subgraph emits *all*
+maximal cliques of the conflict graph induced by xstar. Two maximal
+cliques whose vertex sets overlap in `k − 1` of `k` vertices produce
+clique cuts whose coefficient vectors agree on `k − 1` coordinates and
+differ in one — a "cousin." On dense instances
+(`cod105`, `air03`, `set-packing`) BK can emit hundreds of cousin
+cliques per round.
+
+The existing roadmap defends against cousins only at *selection*:
+
+- **P1-3** (tighten `cut_min_orthogonality` 0.5 → 0.9 + relaxed tier)
+  rejects cousins at cosine > 0.1 against the first-selected cousin.
+  This is the SCIP/Mops design and is the principal selection-stage
+  answer.
+- **P3-4** (cluster-aware top-1 per support cluster) is parked as the
+  alternative selection-stage filter.
+
+Both run *after* every cousin has paid the full insert + dedup +
+score cost: one `add_cut` call, one row of Tomlin-Welch
+(`check_for_duplicate_cuts` is `O(nnz · m)`), one efficacy
+computation, one integer-support-fraction scan, one objective-
+parallelism dot product. On a 200-cousin family this is a 200×
+multiplier on per-cut cost that selection-stage filtering cannot
+recover.
+
+P0-3 explicitly deferred Jaccard filtering to P2 with the rationale
+that "the at-insert hash dedup in P2-2 will catch exact duplicates
+much more cheaply than Jaccard scanning would" — but P2-2 as scoped
+catches *equal-support* duplicates (`{1,2,3}` vs `{2,3,1}`), not
+cousins (`{1,2,3,4}` vs `{1,2,3,5}`, different bucket entirely). P2-4
+is the item that picks up that deferral and makes it concrete.
+
+**Why scoped to `CLIQUE`.** The cousin-family pathology is specific
+to BK enumeration. Gomory / MIR / strong-CG generators produce cuts
+with much more diverse support; running min-hash for them spends
+cycles without payoff and risks rejecting genuinely different cuts
+that happen to share a few high-coefficient variables. The scope-by-
+type gate is one line in `add_cut`.
+
+**Why insert-side and not generator-side.** A generator-side cap
+("emit at most `K_max_per_pivot` cliques per pivot vertex") is a
+strictly stronger but riskier change. None of Mops, SCIP, HiGHS take
+it — presumably because BK enumeration cost is already bounded by
+`max_calls = 100000` in `generate_clique_cuts` and a per-pivot cap
+can drop genuinely strong large cliques. P2-4 is the conservative
+move: keep BK's coverage of the maximal-clique space, drop the
+redundant insertions only.
+
+**Touches.**
+
+- `cut_pool_t`: new `clique_support_minhash_` (sketches, one row per
+  `CLIQUE` cut) + `clique_cousin_buckets_` (bucket → row indices)
+  members. Three-line entry/exit in `add_cut` gated on
+  `cut_type == CLIQUE`. Four-line cleanup in `drop_cuts` /
+  `check_for_duplicate_cuts` compaction so the buckets stay aligned
+  with row indices after every shrink.
+- `add_cut` (~30 lines): sketch + bucket query + score compare +
+  in-place replace.
+- `score_cuts` (no change). The selection-time orthogonality scan
+  still runs and can absorb residual cousin pairs that slipped
+  through the at-insert filter (e.g. cousins inserted in different
+  rounds).
+
+**Knobs.**
+
+- `clique_cousin_jaccard_tau_` (default `0.85`; Mops paper §3 uses
+  `0.9` as the near-duplicate cutoff for maximal cliques — a touch
+  lower lets us absorb extension-gain noise from
+  `extend_clique_vertices`).
+- `clique_cousin_minhash_k_` (default `8`; 64-bit hashes).
+- `clique_cousin_filter_enable_` (default `true`).
+
+**Dependencies.**
+
+- After **P1-1** so `drop_cuts` compaction can keep `clique_support_
+  minhash_` and `clique_cousin_buckets_` aligned with row indices —
+  identical pattern to the P2-2 bucket-alignment work.
+- After **P1-2** so the keep-the-better decision uses the SCIP/Mops
+  composite and not just raw violation. Pre-P1-2 the decision uses
+  violation as a fallback proxy.
+- Compatible with **P2-2**: P2-4's min-hash buckets and P2-2's
+  support-equality hash buckets are independent maps and can coexist;
+  P2-2 fires first (catches exact same-support cousins cheaply),
+  P2-4 fires second (catches partial-overlap cousins).
+- Lands **before P2-3**: cousin elimination at insert is what makes
+  deferring Tomlin-Welch safe even on dense BK-output rounds.
+
+**Validation.**
+
+- `CLIQUE` row in P0-1 stats: a new
+  `CUT_EVENT_ADD_COUSIN_DROPPED` (or equivalent) counter is non-zero
+  on `cod105`, `air03`, `set-packing`, `iis-…`. Total BK output count
+  unchanged (the generator is untouched). `cut_pool_size` after the
+  clique phase drops on those instances.
+- Wall time inside `score_cuts` on the same instances drops, driven
+  by lower `cut_storage_.m` going into the score loop. Root gap
+  closed should not regress: the keep-the-better rule preserves the
+  best representative of each cousin family.
+- Per-round `clique_cousin_buckets_` size stays bounded by `O(num_
+  binaries)` even on adversarial dense instances. (Without bucketing,
+  the sketch comparison would degrade to `O(m_clique²)` per insert.)
+
+**What it does NOT do.**
+
+- Not a generator-side emission cap. BK still enumerates all maximal
+  cliques up to `max_calls = 100000`.
+- Not a replacement for P1-3. P1-3 still runs at selection and
+  catches residual cousins (different rounds, sketch collisions
+  below `tau`, etc.).
+- Not a replacement for P3-4. P3-4 stays parked; if P1-3 + P2-4
+  together still leave cousin starvation in dense MIR families
+  (which BK does not produce — MIR cousins arise from aggregation
+  rounds, not from clique enumeration), P3-4 becomes relevant for
+  MIR / Gomory at selection.
+
+> **Cost note.** A cousin-bucket lookup is `O(k + bucket_size)`;
+> bucket_size is bounded by the number of distinct max-clique
+> "families" in the round, typically `O(√m_clique)` on instances
+> where the cousin pathology shows up. Wall-time-wise this is one to
+> two orders of magnitude cheaper than the per-cut work each cousin
+> would pay through dedup + score, even on the worst case.
 
 ---
 
@@ -698,13 +855,14 @@ P1-4   adaptive min_qual gate (paper §3 hysteresis)  [drops weak candidates ups
 # Robustness & dedup speed.
 P2-1   numerical safety guards in add_cut       [defensive; do anytime after P0-1]
 P2-2   hash-based at-insert duplicate detection [O(1) dedup; precomputes cut_inv_norm_]
-P2-3   Tomlin-Welch dedup made periodic         [requires P2-2 first]
+P2-4   at-insert Jaccard cousin filter (CLIQUE) [absorbs Bron-Kerbosch cousin floods]
+P2-3   Tomlin-Welch dedup made periodic         [requires P2-2 + P2-4 first]
 
 # Experimental — only if P0–P2 don't reach the goal.
 P3-*   distance variants, cluster selection, density
 ```
 
-Ten committed items (P0-1 through P2-3); P3 is open-ended.
+Eleven committed items (P0-1 through P2-4); P3 is open-ended.
 
 Run the benchmark protocol after every P-tier so the deltas are
 attributable. P1-1 alone is expected to be the largest single
