@@ -10,6 +10,7 @@
 #include <dual_simplex/presolve.hpp>
 #include <dual_simplex/simplex_solver_settings.hpp>
 #include <dual_simplex/sparse_vector.hpp>
+#include <dual_simplex/tic_toc.hpp>
 #include <dual_simplex/types.hpp>
 #include <dual_simplex/user_problem.hpp>
 
@@ -55,13 +56,14 @@ enum cut_pool_event_t : int8_t {
   CUT_EVENT_ADD_NF_RHS   = 4,  // P2-1: non-finite rhs
   CUT_EVENT_ADD_NF_COEF  = 5,  // P2-1: non-finite coefficient
   CUT_EVENT_ADD_DEGEN    = 6,  // P2-1: degenerate (zero) norm
+  CUT_EVENT_ADD_OVER_CAP = 7,  // generator already filled per-type per-pass cap
   // Events recorded inside score_cuts (per pool entry per call).
-  CUT_EVENT_SCORE_ACCEPT    = 7,   // cut selected into best_cuts_
-  CUT_EVENT_SCORE_THRESHOLD = 8,   // score below min_cut_distance_
-  CUT_EVENT_SCORE_PARALLEL  = 9,   // rejected by orthogonality filter
-  CUT_EVENT_SCORE_AGED      = 10,  // P1-1: dropped by drop_cuts
-  CUT_EVENT_SCORE_DUP       = 11,  // removed by check_for_duplicate_cuts
-  MAX_CUT_EVENT             = 12
+  CUT_EVENT_SCORE_ACCEPT    = 8,   // cut selected into best_cuts_
+  CUT_EVENT_SCORE_THRESHOLD = 9,   // score below min_cut_distance_
+  CUT_EVENT_SCORE_PARALLEL  = 10,  // rejected by orthogonality filter
+  CUT_EVENT_SCORE_AGED      = 11,  // P1-1: dropped by drop_cuts
+  CUT_EVENT_SCORE_DUP       = 12,  // removed by check_for_duplicate_cuts
+  MAX_CUT_EVENT             = 13
 };
 
 struct cut_pool_stats_t {
@@ -441,7 +443,44 @@ class cut_pool_t {
   f_t good_min_orthogonality() const { return good_min_orthogonality_; }
   f_t good_cut_factor() const { return good_cut_factor_; }
 
+  // Wall-clock deadline. The cut pool's heaviest loops are
+  // `check_for_duplicate_cuts` (Tomlin-Welch O(m^2) in the worst case) and
+  // `score_cuts` (orthogonality scan O(pool * best_cuts * nnz)). On
+  // pathological instances (dense ImpBnd flood, e.g. splice1k1) either can
+  // run for many minutes inside a single `score_cuts` call, blowing past
+  // settings_.time_limit. Callers (B&B root cut loop) set this to the
+  // wall-clock start of the solve; the pool then bails out of its long
+  // loops once toc(start) >= settings_.time_limit. A negative value (the
+  // default) disables the check so unit tests and any caller that does not
+  // care about the deadline keep their previous semantics.
+  void set_wall_clock_start(f_t start_time) { wall_clock_start_ = start_time; }
+
+  // Per-generator-pass cap on accepted cuts of one type. The
+  // `cut_generation_t` driver calls reset_stats() before each generator
+  // (gomory / knapsack / mir / clique / implied_bound) so the
+  // CUT_EVENT_ADD_ACCEPT counter doubles as the per-pass per-type accept
+  // count. When that count reaches max_cuts_per_type_per_pass_, add_cut
+  // short-circuits and bumps CUT_EVENT_ADD_OVER_CAP.
+  //
+  // This is the front-line defence against generator floods (1.13M
+  // implied bounds on splice1k1 -> 580k+ ImpBnd cuts in one round). The
+  // downstream Tomlin-Welch dedup and orthogonality scan are O(m^2) and
+  // O(m * best_cuts * nnz) respectively; capping the inflow keeps both
+  // bounded regardless of probing density. 5000 per type per pass × 6
+  // types ≤ 30000 = pool_soft_limit_, so drop_cuts can keep the pool
+  // bounded across passes too.
+  //
+  // Set to 0 or a negative value to disable the cap (revert to the
+  // pre-cap behaviour where every generated cut enters the pool).
+  void set_max_cuts_per_type_per_pass(i_t v) { max_cuts_per_type_per_pass_ = v; }
+  i_t max_cuts_per_type_per_pass() const { return max_cuts_per_type_per_pass_; }
+
  private:
+  bool over_deadline() const
+  {
+    if (wall_clock_start_ < 0.0) { return false; }
+    return toc(wall_clock_start_) >= settings_.time_limit;
+  }
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
   f_t cut_density(i_t row);
   f_t cut_orthogonality(i_t i, i_t j);
@@ -474,10 +513,16 @@ class cut_pool_t {
   cut_pool_stats_t stats_{};
   bool log_rejects_{false};
 
-  // P1-1: defaults match HiGHS (`mip_pool_age_limit` = 5,
-  // `mip_pool_soft_limit` = 30000).
+  // P1-1: pool_age_limit_ defaults match HiGHS (`mip_pool_age_limit` = 5).
+  // pool_soft_limit_ used to match HiGHS' 30000, but with the per-type
+  // per-pass accept cap (max_cuts_per_type_per_pass_ = 5000 × 6 cut types
+  // = 30000 absolute ceiling per pass) the 30000 soft cap could never
+  // bite during a pass — it only mattered for inter-pass survivors.
+  // Tightening to 20000 makes drop_cuts more aggressive on inter-pass
+  // survivors without conflicting with fresh adds (age-0 cuts are still
+  // unconditionally protected, so the in-pass max of 30000 is unchanged).
   i_t pool_age_limit_{5};
-  i_t pool_soft_limit_{30000};
+  i_t pool_soft_limit_{20000};
 
   // P1-2: SCIP `sepa_cutsel_hybrid` defaults — `efficacyfac=1.0`,
   // `intsupportfac=0.1`, `objparalfac=0.1`. Paper §4 / Figure 4: this
@@ -502,6 +547,15 @@ class cut_pool_t {
   // settings_.cut_min_orthogonality.
   f_t good_min_orthogonality_{0.5};
   f_t good_cut_factor_{0.9};
+
+  // Wall-clock anchor for over_deadline(). Negative => no deadline check.
+  f_t wall_clock_start_{-1.0};
+
+  // Per-cut-type per-generator-pass accept cap. 5000 keeps the cumulative
+  // worst-case accept count under pool_soft_limit_ (= 30000) across the
+  // 6 cut types, so drop_cuts can still bring the pool under cap between
+  // rounds. <= 0 disables the cap.
+  i_t max_cuts_per_type_per_pass_{5000};
 };
 
 template <typename i_t, typename f_t>

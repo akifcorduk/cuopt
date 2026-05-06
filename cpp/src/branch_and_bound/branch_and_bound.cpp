@@ -2203,6 +2203,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   }
 
   cut_pool_t<i_t, f_t> cut_pool(original_lp_.num_cols, settings_);
+  // Anchor the cut pool's deadline guard to the wall-clock start of the
+  // solve so its inner loops (score_cuts, check_for_duplicate_cuts) can
+  // honour settings_.time_limit. Without this, dense ImpBnd-flood
+  // instances (e.g. splice1k1) overrun the time limit by 5-6× because the
+  // O(pool * best_cuts * nnz) orthogonality scan and the O(m^2) Tomlin-
+  // Welch dedup are unbounded internally.
+  cut_pool.set_wall_clock_start(exploration_stats_.start_time);
   cut_generation_t<i_t, f_t> cut_generation(cut_pool,
                                             original_lp_,
                                             settings_,
@@ -2227,6 +2234,18 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   f_t cut_generation_start_time = tic();
   i_t cut_pool_size             = 0;
   for (i_t cut_pass = 0; cut_pass < settings_.max_cut_passes; cut_pass++) {
+    // Wall-clock guard at the top of each cut pass. The LP solve at the
+    // bottom of this loop already respects the time limit, but a pass
+    // also includes generate_cuts + score_cuts + check_for_duplicate_cuts
+    // which on dense instances (e.g. splice1k1 with a 1.13M-implied-bound
+    // probing pass) can each cost minutes. Without this check a single
+    // overrun of the LP slot pulls in another full pass of cut work.
+    if (toc(exploration_stats_.start_time) > settings_.time_limit) {
+      settings_.log.printf("Time limit reached before cut pass %d (pool size %d)\n",
+                           static_cast<int>(cut_pass),
+                           static_cast<int>(cut_pool.pool_size()));
+      break;
+    }
     if (num_fractional == 0) {
       set_solution_at_root(solution, cut_info);
       return mip_status_t::OPTIMAL;

@@ -550,6 +550,25 @@ void cut_pool_t<i_t, f_t>::add_cut(cut_type_t cut_type, const inequality_t<i_t, 
 {
   // TODO: Add fast duplicate check and only add if the cut is not already in the pool
 
+  // Per-cut-type per-pass accept cap. The driver in cut_generation_t calls
+  // reset_stats() before each generator (gomory / knapsack / mir / clique
+  // / implied_bound), so CUT_EVENT_ADD_ACCEPT carries the running per-pass
+  // accept count for this cut_type. Once we hit the cap we early-out so
+  // generator floods (1.13M implied bounds on splice1k1) cannot push the
+  // pool past pool_soft_limit_ within a single pass. <=0 disables the
+  // cap. Checked first so we don't pay squeeze() cost for cuts we'll
+  // immediately drop.
+  if (max_cuts_per_type_per_pass_ > 0 &&
+      stats_.get(cut_type, CUT_EVENT_ADD_ACCEPT) >= max_cuts_per_type_per_pass_) {
+    stats_.inc(cut_type, CUT_EVENT_ADD_OVER_CAP);
+    if (log_rejects_) {
+      settings_.log.printf("Reject cut type=%d reason=over_cap cap=%d\n",
+                           static_cast<int>(cut_type),
+                           static_cast<int>(max_cuts_per_type_per_pass_));
+    }
+    return;
+  }
+
   for (i_t p = 0; p < cut.size(); p++) {
     const i_t j = cut.index(p);
     if (j >= original_vars_) {
@@ -749,7 +768,20 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
   // We now look for cuts that are duplicates of each other and remove them
   std::vector<i_t> cuts_to_remove(m, 0);
   i_t num_cuts_to_remove = 0;
+  // Time-budget guard. The dedup-pair scan below is O(m^2) in the worst
+  // case (e.g. when an entire ImpBnd round shares the same support set).
+  // On a 600k-cut pool that exceeds settings_.time_limit by minutes. If we
+  // run out of time we abort dedup; the as-yet-unremoved duplicates remain
+  // in the pool and are caught by either the next score_cuts call or by
+  // cousin filters (see IMPROVEMENTS.md P2-2 / P2-4). Check is gated to
+  // every 1024 outer iterations to keep toc() overhead negligible.
+  i_t dedup_deadline_counter = 0;
+  bool dedup_truncated       = false;
   for (i_t r = 0; r < m; r++) {
+    if ((++dedup_deadline_counter & 1023) == 0 && over_deadline()) {
+      dedup_truncated = true;
+      break;
+    }
     const i_t set_r = sets[r];
     if (set_r > 0 && set_r < sentinel && cuts_to_remove[r] == 0) {
       // This cut has a duplicate
@@ -790,7 +822,12 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
   }
 
   if (num_cuts_to_remove > 0) {
-    settings_.log.printf("Removing %d duplicate cuts\n", num_cuts_to_remove);
+    if (dedup_truncated) {
+      settings_.log.printf("Removing %d duplicate cuts (dedup truncated by time limit)\n",
+                           num_cuts_to_remove);
+    } else {
+      settings_.log.printf("Removing %d duplicate cuts\n", num_cuts_to_remove);
+    }
     csr_matrix_t<i_t, f_t> new_cut_storage(0, 0, 0);
     cut_storage_.remove_rows(cuts_to_remove, new_cut_storage);
     cut_storage_ = new_cut_storage;
@@ -918,7 +955,21 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
     stats_.inc(cut_type_[i], CUT_EVENT_SCORE_ACCEPT);
   }
 
+  // Time-budget guard. The orthogonality scan is the heaviest loop in
+  // score_cuts (O(pool * best_cuts * nnz)) and on pathological pools
+  // (e.g. dense ImpBnd flood on splice1k1) it can run many minutes,
+  // overrunning settings_.time_limit by 5-6×. Honour the deadline by
+  // breaking out of selection; whatever has been pushed to best_cuts_ so
+  // far is still a valid (just smaller) round of cuts. Check is gated to
+  // every 256 outer iterations so the toc()/chrono cost is negligible.
+  i_t deadline_check_counter = 0;
   while (scored_cuts_ < max_cuts && !sorted_indices.empty()) {
+    if ((++deadline_check_counter & 255) == 0 && over_deadline()) {
+      settings_.log.printf("score_cuts: time limit reached after %d cuts selected (%d remaining)\n",
+                           static_cast<int>(scored_cuts_),
+                           static_cast<int>(sorted_indices.size()));
+      break;
+    }
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
 
@@ -1110,7 +1161,9 @@ void cut_pool_t<i_t, f_t>::log_add_stats_summary(const char* label) const
 {
   // P0-1: one line per cut type that saw at least one add-related event.
   // ADD_DUP / ADD_NF_RHS / ADD_NF_COEF / ADD_DEGEN are reserved for P2-1 /
-  // P2-2; they're zero today and that's intentional.
+  // P2-2; they're zero today and that's intentional. ADD_OVER_CAP fires
+  // when the per-pass per-type accept cap (max_cuts_per_type_per_pass_)
+  // is reached.
   for (i_t t = 0; t < MAX_CUT_TYPE; t++) {
     const auto cut_type    = static_cast<cut_type_t>(t);
     const int64_t acc      = stats_.get(cut_type, CUT_EVENT_ADD_ACCEPT);
@@ -1120,10 +1173,11 @@ void cut_pool_t<i_t, f_t>::log_add_stats_summary(const char* label) const
     const int64_t nf_rhs   = stats_.get(cut_type, CUT_EVENT_ADD_NF_RHS);
     const int64_t nf_coef  = stats_.get(cut_type, CUT_EVENT_ADD_NF_COEF);
     const int64_t degen    = stats_.get(cut_type, CUT_EVENT_ADD_DEGEN);
-    if ((acc | vars_oor | empty | dup | nf_rhs | nf_coef | degen) == 0) { continue; }
+    const int64_t over_cap = stats_.get(cut_type, CUT_EVENT_ADD_OVER_CAP);
+    if ((acc | vars_oor | empty | dup | nf_rhs | nf_coef | degen | over_cap) == 0) { continue; }
     settings_.log.debug(
       "CutPoolAdd[%s] %s: acc=%lld vars_oor=%lld empty=%lld dup=%lld "
-      "nf_rhs=%lld nf_coef=%lld degen=%lld\n",
+      "nf_rhs=%lld nf_coef=%lld degen=%lld over_cap=%lld\n",
       label,
       cut_type_short_names[t],
       static_cast<long long>(acc),
@@ -1132,7 +1186,8 @@ void cut_pool_t<i_t, f_t>::log_add_stats_summary(const char* label) const
       static_cast<long long>(dup),
       static_cast<long long>(nf_rhs),
       static_cast<long long>(nf_coef),
-      static_cast<long long>(degen));
+      static_cast<long long>(degen),
+      static_cast<long long>(over_cap));
   }
 }
 
