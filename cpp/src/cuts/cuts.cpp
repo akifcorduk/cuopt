@@ -14,7 +14,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <unordered_set>
 
 #include <barrier/dense_matrix.hpp>
@@ -1141,10 +1143,16 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax,
   // P1-3: score-tiered orthogonality. Compute the round's top score once and
   // derive the "good" threshold; a candidate's effective min_orthogonality is
   // the relaxed good_min_orthogonality_ for cuts at or above
-  // good_cut_factor_ * top_score, and the strict settings_.cut_min_orthogonality
-  // otherwise. The first cut is always accepted (it is by definition the top
-  // of the round and has nothing to be parallel to).
-  const f_t strict_min_orthogonality = settings_.cut_min_orthogonality;
+  // good_cut_factor_ * top_score, and the strict
+  // settings_.cut_min_orthogonality otherwise. The first cut is always
+  // accepted (it is by definition the top of the round and has nothing to be
+  // parallel to).
+  // strict_min_orthogonality_override_ (<0 by default) lets the cut-pool
+  // sweep dispatcher (see apply_cut_sweep_config) substitute the strict
+  // threshold without mutating the const settings_ object.
+  const f_t strict_min_orthogonality = (strict_min_orthogonality_override_ >= f_t(0))
+                                         ? strict_min_orthogonality_override_
+                                         : settings_.cut_min_orthogonality;
   const f_t good_min_orthogonality   = good_min_orthogonality_;
   const f_t top_score = sorted_indices.empty() ? f_t(0) : cut_distances_[sorted_indices.back()];
   const f_t good_score_threshold = good_cut_factor_ * top_score;
@@ -5466,6 +5474,286 @@ void verify_cuts_against_saved_solution(const csr_matrix_t<i_t, f_t>& cuts,
   }
 }
 
+// ============================================================================
+// Cut benchmark mode + sweep config dispatch (declared in cuts.hpp)
+// ============================================================================
+
+bool cut_bench_mode_enabled()
+{
+  // Cut-bench mode is gated on CUOPT_CONFIG_ID being set to a parseable
+  // non-negative integer. Setting CUOPT_CONFIG_ID is the user's signal
+  // that they are running a cut-pool sweep, so we also force the
+  // deterministic measurement path that goes with it: no concurrent
+  // root LP solve, no reduced-cost-strengthening during the cut loop,
+  // and an early return out of branch_and_bound::solve right after the
+  // cut summary. One-time env-var check; flipping mid-process is not
+  // supported.
+  static const bool enabled = []() {
+    const char* v = std::getenv("CUOPT_CONFIG_ID");
+    if (v == nullptr || v[0] == '\0') return false;
+    try {
+      return std::stoi(v) >= 0;
+    } catch (const std::exception&) {
+      return false;
+    }
+  }();
+  return enabled;
+}
+
+namespace {
+
+// Number of cut-pool sweep configurations exposed via CUOPT_CONFIG_ID.
+// Keep in sync with the switch table in apply_cut_sweep_config and the
+// names in cut_sweep_config_name() below.
+//
+// Design notes for this set:
+//  - All cut generators stay enabled in every config; we only vary
+//    scoring / selection knobs and pool aging.
+//  - max_cuts_per_type_per_pass is left at its default in every config.
+//  - Coverage is spread across composite scoring weights, orthogonality
+//    / score-tiered selection, the adaptive minimum-quality gate, and
+//    pool aging / cousin filtering.
+//  - Four configs (5, 6, 10, 14) intentionally change two or more knobs
+//    together so we get a signal on feature interactions.
+constexpr int kCutSweepNumConfigs = 15;
+
+inline const char* cut_sweep_config_name(int config_id)
+{
+  switch (config_id) {
+    case 0: return "00_baseline";
+    // Composite scoring weights.
+    case 1: return "01_obj_par_off";    // w_obj=0
+    case 2: return "02_obj_par_high";   // w_obj=0.3
+    case 3: return "03_int_supp_off";   // w_int=0
+    case 4: return "04_int_supp_high";  // w_int=0.3
+    case 5: return "05_pure_efficacy";  // w_int=0, w_obj=0
+    case 6:
+      return "06_stronger_composite";  // w_int=0.3, w_obj=0.3
+    // Orthogonality / score-tiered selection.
+    case 7: return "07_loose_ortho";       // ortho=0.5
+    case 8: return "08_tight_ortho";       // ortho=0.95
+    case 9: return "09_relaxed_tier_off";  // good_cut_factor=1.01
+    case 10:
+      return "10_tight_no_relaxed_tier";  // ortho=0.95 + factor=1.01
+    // Adaptive minimum-quality gate.
+    case 11: return "11_gate_off";  // min_score_factor=0, min_qual_ub small
+    case 12:
+      return "12_gate_strict";  // min_score_factor=0.8
+    // Pool aging / cousin filter.
+    case 13: return "13_no_aging";                    // age=100000, soft=10M
+    case 14: return "14_aggressive_aging_no_cousin";  // age=2, soft=5000, cousin off
+    default: return "unknown";
+  }
+}
+
+}  // namespace
+
+template <typename i_t, typename f_t>
+void apply_cut_sweep_config(cut_pool_t<i_t, f_t>& pool,
+                            const simplex_solver_settings_t<i_t, f_t>& settings)
+{
+  // Driven by the same CUOPT_CONFIG_ID / CUOPT_MAX_CONFIG env vars the
+  // diversity manager uses (see diversity_manager.cu). One integer
+  // selects one of kCutSweepNumConfigs hard-coded cut-pool
+  // configurations. Caller side is just:
+  //   CUOPT_MAX_CONFIG=15 CUOPT_CONFIG_ID=$id $RUN_MIP ...
+  //
+  // Setting CUOPT_CONFIG_ID at all (even =0) also flips the solver
+  // into deterministic cut-bench mode (see cut_bench_mode_enabled()):
+  // root LP runs in single-threaded simplex only, in-cut-pass
+  // reduced-cost-strengthening is disabled, and B&B returns early
+  // right after the cut-info summary.
+  //
+  // CUOPT_MAX_CONFIG is the caller's expected upper bound; when set we
+  // additionally range-check CUOPT_CONFIG_ID against it.
+  //   CUOPT_CONFIG_ID unset / unparsable        -> baseline (and bench
+  //                                                mode disabled).
+  //   CUOPT_CONFIG_ID < 0 or >= valid range     -> baseline + warning.
+  //
+  // Banner printf is gated to one emission per process so B&B restarts
+  // (which re-construct cut_pool_t) do not spam the log.
+  const char* env_config_id_raw = std::getenv("CUOPT_CONFIG_ID");
+  int config_id                 = -1;
+  if (env_config_id_raw != nullptr && env_config_id_raw[0] != '\0') {
+    try {
+      config_id = std::stoi(env_config_id_raw);
+    } catch (const std::exception&) {
+      config_id = -1;
+    }
+  }
+
+  int max_config             = kCutSweepNumConfigs;
+  const char* env_max_config = std::getenv("CUOPT_MAX_CONFIG");
+  if (env_max_config != nullptr && env_max_config[0] != '\0') {
+    try {
+      max_config = std::stoi(env_max_config);
+    } catch (const std::exception&) {
+      // Fall back to kCutSweepNumConfigs.
+    }
+  }
+
+  const bool in_range =
+    (config_id >= 0) && (config_id < max_config) && (config_id < kCutSweepNumConfigs);
+
+  if (in_range) {
+    switch (config_id) {
+      case 0:
+        // 00_baseline: shipped defaults; no override. All generators
+        // active, composite weights (w_eff, w_int, w_obj) =
+        // (1, 0.1, 0.1).
+        break;
+
+      // === Composite scoring weights (1..6) ===
+      case 1:
+        // 01_obj_par_off: disable the obj-parallelism term entirely.
+        // Score = w_eff*efficacy + w_int*int_supp.
+        pool.set_obj_parallelism_weight(static_cast<f_t>(0.0));
+        break;
+      case 2:
+        // 02_obj_par_high: 3x the default weight. Obj-parallelism
+        // becomes a clearly dominant term over int_supp (0.1).
+        pool.set_obj_parallelism_weight(static_cast<f_t>(0.3));
+        break;
+      case 3:
+        // 03_int_supp_off: disable the integer-support term entirely.
+        pool.set_integer_support_weight(static_cast<f_t>(0.0));
+        break;
+      case 4:
+        // 04_int_supp_high: 3x the default int_supp weight.
+        pool.set_integer_support_weight(static_cast<f_t>(0.3));
+        break;
+      case 5:
+        // 05_pure_efficacy: combined ablation of both quality terms.
+        // Score collapses to violation / ||a||_2 (pre-P1-2 paper
+        // "distance"). Quality floor and orthogonality scan are
+        // unchanged.
+        pool.set_integer_support_weight(static_cast<f_t>(0.0));
+        pool.set_obj_parallelism_weight(static_cast<f_t>(0.0));
+        break;
+      case 6:
+        // 06_stronger_composite: combined boost of both quality terms
+        // from 0.1 to 0.3. Tests whether the SCIP-derived 0.1/0.1
+        // default is conservative.
+        pool.set_integer_support_weight(static_cast<f_t>(0.3));
+        pool.set_obj_parallelism_weight(static_cast<f_t>(0.3));
+        break;
+
+      // === Orthogonality / score-tiered selection (7..10) ===
+      // We override the strict threshold via the cut_pool override
+      // rather than mutating settings.cut_min_orthogonality, so this
+      // function can take settings as a const reference.
+      case 7:
+        // 07_loose_ortho: revert P1-3 strict tier from 0.9 back to 0.5
+        // (pre-tightening).
+        pool.set_strict_min_orthogonality_override(static_cast<f_t>(0.5));
+        break;
+      case 8:
+        // 08_tight_ortho: push strict tier to 0.95. Almost no two
+        // selected cuts may share direction.
+        pool.set_strict_min_orthogonality_override(static_cast<f_t>(0.95));
+        break;
+      case 9:
+        // 09_relaxed_tier_off: keep default strict ortho but disable
+        // the score-tiered promotion. good_cut_factor > 1.0 means no
+        // cut is ever promoted to the relaxed threshold; every cut
+        // must clear strict ortho.
+        pool.set_good_cut_factor(static_cast<f_t>(1.01));
+        break;
+      case 10:
+        // 10_tight_no_relaxed_tier: combined strict regime.
+        // ortho=0.95 plus relaxed tier off. The strictest possible
+        // orthogonality combination in the parameter space.
+        pool.set_strict_min_orthogonality_override(static_cast<f_t>(0.95));
+        pool.set_good_cut_factor(static_cast<f_t>(1.01));
+        break;
+
+      // === Adaptive minimum-quality gate (11..12) ===
+      case 11:
+        // 11_gate_off: degenerate to "always pass". Only the constant
+        // min_cut_distance_ floor remains (pre-P1-4).
+        pool.set_min_score_factor(static_cast<f_t>(0.0));
+        pool.set_min_qual_ub(static_cast<f_t>(1e-9));
+        break;
+      case 12:
+        // 12_gate_strict: min_score_factor 0.4 -> 0.8. Only cuts
+        // within 20% of the round's top score survive the gate.
+        pool.set_min_score_factor(static_cast<f_t>(0.8));
+        break;
+
+      // === Pool aging / cousin filter (13..14) ===
+      case 13:
+        // 13_no_aging: pre-P1-1 behaviour. drop_cuts effectively never
+        // evicts; pool grows unbounded.
+        pool.set_pool_age_limit(100000);
+        pool.set_pool_soft_limit(10000000);
+        break;
+      case 14:
+        // 14_aggressive_aging_no_cousin: combined tight pool turnover
+        // plus at-insert cousin filter off. Tests whether aging alone
+        // is sufficient to keep the pool clean of cousin floods.
+        pool.set_pool_age_limit(2);
+        pool.set_pool_soft_limit(5000);
+        pool.set_clique_cousin_filter_enable(false);
+        break;
+      default: break;
+    }
+  }
+
+  // One-shot banner emission. cut_pool_t is re-constructed by every
+  // B&B restart inside a single solve, and again per-instance in
+  // benchmark sweeps over a directory of MPS files; without this gate
+  // the diagnostic line spams the search log dozens of times. Each
+  // template instantiation has its own flag, but in practice cuOpt only
+  // instantiates <int, double>, so this is a single emission per
+  // process.
+  static std::once_flag banner_flag;
+  std::call_once(banner_flag, [&]() {
+    if (config_id >= 0 && !in_range) {
+      std::printf(
+        "CutPoolConfig CUOPT_CONFIG_ID=%d out of range [0, %d) "
+        "(CUOPT_MAX_CONFIG=%d). Falling back to baseline.\n",
+        config_id,
+        kCutSweepNumConfigs,
+        max_config);
+    }
+    std::printf(
+      "CutPoolConfig config_id=%d name=%s cut_bench=%d "
+      "mir=%d gomory=%d knapsack=%d clique=%d implied_bound=%d scg=%d "
+      "pool_age_limit=%d pool_soft_limit=%d "
+      "efficacy_w=%g int_supp_w=%g obj_par_w=%g "
+      "min_ortho=%g good_min_ortho=%g good_cut_factor=%g "
+      "min_qual_ub=%g min_score_factor=%g "
+      "max_cuts_per_pass=%d "
+      "cousin_enable=%d cousin_tau=%g cousin_k=%d\n",
+      in_range ? config_id : -1,
+      in_range ? cut_sweep_config_name(config_id) : "baseline",
+      cut_bench_mode_enabled() ? 1 : 0,
+      static_cast<int>(settings.mir_cuts),
+      static_cast<int>(settings.mixed_integer_gomory_cuts),
+      static_cast<int>(settings.knapsack_cuts),
+      static_cast<int>(settings.clique_cuts),
+      static_cast<int>(settings.implied_bound_cuts),
+      static_cast<int>(settings.strong_chvatal_gomory_cuts),
+      static_cast<int>(pool.pool_age_limit()),
+      static_cast<int>(pool.pool_soft_limit()),
+      static_cast<double>(pool.efficacy_weight()),
+      static_cast<double>(pool.integer_support_weight()),
+      static_cast<double>(pool.obj_parallelism_weight()),
+      static_cast<double>(pool.strict_min_orthogonality_override() >= f_t(0)
+                            ? pool.strict_min_orthogonality_override()
+                            : settings.cut_min_orthogonality),
+      static_cast<double>(pool.good_min_orthogonality()),
+      static_cast<double>(pool.good_cut_factor()),
+      static_cast<double>(pool.min_qual_ub()),
+      static_cast<double>(pool.min_score_factor()),
+      static_cast<int>(pool.max_cuts_per_type_per_pass()),
+      static_cast<int>(pool.clique_cousin_filter_enable() ? 1 : 0),
+      static_cast<double>(pool.clique_cousin_jaccard_tau()),
+      static_cast<int>(pool.clique_cousin_minhash_k()));
+    std::fflush(stdout);
+  });
+}
+
 #ifdef DUAL_SIMPLEX_INSTANTIATE_DOUBLE
 template class cut_pool_t<int, double>;
 template class cut_generation_t<int, double>;
@@ -5473,6 +5761,9 @@ template class knapsack_generation_t<int, double>;
 template class tableau_equality_t<int, double>;
 template class complemented_mixed_integer_rounding_cut_t<int, double>;
 template class variable_bounds_t<int, double>;
+
+template void apply_cut_sweep_config<int, double>(
+  cut_pool_t<int, double>& pool, const simplex_solver_settings_t<int, double>& settings);
 
 template int add_cuts(const simplex_solver_settings_t<int, double>& settings,
                       const csr_matrix_t<int, double>& cuts,

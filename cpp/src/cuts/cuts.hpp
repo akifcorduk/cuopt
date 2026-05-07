@@ -456,6 +456,16 @@ class cut_pool_t {
   f_t good_min_orthogonality() const { return good_min_orthogonality_; }
   f_t good_cut_factor() const { return good_cut_factor_; }
 
+  // Optional override for the strict-tier orthogonality threshold the
+  // P1-3 score-tiered selector reads. Default sentinel value (-1)
+  // means "fall back to settings_.cut_min_orthogonality"; setting any
+  // value in [0, 1] makes score_cuts use this value instead, leaving
+  // the simplex_solver_settings_t untouched. Provided so the cut-pool
+  // sweep dispatcher (`apply_cut_sweep_config`) can vary the strict
+  // threshold without needing a non-const reference to settings.
+  void set_strict_min_orthogonality_override(f_t v) { strict_min_orthogonality_override_ = v; }
+  f_t strict_min_orthogonality_override() const { return strict_min_orthogonality_override_; }
+
   // P1-4: adaptive minimum-quality gate (paper §3 / §4 Mops min_qual).
   //
   // Replaces the constant `min_cut_distance_` floor for the orthogonality
@@ -629,6 +639,12 @@ class cut_pool_t {
   f_t good_min_orthogonality_{0.5};
   f_t good_cut_factor_{0.9};
 
+  // Sentinel-defaulted override for the strict-tier threshold. <0
+  // means "use settings_.cut_min_orthogonality" (production path);
+  // any value in [0, 1] is treated as the strict threshold for this
+  // pool. Set by the cut-pool sweep dispatcher only.
+  f_t strict_min_orthogonality_override_{-1};
+
   // Wall-clock anchor for over_deadline(). Negative => no deadline check.
   f_t wall_clock_start_{-1.0};
 
@@ -674,6 +690,65 @@ class cut_pool_t {
   void compute_clique_minhash_sketch(const inequality_t<i_t, f_t>& cut,
                                      std::vector<uint64_t>& sketch) const;
 };
+
+// ============================================================================
+// Cut benchmark mode + sweep config dispatch
+// ============================================================================
+//
+// `cut_bench_mode_enabled()` is gated on `CUOPT_CONFIG_ID` being set
+// to a parseable non-negative integer. The cut-pool sweep dispatch
+// (see `apply_cut_sweep_config`) reads the same variable, so setting
+// `CUOPT_CONFIG_ID` is the single switch the user flips: it picks one
+// of 15 cut-pool configs AND turns on the deterministic measurement
+// path. There is intentionally no second env var.
+//
+//   CUOPT_CONFIG_ID unset / unparsable / negative -> false
+//   CUOPT_CONFIG_ID >= 0                          -> true
+//
+// When enabled, B&B and the MIP solver setup MUST:
+//   1. force `set_concurrent_lp_root_solve(false)` so the root LP is
+//      solved single-threaded by dual simplex (no race-decided winner);
+//   2. skip the in-cut-pass `find_reduced_cost_fixings` block so
+//      primal-driven bound tightening cannot perturb subsequent cut
+//      passes;
+//   3. exit B&B immediately after the cut loop has run and
+//      `print_cut_info` has emitted its summary, returning before
+//      strong branching / B&B exploration begins;
+//   4. skip the diversity-manager primal heuristics in the GPU MIP
+//      solver path so the process actually exits quickly instead of
+//      consuming the full time budget.
+//
+// The point is to make the per-instance MIPLIBGapStat numbers
+// (`root_lp_with_cuts`, `gap_closed_pct`) attributable solely to cut
+// scoring and selection, with no dependence on heuristic timing or LP
+// concurrency winners.
+bool cut_bench_mode_enabled();
+
+// `apply_cut_sweep_config` reads `CUOPT_CONFIG_ID` (and optionally
+// `CUOPT_MAX_CONFIG`) and dispatches one of 15 hard-coded cut-pool
+// configurations. Same env-var convention as `diversity_manager.cu`.
+// Intended for benchmark sweeps without recompiling: a driver loops
+// `CUOPT_MAX_CONFIG=15 CUOPT_CONFIG_ID=$id ...`, runs MIPLIB, and
+// grep-filters the once-per-process `CutPoolConfig` line.
+//
+// Configurations target the moving parts that landed on the
+// `cut_scoring` branch (P1-1 aging, P1-2 composite score, P1-3 tiered
+// orthogonality, P1-4 adaptive gate, P2-4 cousin filter). All cut
+// generators stay enabled in every config and `max_cuts_per_type_per_pass`
+// is left at its default. See cuts.cpp for the table.
+//
+// `settings` is taken by const reference: the dispatcher only reads it
+// (e.g. for the banner) and routes any cut-pool side-channel knobs
+// through `cut_pool_t` setters. Strict-tier orthogonality, when varied,
+// goes through `pool.set_strict_min_orthogonality_override(...)` rather
+// than mutating settings.cut_min_orthogonality.
+//
+// Out-of-range / unset id leaves both the cut pool and the simplex
+// settings at their defaults. A single banner is emitted per process so
+// pool reconstruction inside a B&B restart does not spam the log.
+template <typename i_t, typename f_t>
+void apply_cut_sweep_config(cut_pool_t<i_t, f_t>& pool,
+                            const simplex_solver_settings_t<i_t, f_t>& settings);
 
 template <typename i_t, typename f_t>
 class knapsack_generation_t {

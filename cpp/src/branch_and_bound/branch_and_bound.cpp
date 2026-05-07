@@ -2225,6 +2225,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   // O(pool * best_cuts * nnz) orthogonality scan and the O(m^2) Tomlin-
   // Welch dedup are unbounded internally.
   cut_pool.set_wall_clock_start(exploration_stats_.start_time);
+  // Apply CUOPT_CONFIG_ID sweep override (15 configs; see cuts.cpp).
+  // Mutates `cut_pool` knobs only; `settings_` is read-only. No-op
+  // when CUOPT_CONFIG_ID is unset / out of range.
+  apply_cut_sweep_config(cut_pool, settings_);
   cut_generation_t<i_t, f_t> cut_generation(cut_pool,
                                             original_lp_,
                                             settings_,
@@ -2391,7 +2395,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         return mip_status_t::NUMERICAL;
       }
 
-      if (settings_.reduced_cost_strengthening >= 1 && upper_bound_.load() < last_upper_bound) {
+      // Cut-bench mode (CUOPT_CONFIG_ID set) disables in-cut-pass
+      // reduced-cost strengthening so primal-driven bound tightening
+      // cannot perturb subsequent cut passes. Without this gate the
+      // per-pass cut yield depends on the timing of heuristic-found
+      // incumbents and is non-deterministic across reruns.
+      if (!cut_bench_mode_enabled() && settings_.reduced_cost_strengthening >= 1 &&
+          upper_bound_.load() < last_upper_bound) {
         mutex_upper_.lock();
         last_upper_bound = upper_bound_.load();
         std::vector<f_t> lower_bounds;
@@ -2578,6 +2588,24 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                          original_lp_.num_rows,
                          original_lp_.num_cols,
                          original_lp_.A.col_start[original_lp_.A.n]);
+  }
+
+  // Cut-bench mode (CUOPT_CONFIG_ID set): stop here. The cut loop has
+  // finished, the post-cut root LP value has been published to
+  // benchmark_info_t, and the cut-info summary has been printed.
+  // Returning before strong branching keeps the per-instance
+  // MIPLIBGapStat numbers attributable solely to cut scoring +
+  // selection.
+  if (cut_bench_mode_enabled()) {
+    settings_.log.printf(
+      "CutBench: cut generation complete (max_passes=%d, pool=%d), "
+      "exiting before strong branching / B&B exploration\n",
+      static_cast<int>(settings_.max_cut_passes),
+      static_cast<int>(cut_pool.pool_size()));
+    finish_clique_thread();
+    solver_status_ = mip_status_t::TIME_LIMIT;
+    set_final_solution(solution, root_objective_);
+    return solver_status_;
   }
 
   set_uninitialized_steepest_edge_norms(original_lp_, basic_list, edge_norms_);

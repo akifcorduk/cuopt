@@ -416,7 +416,17 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
     // Set the primal heuristics -> branch and bound callback
     if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
-      branch_and_bound->set_concurrent_lp_root_solve(true);
+      // Cut-bench mode (CUOPT_CONFIG_ID set) forces single-threaded
+      // dual simplex at root so the root LP value (and therefore the
+      // cut-pass starting point) is deterministic across reruns.
+      // Otherwise the concurrent racer can pick PDLP or DS as the
+      // winner non-deterministically and the post-cut gap-closed
+      // metric drifts.
+      if (dual_simplex::cut_bench_mode_enabled()) {
+        branch_and_bound->set_concurrent_lp_root_solve(false);
+      } else {
+        branch_and_bound->set_concurrent_lp_root_solve(true);
+      }
 
       context.problem_ptr->branch_and_bound_callback =
         std::bind(&dual_simplex::branch_and_bound_t<i_t, f_t>::set_new_solution,
@@ -463,9 +473,34 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                                                 std::ref(branch_and_bound_solution));
   }
 
-  // Start the primal heuristics
   context.diversity_manager_ptr = &dm;
-  auto sol                      = dm.run_solver();
+
+  // Cut-bench mode (CUOPT_CONFIG_ID set): the only thing we want from
+  // this run is the per-instance post-cut gap, which dual_simplex BB
+  // has already published into benchmark_info_t before returning.
+  // Skip the diversity-manager primal heuristics entirely (they would
+  // otherwise consume the full time budget after BB exits early) and
+  // skip the feasibility checks below because we have no incumbent.
+  // This mirrors the early-return at line ~459 used when the solve
+  // hits the time limit before B&B even starts.
+  if (dual_simplex::cut_bench_mode_enabled()) {
+    solution_t<i_t, f_t> sol(*context.problem_ptr);
+    if (run_bb) {
+      auto bb_status = branch_and_bound_status_future.get();
+      static_cast<void>(bb_status);
+      if (branch_and_bound_solution.lower_bound > -std::numeric_limits<f_t>::infinity()) {
+        context.stats.set_solution_bound(
+          context.problem_ptr->get_user_obj_from_solver_obj(branch_and_bound_solution.lower_bound));
+      }
+      context.stats.num_nodes              = branch_and_bound_solution.nodes_explored;
+      context.stats.num_simplex_iterations = branch_and_bound_solution.simplex_iterations;
+    }
+    context.stats.total_solve_time = timer_.elapsed_time();
+    context.problem_ptr->post_process_solution(sol);
+    return sol;
+  }
+
+  auto sol = dm.run_solver();
   if (run_bb) {
     // Wait for the branch and bound to finish
     auto bb_status = branch_and_bound_status_future.get();
