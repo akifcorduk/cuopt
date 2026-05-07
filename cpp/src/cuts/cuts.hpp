@@ -21,6 +21,7 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <cmath>
@@ -49,21 +50,22 @@ enum cut_type_t : int8_t {
 // cpp/src/cuts/IMPROVEMENTS.md (Tier P0 / P0-1).
 enum cut_pool_event_t : int8_t {
   // Events recorded inside add_cut (one bump per call to add_cut).
-  CUT_EVENT_ADD_ACCEPT   = 0,  // cut stored in the pool
-  CUT_EVENT_ADD_VARS_OOR = 1,  // cut had a column index >= original_vars_
-  CUT_EVENT_ADD_EMPTY    = 2,  // cut had empty support after squeeze
-  CUT_EVENT_ADD_DUP      = 3,  // P2-2: at-insert duplicate detection
-  CUT_EVENT_ADD_NF_RHS   = 4,  // P2-1: non-finite rhs
-  CUT_EVENT_ADD_NF_COEF  = 5,  // P2-1: non-finite coefficient
-  CUT_EVENT_ADD_DEGEN    = 6,  // P2-1: degenerate (zero) norm
-  CUT_EVENT_ADD_OVER_CAP = 7,  // generator already filled per-type per-pass cap
+  CUT_EVENT_ADD_ACCEPT         = 0,  // cut stored in the pool
+  CUT_EVENT_ADD_VARS_OOR       = 1,  // cut had a column index >= original_vars_
+  CUT_EVENT_ADD_EMPTY          = 2,  // cut had empty support after squeeze
+  CUT_EVENT_ADD_DUP            = 3,  // P2-2: at-insert duplicate detection
+  CUT_EVENT_ADD_NF_RHS         = 4,  // P2-1: non-finite rhs
+  CUT_EVENT_ADD_NF_COEF        = 5,  // P2-1: non-finite coefficient
+  CUT_EVENT_ADD_DEGEN          = 6,  // P2-1: degenerate (zero) norm
+  CUT_EVENT_ADD_OVER_CAP       = 7,  // generator already filled per-type per-pass cap
+  CUT_EVENT_ADD_COUSIN_DROPPED = 8,  // P2-4: dropped by Jaccard cousin filter (CLIQUE only)
   // Events recorded inside score_cuts (per pool entry per call).
-  CUT_EVENT_SCORE_ACCEPT    = 8,   // cut selected into best_cuts_
-  CUT_EVENT_SCORE_THRESHOLD = 9,   // score below min_cut_distance_
-  CUT_EVENT_SCORE_PARALLEL  = 10,  // rejected by orthogonality filter
-  CUT_EVENT_SCORE_AGED      = 11,  // P1-1: dropped by drop_cuts
-  CUT_EVENT_SCORE_DUP       = 12,  // removed by check_for_duplicate_cuts
-  MAX_CUT_EVENT             = 13
+  CUT_EVENT_SCORE_ACCEPT    = 9,
+  CUT_EVENT_SCORE_THRESHOLD = 10,
+  CUT_EVENT_SCORE_PARALLEL  = 11,
+  CUT_EVENT_SCORE_AGED      = 12,
+  CUT_EVENT_SCORE_DUP       = 13,
+  MAX_CUT_EVENT             = 14
 };
 
 struct cut_pool_stats_t {
@@ -326,12 +328,36 @@ class cut_pool_t {
       cut_type_(0),
       scored_cuts_(0)
   {
+    apply_env_overrides();
   }
+
+  // Reads CUOPT_CONFIG_ID / CUOPT_MAX_CONFIG (same convention as
+  // diversity_manager.cu) and dispatches to one of the 12 hard-coded
+  // cut-pool configurations defined in cuts.cpp. Intended for one-shot
+  // benchmark sweeps without recompiling: the bench driver sets
+  //   CUOPT_MAX_CONFIG=12 CUOPT_CONFIG_ID=$id
+  // observes per-instance gap deltas (see miplib2017_optima.hpp /
+  // print_miplib_gap_stat in the benchmarks runner), and grep-filters
+  // the once-per-process "CutPoolConfig …" line for the applied knobs.
+  // No-op when CUOPT_CONFIG_ID is unset so production behaves exactly
+  // as before.
+  void apply_env_overrides();
 
   // Add a cut in the form: cut'*x >= rhs.
   // We expect that the cut is violated by the current relaxation xstar
   // cut'*xstart < rhs
-  void add_cut(cut_type_t cut_type, const inequality_t<i_t, f_t>& cut);
+  //
+  // cut_score is an optional caller-supplied quality proxy used by the P2-4
+  // CLIQUE cousin filter to choose the better representative when two
+  // clique cuts in the same round have Jaccard overlap >=
+  // clique_cousin_jaccard_tau_. Pre-P1-2 the natural value is the cut's
+  // raw violation (rhs - dot(a, xstar)); under P1-2 callers may pass the
+  // composite. A negative value indicates "no score available" and the
+  // cousin filter falls back to keeping whichever entry was inserted
+  // first. The argument is ignored for non-CLIQUE cut types.
+  void add_cut(cut_type_t cut_type,
+               const inequality_t<i_t, f_t>& cut,
+               f_t cut_score = static_cast<f_t>(-1.0));
 
   // P1-2: when var_types and objective are non-null, the per-cut sort key
   // becomes the SCIP/Mops Achterberg-style additive composite:
@@ -513,6 +539,36 @@ class cut_pool_t {
   void set_max_cuts_per_type_per_pass(i_t v) { max_cuts_per_type_per_pass_ = v; }
   i_t max_cuts_per_type_per_pass() const { return max_cuts_per_type_per_pass_; }
 
+  // P2-4: at-insert Jaccard cousin filter for the clique-cut family.
+  // Bron-Kerbosch on a fractional-binary subgraph emits all maximal
+  // cliques, so two maximal cliques whose vertex sets overlap in k-1 of k
+  // vertices produce "cousin" clique cuts whose coefficient vectors agree
+  // on k-1 coordinates and differ in one. Such cousins pay the full
+  // insert + dedup + score cost and only get filtered at selection by
+  // the orthogonality scan (P1-3). The cousin filter intercepts them at
+  // insert: every CLIQUE cut gets a k-min-hash sketch over its support
+  // indices; on insert the new cut's sketch is compared (via bucketed
+  // lookup) against pool sketches from the same support cluster, and a
+  // collision with estimated Jaccard >= clique_cousin_jaccard_tau_
+  // triggers cousin de-duplication. The new cut is dropped when its
+  // caller-supplied cut_score is no better than the existing
+  // representative; otherwise the existing representative is marked for
+  // eviction at the next drop_cuts pass and the new cut takes its place
+  // in the bucket.
+  //
+  // Knobs (see IMPROVEMENTS.md P2-4):
+  //   clique_cousin_jaccard_tau_  — default 0.85 (Mops paper cutoff 0.9
+  //                                 lowered slightly to absorb extension
+  //                                 noise from extend_clique_vertices).
+  //   clique_cousin_minhash_k_    — default 8; 64-bit hashes.
+  //   clique_cousin_filter_enable_ — default true.
+  void set_clique_cousin_jaccard_tau(f_t v) { clique_cousin_jaccard_tau_ = v; }
+  void set_clique_cousin_minhash_k(i_t v) { clique_cousin_minhash_k_ = v; }
+  void set_clique_cousin_filter_enable(bool v) { clique_cousin_filter_enable_ = v; }
+  f_t clique_cousin_jaccard_tau() const { return clique_cousin_jaccard_tau_; }
+  i_t clique_cousin_minhash_k() const { return clique_cousin_minhash_k_; }
+  bool clique_cousin_filter_enable() const { return clique_cousin_filter_enable_; }
+
  private:
   bool over_deadline() const
   {
@@ -605,6 +661,31 @@ class cut_pool_t {
   f_t min_score_factor_{0.5};
   i_t fail_threshold_{2};
   i_t fail_count_{0};
+
+  // P2-4: cousin filter state. clique_support_minhash_ is sized in
+  // lockstep with cut_storage_.m: empty inner vector for non-CLIQUE rows,
+  // length-clique_cousin_minhash_k_ sketch for CLIQUE rows.
+  // clique_cousin_score_ holds the caller-supplied score (raw violation
+  // pre-P1-2, composite under P1-2) used to break ties when two cousins
+  // collide. clique_cousin_buckets_ maps the bucket key (= sketch[0]) to
+  // the list of CLIQUE row indices whose sketches share that key; rebuilt
+  // by drop_cuts / check_for_duplicate_cuts compaction so row indices
+  // stay correct after pool shrink.
+  std::vector<std::vector<uint64_t>> clique_support_minhash_;
+  std::vector<f_t> clique_cousin_score_;
+  std::unordered_map<uint64_t, std::vector<i_t>> clique_cousin_buckets_;
+  f_t clique_cousin_jaccard_tau_{0.85};
+  i_t clique_cousin_minhash_k_{8};
+  bool clique_cousin_filter_enable_{true};
+
+  // Helpers wired in cuts.cpp: rebuild_clique_cousin_buckets_() rewrites
+  // clique_cousin_buckets_ from clique_support_minhash_ after a row-index
+  // shift (drop_cuts, check_for_duplicate_cuts compaction), and the
+  // remap_clique_minhash_*() helpers keep the parallel sketch / score
+  // vectors aligned with cut_storage_.
+  void rebuild_clique_cousin_buckets();
+  void compute_clique_minhash_sketch(const inequality_t<i_t, f_t>& cut,
+                                     std::vector<uint64_t>& sketch) const;
 };
 
 template <typename i_t, typename f_t>

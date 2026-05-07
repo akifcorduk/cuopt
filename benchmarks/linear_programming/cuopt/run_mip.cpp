@@ -6,6 +6,7 @@
 /* clang-format on */
 #include "initial_solution_reader.hpp"
 #include "mip_test_instances.hpp"
+#include "miplib2017_optima.hpp"
 
 #include <cstdio>
 #include <cuopt/linear_programming/mip/solver_settings.hpp>
@@ -243,6 +244,42 @@ int run_single_file(std::string file_path,
   } else {
     CUOPT_LOG_INFO("%s: no solution found", base_filename.c_str());
   }
+
+  // Per-instance "gap closed to optimum" stat. Emits a single
+  // grep-friendly "MIPLIBGapStat ..." line via printf so cross-branch
+  // comparison is just `grep '^MIPLIBGapStat' branchA.log` then diff.
+  // Optima are looked up from the in-source MIPLIB2017 benchmark-set
+  // table (miplib2017_optima.hpp); unknown instances emit "opt=TBD"
+  // and infeasibility-flagged instances emit "opt=Infeasible".
+  {
+    const double _gap_seconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::high_resolution_clock::now() - start_run_solver)
+                                  .count() /
+                                1000.0;
+    std::string _status_str;
+    switch (solution.get_termination_status()) {
+      case cuopt::linear_programming::mip_termination_status_t::Optimal:
+        _status_str = "Optimal";
+        break;
+      case cuopt::linear_programming::mip_termination_status_t::FeasibleFound:
+        _status_str = "FeasibleFound";
+        break;
+      case cuopt::linear_programming::mip_termination_status_t::TimeLimit:
+        _status_str = "TimeLimit";
+        break;
+      case cuopt::linear_programming::mip_termination_status_t::Infeasible:
+        _status_str = "Infeasible";
+        break;
+      default: _status_str = "Other"; break;
+    }
+    cuopt_bench::print_miplib_gap_stat(base_filename,
+                                       solution,
+                                       _gap_seconds,
+                                       _status_str,
+                                       benchmark_info.root_lp_no_cuts,
+                                       benchmark_info.root_lp_with_cuts);
+  }
+
   std::stringstream ss;
   int decimal_places = 2;
   double mip_gap     = solution.get_mip_gap();

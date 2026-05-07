@@ -876,4 +876,5 @@ before stacking P1-2/3/4.
 | Date | Item | Δ optima | Δ SGM time | Δ root gap closed | Notes |
 |---|---|---|---|---|---|
 | _baseline_ | `eb5d586` | — | — | — | reference; `drop_cuts` is TODO, pool grows unbounded, single 0.5 parallelism threshold |
+| 2026-05-07 | P2-4 | TBD | TBD | TBD | At-insert Jaccard cousin filter for `CLIQUE`. k-min-hash sketch (k=8) with bucketing on `sketch[0]`, threshold τ=0.85. Loser is age-stamped to `INT_MAX/2` so `drop_cuts` evicts it on the next round; new event `CUT_EVENT_ADD_COUSIN_DROPPED` reports per-pass cousin drops. `generate_clique_cuts` forwards `cut_violation` as the tie-breaker (P1-2 composite would be more discriminating but is a `score_cuts` artifact). Knobs: `clique_cousin_jaccard_tau_`, `clique_cousin_minhash_k_`, `clique_cousin_filter_enable_`. |
 |     |     |     |     |     |     |
