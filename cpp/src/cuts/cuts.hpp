@@ -328,20 +328,7 @@ class cut_pool_t {
       cut_type_(0),
       scored_cuts_(0)
   {
-    apply_env_overrides();
   }
-
-  // Reads CUOPT_CONFIG_ID / CUOPT_MAX_CONFIG (same convention as
-  // diversity_manager.cu) and dispatches to one of the 12 hard-coded
-  // cut-pool configurations defined in cuts.cpp. Intended for one-shot
-  // benchmark sweeps without recompiling: the bench driver sets
-  //   CUOPT_MAX_CONFIG=12 CUOPT_CONFIG_ID=$id
-  // observes per-instance gap deltas (see miplib2017_optima.hpp /
-  // print_miplib_gap_stat in the benchmarks runner), and grep-filters
-  // the once-per-process "CutPoolConfig …" line for the applied knobs.
-  // No-op when CUOPT_CONFIG_ID is unset so production behaves exactly
-  // as before.
-  void apply_env_overrides();
 
   // Add a cut in the form: cut'*x >= rhs.
   // We expect that the cut is violated by the current relaxation xstar
