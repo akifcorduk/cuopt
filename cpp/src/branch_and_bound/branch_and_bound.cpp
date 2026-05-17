@@ -10,6 +10,8 @@
 #include <branch_and_bound/mip_node.hpp>
 #include <branch_and_bound/pseudo_costs.hpp>
 
+#include <cuopt/linear_programming/mip/solver_settings.hpp>  // benchmark_info_t
+
 #include <cuts/cuts.hpp>
 #include <mip_heuristics/feasibility_jump/cpu_fj_thread.cuh>
 #include <mip_heuristics/mip_constants.hpp>
@@ -2244,6 +2246,15 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
   }
   root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
 
+  // Publish after every successful post-cut LP resolve so any
+  // early-exit path below (NUMERICAL, TIME_LIMIT, gap-tolerance
+  // exit) still leaves benchmark_info->root_lp_with_cuts pointing
+  // at the most recent valid LP-with-cuts objective.
+  if (settings_.benchmark_info_ptr != nullptr) {
+    settings_.benchmark_info_ptr->root_lp_with_cuts =
+      static_cast<double>(compute_user_objective(original_lp_, root_objective_));
+  }
+
   f_t remove_cuts_start_time = tic();
   mutex_original_lp_.lock();
   remove_cuts(original_lp_,
@@ -2470,6 +2481,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   cut_info_t<i_t, f_t> cut_info;
 
   if (num_fractional == 0) {
+    // LP relaxation already integer-feasible — solved at the root with
+    // no cuts. Publish both bounds equal to the root LP value so the
+    // gap-closed-by-cuts line still has a finite, meaningful entry
+    // (the printer reports 100% closed when total integrality gap ~= 0).
+    if (settings_.benchmark_info_ptr != nullptr) {
+      const double v = static_cast<double>(compute_user_objective(original_lp_, root_objective_));
+      settings_.benchmark_info_ptr->root_lp_no_cuts   = v;
+      settings_.benchmark_info_ptr->root_lp_with_cuts = v;
+    }
     set_solution_at_root(solution, cut_info);
     signal_extend_cliques_.store(true, std::memory_order_release);
 #pragma omp taskwait depend(in : *clique_signal)
@@ -2507,6 +2527,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   f_t last_objective       = root_objective_;
   f_t root_relax_objective = root_objective_;
 
+  // Publish the no-cuts root LP value once. The with-cuts companion is
+  // published below after the cut loop terminates. Both go to the
+  // benchmark_info_t so callers (run_mip.cpp) can compute
+  // gap-closed-by-cuts without instrumenting the cut loop directly.
+  if (settings_.benchmark_info_ptr != nullptr) {
+    settings_.benchmark_info_ptr->root_lp_no_cuts =
+      static_cast<double>(compute_user_objective(original_lp_, root_relax_objective));
+  }
+
   constexpr bool enable_root_cut_cpufj = true;
   std::unique_ptr<detail::fj_cpu_task_t<i_t, f_t>> root_cut_cpufj_task;
   auto root_cut_cpufj_improvement_callback =
@@ -2535,6 +2564,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   i_t cut_pool_size             = 0;
   for (i_t cut_pass = 0; cut_pass < settings_.max_cut_passes; cut_pass++) {
     if (num_fractional == 0) {
+      // LP relaxation is already integer-feasible — solved at the root
+      // by the cuts added so far (possibly zero). Publish the with-cuts
+      // value so the gap-closed line still has a non-NaN dual bound.
+      if (settings_.benchmark_info_ptr != nullptr) {
+        settings_.benchmark_info_ptr->root_lp_with_cuts =
+          static_cast<double>(compute_user_objective(original_lp_, root_objective_));
+      }
       set_solution_at_root(solution, cut_info);
       signal_extend_cliques_.store(true, std::memory_order_release);
 #pragma omp taskwait depend(in : *clique_signal)
@@ -2596,8 +2632,28 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     }
   }
 
+  // Cut loop terminated (max_cut_passes hit, num_fractional==0 break,
+  // negligible-objective-change break, or time-limit break). Publish
+  // the post-cuts root LP value so benchmark drivers can compute
+  // gap-closed-by-cuts. We use compute_user_objective to flip the sign
+  // back into user space when the LP was dualized, matching the
+  // convention used for root_lp_no_cuts above and for the per-pass
+  // "Bound" column in the search log.
+  if (settings_.benchmark_info_ptr != nullptr) {
+    settings_.benchmark_info_ptr->root_lp_with_cuts =
+      static_cast<double>(compute_user_objective(original_lp_, root_objective_));
+  }
+
   print_cut_info(settings_, cut_info);
   f_t cut_generation_time = toc(cut_generation_start_time);
+  // Publish the cut generation wall time so MIPLIBGapStat / run_mip can
+  // emit it alongside gap_closed_pct. Always set when the cut loop ran,
+  // even if no cuts were added (the time still measures real work in
+  // generate_cuts + score_cuts + dedup + LP resolves).
+  if (settings_.benchmark_info_ptr != nullptr) {
+    settings_.benchmark_info_ptr->cut_generation_time_sec =
+      static_cast<double>(cut_generation_time);
+  }
   if (cut_info.has_cuts()) {
     settings_.log.printf("Cut generation time: %.2f seconds\n", cut_generation_time);
     settings_.log.printf("Cut pool size  : %d\n", cut_pool_size);
