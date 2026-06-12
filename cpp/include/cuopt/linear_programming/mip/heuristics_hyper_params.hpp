@@ -36,6 +36,13 @@ struct mip_heuristics_hyper_params_t {
   i_t cycle_detection_length             = 30;      // FP assignment cycle ring buffer
   f_t relaxed_lp_time_limit              = 1.0;     // base relaxed LP time cap in heuristics
   f_t related_vars_time_limit            = 30.0;    // time for related-variable structure build
+
+  // Work-unit machinery (formulation knobs). Components are moving from wall-clock time
+  // budgets to absolute work-unit budgets; these define how work units are counted.
+  f_t work_unit_default_wups     = 1.0e9;  // deterministic time->work rate / opportunistic fallback
+  f_t work_unit_kernel_nnz_coeff = 1.0;    // GPU kernel work weight on nonzeros
+  f_t work_unit_kernel_var_coeff = 0.0;    // GPU kernel work weight on n_variables
+  f_t work_unit_kernel_con_coeff = 0.0;    // GPU kernel work weight on n_constraints
 };
 
 }  // namespace cuopt::linear_programming

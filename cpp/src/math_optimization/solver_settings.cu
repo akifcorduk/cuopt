@@ -114,6 +114,10 @@ solver_settings_t<i_t, f_t>::solver_settings_t() : pdlp_settings(), mip_settings
     {CUOPT_MIP_HYPER_HEURISTIC_INITIAL_INFEASIBILITY_WEIGHT, &mip_settings.heuristic_params.initial_infeasibility_weight, f_t(1e-9), std::numeric_limits<f_t>::infinity(), f_t(1000.0), "constraint violation penalty seed"},
     {CUOPT_MIP_HYPER_HEURISTIC_RELAXED_LP_TIME_LIMIT, &mip_settings.heuristic_params.relaxed_lp_time_limit, f_t(1e-9), std::numeric_limits<f_t>::infinity(), f_t(1.0), "base relaxed LP time cap in heuristics"},
     {CUOPT_MIP_HYPER_HEURISTIC_RELATED_VARS_TIME_LIMIT, &mip_settings.heuristic_params.related_vars_time_limit, f_t(1e-9), std::numeric_limits<f_t>::infinity(), f_t(30.0), "time for related-variable structure build"},
+    {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_DEFAULT_WUPS, &mip_settings.heuristic_params.work_unit_default_wups, f_t(1e-9), std::numeric_limits<f_t>::infinity(), f_t(1.0e9), "work units per second used to seed work-unit budgets"},
+    {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_NNZ_COEFF, &mip_settings.heuristic_params.work_unit_kernel_nnz_coeff, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(1.0), "GPU kernel work-unit weight on nonzeros"},
+    {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_VAR_COEFF, &mip_settings.heuristic_params.work_unit_kernel_var_coeff, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(0.0), "GPU kernel work-unit weight on n_variables"},
+    {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_CON_COEFF, &mip_settings.heuristic_params.work_unit_kernel_con_coeff, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(0.0), "GPU kernel work-unit weight on n_constraints"},
     {CUOPT_MIP_SEMICONTINUOUS_BIG_M, &mip_settings.semi_continuous_big_m, f_t(1.0), std::numeric_limits<f_t>::infinity(), f_t(1e10), "big-M value for semi-continuous variables with no finite upper bound"},
     // Diving heuristic hyper-parameters (hidden from default --help: name contains "hyper_")
     {CUOPT_MIP_HYPER_DIVING_ITERATION_LIMIT_FACTOR, &mip_settings.diving_params.iteration_limit_factor, f_t(0.0), f_t(1.0), f_t(0.05), "fraction of best-first iterations allowed per dive"},

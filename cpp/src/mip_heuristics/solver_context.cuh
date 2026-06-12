@@ -9,6 +9,8 @@
 
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
+#include <mip_heuristics/utilities/work_estimation.cuh>
+#include <utilities/work_calibration.hpp>
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
@@ -46,6 +48,12 @@ struct mip_solver_context_t {
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
                                                    : -std::numeric_limits<f_t>::infinity());
     gpu_heur_loop.deterministic = settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+
+    work_calibrator.deterministic = settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+    work_calibrator.default_wups  = settings.heuristic_params.work_unit_default_wups;
+    kernel_work_coeffs.nnz_coeff  = settings.heuristic_params.work_unit_kernel_nnz_coeff;
+    kernel_work_coeffs.var_coeff  = settings.heuristic_params.work_unit_kernel_var_coeff;
+    kernel_work_coeffs.con_coeff  = settings.heuristic_params.work_unit_kernel_con_coeff;
   }
 
   mip_solver_context_t(const mip_solver_context_t&)            = delete;
@@ -64,6 +72,12 @@ struct mip_solver_context_t {
 
   // synchronization every 5 seconds for deterministic mode
   work_unit_scheduler_t work_unit_scheduler_{5.0};
+
+  // Time->work seeding (opportunistic measured / deterministic fixed) and the tunable
+  // GPU-kernel work-unit cost model. Seeded from heuristic_params; consumed as components
+  // move from time budgets to work-unit budgets.
+  work_calibrator_t work_calibrator;
+  kernel_work_coeffs_t kernel_work_coeffs;
 
   early_cpufj_t<i_t, f_t>* early_cpufj_ptr{nullptr};
   // Best upper bound from early heuristics, in user-space.
