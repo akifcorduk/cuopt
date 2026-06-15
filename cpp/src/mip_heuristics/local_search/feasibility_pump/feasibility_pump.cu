@@ -219,7 +219,22 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
-  auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
+  // Deterministic stop-gap: cap PDLP by iterations (deterministic) instead of wall time.
+  const int lp_iters =
+    lp_iteration_limit_from_time(time_limit,
+                                 context.problem_features,
+                                 context.settings.heuristic_params.work_unit_lp_iters_per_sec);
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    lp_settings.iteration_limit = lp_iters;
+  }
+  auto solver_response = get_relaxed_lp_solution(temp_p, solution, lp_settings);
+  // Record approximate LP work so a work-clocked timer advances during projection.
+  context.gpu_heur_loop.record_work(estimate_iterative_op_work(temp_p.nnz,
+                                                               temp_p.n_variables,
+                                                               temp_p.n_constraints,
+                                                               sizeof(f_t),
+                                                               lp_iters,
+                                                               context.kernel_work_coeffs));
   cuopt_func_call(solution.test_variable_bounds(false));
   last_lp_time = old_remaining - timer.remaining_time();
   lp_time += last_lp_time;
@@ -257,6 +272,13 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
   result = constraint_prop.apply_round(solution, lp_run_time_after_feasible, bounds_prop_timer);
   constraint_prop.round_all_vars           = old_var;
   constraint_prop.max_time_for_bounds_prop = old_time;
+  // Record approximate bounds-prop work so a work-clocked timer advances during rounding.
+  context.gpu_heur_loop.record_work(estimate_iterative_op_work(solution.problem_ptr->nnz,
+                                                               solution.problem_ptr->n_variables,
+                                                               solution.problem_ptr->n_constraints,
+                                                               sizeof(f_t),
+                                                               default_bounds_prop_work_iters,
+                                                               context.kernel_work_coeffs));
   // result = solution.round_nearest();
   cuopt_func_call(solution.test_variable_bounds(true));
   // copy the last rounding

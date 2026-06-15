@@ -30,6 +30,10 @@ namespace cuopt::linear_programming::detail {
  * byte-touch unit (~1e10 byte-touches) via unit_divisor, so budgets are comparable
  * across components.
  */
+// Coarse default pass count for a bounds-propagation "round" when the exact iteration count
+// is not readily available. Only affects work-unit accounting magnitude (tunable later).
+inline constexpr int default_bounds_prop_work_iters = 50;
+
 struct kernel_work_coeffs_t {
   double nnz_coeff{1.0};        // weight on nonzeros (the dominant sparse-pattern term)
   double var_coeff{0.0};        // weight on number of variables
@@ -53,6 +57,19 @@ __host__ inline double estimate_sparse_kernel_work(std::size_t nnz,
   const double touches = c.nnz_coeff * (double)nnz * bytes_per_pass + c.var_coeff * (double)n_vars +
                          c.con_coeff * (double)n_constraints;
   return touches / c.unit_divisor;
+}
+
+// Approximate work for an iterative sparse op (e.g. relaxed LP, bounds propagation) that runs
+// @p iterations passes over the constraint matrix. Deterministic given the inputs.
+__host__ inline double estimate_iterative_op_work(std::size_t nnz,
+                                                  std::size_t n_vars,
+                                                  std::size_t n_constraints,
+                                                  double bytes_per_pass,
+                                                  int iterations,
+                                                  const kernel_work_coeffs_t& c) noexcept
+{
+  const double iters = iterations > 0 ? (double)iterations : 1.0;
+  return estimate_sparse_kernel_work(nnz, n_vars, n_constraints, bytes_per_pass, c) * iters;
 }
 
 }  // namespace cuopt::linear_programming::detail
