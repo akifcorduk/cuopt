@@ -249,7 +249,8 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     std::unique_ptr<detail::early_cpufj_t<i_t, f_t>> early_cpufj;
     bool run_early_cpufj = problem.has_papilo_presolve_data() &&
                            settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
-                           problem.original_problem_ptr->get_n_integers() > 0;
+                           problem.original_problem_ptr->get_n_integers() > 0 &&
+                           settings.heuristic_params.num_cpufj_threads > 0;
     if (run_early_cpufj) {
       auto early_fj_start = std::chrono::steady_clock::now();
       auto* presolver_ptr = problem.presolve_data.papilo_presolve_ptr;
@@ -519,11 +520,14 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
                                     no_bound);
         };
 
-      // Start early CPUFJ on original problem (will restart on presolved problem after Papilo)
-      early_cpufj = std::make_unique<detail::early_cpufj_t<i_t, f_t>>(
-        op_problem, settings.get_tolerances(), early_fj_callback);
-      early_cpufj->start();
-      CUOPT_LOG_DEBUG("Started early CPUFJ on original problem");
+      // Start early CPUFJ on original problem (will restart on presolved problem after Papilo).
+      // Skipped when CPUFJ is disabled (num_cpufj_threads == 0); early GPU FJ still runs.
+      if (settings.heuristic_params.num_cpufj_threads > 0) {
+        early_cpufj = std::make_unique<detail::early_cpufj_t<i_t, f_t>>(
+          op_problem, settings.get_tolerances(), early_fj_callback);
+        early_cpufj->start();
+        CUOPT_LOG_DEBUG("Started early CPUFJ on original problem");
+      }
 
       // Start early GPU FJ (uses GPU while CPU is busy with Papilo)
       early_gpufj =

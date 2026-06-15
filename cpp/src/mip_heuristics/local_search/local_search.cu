@@ -44,13 +44,16 @@ local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context
 {
   const int n_cpufj = context.settings.heuristic_params.num_cpufj_threads;
   ls_cpu_fj.resize(n_cpufj);
-  scratch_cpu_fj.resize(1);
+  // num_cpufj_threads == 0 disables all CPUFJ (no scratch climber either), so the
+  // single-thread heuristic-only baseline runs the GPU workflow with zero CPUFJ.
+  scratch_cpu_fj.resize(n_cpufj > 0 ? 1 : 0);
   fj.settings.n_of_minimums_for_exit = context.settings.heuristic_params.n_of_minimums_for_exit;
 }
 
 template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t>& population)
 {
+  if (scratch_cpu_fj.empty()) return;  // CPUFJ disabled (num_cpufj_threads == 0)
   // TODO: Find a way to enable this in low core count scenarios
   if (omp_get_num_threads() < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
 
@@ -106,6 +109,7 @@ template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
   population_t<i_t, f_t>& population)
 {
+  if (context.settings.heuristic_params.num_cpufj_threads == 0) return;  // CPUFJ disabled
   // TODO: Find a way to enable this in low core count scenarios
   if (omp_get_num_threads() < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
 
