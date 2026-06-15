@@ -215,6 +215,8 @@ int run_single_file(std::string file_path,
   settings.reliability_branching         = reliability_branching;
   settings.clique_cuts                   = -1;
   settings.seed                          = 42;
+  // Benchmark only: force-disable CPUFJ so runs are single-thread, GPU-only.
+  settings.heuristic_params.num_cpufj_threads = 0;
   cuopt::linear_programming::benchmark_info_t benchmark_info;
   settings.benchmark_info_ptr = &benchmark_info;
   auto start_run_solver       = std::chrono::high_resolution_clock::now();
