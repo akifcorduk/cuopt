@@ -118,6 +118,7 @@ solver_settings_t<i_t, f_t>::solver_settings_t() : pdlp_settings(), mip_settings
     {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_NNZ_COEFF, &mip_settings.heuristic_params.work_unit_kernel_nnz_coeff, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(1.0), "GPU kernel work-unit weight on nonzeros"},
     {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_VAR_COEFF, &mip_settings.heuristic_params.work_unit_kernel_var_coeff, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(0.0), "GPU kernel work-unit weight on n_variables"},
     {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_CON_COEFF, &mip_settings.heuristic_params.work_unit_kernel_con_coeff, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(0.0), "GPU kernel work-unit weight on n_constraints"},
+    {CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_LP_ITERS_PER_SEC, &mip_settings.heuristic_params.work_unit_lp_iters_per_sec, f_t(1.0), std::numeric_limits<f_t>::infinity(), f_t(2000.0), "deterministic PDLP iteration-cap estimate (iters/sec, stop-gap)"},
     {CUOPT_MIP_SEMICONTINUOUS_BIG_M, &mip_settings.semi_continuous_big_m, f_t(1.0), std::numeric_limits<f_t>::infinity(), f_t(1e10), "big-M value for semi-continuous variables with no finite upper bound"},
     // Diving heuristic hyper-parameters (hidden from default --help: name contains "hyper_")
     {CUOPT_MIP_HYPER_DIVING_ITERATION_LIMIT_FACTOR, &mip_settings.diving_params.iteration_limit_factor, f_t(0.0), f_t(1.0), f_t(0.05), "fraction of best-first iterations allowed per dive"},

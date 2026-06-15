@@ -121,6 +121,8 @@
   "mip_hyper_heuristic_work_unit_kernel_var_coeff"
 #define CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_CON_COEFF \
   "mip_hyper_heuristic_work_unit_kernel_con_coeff"
+#define CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_LP_ITERS_PER_SEC \
+  "mip_hyper_heuristic_work_unit_lp_iters_per_sec"
 
 /* @brief Diving heuristic toggles: -1 automatic, 0 disabled, 1 enabled */
 #define CUOPT_MIP_HYPER_DIVING_LINE_SEARCH "mip_hyper_diving_line_search"

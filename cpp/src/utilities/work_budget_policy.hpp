@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 
@@ -46,6 +47,19 @@ struct solution_state_view_t {
   bool has_incumbent{false};
   int stagnation{0};
 };
+
+// Deterministic stop-gap for PDLP-based LP solves: convert a wall-clock time cap into a
+// PDLP iteration cap (PDLP's iteration count is deterministic, unlike wall time). This is a
+// rough guess to be calibrated; for now it is a tunable constant rate times the time cap.
+// TODO(work-units): make size-aware (per-iteration PDLP cost scales with nnz) and/or
+// calibrate online, then replace with a real work-unit budget.
+inline int lp_iteration_limit_from_time(double time_limit_seconds,
+                                        const problem_features_t& /*features*/,
+                                        double iters_per_sec) noexcept
+{
+  const double iters = std::max(0.0, iters_per_sec) * std::max(0.0, time_limit_seconds);
+  return iters < 1.0 ? 1 : (int)iters;
+}
 
 // Identifies the sub-algorithm requesting a budget, so the policy can apply
 // per-algorithm limits / formulation.

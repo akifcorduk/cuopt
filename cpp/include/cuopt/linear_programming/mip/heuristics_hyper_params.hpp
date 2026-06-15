@@ -43,6 +43,7 @@ struct mip_heuristics_hyper_params_t {
   f_t work_unit_kernel_nnz_coeff = 1.0;    // GPU kernel work weight on nonzeros
   f_t work_unit_kernel_var_coeff = 0.0;    // GPU kernel work weight on n_variables
   f_t work_unit_kernel_con_coeff = 0.0;    // GPU kernel work weight on n_constraints
+  f_t work_unit_lp_iters_per_sec = 2000.0;  // deterministic PDLP iteration-cap estimate (stop-gap)
 };
 
 }  // namespace cuopt::linear_programming

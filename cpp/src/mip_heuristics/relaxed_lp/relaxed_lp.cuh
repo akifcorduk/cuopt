@@ -17,8 +17,12 @@
 namespace cuopt::linear_programming::detail {
 
 struct relaxed_lp_settings_t {
-  double tolerance                  = 1e-4;
-  double time_limit                 = 1.0;
+  double tolerance  = 1e-4;
+  double time_limit = 1.0;
+  // Deterministic stop-gap: when > 0, cap PDLP by iteration count (which is deterministic)
+  // instead of (or in addition to) wall-clock time. Computed from time_limit + problem size
+  // by the caller in deterministic mode. 0 keeps the legacy time-based behavior.
+  int iteration_limit               = 0;
   bool check_infeasibility          = true;
   bool return_first_feasible        = false;
   bool save_state                   = true;
