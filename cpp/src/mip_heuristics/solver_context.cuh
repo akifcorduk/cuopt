@@ -74,6 +74,20 @@ struct mip_solver_context_t {
   mip_solver_context_t(const mip_solver_context_t&)            = delete;
   mip_solver_context_t& operator=(const mip_solver_context_t&) = delete;
 
+  // Creates a budget timer for a heuristic ORCHESTRATING loop (one that records work via FJ / LP /
+  // bounds-prop). In deterministic mode it ticks on accumulated GPU work units (reproducible)
+  // instead of wall-clock time. Do NOT use this for timers passed into pure bounds-prop /
+  // constraint-prop (they record no work internally, so a work clock would never advance -> hang).
+  timer_t make_heuristic_timer(double time_limit) const
+  {
+    timer_t t(time_limit);
+    if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed,
+                       settings.heuristic_params.work_unit_default_wups);
+    }
+    return t;
+  }
+
   raft::handle_t const* const handle_ptr;
   problem_t<i_t, f_t>* problem_ptr;
   dual_simplex::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};

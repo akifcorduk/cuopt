@@ -317,7 +317,7 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
   // min 1 second, max 10 seconds
   const f_t generate_fast_solution_time =
     std::min(diversity_config.max_fast_sol_time, std::max(1., timer.remaining_time() / 20.));
-  timer_t sol_timer(generate_fast_solution_time);
+  timer_t sol_timer = context.make_heuristic_timer(generate_fast_solution_time);
   // do very short LP run to get somewhere close to the optimal point
   ls.generate_fast_solution(solution, sol_timer);
   if (solution.get_feasible()) {
@@ -483,6 +483,16 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     pdlp_settings.per_constraint_residual = true;
     set_pdlp_solver_mode(pdlp_settings);
     timer_t lp_timer(lp_time_limit);
+    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      // Deterministic stop-gap: cap PDLP by its (deterministic) iteration count rather than wall
+      // time. lp_time_limit is already deterministic here (virtual work clock).
+      pdlp_settings.iteration_limit =
+        lp_iteration_limit_from_time(lp_time_limit,
+                                     context.problem_features,
+                                     context.settings.heuristic_params.work_unit_lp_iters_per_sec);
+      pdlp_settings.time_limit = std::numeric_limits<f_t>::infinity();
+      lp_timer                 = context.make_heuristic_timer(std::numeric_limits<f_t>::infinity());
+    }
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
 
     // The concurrent root LP can fail to produce a usable solution -- e.g. the barrier

@@ -236,7 +236,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
 {
   if (time_limit == 0.) return solution.get_feasible();
 
-  timer_t timer(time_limit);
+  timer_t timer                      = context.make_heuristic_timer(time_limit);
   const auto old_n_cstr_weights      = in_fj.cstr_weights.size();
   const auto expected_n_cstr_weights = static_cast<size_t>(solution.problem_ptr->n_constraints);
   // in case this is the first time run, resize
@@ -381,10 +381,10 @@ bool local_search_t<i_t, f_t>::run_local_search(solution_t<i_t, f_t>& solution,
   if (!solution.get_feasible()) {
     if (ls_config.at_least_one_parent_feasible) {
       fj_settings.time_limit = 0.5;
-      timer                  = timer_t(fj_settings.time_limit);
+      timer                  = context.make_heuristic_timer(fj_settings.time_limit);
     } else {
       fj_settings.time_limit = 0.25;
-      timer                  = timer_t(fj_settings.time_limit);
+      timer                  = context.make_heuristic_timer(fj_settings.time_limit);
     }
   } else {
     fj_settings.time_limit = std::min(1., timer.remaining_time());
@@ -752,7 +752,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     is_feasible ? solution.get_objective() : std::numeric_limits<double>::max();
   rmm::device_uvector<f_t> best_solution(solution.assignment, solution.handle_ptr->get_stream());
   problem_t<i_t, f_t>* old_problem_ptr = solution.problem_ptr;
-  fp.timer                             = timer_t(timer.remaining_time());
+  fp.timer                             = context.make_heuristic_timer(timer.remaining_time());
   // if it has not been initialized yet, create a new problem and move it to the cut problem
   if (!problem_with_objective_cut.cutting_plane_added) {
     problem_with_objective_cut = std::move(problem_t<i_t, f_t>(*old_problem_ptr));
@@ -853,7 +853,7 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
 {
   raft::common::nvtx::range fun_scope("generate_solution");
   cuopt_assert(population_ptr != nullptr, "Population pointer must not be null");
-  timer_t timer(time_limit);
+  timer_t timer       = context.make_heuristic_timer(time_limit);
   auto n_vars         = solution.problem_ptr->n_variables;
   auto n_binary_vars  = solution.problem_ptr->get_n_binary_variables();
   auto n_integer_vars = solution.problem_ptr->n_integer_vars;
