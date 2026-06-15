@@ -138,8 +138,18 @@
 #define CUOPT_MIP_HYPER_DIVING_SHOW_TYPE "mip_hyper_diving_show_type"
 
 /* @brief MIP determinism mode constants */
-#define CUOPT_MODE_OPPORTUNISTIC 0
-#define CUOPT_MODE_DETERMINISTIC 1
+/* @brief MIP determinism mode flags (bitset). Matches aliceb/gpudet so its deterministic GPU
+ * heuristics can be checked via (determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS). */
+#define CUOPT_DETERMINISM_NONE 0x0
+// matches the previous value of '1' which was for B&B-only determinism in the previous release
+#define CUOPT_DETERMINISM_BB             0x1
+#define CUOPT_DETERMINISM_GPU_HEURISTICS 0x2
+#define CUOPT_DETERMINISM_FULL           (CUOPT_DETERMINISM_BB | CUOPT_DETERMINISM_GPU_HEURISTICS)
+
+#define CUOPT_MODE_OPPORTUNISTIC                CUOPT_DETERMINISM_NONE
+#define CUOPT_MODE_DETERMINISTIC                CUOPT_DETERMINISM_FULL
+#define CUOPT_MODE_DETERMINISTIC_BB             CUOPT_DETERMINISM_BB
+#define CUOPT_MODE_DETERMINISTIC_GPU_HEURISTICS CUOPT_DETERMINISM_GPU_HEURISTICS
 
 /* @brief LP/MIP termination status constants */
 #define CUOPT_TERMINATION_STATUS_NO_TERMINATION          0

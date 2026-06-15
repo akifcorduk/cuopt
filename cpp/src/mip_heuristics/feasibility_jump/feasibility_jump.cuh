@@ -18,7 +18,9 @@
 #include <mip_heuristics/utils.cuh>
 
 #include <utilities/event_handler.cuh>
-#include <utilities/manual_cuda_graph.cuh>
+
+#include <map>
+#include <string>
 
 #include <functional>
 
@@ -106,6 +108,7 @@ struct fj_settings_t {
   fj_mode_t mode{fj_mode_t::FIRST_FEASIBLE};
   fj_candidate_selection_t candidate_selection{fj_candidate_selection_t::WEIGHTED_SCORE};
   double time_limit{60.0};
+  double work_limit{std::numeric_limits<double>::infinity()};
   int iteration_limit{std::numeric_limits<int>::max()};
   fj_hyper_parameters_t parameters{};
   int n_of_minimums_for_exit  = 7000;
@@ -132,12 +135,17 @@ struct fj_move_t {
   bool operator!=(const fj_move_t& rhs) const { return !(*this == rhs); }
 };
 
-// TODO: use 32bit integers instead,
-// as we dont need them to be floating point per the FJ2 scoring scheme
 // sizeof(fj_staged_score_t) <= 8 is needed to allow for atomic loads
 struct fj_staged_score_t {
-  float base{-std::numeric_limits<float>::infinity()};
-  float bonus{-std::numeric_limits<float>::infinity()};
+  int32_t base{std::numeric_limits<int32_t>::lowest()};
+  int32_t bonus{std::numeric_limits<int32_t>::lowest()};
+
+  fj_staged_score_t() = default;
+  HDI fj_staged_score_t(int32_t base_, int32_t bonus_) : base(base_), bonus(bonus_) {}
+  fj_staged_score_t(const fj_staged_score_t&)            = default;
+  fj_staged_score_t(fj_staged_score_t&&)                 = default;
+  fj_staged_score_t& operator=(const fj_staged_score_t&) = default;
+  fj_staged_score_t& operator=(fj_staged_score_t&&)      = default;
 
   HDI bool operator<(fj_staged_score_t other) const noexcept
   {
@@ -155,7 +163,7 @@ struct fj_staged_score_t {
 
   HDI static fj_staged_score_t invalid()
   {
-    return {-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()};
+    return {std::numeric_limits<int32_t>::lowest(), std::numeric_limits<int32_t>::lowest()};
   }
   HDI static fj_staged_score_t zero() { return {0, 0}; }
 
@@ -217,6 +225,8 @@ class fj_t {
     std::atomic<bool>& preemption_flag,
     fj_settings_t settings = fj_settings_t{},
     bool randomize_params  = false);
+  bool cpu_solve(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
+                 f_t time_limit = +std::numeric_limits<f_t>::infinity());
   i_t alloc_max_climbers(i_t desired_climbers);
   void resize_vectors(const raft::handle_t* handle_ptr);
   void device_init(const rmm::cuda_stream_view& stream);
@@ -267,8 +277,10 @@ class fj_t {
   rmm::device_uvector<fj_load_balancing_workid_mapping_t> work_id_to_bin_var_idx;
   rmm::device_uvector<fj_load_balancing_workid_mapping_t> work_id_to_nonbin_var_idx;
   rmm::device_uvector<i_t> work_ids_for_related_vars;
+  rmm::device_uvector<double> deterministic_frontier_work_by_var_d_;
 
-  cuopt::manual_cuda_graph_t step_graph_;
+  cudaGraphExec_t graph_instance;
+  bool graph_created = false;
 
   // kernel launch dimensions, computed once inside the constructor
   std::pair<dim3, dim3> setval_launch_dims;
@@ -324,6 +336,7 @@ class fj_t {
     rmm::device_scalar<i_t> full_refresh_iteration;
     rmm::device_scalar<i_t> relvar_count_last_update;
     rmm::device_scalar<i_t> load_balancing_skip;
+    rmm::device_scalar<double> deterministic_batch_work;
 
     contiguous_set_t<i_t, f_t> violated_constraints;
     contiguous_set_t<i_t, f_t> candidate_variables;
@@ -418,6 +431,7 @@ class fj_t {
         last_iter_candidates(0, fj.handle_ptr->get_stream()),
         relvar_count_last_update(0, fj.handle_ptr->get_stream()),
         load_balancing_skip(0, fj.handle_ptr->get_stream()),
+        deterministic_batch_work(0.0, fj.handle_ptr->get_stream()),
         break_condition(0, fj.handle_ptr->get_stream()),
         temp_break_condition(0, fj.handle_ptr->get_stream()),
         cub_storage_bytes(0, fj.handle_ptr->get_stream()),
@@ -488,6 +502,7 @@ class fj_t {
       raft::device_span<i_t> row_size_nonbin_prefix_sum;
       raft::device_span<fj_load_balancing_workid_mapping_t> work_id_to_bin_var_idx;
       raft::device_span<fj_load_balancing_workid_mapping_t> work_id_to_nonbin_var_idx;
+      raft::device_span<double> deterministic_frontier_work_by_var;
 
       i_t* selected_var;
       i_t* constraints_changed_count;
@@ -516,6 +531,9 @@ class fj_t {
       i_t* relvar_count_last_update;
       i_t* load_balancing_skip;
       f_t* max_cstr_weight;
+      double* deterministic_batch_work;
+      double deterministic_refresh_work;
+      bool deterministic_work_accounting;
 
       fj_settings_t* settings;
 
@@ -632,10 +650,19 @@ class fj_t {
   std::vector<std::unique_ptr<climber_data_t>> climbers;
   rmm::device_uvector<typename climber_data_t::view_t> climber_views;
   fj_settings_t settings;
-  // Device-side mirror of `settings`. `run_step_device` pushes the host
-  // `settings` here before each kernel launch; kernels read it via
-  // `view_t::settings`.
-  rmm::device_scalar<fj_settings_t> device_settings;
+  std::vector<double> deterministic_frontier_work_by_var_;
+  double deterministic_average_frontier_work_{0.0};
+  double deterministic_refresh_work_{0.0};
+
+ public:
+  void initialize_deterministic_work_estimator();
+  void set_improvement_callback(fj_improvement_callback_t<f_t> callback)
+  {
+    improvement_callback = std::move(callback);
+  }
+
+ private:
+  bool use_load_balancing_codepath() const;
 
   fj_improvement_callback_t<f_t> improvement_callback;
   f_t last_reported_objective_{std::numeric_limits<f_t>::infinity()};

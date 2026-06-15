@@ -127,16 +127,17 @@ thrust::tuple<f_t, f_t, f_t, f_t> get_mtm_for_constraint(
 }
 
 template <typename i_t, typename f_t>
-std::pair<f_t, f_t> feas_score_constraint(const typename fj_t<i_t, f_t>::climber_data_t::view_t& fj,
-                                          i_t var_idx,
-                                          f_t delta,
-                                          i_t cstr_idx,
-                                          f_t cstr_coeff,
-                                          f_t c_lb,
-                                          f_t c_ub,
-                                          f_t current_lhs,
-                                          f_t left_weight,
-                                          f_t right_weight)
+std::pair<f_t, f_t> cpu_feas_score_constraint(
+  const typename fj_t<i_t, f_t>::climber_data_t::view_t& fj,
+  i_t var_idx,
+  f_t delta,
+  i_t cstr_idx,
+  f_t cstr_coeff,
+  f_t c_lb,
+  f_t c_ub,
+  f_t current_lhs,
+  f_t left_weight,
+  f_t right_weight)
 {
   cuopt_assert(isfinite(delta), "invalid delta");
   cuopt_assert(cstr_coeff != 0 && isfinite(cstr_coeff), "invalid coefficient");
@@ -608,16 +609,16 @@ static inline std::pair<fj_staged_score_t, f_t> compute_score(fj_cpu_climber_t<i
     cuopt_assert(c_lb <= c_ub, "invalid bounds");
 
     auto [cstr_base_feas, cstr_bonus_robust] =
-      feas_score_constraint<i_t, f_t>(fj_cpu.view,
-                                      var_idx,
-                                      delta,
-                                      cstr_idx,
-                                      cstr_coeff,
-                                      c_lb,
-                                      c_ub,
-                                      fj_cpu.h_lhs[cstr_idx],
-                                      fj_cpu.h_cstr_left_weights[cstr_idx],
-                                      fj_cpu.h_cstr_right_weights[cstr_idx]);
+      cpu_feas_score_constraint<i_t, f_t>(fj_cpu.view,
+                                          var_idx,
+                                          delta,
+                                          cstr_idx,
+                                          cstr_coeff,
+                                          c_lb,
+                                          c_ub,
+                                          fj_cpu.h_lhs[cstr_idx],
+                                          fj_cpu.h_cstr_left_weights[cstr_idx],
+                                          fj_cpu.h_cstr_right_weights[cstr_idx]);
 
     base_feas_sum += cstr_base_feas;
     bonus_robust_sum += cstr_bonus_robust;

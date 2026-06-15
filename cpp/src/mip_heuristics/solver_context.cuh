@@ -45,8 +45,17 @@ struct mip_solver_context_t {
   explicit mip_solver_context_t(raft::handle_t const* handle_ptr_,
                                 problem_t<i_t, f_t>* problem_ptr_,
                                 mip_solver_settings_t<i_t, f_t> settings_)
-    : handle_ptr(handle_ptr_), problem_ptr(problem_ptr_), settings(settings_)
+    : handle_ptr(handle_ptr_),
+      problem_ptr(problem_ptr_),
+      root_termination(settings_.determinism_mode == CUOPT_MODE_DETERMINISTIC
+                         ? std::numeric_limits<f_t>::infinity()
+                         : settings_.time_limit,
+                       cuopt::termination_checker_t::root_tag_t{}),
+      settings(settings_)
   {
+    // FJ derives child work-budget checkers from this root. In deterministic mode the root is an
+    // infinite wall clock so it never injects wall-clock nondeterminism; budgets are work-based.
+    termination = &root_termination;
     cuopt_assert(problem_ptr != nullptr, "problem_ptr is nullptr");
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
                                                    : -std::numeric_limits<f_t>::infinity());
@@ -95,6 +104,10 @@ struct mip_solver_context_t {
   dual_simplex::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
+  // Root termination checker (wall-clock cap; infinite in deterministic mode). FJ derives child
+  // work-budget checkers from `termination`, which points at root_termination.
+  cuopt::termination_checker_t root_termination;
+  cuopt::termination_checker_t* termination{nullptr};
   const mip_solver_settings_t<i_t, f_t> settings;
   solver_stats_t<i_t, f_t> stats;
   // Work limit context for tracking work units in deterministic mode (shared across all timers in
