@@ -38,8 +38,21 @@ class timer_t {
 
   bool check_half_time() const noexcept { return elapsed_time() >= time_limit / 2; }
 
+  // Switch this timer to a virtual "work clock": elapsed/remaining are derived from accumulated
+  // work units (deterministic) instead of wall-clock time. @p work_units points at a monotonically
+  // increasing work counter (e.g. work_limit_context_t::global_work_units_elapsed); @p
+  // work_per_second converts work units back into seconds so existing time-based budgets keep
+  // working. Passed as a raw double* to avoid a header dependency cycle.
+  void use_work_clock(const double* work_units, double work_per_second) noexcept
+  {
+    work_units_      = work_units;
+    work_per_second_ = work_per_second > 0.0 ? work_per_second : 1.0;
+    work_begin_      = work_units != nullptr ? *work_units : 0.0;
+  }
+
   double elapsed_time() const noexcept
   {
+    if (work_units_ != nullptr) { return (*work_units_ - work_begin_) / work_per_second_; }
     return std::chrono::duration<double>(steady_clock::now() - begin).count();
   }
 
@@ -87,6 +100,10 @@ class timer_t {
  private:
   double time_limit;
   steady_clock::time_point begin;
+  // Optional virtual work-clock (deterministic mode). nullptr => wall-clock.
+  const double* work_units_{nullptr};
+  double work_per_second_{1.0};
+  double work_begin_{0.0};
 };
 
 }  // namespace cuopt

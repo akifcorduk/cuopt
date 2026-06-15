@@ -393,12 +393,21 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
                   context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ? "deterministic"
                                                                                 : "opportunistic");
 
-  // to automatically compute the solving time on scope exit
-  auto timer_raii_guard =
-    cuopt::scope_guard([&]() { stats.total_solve_time = timer.elapsed_time(); });
+  // Report wall-clock solve time regardless of whether the budget timer runs on a work clock.
+  auto wall_start       = std::chrono::steady_clock::now();
+  auto timer_raii_guard = cuopt::scope_guard([&]() {
+    stats.total_solve_time =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
+  });
 
-  // Deterministic and opportunistic modes run the SAME heuristic path. Determinism is
-  // achieved by budgeting the path in work units (not wall clock), not by a separate flow.
+  // Deterministic and opportunistic modes run the SAME heuristic path. Determinism is achieved by
+  // budgeting the path in work units (not wall clock): in deterministic mode the heuristic timer
+  // ticks on accumulated GPU work units instead of wall-clock time, so control flow is
+  // reproducible.
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed,
+                         context.settings.heuristic_params.work_unit_default_wups);
+  }
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
   if (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1") {

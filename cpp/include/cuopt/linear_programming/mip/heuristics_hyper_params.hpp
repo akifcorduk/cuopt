@@ -39,10 +39,13 @@ struct mip_heuristics_hyper_params_t {
 
   // Work-unit machinery (formulation knobs). Components are moving from wall-clock time
   // budgets to absolute work-unit budgets; these define how work units are counted.
-  f_t work_unit_default_wups     = 1.0e9;  // deterministic time->work rate / opportunistic fallback
-  f_t work_unit_kernel_nnz_coeff = 1.0;    // GPU kernel work weight on nonzeros
-  f_t work_unit_kernel_var_coeff = 0.0;    // GPU kernel work weight on n_variables
-  f_t work_unit_kernel_con_coeff = 0.0;    // GPU kernel work weight on n_constraints
+  // Deterministic time->work rate (work units per second) and opportunistic fallback.
+  // Rough calibration from measurement; tune/recalibrate per arch+workload. In opportunistic
+  // mode this is only the pre-measurement fallback (the rate is measured online).
+  f_t work_unit_default_wups     = 0.03;
+  f_t work_unit_kernel_nnz_coeff = 1.0;     // GPU kernel work weight on nonzeros
+  f_t work_unit_kernel_var_coeff = 0.0;     // GPU kernel work weight on n_variables
+  f_t work_unit_kernel_con_coeff = 0.0;     // GPU kernel work weight on n_constraints
   f_t work_unit_lp_iters_per_sec = 2000.0;  // deterministic PDLP iteration-cap estimate (stop-gap)
 };
 
