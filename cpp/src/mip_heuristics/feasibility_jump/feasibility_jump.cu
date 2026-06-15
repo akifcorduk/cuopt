@@ -13,9 +13,11 @@
 #include <mip_heuristics/diversity/diversity_manager.cuh>
 #include <mip_heuristics/diversity/population.cuh>
 #include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/utilities/work_estimation.cuh>
 #include <mip_heuristics/utils.cuh>
 #include <utilities/seed_generator.cuh>
 #include <utilities/timer.hpp>
+#include <utilities/work_limit_context.hpp>
 
 #include <raft/linalg/eltwise.cuh>
 #include <raft/linalg/reduce.cuh>
@@ -840,13 +842,34 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 
   data.incumbent_quality.set_value_async(obj, handle_ptr->get_stream());
 
+  // Work-unit budget for this FJ call. The wall-clock timer is kept only to calibrate the
+  // work-units-per-second rate (opportunistic) and for logging; in deterministic mode the
+  // rate is fixed so the stopping point is reproducible. See work_calibration.hpp.
   timer_t timer(settings.time_limit);
+  auto& work_ctx   = context.gpu_heur_loop;
+  auto& calibrator = context.work_calibrator;
+  work_meter_t work_meter(work_ctx, calibrator.work_units_from_time(settings.time_limit));
+  // Approximate work units for a single FJ device iteration: dominated by a sparse pass
+  // over the constraint matrix (~nnz), plus tunable per-var / per-constraint terms.
+  const double work_per_iteration = estimate_sparse_kernel_work(pb_ptr->coefficients.size(),
+                                                                pb_ptr->n_variables,
+                                                                pb_ptr->n_constraints,
+                                                                sizeof(f_t),
+                                                                context.kernel_work_coeffs);
   i_t steps;
   bool limit_reached = false;
   for (steps = 0; steps < std::numeric_limits<i_t>::max(); steps += iterations_per_graph) {
-    // to actualize time limit
+    // to actualize time/work limit
     handle_ptr->sync_stream();
-    if (timer.check_time_limit() || steps >= settings.iteration_limit ||
+    // Account for the device iterations completed in the previous pass.
+    if (steps > 0) { work_ctx.record_work(work_per_iteration * iterations_per_graph); }
+    // In opportunistic mode, refine the work-per-second estimate from the wall clock so the
+    // work budget tracks the requested time limit. No clock reads in deterministic mode.
+    if (!calibrator.deterministic) {
+      calibrator.update(work_meter.elapsed_work(), timer.elapsed_time());
+    }
+    const double work_budget = calibrator.work_units_from_time(settings.time_limit);
+    if (work_meter.elapsed_work() >= work_budget || steps >= settings.iteration_limit ||
         context.preempt_heuristic_solver_.load()) {
       limit_reached = true;
     }
