@@ -35,6 +35,9 @@ struct work_limit_context_t {
 
   work_limit_context_t(const std::string& name) : name(name) {}
 
+  // Current accumulated work units (interface used by termination_checker_t).
+  double current_work() const noexcept { return global_work_units_elapsed; }
+
   // Accumulate work units in BOTH modes. This is pure accounting (no synchronization),
   // so it is safe in opportunistic mode where it only feeds work_meter_t budgets and
   // never gates control flow (work_limit is infinity there).

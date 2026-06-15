@@ -10,6 +10,8 @@
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
 #include <mip_heuristics/utilities/work_estimation.cuh>
+#include <utilities/determinism_log.hpp>
+#include <utilities/termination_checker.hpp>
 #include <utilities/work_budget_policy.hpp>
 #include <utilities/work_calibration.hpp>
 #include <utilities/work_limit_context.hpp>
