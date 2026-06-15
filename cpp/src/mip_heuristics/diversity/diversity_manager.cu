@@ -397,29 +397,10 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   auto timer_raii_guard =
     cuopt::scope_guard([&]() { stats.total_solve_time = timer.elapsed_time(); });
 
+  // Deterministic and opportunistic modes run the SAME heuristic path. Determinism is
+  // achieved by budgeting the path in work units (not wall clock), not by a separate flow.
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    CUOPT_LOG_INFO("Running deterministic mode with CPUFJ heuristic");
-    population.initialize_population();
-    population.allocate_solutions();
-
-    // Start CPUFJ in deterministic mode with B&B integration
-    if (context.branch_and_bound_ptr != nullptr) {
-      ls.start_cpufj_deterministic(*context.branch_and_bound_ptr);
-    }
-
-    while (!check_b_b_preemption()) {
-      if (timer.check_time_limit()) break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Stop CPUFJ when B&B is done
-    ls.stop_cpufj_deterministic();
-
-    population.add_external_solutions_to_population();
-    return population.best_feasible();
-  }
   if (disable_heuristics_env != nullptr && std::string(disable_heuristics_env) == "1") {
     CUOPT_LOG_INFO("GPU heuristics disabled via CUOPT_DISABLE_GPU_HEURISTICS=1");
     population.initialize_population();
@@ -480,10 +461,12 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     pdlp_settings.tolerances.absolute_primal_tolerance = absolute_tolerance;
     pdlp_settings.tolerances.relative_primal_tolerance =
       context.settings.tolerances.relative_tolerance;
-    pdlp_settings.time_limit              = lp_time_limit;
-    pdlp_settings.first_primal_feasible   = false;
-    pdlp_settings.concurrent_halt         = &global_concurrent_halt;
-    pdlp_settings.method                  = method_t::Concurrent;
+    pdlp_settings.time_limit            = lp_time_limit;
+    pdlp_settings.first_primal_feasible = false;
+    pdlp_settings.concurrent_halt       = &global_concurrent_halt;
+    // PDLP-only for now: the concurrent method races PDLP/Barrier/DualSimplex (nondeterministic
+    // winner); only PDLP has the deterministic iteration-count stop-gap, so restrict to it.
+    pdlp_settings.method                  = method_t::PDLP;
     pdlp_settings.inside_mip              = true;
     pdlp_settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable2;
     pdlp_settings.num_gpus                = context.settings.num_gpus;
