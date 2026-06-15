@@ -17,6 +17,7 @@
 #include <mip_heuristics/utils.cuh>
 #include <utilities/seed_generator.cuh>
 #include <utilities/timer.hpp>
+#include <utilities/work_budget_policy.hpp>
 #include <utilities/work_limit_context.hpp>
 
 #include <raft/linalg/eltwise.cuh>
@@ -848,7 +849,14 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
   timer_t timer(settings.time_limit);
   auto& work_ctx   = context.gpu_heur_loop;
   auto& calibrator = context.work_calibrator;
-  work_meter_t work_meter(work_ctx, calibrator.work_units_from_time(settings.time_limit));
+  // Budget comes from the pluggable policy (default: time-calibrated, so behavior is
+  // unchanged). solution state is a placeholder until the structural policy needs it.
+  const solution_state_view_t fj_state{};
+  auto fj_budget = [&]() {
+    return context.budget_policy->budget_for(
+      work_algorithm_t::feasibility_jump, settings.time_limit, context.problem_features, fj_state);
+  };
+  work_meter_t work_meter(work_ctx, fj_budget());
   // Approximate work units for a single FJ device iteration: dominated by a sparse pass
   // over the constraint matrix (~nnz), plus tunable per-var / per-constraint terms.
   const double work_per_iteration = estimate_sparse_kernel_work(pb_ptr->coefficients.size(),
@@ -868,7 +876,7 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
     if (!calibrator.deterministic) {
       calibrator.update(work_meter.elapsed_work(), timer.elapsed_time());
     }
-    const double work_budget = calibrator.work_units_from_time(settings.time_limit);
+    const double work_budget = fj_budget();
     if (work_meter.elapsed_work() >= work_budget || steps >= settings.iteration_limit ||
         context.preempt_heuristic_solver_.load()) {
       limit_reached = true;

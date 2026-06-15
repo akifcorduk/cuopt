@@ -10,6 +10,7 @@
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
 #include <mip_heuristics/utilities/work_estimation.cuh>
+#include <utilities/work_budget_policy.hpp>
 #include <utilities/work_calibration.hpp>
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
@@ -54,6 +55,20 @@ struct mip_solver_context_t {
     kernel_work_coeffs.nnz_coeff  = settings.heuristic_params.work_unit_kernel_nnz_coeff;
     kernel_work_coeffs.var_coeff  = settings.heuristic_params.work_unit_kernel_var_coeff;
     kernel_work_coeffs.con_coeff  = settings.heuristic_params.work_unit_kernel_con_coeff;
+
+    // Static problem features for the structural budget policy (computed once; cheap host
+    // scalars only). Per-row/col nnz std are left as TODO until needed by structural_policy.
+    problem_features.n_vars        = (std::size_t)problem_ptr->n_variables;
+    problem_features.n_constraints = (std::size_t)problem_ptr->n_constraints;
+    problem_features.nnz           = (std::size_t)problem_ptr->nnz;
+    problem_features.row_nnz_mean =
+      problem_ptr->n_constraints > 0 ? (double)problem_ptr->nnz / problem_ptr->n_constraints : 0.0;
+    problem_features.col_nnz_mean =
+      problem_ptr->n_variables > 0 ? (double)problem_ptr->nnz / problem_ptr->n_variables : 0.0;
+    problem_features.integer_fraction =
+      problem_ptr->n_variables > 0
+        ? (double)problem_ptr->integer_indices.size() / problem_ptr->n_variables
+        : 0.0;
   }
 
   mip_solver_context_t(const mip_solver_context_t&)            = delete;
@@ -78,6 +93,14 @@ struct mip_solver_context_t {
   // move from time budgets to work-unit budgets.
   work_calibrator_t work_calibrator;
   kernel_work_coeffs_t kernel_work_coeffs;
+
+  // Per-sub-algorithm work-unit budgets come from this pluggable policy (never from the
+  // calibrator directly). Default is the transitional time-calibrated policy, so behavior
+  // is unchanged; switch budget_policy to &structural_policy to use structural budgets.
+  problem_features_t problem_features;
+  time_calibrated_policy_t time_calibrated_policy{work_calibrator};
+  structural_policy_t structural_policy{work_calibrator};
+  work_budget_policy_t* budget_policy{&time_calibrated_policy};
 
   early_cpufj_t<i_t, f_t>* early_cpufj_ptr{nullptr};
   // Best upper bound from early heuristics, in user-space.
