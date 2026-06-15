@@ -20,9 +20,11 @@ struct relaxed_lp_settings_t {
   double tolerance  = 1e-4;
   double time_limit = 1.0;
   // Deterministic stop-gap: when > 0, cap PDLP by iteration count (which is deterministic)
-  // instead of (or in addition to) wall-clock time. Computed from time_limit + problem size
-  // by the caller in deterministic mode. 0 keeps the legacy time-based behavior.
-  int iteration_limit               = 0;
+  // instead of (or in addition to) wall-clock time. If left 0, get_relaxed_lp_solution will
+  // derive a cap automatically when the problem is in deterministic mode (using lp_iters_per_sec).
+  int iteration_limit = 0;
+  // Rate used to derive the deterministic iteration cap from time_limit when iteration_limit==0.
+  double lp_iters_per_sec           = 2000.0;
   bool check_infeasibility          = true;
   bool return_first_feasible        = false;
   bool save_state                   = true;
