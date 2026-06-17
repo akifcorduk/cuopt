@@ -21,6 +21,8 @@
 #include <utilities/copy_helpers.hpp>
 #include <utilities/timer.hpp>
 
+#include <algorithm>
+#include <map>
 #include <unordered_set>
 #include <utilities/omp_helpers.hpp>
 
@@ -581,7 +583,7 @@ void apply_modification_queue_to_problem(
 // Ensures that if A subs B and B subs A, we only keep one deterministic direction.
 template <typename i_t, typename f_t>
 void sanitize_graph(
-  std::unordered_map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>>& all_substitutions)
+  std::map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>>& all_substitutions)
 {
   for (auto& substitution : all_substitutions) {
     auto& substituting_var = substitution.first;
@@ -616,11 +618,10 @@ void sanitize_graph(
 }
 
 template <typename i_t, typename f_t>
-void dfs(
-  std::unordered_map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>>& all_substitutions,
-  std::unordered_set<i_t>& visited,
-  const substitution_t<i_t, f_t>& parent_substitution,
-  i_t curr_var)
+void dfs(std::map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>>& all_substitutions,
+         std::unordered_set<i_t>& visited,
+         const substitution_t<i_t, f_t>& parent_substitution,
+         i_t curr_var)
 {
   // If we have already processed this node in the current traversal.
   if (visited.count(curr_var)) return;
@@ -649,7 +650,7 @@ void dfs(
 
 template <typename i_t, typename f_t>
 void merge_substitutions(
-  std::unordered_map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>>& all_substitutions)
+  std::map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>>& all_substitutions)
 {
   // Remove cycles (A->B and B->A) as probing always generates a pair of equivalent substitutions
   sanitize_graph(all_substitutions);
@@ -686,13 +687,20 @@ void apply_substitution_queue_to_problem(
   std::vector<std::vector<substitution_t<i_t, f_t>>>& substitution_vector_pool,
   problem_t<i_t, f_t>& problem)
 {
-  std::unordered_map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>> all_substitutions;
+  std::map<i_t, std::vector<std::pair<i_t, substitution_t<i_t, f_t>>>> all_substitutions;
 
   for (const auto& substitution_vector : substitution_vector_pool) {
     for (const auto& substitution : substitution_vector) {
       all_substitutions[substitution.substituting_var].push_back(
         {substitution.substituted_var, substitution});
     }
+  }
+  // Determinism: the substitution lists are filled in (parallel) producer order, so sort each by
+  // substituted var. Combined with the ordered std::map keys this makes the DAG flatten/apply
+  // independent of thread timing.
+  for (auto& [key, list] : all_substitutions) {
+    std::sort(
+      list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
   }
 
   // Flatten Graph
@@ -863,6 +871,12 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
 
   size_t num_tasks = bound_presolve.settings.num_tasks < 0 ? omp_get_num_threads() - 1
                                                            : bound_presolve.settings.num_tasks;
+  num_tasks        = std::max<size_t>(1, num_tasks);
+  // Deterministic mode runs multi-threaded: each step processes a fixed (deterministic) range of
+  // vars; per-var cache writes are mutex-protected + keyed by var, bound modifications are
+  // commutative, and substitutions are merged via an ordered map -> the result is independent of
+  // thread timing. Probing work is accounted deterministically at the step barrier (below), not
+  // per-probe, so the work counter is race-free.
 
   // Create a vector of multi_probe_t objects
   std::vector<multi_probe_t<i_t, f_t>> multi_probe_presolve_pool;
@@ -926,8 +940,6 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
       }
     }  // implicit barrier that waits for all iterations to finish before proceeding
 
-    // TODO when we have determinism, check current threads work/time counter and filter queue
-    // items that are smaller or equal to that
     apply_modification_queue_to_problem(modification_vector_pool, problem);
     // copy host bounds again, because we changed some problem bounds
     raft::copy(h_var_bounds.data(),

@@ -9,11 +9,8 @@
 
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
-#include <mip_heuristics/utilities/work_estimation.cuh>
 #include <utilities/determinism_log.hpp>
 #include <utilities/termination_checker.hpp>
-#include <utilities/work_budget_policy.hpp>
-#include <utilities/work_calibration.hpp>
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
@@ -60,41 +57,20 @@ struct mip_solver_context_t {
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
                                                    : -std::numeric_limits<f_t>::infinity());
     gpu_heur_loop.deterministic = settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
-
-    work_calibrator.deterministic = settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
-    work_calibrator.default_wups  = settings.heuristic_params.work_unit_default_wups;
-    kernel_work_coeffs.nnz_coeff  = settings.heuristic_params.work_unit_kernel_nnz_coeff;
-    kernel_work_coeffs.var_coeff  = settings.heuristic_params.work_unit_kernel_var_coeff;
-    kernel_work_coeffs.con_coeff  = settings.heuristic_params.work_unit_kernel_con_coeff;
-
-    // Static problem features for the structural budget policy (computed once; cheap host
-    // scalars only). Per-row/col nnz std are left as TODO until needed by structural_policy.
-    problem_features.n_vars        = (std::size_t)problem_ptr->n_variables;
-    problem_features.n_constraints = (std::size_t)problem_ptr->n_constraints;
-    problem_features.nnz           = (std::size_t)problem_ptr->nnz;
-    problem_features.row_nnz_mean =
-      problem_ptr->n_constraints > 0 ? (double)problem_ptr->nnz / problem_ptr->n_constraints : 0.0;
-    problem_features.col_nnz_mean =
-      problem_ptr->n_variables > 0 ? (double)problem_ptr->nnz / problem_ptr->n_variables : 0.0;
-    problem_features.integer_fraction =
-      problem_ptr->n_variables > 0
-        ? (double)problem_ptr->integer_indices.size() / problem_ptr->n_variables
-        : 0.0;
   }
 
   mip_solver_context_t(const mip_solver_context_t&)            = delete;
   mip_solver_context_t& operator=(const mip_solver_context_t&) = delete;
 
-  // Creates a budget timer for a heuristic ORCHESTRATING loop (one that records work via FJ / LP /
-  // bounds-prop). In deterministic mode it ticks on accumulated GPU work units (reproducible)
-  // instead of wall-clock time. Do NOT use this for timers passed into pure bounds-prop /
-  // constraint-prop (they record no work internally, so a work clock would never advance -> hang).
+  // Creates a budget timer for a heuristic loop. In deterministic mode it ticks on accumulated GPU
+  // work units (reproducible) instead of wall-clock time; work units are calibrated to seconds
+  // (wups == 1), and the absolute --work-limit is the reproducible global stop. The work clock only
+  // advances once leaves are wired to record calibrated work (see deterministic_calibrator/).
   timer_t make_heuristic_timer(double time_limit) const
   {
     timer_t t(time_limit);
     if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-      t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed,
-                       settings.heuristic_params.work_unit_default_wups);
+      t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit);
     }
     return t;
   }
@@ -116,20 +92,6 @@ struct mip_solver_context_t {
 
   // synchronization every 5 seconds for deterministic mode
   work_unit_scheduler_t work_unit_scheduler_{5.0};
-
-  // Time->work seeding (opportunistic measured / deterministic fixed) and the tunable
-  // GPU-kernel work-unit cost model. Seeded from heuristic_params; consumed as components
-  // move from time budgets to work-unit budgets.
-  work_calibrator_t work_calibrator;
-  kernel_work_coeffs_t kernel_work_coeffs;
-
-  // Per-sub-algorithm work-unit budgets come from this pluggable policy (never from the
-  // calibrator directly). Default is the transitional time-calibrated policy, so behavior
-  // is unchanged; switch budget_policy to &structural_policy to use structural budgets.
-  problem_features_t problem_features;
-  time_calibrated_policy_t time_calibrated_policy{work_calibrator};
-  structural_policy_t structural_policy{work_calibrator};
-  work_budget_policy_t* budget_policy{&time_calibrated_policy};
 
   early_cpufj_t<i_t, f_t>* early_cpufj_ptr{nullptr};
   // Best upper bound from early heuristics, in user-space.

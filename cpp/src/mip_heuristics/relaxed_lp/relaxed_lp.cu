@@ -11,7 +11,6 @@
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/utils.cuh>
 #include <pdlp/solve.cuh>
-#include <utilities/work_budget_policy.hpp>
 
 #include <limits>
 
@@ -51,21 +50,10 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   pdlp_settings.tolerances.relative_primal_tolerance = settings.tolerance / tolerance_divisor;
   pdlp_settings.tolerances.relative_dual_tolerance   = settings.tolerance / tolerance_divisor;
   pdlp_settings.time_limit                           = settings.time_limit;
-  // Deterministic stop-gap: cap PDLP by its (deterministic) iteration count. Use the caller's
-  // explicit cap if given, otherwise derive one automatically for deterministic problems (covers
-  // all relaxed-LP callers at this chokepoint). PDLP's iteration count is reproducible; wall time
-  // is not.
-  if (settings.iteration_limit > 0) {
-    pdlp_settings.iteration_limit = settings.iteration_limit;
-  } else if (op_problem.deterministic) {
-    problem_features_t feats;
-    feats.nnz           = (std::size_t)op_problem.nnz;
-    feats.n_vars        = (std::size_t)op_problem.n_variables;
-    feats.n_constraints = (std::size_t)op_problem.n_constraints;
-    pdlp_settings.iteration_limit =
-      lp_iteration_limit_from_time(settings.time_limit, feats, settings.lp_iters_per_sec);
-    pdlp_settings.time_limit = std::numeric_limits<f_t>::infinity();
-  }
+  // Deterministic stop-gap: honor an explicit (reproducible) PDLP iteration cap if the caller set
+  // one. Auto-derivation from time removed during the work-unit rebuild; the PDLP leaf will get its
+  // own calibrated work model (deterministic_calibrator/).
+  if (settings.iteration_limit > 0) { pdlp_settings.iteration_limit = settings.iteration_limit; }
   pdlp_settings.concurrent_halt         = settings.concurrent_halt;
   pdlp_settings.per_constraint_residual = settings.per_constraint_residual;
   pdlp_settings.first_primal_feasible   = settings.return_first_feasible;

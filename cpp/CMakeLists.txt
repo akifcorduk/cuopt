@@ -793,6 +793,48 @@ if (BUILD_MIP_BENCHMARKS AND NOT BUILD_LP_ONLY)
 
 endif ()
 
+# ##################################################################################################
+# - mip_work_calibrator - offline deterministic work-unit calibration tool -----------------------
+option(BUILD_MIP_WORK_CALIBRATOR "Build MIP deterministic work-unit calibrator" OFF)
+if (BUILD_MIP_WORK_CALIBRATOR AND NOT BUILD_LP_ONLY)
+    add_executable(mip_work_calibrator
+            src/mip_heuristics/deterministic_calibrator/calibrate_main.cpp
+            src/mip_heuristics/deterministic_calibrator/fj_harness.cu
+    )
+
+    set_target_properties(mip_work_calibrator
+            PROPERTIES
+            CXX_SCAN_FOR_MODULES OFF
+            CUDA_SEPARABLE_COMPILATION ON
+    )
+
+    target_compile_options(mip_work_calibrator
+            PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CUOPT_CXX_FLAGS}>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:${CUOPT_CUDA_FLAGS}>"
+    )
+
+    target_include_directories(mip_work_calibrator SYSTEM PRIVATE
+            "${dejavu_SOURCE_DIR}"
+    )
+
+    target_include_directories(mip_work_calibrator
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    )
+
+    target_link_libraries(mip_work_calibrator
+            PUBLIC
+            cuopt
+            OpenMP::OpenMP_CXX
+            PRIVATE
+    )
+    if (NOT DEFINED INSTALL_TARGET OR "${INSTALL_TARGET}" STREQUAL "")
+        target_link_options(mip_work_calibrator PRIVATE -Wl,--enable-new-dtags)
+    endif ()
+endif ()
+
 option(BUILD_LP_BENCHMARKS "Build LP benchmarks" OFF)
 if (BUILD_LP_BENCHMARKS)
     add_executable(solve_LP ../benchmarks/linear_programming/cuopt/run_pdlp.cu)

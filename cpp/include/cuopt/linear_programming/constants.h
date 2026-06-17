@@ -113,16 +113,6 @@
 #define CUOPT_MIP_HYPER_HEURISTIC_RELAXED_LP_TIME_LIMIT "mip_hyper_heuristic_relaxed_lp_time_limit"
 #define CUOPT_MIP_HYPER_HEURISTIC_RELATED_VARS_TIME_LIMIT \
   "mip_hyper_heuristic_related_vars_time_limit"
-#define CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_DEFAULT_WUPS \
-  "mip_hyper_heuristic_work_unit_default_wups"
-#define CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_NNZ_COEFF \
-  "mip_hyper_heuristic_work_unit_kernel_nnz_coeff"
-#define CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_VAR_COEFF \
-  "mip_hyper_heuristic_work_unit_kernel_var_coeff"
-#define CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_KERNEL_CON_COEFF \
-  "mip_hyper_heuristic_work_unit_kernel_con_coeff"
-#define CUOPT_MIP_HYPER_HEURISTIC_WORK_UNIT_LP_ITERS_PER_SEC \
-  "mip_hyper_heuristic_work_unit_lp_iters_per_sec"
 
 /* @brief Diving heuristic toggles: -1 automatic, 0 disabled, 1 enabled */
 #define CUOPT_MIP_HYPER_DIVING_LINE_SEARCH "mip_hyper_diving_line_search"

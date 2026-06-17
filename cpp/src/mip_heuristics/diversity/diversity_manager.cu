@@ -19,6 +19,7 @@
 
 #include <utilities/scope_guard.hpp>
 
+#include <algorithm>
 #include <memory>
 
 constexpr bool fj_only_run = false;
@@ -235,9 +236,6 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
     ls.constraint_prop.bounds_update.set_updated_bounds(*problem_ptr);
   }
   bool run_probing_cache = !fj_only_run;
-  // Don't run probing cache in deterministic mode yet as neither B&B nor CPUFJ need it
-  // and it doesn't make use of work units yet
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) { run_probing_cache = false; }
   // Allow the user to disable the probing-cache step of cuOpt's internal presolve
   // independently of the higher-level presolver setting.
   if (!context.settings.probing) {
@@ -248,7 +246,11 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
     // Run probing cache before trivial presolve to discover variable implications
     const f_t max_time_on_probing = diversity_config.max_time_on_probing;
     f_t time_for_probing_cache    = std::min(max_time_on_probing, time_limit);
-    timer_t probing_timer{time_for_probing_cache};
+    // In deterministic mode the probing cache is work-clocked (reproducible budget) instead of
+    // wall-clocked; compute_probing_cache also runs single-threaded in that mode.
+    timer_t probing_timer = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC
+                              ? context.make_heuristic_timer(time_for_probing_cache)
+                              : timer_t{time_for_probing_cache};
     // this function computes probing cache, finds singletons, substitutions and changes the problem
     bool problem_is_infeasible =
       compute_probing_cache(ls.constraint_prop.bounds_update, *problem_ptr, probing_timer);
@@ -313,6 +315,8 @@ template <typename i_t, typename f_t>
 void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
 {
   raft::common::nvtx::range fun_scope("generate_quick_feasible_solution");
+  const auto fast_wall_start   = std::chrono::steady_clock::now();
+  const double fast_work_start = context.gpu_heur_loop.global_work_units_elapsed;
   solution_t<i_t, f_t> solution(*problem_ptr);
   // min 1 second, max 10 seconds
   const f_t generate_fast_solution_time =
@@ -337,6 +341,12 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
                    feas_sol.get_user_objective());
   }
   problem_ptr->handle_ptr->sync_stream();
+  const double fast_wall =
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - fast_wall_start).count();
+  CUOPT_LOG_INFO("PHASE init_fj: wall %.3fs work %.3fwu (total work %.3fwu)",
+                 fast_wall,
+                 context.gpu_heur_loop.global_work_units_elapsed - fast_work_start,
+                 context.gpu_heur_loop.global_work_units_elapsed);
 }
 
 template <typename i_t, typename f_t>
@@ -398,6 +408,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   auto timer_raii_guard = cuopt::scope_guard([&]() {
     stats.total_solve_time =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
+    CUOPT_LOG_INFO("PHASE total: wall %.3fs heuristic work %.3fwu (%s)",
+                   stats.total_solve_time,
+                   context.gpu_heur_loop.global_work_units_elapsed,
+                   context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ? "deterministic"
+                                                                                 : "opportunistic");
   });
 
   // Deterministic and opportunistic modes run the SAME heuristic path. Determinism is achieved by
@@ -405,8 +420,14 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   // ticks on accumulated GPU work units instead of wall-clock time, so control flow is
   // reproducible.
   if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed,
-                         context.settings.heuristic_params.work_unit_default_wups);
+    // When the user passes a finite --work-limit, it becomes the heuristic budget: drop the
+    // wall-time budget (set it to infinity) so the run stops purely on the absolute work-unit cap,
+    // reproducibly. Without --work-limit (infinity) this keeps the existing time-budgeted behavior.
+    if (context.settings.work_limit < std::numeric_limits<f_t>::infinity()) {
+      timer = timer_t(std::numeric_limits<f_t>::infinity());
+    }
+    timer.use_work_clock(
+      &context.gpu_heur_loop.global_work_units_elapsed, 1.0, context.settings.work_limit);
   }
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
@@ -435,6 +456,13 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   problem_ptr->compute_integer_fixed_problem();
   recombiner_t<i_t, f_t>::init_enabled_recombiners(
     *problem_ptr, context.settings.heuristic_params.enabled_recombiners);
+  if (context.settings.heuristics_only) {
+    // SUB_MIP runs a full inner branch-and-bound (deep, not work-unit accounted), which stalls the
+    // work-unit budget on the heuristic-only path. Exclude it; the remaining recombiners are
+    // FJ / bounds-prop based and record work units.
+    auto& er = recombiner_t<i_t, f_t>::enabled_recombiners;
+    er.erase(std::remove(er.begin(), er.end(), recombiner_enum_t::SUB_MIP), er.end());
+  }
   mab_recombiner.resize_mab_arm_stats(recombiner_t<i_t, f_t>::enabled_recombiners.size());
   // test problem is not ii
   cuopt_func_call(
@@ -482,18 +510,19 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     pdlp_settings.presolver               = presolver_t::None;
     pdlp_settings.per_constraint_residual = true;
     set_pdlp_solver_mode(pdlp_settings);
+    // NOTE: deterministic PDLP work accounting removed during the work-unit rebuild; the PDLP leaf
+    // will get its own calibrated work model (deterministic_calibrator/) when wired back in.
     timer_t lp_timer(lp_time_limit);
-    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-      // Deterministic stop-gap: cap PDLP by its (deterministic) iteration count rather than wall
-      // time. lp_time_limit is already deterministic here (virtual work clock).
-      pdlp_settings.iteration_limit =
-        lp_iteration_limit_from_time(lp_time_limit,
-                                     context.problem_features,
-                                     context.settings.heuristic_params.work_unit_lp_iters_per_sec);
-      pdlp_settings.time_limit = std::numeric_limits<f_t>::infinity();
-      lp_timer                 = context.make_heuristic_timer(std::numeric_limits<f_t>::infinity());
-    }
+    const auto root_lp_wall_start = std::chrono::steady_clock::now();
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
+    {
+      const int root_lp_steps =
+        lp_result.get_additional_termination_information(0).number_of_steps_taken;
+      const double root_lp_wall =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - root_lp_wall_start)
+          .count();
+      CUOPT_LOG_INFO("PHASE root_lp: wall %.3fs (pdlp steps %d)", root_lp_wall, root_lp_steps);
+    }
 
     // The concurrent root LP can fail to produce a usable solution -- e.g. the barrier
     // hits a numerical error on an infeasible problem and PDLP returns NumericalError
@@ -629,7 +658,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     return sol;
   }
 
-  if (omp_get_num_threads() > CUOPT_MIP_RINS_REQUIRED_THREAD_COUNT) { rins.enable(); }
+  // RINS runs an inner sub-MIP (deep, not work-unit accounted); skip it on the heuristic-only path.
+  if (!context.settings.heuristics_only &&
+      omp_get_num_threads() > CUOPT_MIP_RINS_REQUIRED_THREAD_COUNT) {
+    rins.enable();
+  }
 
   generate_solution(timer.remaining_time(), false);
   if (timer.check_time_limit()) {
@@ -655,6 +688,7 @@ void diversity_manager_t<i_t, f_t>::diversity_step(i_t max_iterations_without_im
     improved = false;
     while (k-- > 0) {
       if (check_b_b_preemption()) { return; }
+      if (timer.check_time_limit()) { return; }
       auto new_sol_vector = population.get_external_solutions();
       recombine_and_ls_with_all(new_sol_vector);
       population.adjust_weights_according_to_best_feasible();

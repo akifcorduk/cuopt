@@ -1032,10 +1032,8 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
 template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
-  auto& data = *climbers[climber_idx];
-  auto v     = data.view();  // == climber_views[climber_idx]
-  const bool deterministic_work_estimate =
-    (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
+  auto& data                     = *climbers[climber_idx];
+  auto v                         = data.view();  // == climber_views[climber_idx]
   const bool use_graph           = true;
   const i_t iterations_per_batch = use_graph ? iterations_per_graph : 1;
 
@@ -1104,12 +1102,9 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
     // periodically recompute the LHS and violation scores
     // to correct any accumulated numerical errors
     if (lhs_refreshed) { refresh_lhs_and_violation(climber_stream, climber_idx); }
-    if (deterministic_work_estimate && !limit_reached) {
-      // TODO: replace with work predictor model
-      double batch_work = data.deterministic_batch_work.value(climber_stream) / 1e8;
-      timer.record_work(batch_work);
-      if (timer.check_time_limit()) { limit_reached = true; }
-    }
+    // NOTE: per-step work-unit recording removed during the work-unit rebuild. FJ's device
+    // frontier-work estimator (deterministic_batch_work) is still computed and will feed the
+    // calibrated FJ work model (deterministic_calibrator/) when FJ is wired back in.
 
     // periodically synchronize and check the latest solution
     // feasible solution found!*view.break_condition
@@ -1303,7 +1298,7 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
     "FJ: work_limit %f time_limit %f sol hash %x pb hash %x",
     settings.work_limit < std::numeric_limits<double>::max() ? settings.work_limit : -1.0,
     settings.time_limit < std::numeric_limits<double>::max() ? settings.time_limit : -1.0,
-    solution.get_hash(),
+    detail::compute_hash(solution.assignment, handle_ptr->get_stream()),
     pb_ptr->get_fingerprint());
   CUOPT_LOG_DEBUG("FJ: weights hash %x, left weights hash %x, right weights hash %x",
                   detail::compute_hash(cstr_weights, handle_ptr->get_stream()),
@@ -1413,7 +1408,8 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
                     elapsed_time);
   }
 
-  CUOPT_LOG_DEBUG("FJ sol hash %x", solution.get_hash());
+  CUOPT_LOG_DEBUG("FJ sol hash %x",
+                  detail::compute_hash(solution.assignment, handle_ptr->get_stream()));
 
   return is_new_feasible;
 }

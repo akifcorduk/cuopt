@@ -7,6 +7,7 @@
 #pragma once
 
 #include <chrono>
+#include <limits>
 #include <string>
 
 namespace cuopt {
@@ -34,7 +35,15 @@ class timer_t {
            elapsed_time());
   }
 
-  bool check_time_limit() const noexcept { return elapsed_time() >= time_limit; }
+  // Stop on the absolute work-unit budget (deterministic, work-clock only) OR the local time/work
+  // budget. The absolute cap (@p work_limit_abs_) is an absolute value of the shared work counter,
+  // so every timer sharing the counter stops at the same global work_limit regardless of when it
+  // was created -- this is what makes `--work-limit` a reproducible global heuristic stop.
+  bool check_time_limit() const noexcept
+  {
+    if (work_units_ != nullptr && *work_units_ >= work_limit_abs_) { return true; }
+    return elapsed_time() >= time_limit;
+  }
 
   bool check_half_time() const noexcept { return elapsed_time() >= time_limit / 2; }
 
@@ -42,12 +51,16 @@ class timer_t {
   // work units (deterministic) instead of wall-clock time. @p work_units points at a monotonically
   // increasing work counter (e.g. work_limit_context_t::global_work_units_elapsed); @p
   // work_per_second converts work units back into seconds so existing time-based budgets keep
-  // working. Passed as a raw double* to avoid a header dependency cycle.
-  void use_work_clock(const double* work_units, double work_per_second) noexcept
+  // working. @p work_limit_abs is an absolute global work-unit cap (infinity => disabled).
+  // Passed as a raw double* to avoid a header dependency cycle.
+  void use_work_clock(const double* work_units,
+                      double work_per_second,
+                      double work_limit_abs = std::numeric_limits<double>::infinity()) noexcept
   {
     work_units_      = work_units;
     work_per_second_ = work_per_second > 0.0 ? work_per_second : 1.0;
     work_begin_      = work_units != nullptr ? *work_units : 0.0;
+    work_limit_abs_  = work_limit_abs;
   }
 
   double elapsed_time() const noexcept
@@ -104,6 +117,8 @@ class timer_t {
   const double* work_units_{nullptr};
   double work_per_second_{1.0};
   double work_begin_{0.0};
+  // Absolute global work-unit cap (work-clock only). infinity => no work-unit limit.
+  double work_limit_abs_{std::numeric_limits<double>::infinity()};
 };
 
 }  // namespace cuopt

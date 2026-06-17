@@ -20,6 +20,8 @@
 #include "bounds_update_helpers.cuh"
 #include "multi_probe.cuh"
 
+#include <limits>
+
 namespace cuopt::linear_programming::detail {
 
 // Tobias Achterberg, Robert E. Bixby, Zonghao Gu, Edward Rothberg, Dieter Weninger (2019) Presolve

@@ -8,6 +8,8 @@
 #include <cuopt/linear_programming/mip/solver_settings.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 
+#include <limits>
+
 #include <thrust/count.h>
 #include <thrust/extrema.h>
 #include <thrust/functional.h>
