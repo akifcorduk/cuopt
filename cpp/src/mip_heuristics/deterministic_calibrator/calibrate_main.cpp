@@ -5,6 +5,7 @@
  */
 /* clang-format on */
 
+#include <mip_heuristics/deterministic_calibrator/bp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/calibrator.hpp>
 #include <mip_heuristics/deterministic_calibrator/fj_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
@@ -34,17 +35,51 @@ const std::vector<std::string> kInstances = {
   "nursesched-medium-hint03",
 };
 
+void report_and_emit(const std::string& algo,
+                     const std::vector<std::string>& feature_names,
+                     const std::vector<calibration_sample_t>& samples,
+                     const std::string& out_header)
+{
+  if (samples.size() < 2) {
+    std::printf("\nNot enough samples to calibrate (%zu).\n", samples.size());
+    return;
+  }
+  work_calibrator_t calibrator;
+  work_calibrator_t::options_t opt;
+  auto result = calibrator.fit(samples, feature_names.size(), opt);
+
+  std::printf("\n=== %s fit ===\n", algo.c_str());
+  std::printf("samples=%zu  CV (measured/predicted) = %.4f  converged=%s  iters=%d\n",
+              samples.size(),
+              result.cv,
+              result.converged ? "yes" : "no",
+              result.iterations_used);
+  for (std::size_t i = 0; i < result.coeffs.size(); ++i) {
+    std::printf("  coeff[%s] = %.6g\n", feature_names[i].c_str(), result.coeffs[i]);
+  }
+  std::printf("\nper-sample ratio (measured / predicted, want ~1):\n");
+  for (const auto& s : samples) {
+    const double pred = predict_work(result.coeffs, s.features);
+    std::printf("  %-32s measured=%.3e pred=%.3e ratio=%.3f\n",
+                s.instance.c_str(),
+                s.measured_time_per_iter,
+                pred,
+                s.measured_time_per_iter / pred);
+  }
+
+  emit_coeffs_header(out_header, algo, feature_names, result, samples);
+  std::printf("\nWrote %s\n", out_header.c_str());
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
-  std::string dataset_dir = "datasets/mip/miplib2017";
-  std::string out_header =
-    "cpp/src/mip_heuristics/deterministic_calibrator/generated/fj_work_coeffs.hpp";
-  if (argc > 1) { dataset_dir = argv[1]; }
-  if (argc > 2) { out_header = argv[2]; }
+  std::string algo        = argc > 1 ? argv[1] : "fj";
+  std::string dataset_dir = argc > 2 ? argv[2] : "datasets/mip/miplib2017";
+  std::string out_header  = argc > 3 ? argv[3] : std::string();
 
-  std::printf("=== FJ deterministic work-unit calibration ===\n");
+  std::printf("=== deterministic work-unit calibration: %s ===\n", algo.c_str());
   std::printf("dataset_dir: %s\n", dataset_dir.c_str());
 
   std::vector<calibration_sample_t> samples;
@@ -53,48 +88,31 @@ int main(int argc, char** argv)
     std::printf("\n[instance] %s\n", name.c_str());
     std::fflush(stdout);
     try {
-      auto s = run_fj_calibration_sample(path, name);
-      std::printf("  median %.3e s/step  features:", s.measured_time_per_iter);
-      for (double f : s.features) {
-        std::printf(" %.4g", f);
+      if (algo == "fj") {
+        samples.push_back(run_fj_calibration_sample(path, name));
+      } else if (algo == "bp") {
+        auto s = run_bp_calibration_samples(path, name);
+        samples.insert(samples.end(), s.begin(), s.end());
+      } else {
+        std::printf("Unknown algo '%s' (expected fj|bp)\n", algo.c_str());
+        return 2;
       }
-      std::printf("\n");
-      samples.push_back(std::move(s));
     } catch (const std::exception& e) {
       std::printf("  SKIP (%s)\n", e.what());
     }
     std::fflush(stdout);
   }
 
-  if (samples.size() < 2) {
-    std::printf("\nNot enough samples to calibrate (%zu).\n", samples.size());
-    return 1;
+  if (algo == "fj") {
+    if (out_header.empty()) {
+      out_header = "cpp/src/mip_heuristics/deterministic_calibrator/generated/fj_work_coeffs.hpp";
+    }
+    report_and_emit("fj", fj_feature_names(), samples, out_header);
+  } else {  // bp
+    if (out_header.empty()) {
+      out_header = "cpp/src/mip_heuristics/deterministic_calibrator/generated/bp_work_coeffs.hpp";
+    }
+    report_and_emit("bp", bp_feature_names(), samples, out_header);
   }
-
-  const auto feature_names = fj_feature_names();
-  work_calibrator_t calibrator;
-  work_calibrator_t::options_t opt;
-  auto result = calibrator.fit(samples, feature_names.size(), opt);
-
-  std::printf("\n=== FJ fit ===\n");
-  std::printf("CV (measured/predicted) = %.4f  converged=%s  iters=%d\n",
-              result.cv,
-              result.converged ? "yes" : "no",
-              result.iterations_used);
-  for (std::size_t i = 0; i < result.coeffs.size(); ++i) {
-    std::printf("  coeff[%s] = %.6g\n", feature_names[i].c_str(), result.coeffs[i]);
-  }
-  std::printf("\nper-instance ratio (measured / predicted, want ~1):\n");
-  for (const auto& s : samples) {
-    const double pred = predict_work(result.coeffs, s.features);
-    std::printf("  %-26s measured=%.3e pred=%.3e ratio=%.3f\n",
-                s.instance.c_str(),
-                s.measured_time_per_iter,
-                pred,
-                s.measured_time_per_iter / pred);
-  }
-
-  emit_coeffs_header(out_header, "fj", feature_names, result, samples);
-  std::printf("\nWrote %s\n", out_header.c_str());
   return 0;
 }

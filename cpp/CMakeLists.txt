@@ -800,6 +800,7 @@ if (BUILD_MIP_WORK_CALIBRATOR AND NOT BUILD_LP_ONLY)
     add_executable(mip_work_calibrator
             src/mip_heuristics/deterministic_calibrator/calibrate_main.cpp
             src/mip_heuristics/deterministic_calibrator/fj_harness.cu
+            src/mip_heuristics/deterministic_calibrator/bp_harness.cu
     )
 
     set_target_properties(mip_work_calibrator

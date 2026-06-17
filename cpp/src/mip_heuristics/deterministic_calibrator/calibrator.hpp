@@ -44,12 +44,9 @@ struct calibration_result_t {
 class work_calibrator_t {
  public:
   struct options_t {
-    int max_iters      = 100000;
-    double target_cv   = 0.10;
-    double init_sigma  = 0.75;  // initial log-scale step for multiplicative moves
-    double final_sigma = 0.02;  // final log-scale step
-    double init_temp   = 0.20;  // initial SA temperature on CV
-    unsigned seed      = 12345;
+    int max_iters    = 100000;  // max coordinate-descent passes
+    double target_cv = 0.10;    // reporting target (CV of measured/predicted)
+    double tol       = 1e-15;   // convergence tolerance on coefficient change
   };
 
   static double coeff_of_variation(const std::vector<double>& coeffs,
@@ -94,50 +91,70 @@ class work_calibrator_t {
     }
   }
 
+  // Fit non-negative coefficients by coordinate-descent NNLS on the relative-error system:
+  //   minimize  sum_i ( dot(c, features_i) / measured_i  -  1 )^2     subject to c >= 0
+  // i.e. drive every predicted/measured ratio toward 1 (the CV objective's intent), weighting each
+  // sample equally regardless of its absolute time. The objective is convex and bounded below, so
+  // exact coordinate descent on the non-negative orthant converges to the global optimum (no random
+  // restarts / local-minimum issues). With wups == 1 the resulting work unit ~ predicted seconds.
   calibration_result_t fit(const std::vector<calibration_sample_t>& samples,
                            std::size_t n_features,
                            options_t opt) const
   {
-    std::mt19937 rng(opt.seed);
-    std::normal_distribution<double> gauss(0.0, 1.0);
-    std::uniform_int_distribution<std::size_t> pick(0, n_features - 1);
-    std::uniform_real_distribution<double> unit(0.0, 1.0);
+    const std::size_t n = samples.size();
+    std::vector<double> c(n_features, 0.0);
+    if (n == 0) { return {c, 0.0, 0, false}; }
 
-    std::vector<double> cur(n_features, 1.0);
-    double cur_cv            = coeff_of_variation(cur, samples);
-    std::vector<double> best = cur;
-    double best_cv           = cur_cv;
+    // A[i][j] = features_i[j] / measured_i ; target b_i = 1. Keep pred[i] = dot(c, A[i]).
+    std::vector<std::vector<double>> A(n, std::vector<double>(n_features, 0.0));
+    for (std::size_t i = 0; i < n; ++i) {
+      const double inv_m = 1.0 / samples[i].measured_time_per_iter;
+      for (std::size_t j = 0; j < n_features && j < samples[i].features.size(); ++j) {
+        A[i][j] = samples[i].features[j] * inv_m;
+      }
+    }
+    std::vector<double> denom(n_features, 0.0);
+    for (std::size_t j = 0; j < n_features; ++j) {
+      for (std::size_t i = 0; i < n; ++i) {
+        denom[j] += A[i][j] * A[i][j];
+      }
+    }
+    std::vector<double> pred(n, 0.0);  // dot(c, A[i]) == 0 initially
 
-    int it = 0;
-    for (; it < opt.max_iters && best_cv > opt.target_cv; ++it) {
-      const double t     = static_cast<double>(it) / static_cast<double>(opt.max_iters);
-      const double sigma = opt.init_sigma * std::pow(opt.final_sigma / opt.init_sigma, t);
-      const double temp  = opt.init_temp * (1.0 - t);
-
-      std::vector<double> cand = cur;
-      const std::size_t k      = pick(rng);
-      cand[k] *= std::exp(sigma * gauss(rng));
-      if (cand[k] < 0.0) { cand[k] = 0.0; }
-
-      const double cand_cv = coeff_of_variation(cand, samples);
-      const double delta   = cand_cv - cur_cv;
-      if (delta < 0.0 || (temp > 0.0 && unit(rng) < std::exp(-delta / temp))) {
-        cur    = cand;
-        cur_cv = cand_cv;
-        if (cur_cv < best_cv) {
-          best    = cur;
-          best_cv = cur_cv;
+    int pass = 0;
+    for (; pass < opt.max_iters; ++pass) {
+      double max_change = 0.0;
+      for (std::size_t j = 0; j < n_features; ++j) {
+        if (denom[j] <= 0.0) { continue; }
+        // optimal c_j (others fixed): residual excluding j is (1 - (pred_i - c_j A_ij)).
+        double num = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+          num += A[i][j] * (1.0 - (pred[i] - c[j] * A[i][j]));
         }
+        double new_cj = num / denom[j];
+        if (new_cj < 0.0) { new_cj = 0.0; }
+        const double delta = new_cj - c[j];
+        if (delta != 0.0) {
+          for (std::size_t i = 0; i < n; ++i) {
+            pred[i] += delta * A[i][j];
+          }
+          c[j]       = new_cj;
+          max_change = std::max(max_change, std::abs(delta));
+        }
+      }
+      if (max_change <= opt.tol) {
+        ++pass;
+        break;
       }
     }
 
-    scale_to_wups_one(best, samples);
+    scale_to_wups_one(c, samples);
 
     calibration_result_t res;
-    res.coeffs          = best;
-    res.cv              = best_cv;
-    res.iterations_used = it;
-    res.converged       = best_cv <= opt.target_cv;
+    res.coeffs          = c;
+    res.cv              = coeff_of_variation(c, samples);
+    res.iterations_used = pass;
+    res.converged       = res.cv <= opt.target_cv;
     return res;
   }
 };
