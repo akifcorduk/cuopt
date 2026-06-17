@@ -29,6 +29,7 @@
 #include <thrust/transform_reduce.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -36,6 +37,10 @@
 #include <random>
 #include <utility>
 #include <vector>
+
+#ifndef LNS_DEBUG
+#define LNS_DEBUG 0
+#endif
 
 namespace cuopt::linear_programming::detail {
 
@@ -99,6 +104,39 @@ struct lns_upper_violated_t {
   f_t rel_tol;
 
   __device__ bool operator()(i_t idx) const { return sol_view.upper_excess[idx] > rel_tol; }
+};
+
+template <typename i_t, typename f_t>
+struct lns_constraint_violated_t {
+  typename solution_t<i_t, f_t>::view_t sol_view;
+  f_t rel_tol;
+
+  __device__ bool operator()(i_t idx) const
+  {
+    return (sol_view.lower_excess[idx] + sol_view.upper_excess[idx]) > rel_tol;
+  }
+};
+
+template <typename i_t, typename f_t>
+struct lns_constraint_excess_t {
+  typename solution_t<i_t, f_t>::view_t sol_view;
+
+  __device__ f_t operator()(i_t idx) const
+  {
+    return sol_view.lower_excess[idx] + sol_view.upper_excess[idx];
+  }
+};
+
+template <typename i_t, typename f_t>
+struct lns_violated_constraint_excess_t {
+  typename solution_t<i_t, f_t>::view_t sol_view;
+  f_t rel_tol;
+
+  __device__ f_t operator()(i_t idx) const
+  {
+    const f_t excess = sol_view.lower_excess[idx] + sol_view.upper_excess[idx];
+    return excess > rel_tol ? excess : std::numeric_limits<f_t>::infinity();
+  }
 };
 
 template <typename i_t, typename f_t>
@@ -344,7 +382,9 @@ class lns_feasibility_t {
     }
     if (is_better_feasibility_state(best_solution, solution)) { solution.copy_from(best_solution); }
     if (solution.get_feasible()) { finalize_feasible_solution(solution); }
+#if LNS_DEBUG
     if (!solution.get_feasible()) { log_violation_summary(solution, "Standalone LNS final"); }
+#endif
     CUOPT_LOG_INFO("Standalone LNS feasibility finished: feasible %d, unsat %d, excess %.6e, "
                    "repairs %lu, accepted %lu",
                    solution.get_feasible(),
@@ -432,12 +472,14 @@ class lns_feasibility_t {
     related_pair_offsets          = cuopt::device_copy(h_pair_offsets, stream);
     related_pair_coefficients     = cuopt::device_copy(h_pair_coefficients, stream);
 
+#if LNS_DEBUG
     CUOPT_LOG_DEBUG("Standalone LNS relatedness cache: variables %d, integer vars %d, "
                     "neighbor pairs %lu, coefficient pairs %lu",
                     n_variables,
                     n_integer_vars,
                     static_cast<unsigned long>(h_neighbor_vars.size()),
                     static_cast<unsigned long>(h_pair_coefficients.size()));
+#endif
   }
 
   bool finalize_feasible_solution(solution_t<i_t, f_t>& solution)
@@ -545,12 +587,41 @@ class lns_feasibility_t {
       thrust::plus<f_t>());
   }
 
+#if LNS_DEBUG
+  std::pair<cudaEvent_t, cudaEvent_t> start_kernel_timer(cudaStream_t stream) const
+  {
+    cudaEvent_t start;
+    cudaEvent_t stop;
+    RAFT_CUDA_TRY(cudaEventCreate(&start));
+    RAFT_CUDA_TRY(cudaEventCreate(&stop));
+    RAFT_CUDA_TRY(cudaEventRecord(start, stream));
+    return {start, stop};
+  }
+
+  void log_kernel_timer(std::pair<cudaEvent_t, cudaEvent_t> events,
+                        const char* label,
+                        cudaStream_t stream) const
+  {
+    RAFT_CUDA_TRY(cudaEventRecord(events.second, stream));
+    RAFT_CUDA_TRY(cudaEventSynchronize(events.second));
+    float elapsed_ms = 0.f;
+    RAFT_CUDA_TRY(cudaEventElapsedTime(&elapsed_ms, events.first, events.second));
+    RAFT_CUDA_TRY(cudaEventDestroy(events.first));
+    RAFT_CUDA_TRY(cudaEventDestroy(events.second));
+    CUOPT_LOG_DEBUG("Standalone LNS kernel %s took %.3f ms", label, static_cast<double>(elapsed_ms));
+  }
+
   void log_violation_summary(solution_t<i_t, f_t>& sol, const char* label) const
   {
     sol.compute_feasibility();
     const auto policy = sol.handle_ptr->get_thrust_policy();
     const auto view   = sol.view();
     const f_t rel_tol = sol.problem_ptr->tolerances.relative_tolerance;
+    const i_t infeasible_count =
+      thrust::count_if(policy,
+                       thrust::make_counting_iterator<i_t>(0),
+                       thrust::make_counting_iterator<i_t>(sol.problem_ptr->n_constraints),
+                       lns_constraint_violated_t<i_t, f_t>{view, rel_tol});
     const i_t lower_count =
       thrust::count_if(policy,
                        thrust::make_counting_iterator<i_t>(0),
@@ -561,28 +632,115 @@ class lns_feasibility_t {
                        thrust::make_counting_iterator<i_t>(0),
                        thrust::make_counting_iterator<i_t>(sol.problem_ptr->n_constraints),
                        lns_upper_violated_t<i_t, f_t>{view, rel_tol});
-    auto worst_it =
-      thrust::max_element(policy,
-                          thrust::make_counting_iterator<i_t>(0),
-                          thrust::make_counting_iterator<i_t>(sol.problem_ptr->n_constraints),
-                          lns_worse_constraint_t<i_t, f_t>{view});
-    const i_t worst_idx = static_cast<i_t>(*worst_it);
-    const auto stream   = sol.handle_ptr->get_stream();
-    CUOPT_LOG_INFO(
-      "%s violation summary: lower %d, upper %d, worst row %d, lower_excess %.6e, "
-      "upper_excess %.6e, activity %.6e, lb %.6e, ub %.6e, row_nnz %d",
+    f_t min_infeasibility = f_t{0};
+    f_t max_infeasibility = f_t{0};
+    if (infeasible_count > 0) {
+      min_infeasibility =
+        thrust::transform_reduce(policy,
+                                 thrust::make_counting_iterator<i_t>(0),
+                                 thrust::make_counting_iterator<i_t>(sol.problem_ptr->n_constraints),
+                                 lns_violated_constraint_excess_t<i_t, f_t>{view, rel_tol},
+                                 std::numeric_limits<f_t>::infinity(),
+                                 thrust::minimum<f_t>());
+      max_infeasibility =
+        thrust::transform_reduce(policy,
+                                 thrust::make_counting_iterator<i_t>(0),
+                                 thrust::make_counting_iterator<i_t>(sol.problem_ptr->n_constraints),
+                                 lns_constraint_excess_t<i_t, f_t>{view},
+                                 f_t{0},
+                                 thrust::maximum<f_t>());
+    }
+    CUOPT_LOG_DEBUG(
+      "%s infeasibility: constraints %d, lower %d, upper %d, min %.6e, max %.6e, total %.6e",
       label,
+      infeasible_count,
       lower_count,
       upper_count,
-      worst_idx,
-      static_cast<double>(sol.lower_excess.element(worst_idx, stream)),
-      static_cast<double>(sol.upper_excess.element(worst_idx, stream)),
-      static_cast<double>(sol.constraint_value.element(worst_idx, stream)),
-      static_cast<double>(sol.problem_ptr->constraint_lower_bounds.element(worst_idx, stream)),
-      static_cast<double>(sol.problem_ptr->constraint_upper_bounds.element(worst_idx, stream)),
-      sol.problem_ptr->offsets.element(worst_idx + 1, stream) -
-        sol.problem_ptr->offsets.element(worst_idx, stream));
+      static_cast<double>(min_infeasibility),
+      static_cast<double>(max_infeasibility),
+      static_cast<double>(sol.get_total_excess()));
   }
+
+  void log_ruined_assignment_delta(solution_t<i_t, f_t>& before,
+                                   solution_t<i_t, f_t>& after,
+                                   const char* label) const
+  {
+    const auto policy       = after.handle_ptr->get_thrust_policy();
+    const f_t* before_ptr   = before.assignment.data();
+    const f_t* after_ptr    = after.assignment.data();
+    const i_t* ruined_ptr   = ruined_var_flags.data();
+    const f_t change_tol    = after.problem_ptr->tolerances.absolute_tolerance;
+    const i_t changed_count = thrust::count_if(
+      policy,
+      thrust::make_counting_iterator<i_t>(0),
+      thrust::make_counting_iterator<i_t>(after.problem_ptr->n_variables),
+      [before_ptr, after_ptr, ruined_ptr, change_tol] __device__(i_t idx) {
+        return ruined_ptr[idx] != 0 && abs(after_ptr[idx] - before_ptr[idx]) > change_tol;
+      });
+    const f_t max_delta = thrust::transform_reduce(
+      policy,
+      thrust::make_counting_iterator<i_t>(0),
+      thrust::make_counting_iterator<i_t>(after.problem_ptr->n_variables),
+      [before_ptr, after_ptr, ruined_ptr] __device__(i_t idx) -> f_t {
+        return ruined_ptr[idx] != 0 ? abs(after_ptr[idx] - before_ptr[idx]) : f_t{0};
+      },
+      f_t{0},
+      thrust::maximum<f_t>());
+    CUOPT_LOG_DEBUG("%s ruined assignment delta: changed %d, max %.6e",
+                    label,
+                    changed_count,
+                    static_cast<double>(max_delta));
+  }
+
+  const char* acceptance_reason(solution_t<i_t, f_t>& current,
+                                solution_t<i_t, f_t>& candidate,
+                                const weight_t<i_t, f_t>& weights) const
+  {
+    const i_t current_unsat   = n_unsatisfied_constraints(current);
+    const i_t candidate_unsat = n_unsatisfied_constraints(candidate);
+    if (candidate_unsat < current_unsat) { return "fewer infeasible constraints"; }
+    if (candidate_unsat > current_unsat) { return "more infeasible constraints"; }
+
+    const f_t current_excess   = current.get_total_excess();
+    const f_t candidate_excess = candidate.get_total_excess();
+    if (candidate_excess + OBJECTIVE_EPSILON < current_excess) { return "lower total excess"; }
+    if (current_excess + OBJECTIVE_EPSILON < candidate_excess) { return "higher total excess"; }
+
+    const f_t current_tardiness_penalty   = get_tardiness_penalty(current);
+    const f_t candidate_tardiness_penalty = get_tardiness_penalty(candidate);
+    if (candidate_tardiness_penalty + OBJECTIVE_EPSILON < current_tardiness_penalty) {
+      return "lower tardiness penalty";
+    }
+    if (current_tardiness_penalty + OBJECTIVE_EPSILON < candidate_tardiness_penalty) {
+      return "higher tardiness penalty";
+    }
+
+    const f_t current_quality   = current.get_quality(weights);
+    const f_t candidate_quality = candidate.get_quality(weights);
+    if (candidate_quality + OBJECTIVE_EPSILON < current_quality) { return "lower weighted quality"; }
+    return "not improving weighted quality";
+  }
+
+  void log_acceptance_diagnostics(solution_t<i_t, f_t>& current,
+                                  solution_t<i_t, f_t>& candidate,
+                                  const weight_t<i_t, f_t>& weights,
+                                  bool accepted) const
+  {
+    CUOPT_LOG_DEBUG(
+      "Standalone LNS acceptance: accepted %d, reason %s, unsat %d -> %d, excess %.6e -> "
+      "%.6e, tardiness %.6e -> %.6e, quality %.6e -> %.6e",
+      accepted,
+      acceptance_reason(current, candidate, weights),
+      n_unsatisfied_constraints(current),
+      n_unsatisfied_constraints(candidate),
+      static_cast<double>(current.get_total_excess()),
+      static_cast<double>(candidate.get_total_excess()),
+      static_cast<double>(get_tardiness_penalty(current)),
+      static_cast<double>(get_tardiness_penalty(candidate)),
+      static_cast<double>(current.get_quality(weights)),
+      static_cast<double>(candidate.get_quality(weights)));
+  }
+#endif
 
   bool accept_feasibility_move(solution_t<i_t, f_t>& current,
                                solution_t<i_t, f_t>& candidate,
@@ -633,19 +791,35 @@ class lns_feasibility_t {
     seed_pos = seed_dist(rng);
 
     const i_t seed_var = integer_indices_host[seed_pos];
+#if LNS_DEBUG
+    auto seed_kernel_timer = start_kernel_timer(stream);
+#endif
     lns_seed_ruin_kernel<i_t>
       <<<1, 1, 0, stream>>>(seed_var, ruined_var_flags.data(), ruin_vars.data());
     RAFT_CUDA_TRY(cudaPeekAtLastError());
+#if LNS_DEBUG
+    log_kernel_timer(seed_kernel_timer, "lns_seed_ruin_kernel", stream);
+#endif
     if (selected_count <= 1) { return 1; }
 
     const i_t neighbor_begin = related_neighbor_offsets_host[seed_var];
     const i_t neighbor_end   = related_neighbor_offsets_host[seed_var + 1];
     const i_t neighbor_count = neighbor_end - neighbor_begin;
+#if LNS_DEBUG
+    CUOPT_LOG_DEBUG("Standalone LNS related ruin seed: var %d, selected target %d, "
+                    "neighbor candidates %d",
+                    seed_var,
+                    selected_count,
+                    neighbor_count);
+#endif
     if (neighbor_count <= 0) { return 1; }
 
     static constexpr i_t warp_size = 32;
     const i_t warp_grid_size       = std::min<i_t>(
       4096, (neighbor_count + (block_size / warp_size) - 1) / (block_size / warp_size));
+#if LNS_DEBUG
+    auto score_kernel_timer = start_kernel_timer(stream);
+#endif
     lns_compute_seed_neighbor_scores_kernel<i_t, f_t>
       <<<warp_grid_size, block_size, 0, stream>>>(sol.assignment.data(),
                                                   seed_var,
@@ -657,6 +831,9 @@ class lns_feasibility_t {
                                                   candidate_scores.data(),
                                                   related_candidate_vars.data());
     RAFT_CUDA_TRY(cudaPeekAtLastError());
+#if LNS_DEBUG
+    log_kernel_timer(score_kernel_timer, "lns_compute_seed_neighbor_scores_kernel", stream);
+#endif
 
     thrust::sort_by_key(sol.handle_ptr->get_thrust_policy(),
                         candidate_scores.begin(),
@@ -664,6 +841,9 @@ class lns_feasibility_t {
                         related_candidate_vars.begin());
 
     const i_t additional_count = std::min(selected_count - 1, neighbor_count);
+#if LNS_DEBUG
+    auto mark_neighbor_kernel_timer = start_kernel_timer(stream);
+#endif
     thrust::for_each_n(
         sol.handle_ptr->get_thrust_policy(),
         thrust::counting_iterator<i_t>(0),
@@ -677,6 +857,12 @@ class lns_feasibility_t {
         }
     );
     RAFT_CUDA_TRY(cudaPeekAtLastError());
+#if LNS_DEBUG
+    log_kernel_timer(mark_neighbor_kernel_timer, "lns_mark_selected_neighbor_ruin", stream);
+    CUOPT_LOG_DEBUG("Standalone LNS related ruin selected: seed 1, neighbors %d, total %d",
+                    additional_count,
+                    additional_count + 1);
+#endif
     return additional_count + 1;
   }
 
@@ -698,6 +884,9 @@ class lns_feasibility_t {
     constexpr i_t block_size = 256;
     const i_t grid_size =
       std::min<i_t>(4096, (fixed_sol.problem_ptr->n_variables + block_size - 1) / block_size);
+#if LNS_DEBUG
+    auto unset_kernel_timer = start_kernel_timer(fixed_sol.handle_ptr->get_stream());
+#endif
     lns_unset_ruined_values_kernel<i_t, f_t>
       <<<grid_size, block_size, 0, fixed_sol.handle_ptr->get_stream()>>>(
         fixed_sol.view(),
@@ -705,19 +894,51 @@ class lns_feasibility_t {
         ruined_var_flags.data(),
         static_cast<i_t>(attempt));
     RAFT_CUDA_TRY(cudaPeekAtLastError());
+#if LNS_DEBUG
+    log_kernel_timer(
+      unset_kernel_timer, "lns_unset_ruined_values_kernel", fixed_sol.handle_ptr->get_stream());
+#endif
   }
 
   std::pair<solution_t<i_t, f_t>, bool> repair_current_ruin_set(
-    solution_t<i_t, f_t>& current, const weight_t<i_t, f_t>& weights, size_t attempt)
+    solution_t<i_t, f_t>& current,
+    const weight_t<i_t, f_t>& weights,
+    size_t attempt,
+    const char* ruin_strategy)
   {
     raft::common::nvtx::range fun_scope("standalone_lns_feasibility_ruin_repair");
     const i_t n_vars_to_fix = build_vars_to_fix();
     const i_t ruin_count    = problem_ptr->n_integer_vars - n_vars_to_fix;
     if (ruin_count < 1) { return std::make_pair(solution_t<i_t, f_t>(current), false); }
     vars_to_fix.resize(n_vars_to_fix, current.handle_ptr->get_stream());
+#if LNS_DEBUG
+    CUOPT_LOG_DEBUG("Standalone LNS repair attempt %lu: strategy %s, ruin %d, fix %d",
+                    static_cast<unsigned long>(attempt),
+                    ruin_strategy,
+                    ruin_count,
+                    n_vars_to_fix);
+    log_violation_summary(current, "Standalone LNS original before repair");
+#endif
 
     solution_t<i_t, f_t> offspring(current);
+#if LNS_DEBUG
+    const auto fix_start = std::chrono::steady_clock::now();
+#endif
     auto [fixed_problem, fixed_assignment, variable_map] = offspring.fix_variables(vars_to_fix);
+#if LNS_DEBUG
+    const auto fix_end = std::chrono::steady_clock::now();
+    const double fix_ms =
+      std::chrono::duration<double, std::milli>(fix_end - fix_start).count();
+    CUOPT_LOG_DEBUG("Standalone LNS fixed problem: vars %d -> %d, constraints %d -> %d, "
+                    "nnz %d -> %d, fix_variables %.3f ms",
+                    current.problem_ptr->n_variables,
+                    fixed_problem.n_variables,
+                    current.problem_ptr->n_constraints,
+                    fixed_problem.n_constraints,
+                    current.problem_ptr->nnz,
+                    fixed_problem.nnz,
+                    fix_ms);
+#endif
     timer_t timer(feasibility_lns_config_t::bounds_prop_time_limit);
     rmm::device_uvector<f_t> old_assignment(offspring.assignment,
                                             offspring.handle_ptr->get_stream());
@@ -726,12 +947,25 @@ class lns_feasibility_t {
     offspring.problem_ptr = &fixed_problem;
     unset_ruined_integer_values(offspring, variable_map, attempt);
     cuopt_func_call(offspring.test_variable_bounds(false));
+#if LNS_DEBUG
+    log_violation_summary(offspring, "Standalone LNS fixed after unset");
+#endif
 
     const auto old_repair_iterations               = constraint_prop.max_n_failed_repair_iterations;
     constraint_prop.max_n_failed_repair_iterations = feasibility_lns_config_t::n_repair_iterations;
+#if LNS_DEBUG
+    const f_t cp_remaining_before = timer.remaining_time();
+#endif
     constraint_prop.apply_round(
       offspring, feasibility_lns_config_t::lp_after_bounds_prop_time_limit, timer);
     constraint_prop.max_n_failed_repair_iterations = old_repair_iterations;
+#if LNS_DEBUG
+    CUOPT_LOG_DEBUG("Standalone LNS constraint propagation: feasible %d, remaining %.6e -> %.6e",
+                    offspring.get_feasible(),
+                    static_cast<double>(cp_remaining_before),
+                    static_cast<double>(timer.remaining_time()));
+    log_violation_summary(offspring, "Standalone LNS fixed after constraint propagation");
+#endif
 
     offspring.handle_ptr->sync_stream();
     offspring.problem_ptr = current.problem_ptr;
@@ -739,16 +973,36 @@ class lns_feasibility_t {
     offspring.assignment  = std::move(old_assignment);
     offspring.unfix_variables(fixed_assignment, variable_map);
     offspring.compute_feasibility();
+#if LNS_DEBUG
+    log_violation_summary(offspring, "Standalone LNS original after unfix");
+    log_ruined_assignment_delta(current, offspring, "Standalone LNS after unfix");
+    const i_t lp_unsat_before = n_unsatisfied_constraints(offspring);
+    const f_t lp_excess_before = offspring.get_total_excess();
+#endif
     lp_polish_with_integers_fixed(offspring);
+#if LNS_DEBUG
+    CUOPT_LOG_DEBUG("Standalone LNS LP polish: unsat %d -> %d, excess %.6e -> %.6e",
+                    lp_unsat_before,
+                    n_unsatisfied_constraints(offspring),
+                    static_cast<double>(lp_excess_before),
+                    static_cast<double>(offspring.get_total_excess()));
+    log_violation_summary(offspring, "Standalone LNS original after LP polish");
+    log_ruined_assignment_delta(current, offspring, "Standalone LNS after LP polish");
+#endif
 
     bool accepted = accept_feasibility_move(current, offspring, weights);
     update_constraint_tardiness(offspring);
+#if LNS_DEBUG
+    log_acceptance_diagnostics(current, offspring, weights, accepted);
+#endif
     if (accepted) {
+#if LNS_DEBUG
       CUOPT_LOG_DEBUG("Standalone LNS feasibility accepted: unsat %d -> %d, excess %.6e -> %.6e",
                       n_unsatisfied_constraints(current),
                       n_unsatisfied_constraints(offspring),
                       current.get_total_excess(),
                       offspring.get_total_excess());
+#endif
       return std::make_pair(std::move(offspring), true);
     }
     return std::make_pair(std::move(offspring), false);
@@ -765,7 +1019,7 @@ class lns_feasibility_t {
 
     const i_t ruin_count = select_related_ruin_vars(current, target_ruin_count);
     if (ruin_count < 2) { return std::make_pair(solution_t<i_t, f_t>(current), false); }
-    return repair_current_ruin_set(current, weights, attempt);
+    return repair_current_ruin_set(current, weights, attempt, "related");
   }
 
   std::pair<solution_t<i_t, f_t>, bool> violated_constraint_ruin_repair(
@@ -784,13 +1038,26 @@ class lns_feasibility_t {
     constexpr i_t block_size = 256;
     const i_t grid_size =
       std::min<i_t>(4096, (current.problem_ptr->n_constraints + block_size - 1) / block_size);
+#if LNS_DEBUG
+    auto mark_kernel_timer = start_kernel_timer(stream);
+#endif
     lns_mark_violated_constraint_integer_vars_kernel<i_t, f_t>
       <<<grid_size, block_size, 0, stream>>>(
         current.view(),
         ruined_var_flags.data(),
         current.problem_ptr->tolerances.relative_tolerance);
     RAFT_CUDA_TRY(cudaPeekAtLastError());
-    return repair_current_ruin_set(current, weights, attempt);
+#if LNS_DEBUG
+    log_kernel_timer(mark_kernel_timer, "lns_mark_violated_constraint_integer_vars_kernel", stream);
+    const i_t marked_count =
+      thrust::count(current.handle_ptr->get_thrust_policy(),
+                    ruined_var_flags.begin(),
+                    ruined_var_flags.end(),
+                    i_t{1});
+    CUOPT_LOG_DEBUG("Standalone LNS violated-constraint ruin selected %d integer variables",
+                    marked_count);
+#endif
+    return repair_current_ruin_set(current, weights, attempt, "violated_constraint");
   }
 
   void lp_polish_with_integers_fixed(
