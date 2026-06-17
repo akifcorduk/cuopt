@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <limits>
 #include <map>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -33,8 +34,10 @@ namespace cuopt::linear_programming::detail::calib {
 std::vector<std::string> bp_feature_names()
 {
   auto names = base_features_t::names();
-  names.push_back("n_changed_constraints");    // dynamic: changed constraints this iteration
-  names.push_back("changed_constraints_nnz");  // dynamic: row-size-weighted changed set
+  names.push_back("max_row_nnz");              // static: deepest constraint row (reduction depth)
+  names.push_back("n_changed_constraints");    // dynamic: changed constraints (block launches)
+  names.push_back("changed_constraints_nnz");  // dynamic: total nnz of the changed set
+  names.push_back("changed_warp_loads");       // dynamic: sum ceil(rowsize/32) over changed set
   return names;
 }
 
@@ -45,8 +48,8 @@ constexpr int kMaxIters = 256;  // bound presolve converges well before this on 
 
 }  // namespace
 
-std::vector<calibration_sample_t> run_bp_calibration_samples(const std::string& mps_path,
-                                                             const std::string& instance_name)
+bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
+                                        const std::string& instance_name)
 {
   const raft::handle_t handle_{};
   auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
@@ -76,8 +79,10 @@ std::vector<calibration_sample_t> run_bp_calibration_samples(const std::string& 
   bf.col_nnz_var   = row_nnz_mean_var(h_rev_offsets).second;
 
   std::vector<double> h_row_size(h_offsets.size() > 0 ? h_offsets.size() - 1 : 0);
+  double max_row_nnz = 0.0;
   for (std::size_t r = 0; r + 1 < h_offsets.size(); ++r) {
     h_row_size[r] = static_cast<double>(h_offsets[r + 1] - h_offsets[r]);
+    max_row_nnz   = std::max(max_row_nnz, h_row_size[r]);
   }
 
   bound_presolve_t<int, double> bp(solver.context);
@@ -89,7 +94,14 @@ std::vector<calibration_sample_t> run_bp_calibration_samples(const std::string& 
   // changed_constraints_nnz). A converging loop revisits the same state many times (e.g. a long
   // tail of identical iterations); each DISTINCT (features -> time) observation should weigh once,
   // not once per visit, otherwise one instance's tail dominates the fit.
-  std::map<std::pair<long, long>, std::vector<double>> by_point;
+  // Per distinct dynamic-feature point: collect activity-kernel and bounds-update-kernel times
+  // separately (each timed with its own sync barriers) so the two sub-models can be fit
+  // independently.
+  struct point_times_t {
+    std::vector<double> activity;
+    std::vector<double> update;
+  };
+  std::map<std::tuple<long, long, long>, point_times_t> by_point;
   for (int rep = 0; rep < kRepeats; ++rep) {
     bp.copy_input_bounds(*pb);
     bp.upd.init_changed_constraints(pb->handle_ptr);
@@ -100,55 +112,77 @@ std::vector<calibration_sample_t> run_bp_calibration_samples(const std::string& 
       pb->handle_ptr->sync_stream();
       long n_changed   = 0;
       long changed_nnz = 0;
+      long warp_loads  = 0;  // sum ceil(rowsize/32): per-row reduction depth at warp granularity
       for (std::size_t c = 0; c < h_changed.size(); ++c) {
         if (h_changed[c] != 0) {
+          const long rs = (long)h_row_size[c];
           n_changed += 1;
-          changed_nnz += (long)h_row_size[c];
+          changed_nnz += rs;
+          warp_loads += (rs + 31) / 32;
         }
       }
 
       pb->handle_ptr->sync_stream();
       auto t0 = std::chrono::steady_clock::now();
       bp.calculate_activity(*pb);
+      pb->handle_ptr->sync_stream();
+      auto t1      = std::chrono::steady_clock::now();
       bool updated = bp.calculate_bounds_update(*pb);
       pb->handle_ptr->sync_stream();
-      auto t1           = std::chrono::steady_clock::now();
-      const double secs = std::chrono::duration<double>(t1 - t0).count();
+      auto t2 = std::chrono::steady_clock::now();
 
-      by_point[{n_changed, changed_nnz}].push_back(secs);
+      auto& pt = by_point[{n_changed, changed_nnz, warp_loads}];
+      pt.activity.push_back(std::chrono::duration<double>(t1 - t0).count());
+      pt.update.push_back(std::chrono::duration<double>(t2 - t1).count());
 
       if (!updated) { break; }
       bp.upd.prepare_for_next_iteration(pb->handle_ptr);
     }
   }
 
-  std::vector<calibration_sample_t> samples;
+  bp_samples_t out;
   int point_idx = 0;
-  for (auto& [key, times] : by_point) {
-    std::sort(times.begin(), times.end());
-    const double median = times.empty() ? 0.0 : times[times.size() / 2];
-    if (median <= 0.0) { continue; }
+  for (auto& [key, pt] : by_point) {
+    std::sort(pt.activity.begin(), pt.activity.end());
+    std::sort(pt.update.begin(), pt.update.end());
+    const double med_act = pt.activity.empty() ? 0.0 : pt.activity[pt.activity.size() / 2];
+    const double med_upd = pt.update.empty() ? 0.0 : pt.update[pt.update.size() / 2];
+    if (med_act <= 0.0 || med_upd <= 0.0) { continue; }
+    const long n_changed   = std::get<0>(key);
+    const long changed_nnz = std::get<1>(key);
+    const long warp_loads  = std::get<2>(key);
 
     std::vector<double> features;
     bf.append_to(features);
-    features.push_back((double)key.first);   // n_changed_constraints
-    features.push_back((double)key.second);  // changed_constraints_nnz
+    features.push_back(max_row_nnz);
+    features.push_back((double)n_changed);
+    features.push_back((double)changed_nnz);
+    features.push_back((double)warp_loads);
 
-    calibration_sample_t s;
-    s.instance               = instance_name + "#p" + std::to_string(point_idx++);
-    s.features               = std::move(features);
-    s.measured_time_per_iter = median;
-    samples.push_back(std::move(s));
+    const std::string tag = instance_name + "#p" + std::to_string(point_idx++);
+    calibration_sample_t a;
+    a.instance               = tag;
+    a.features               = features;
+    a.measured_time_per_iter = med_act;
+    out.activity.push_back(std::move(a));
 
-    std::printf("    [%s] changed_cons=%ld changed_nnz=%ld -> %.3e s (x%zu)\n",
-                instance_name.c_str(),
-                key.first,
-                key.second,
-                median,
-                times.size());
+    calibration_sample_t u;
+    u.instance               = tag;
+    u.features               = std::move(features);
+    u.measured_time_per_iter = med_upd;
+    out.update.push_back(std::move(u));
+
+    std::printf(
+      "    [%s] changed_cons=%ld changed_nnz=%ld warp_loads=%ld -> act %.3e s upd %.3e s\n",
+      instance_name.c_str(),
+      n_changed,
+      changed_nnz,
+      warp_loads,
+      med_act,
+      med_upd);
     std::fflush(stdout);
   }
-  return samples;
+  return out;
 }
 
 }  // namespace cuopt::linear_programming::detail::calib
