@@ -38,6 +38,18 @@ struct bp_recombiner_config_t {
   }
 };
 
+struct feasibility_lns_config_t {
+  static constexpr size_t ruin_count                      = 128;
+  static constexpr size_t max_attempts                    = 1000000;
+  static constexpr double seed_repair_time_limit          = 1.;
+  static constexpr double bounds_prop_time_limit          = 0.25;
+  static constexpr double lp_after_bounds_prop_time_limit = 0.25;
+  static constexpr double alpha                           = 1.;
+  static constexpr double beta                            = 1.;
+  static constexpr size_t n_repair_iterations             = 100;
+  static constexpr size_t violated_constraint_ruin_unsat_limit = 128;
+};
+
 struct ls_recombiner_config_t {
   // line segment related configs
   // FIXME: not implemented yet

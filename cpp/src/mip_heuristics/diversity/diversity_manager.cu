@@ -7,6 +7,7 @@
 
 #include "cuda_profiler_api.h"
 #include "diversity_manager.cuh"
+#include "lns/lns_feasibility.cuh"
 
 #include <mip_heuristics/mip_constants.hpp>
 
@@ -175,6 +176,15 @@ void diversity_manager_t<i_t, f_t>::generate_solution(f_t time_limit, bool rando
   // if a feasible is found, it is added to the population
   ls.generate_solution(sol, random_start, &population, time_limit);
   population.add_solution(std::move(sol));
+}
+
+template <typename i_t, typename f_t>
+bool diversity_manager_t<i_t, f_t>::run_lns_feasibility_phase(solution_t<i_t, f_t>& solution,
+                                                              f_t time_limit)
+{
+  raft::common::nvtx::range fun_scope("run_lns_feasibility_phase");
+  lns_feasibility_t<i_t, f_t> lns_feasibility(context, ls.constraint_prop);
+  return lns_feasibility.run(solution, time_limit);
 }
 
 template <typename i_t, typename f_t>
@@ -381,6 +391,55 @@ struct ls_cpufj_raii_guard_t {
   ls_cpufj_raii_guard_t(local_search_t<i_t, f_t>& ls) : ls(ls) {}
   ~ls_cpufj_raii_guard_t() { ls.stop_cpufj_scratch_threads(); }
   local_search_t<i_t, f_t>& ls;
+};
+
+// returns the best feasible solution
+template <typename i_t, typename f_t>
+solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver_with_lns()
+{
+  raft::common::nvtx::range fun_scope("run_solver_with_lns");
+
+  CUOPT_LOG_DEBUG("Determinism mode: %s",
+                  context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ? "deterministic"
+                                                                                : "opportunistic");
+
+  // to automatically compute the solving time on scope exit
+  auto timer_raii_guard =
+    cuopt::scope_guard([&]() { stats.total_solve_time = timer.elapsed_time(); });
+
+  // after every change to the problem, we should resize all the relevant vars
+  // we need to encapsulate that to prevent repetitions
+  recombine_stats.reset();
+  ls.resize_vectors(*problem_ptr, problem_ptr->handle_ptr);
+  ls.constraint_prop.bounds_update.resize(*problem_ptr);
+  problem_ptr->check_problem_representation(true);
+  // test problem is not ii
+  cuopt_func_call(
+    ls.constraint_prop.bounds_update.calculate_activity_on_problem_bounds(*problem_ptr));
+  cuopt_assert(
+    ls.constraint_prop.bounds_update.calculate_infeasible_redundant_constraints(*problem_ptr),
+    "The problem must not be ii");
+
+  CUOPT_LOG_INFO("Running isolated standalone LNS feasibility phase");
+  solution_t<i_t, f_t> lns_sol(*problem_ptr);
+  rmm::device_uvector<i_t> no_fixed_vars(0, problem_ptr->handle_ptr->get_stream());
+  relaxed_lp_settings_t lp_seed_settings;
+  lp_seed_settings.time_limit            = std::min<f_t>(1., timer.remaining_time() / 4);
+  lp_seed_settings.tolerance             = problem_ptr->tolerances.absolute_tolerance;
+  lp_seed_settings.save_state            = false;
+  lp_seed_settings.return_first_feasible = true;
+  run_lp_with_vars_fixed(*problem_ptr,
+                         lns_sol,
+                         no_fixed_vars,
+                         lp_seed_settings,
+                         static_cast<bound_presolve_t<i_t, f_t>*>(nullptr));
+  lns_sol.round_nearest();
+  lns_sol.compute_feasibility();
+  if (lns_sol.compute_max_variable_violation() > problem_ptr->tolerances.absolute_tolerance) {
+    lns_sol.assign_random_within_bounds(1.0, true);
+  }
+  run_lns_feasibility_phase(lns_sol, timer.remaining_time());
+  return lns_sol;
 };
 
 // returns the best feasible solution

@@ -501,7 +501,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
     // Start the primal heuristics
     context.diversity_manager_ptr = &dm;
-    sol                           = dm.run_solver();
+    sol = context.settings.heuristics_only ? dm.run_solver_with_lns() : dm.run_solver();
   }  // implicit barrier for all tasks created in B&B and heuristics
 
   if (!context.settings.heuristics_only) {

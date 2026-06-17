@@ -250,6 +250,7 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     bool run_early_cpufj = problem.has_papilo_presolve_data() &&
                            settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                            problem.original_problem_ptr->get_n_integers() > 0;
+    run_early_cpufj      = false;
     if (run_early_cpufj) {
       auto early_fj_start = std::chrono::steady_clock::now();
       auto* presolver_ptr = problem.presolve_data.papilo_presolve_ptr;
@@ -486,6 +487,7 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
 
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                         op_problem.get_n_integers() > 0 && op_problem.get_n_constraints() > 0;
+    run_early_fj      = false;
     f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
     if (run_early_fj) {
       auto early_fj_start = std::chrono::steady_clock::now();

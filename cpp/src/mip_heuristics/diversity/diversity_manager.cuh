@@ -37,7 +37,9 @@ class diversity_manager_t {
   diversity_manager_t(mip_solver_context_t<i_t, f_t>& context);
   bool run_presolve(f_t time_limit, timer_t global_timer);
   solution_t<i_t, f_t> run_solver();
+  solution_t<i_t, f_t> run_solver_with_lns();
   void generate_solution(f_t time_limit, bool random_start = true);
+  bool run_lns_feasibility_phase(solution_t<i_t, f_t>& solution, f_t time_limit);
   void run_fj_alone(solution_t<i_t, f_t>& solution);
   void run_fp_alone();
   // main loop of diversity improvements
