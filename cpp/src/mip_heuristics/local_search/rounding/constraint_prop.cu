@@ -184,11 +184,20 @@ void constraint_prop_t<i_t, f_t>::sort_by_implied_slack_consumption(solution_t<i
       make_span(implied_slack_consumption_per_var),
       problem_ii,
       context.settings.get_tolerances());
-  thrust::sort_by_key(sol.handle_ptr->get_thrust_policy(),
-                      implied_slack_consumption_per_var.begin(),
-                      implied_slack_consumption_per_var.end(),
-                      vars.data(),
-                      thrust::greater<f_t>{});
+  // Deterministic ordering: sort (slack, var) by slack desc with the variable index as a total
+  // tie-breaker. thrust::sort_by_key is not stable, so equal-slack vars would otherwise be ordered
+  // nondeterministically across runs, changing which var is rounded next.
+  auto slack_key_it = thrust::make_zip_iterator(
+    thrust::make_tuple(implied_slack_consumption_per_var.begin(), vars.begin()));
+  thrust::sort(sol.handle_ptr->get_thrust_policy(),
+               slack_key_it,
+               slack_key_it + vars.size(),
+               [] __device__(auto a, auto b) {
+                 if (thrust::get<0>(a) != thrust::get<0>(b)) {
+                   return thrust::get<0>(a) > thrust::get<0>(b);
+                 }
+                 return thrust::get<1>(a) < thrust::get<1>(b);
+               });
   sol.handle_ptr->sync_stream();
 }
 
@@ -293,7 +302,10 @@ void constraint_prop_t<i_t, f_t>::sort_by_frac(solution_t<i_t, f_t>& sol,
                [assgn] __device__(i_t v_idx_1, i_t v_idx_2) {
                  f_t frac_1 = get_fractionality_of_val(assgn[v_idx_1]);
                  f_t frac_2 = get_fractionality_of_val(assgn[v_idx_2]);
-                 return frac_1 < frac_2;
+                 // var index tie-break: thrust::sort is not stable, so equal-fractionality vars
+                 // must be totally ordered for deterministic rounding.
+                 if (frac_1 != frac_2) { return frac_1 < frac_2; }
+                 return v_idx_1 < v_idx_2;
                });
 }
 

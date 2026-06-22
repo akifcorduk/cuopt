@@ -338,24 +338,34 @@ inline std::vector<i_t> compute_prioritized_integer_indices(
       make_span(different_coefficient),
       make_span(max_excess_per_var),
       make_span(max_n_violated_per_constraint));
-  auto iterator = thrust::make_zip_iterator(thrust::make_tuple(
-    max_n_violated_per_constraint.begin(), max_excess_per_var.begin(), min_slack_per_var.begin()));
-  // sort the vars
-  thrust::sort_by_key(problem.handle_ptr->get_thrust_policy(),
-                      iterator,
-                      iterator + problem.n_integer_vars,
-                      priority_indices.begin(),
-                      [] __device__(auto tuple1, auto tuple2) {
-                        // if both are zero, i.e. no excess, sort it by min slack
-                        if (thrust::get<0>(tuple1) == 0 && thrust::get<0>(tuple2) == 0) {
-                          return thrust::get<2>(tuple1) < thrust::get<2>(tuple2);
-                        } else if (thrust::get<0>(tuple1) > thrust::get<0>(tuple2)) {
-                          return true;
-                        } else if (thrust::get<0>(tuple1) == thrust::get<0>(tuple2)) {
-                          return thrust::get<1>(tuple1) > thrust::get<1>(tuple2);
-                        }
-                        return false;
-                      });
+  // Sort vars by (n_violated, excess, slack) with the variable index as a total tie-breaker.
+  // priority_indices is folded into the sort key (4th tuple element) because thrust::sort is not
+  // stable: equal-priority vars must keep a deterministic order so the probed-var set within the
+  // budget is reproducible.
+  auto iterator =
+    thrust::make_zip_iterator(thrust::make_tuple(max_n_violated_per_constraint.begin(),
+                                                 max_excess_per_var.begin(),
+                                                 min_slack_per_var.begin(),
+                                                 priority_indices.begin()));
+  thrust::sort(problem.handle_ptr->get_thrust_policy(),
+               iterator,
+               iterator + problem.n_integer_vars,
+               [] __device__(auto t1, auto t2) {
+                 // if both have no excess violation, sort by min slack (then var index)
+                 if (thrust::get<0>(t1) == 0 && thrust::get<0>(t2) == 0) {
+                   if (thrust::get<2>(t1) != thrust::get<2>(t2)) {
+                     return thrust::get<2>(t1) < thrust::get<2>(t2);
+                   }
+                   return thrust::get<3>(t1) < thrust::get<3>(t2);
+                 }
+                 if (thrust::get<0>(t1) != thrust::get<0>(t2)) {
+                   return thrust::get<0>(t1) > thrust::get<0>(t2);
+                 }
+                 if (thrust::get<1>(t1) != thrust::get<1>(t2)) {
+                   return thrust::get<1>(t1) > thrust::get<1>(t2);
+                 }
+                 return thrust::get<3>(t1) < thrust::get<3>(t2);
+               });
   auto h_priority_indices = host_copy(priority_indices, problem.handle_ptr->get_stream());
   problem.handle_ptr->sync_stream();
   return h_priority_indices;
@@ -833,11 +843,24 @@ std::vector<i_t> compute_priority_indices_by_implied_integers(problem_t<i_t, f_t
   rmm::device_uvector<i_t> priority_indices(problem.n_variables, problem.handle_ptr->get_stream());
   thrust::sequence(
     problem.handle_ptr->get_thrust_policy(), priority_indices.begin(), priority_indices.end());
-  thrust::sort_by_key(problem.handle_ptr->get_thrust_policy(),
-                      count_per_variable.data(),
-                      count_per_variable.data() + problem.n_variables,
-                      priority_indices.data(),
-                      thrust::greater<i_t>());
+  // Deterministic ordering: sort (count, var) by count desc with the variable index as a total
+  // tie-breaker (thrust::sort_by_key is not stable). Without this, equal-count variables get a
+  // nondeterministic probing order -> a different set of vars is probed within the budget ->
+  // nondeterministic probing cache and work. count_per_variable stays sorted desc for the
+  // lower_bound below.
+  {
+    auto key_it = thrust::make_zip_iterator(
+      thrust::make_tuple(count_per_variable.begin(), priority_indices.begin()));
+    thrust::sort(problem.handle_ptr->get_thrust_policy(),
+                 key_it,
+                 key_it + problem.n_variables,
+                 [] __device__(auto a, auto b) {
+                   if (thrust::get<0>(a) != thrust::get<0>(b)) {
+                     return thrust::get<0>(a) > thrust::get<0>(b);
+                   }
+                   return thrust::get<1>(a) < thrust::get<1>(b);
+                 });
+  }
   auto h_priority_indices = host_copy(priority_indices, problem.handle_ptr->get_stream());
   // Find the index of the first 0 element in count_per_variable
   auto first_zero_it      = thrust::lower_bound(problem.handle_ptr->get_thrust_policy(),
