@@ -228,6 +228,18 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   }
   auto solver_response = get_relaxed_lp_solution(temp_p, solution, lp_settings);
   cuopt_func_call(solution.test_variable_bounds(false));
+  // Deterministic: charge the projection's actual PDLP work onto the shared work clock so the
+  // global work budget reflects the (dominant) projection effort and the heuristic loop terminates
+  // reproducibly in work units.
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    context.ensure_work_features();
+    const double pdlp_iters =
+      (double)solver_response.get_additional_termination_information().number_of_steps_taken;
+    if (pdlp_iters > 0.0) {
+      context.gpu_heur_loop.record_work(pdlp_iters *
+                                        calib::pdlp_work_per_iter(context.work_features));
+    }
+  }
   last_lp_time = old_remaining - timer.remaining_time();
   lp_time += last_lp_time;
   n_calls++;
@@ -255,7 +267,11 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
 {
   bool result;
   CUOPT_LOG_DEBUG("Rounding the point");
+  // In deterministic mode this budget is spent in work units (the rounding leaves record calibrated
+  // work onto the shared work clock), so the rounding terminates reproducibly instead of on wall
+  // time. `timer` is already work-clocked in deterministic mode (see make_heuristic_timer).
   timer_t bounds_prop_timer(std::max(0.05, std::min(0.5, timer.remaining_time() / 10.)));
+  context.maybe_work_clock(bounds_prop_timer);
   const f_t lp_run_time_after_feasible     = 0.;
   bool old_var                             = constraint_prop.round_all_vars;
   f_t old_time                             = constraint_prop.max_time_for_bounds_prop;

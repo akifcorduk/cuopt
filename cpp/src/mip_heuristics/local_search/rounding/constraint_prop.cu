@@ -974,6 +974,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     if (!(n_failed_repair_iterations >= max_n_failed_repair_iterations) && rounding_ii &&
         !timeout_happened) {
       timer_t repair_timer{std::min(timer.remaining_time() / 5, timer.elapsed_time() / 3)};
+      context.maybe_work_clock(repair_timer);
       save_bounds(sol);
       // update bounds and run repair procedure
       bool bounds_repaired =
@@ -1064,6 +1065,11 @@ bool constraint_prop_t<i_t, f_t>::apply_round(
 {
   raft::common::nvtx::range fun_scope("constraint prop round");
   max_timer = timer_t{max_time_for_bounds_prop};
+  // Deterministic: spend the rounding budget in calibrated work units (shared work clock) so the
+  // bounds-prop rounding loop and all leaf budgets derived from max_timer.remaining_time() stop
+  // reproducibly. The leaves (bounds_update, multi_probe, bounds_repair) record work onto the
+  // clock.
+  context.maybe_work_clock(max_timer);
   if (check_brute_force_rounding(sol)) { return true; }
   recovery_mode      = false;
   rounding_ii        = false;

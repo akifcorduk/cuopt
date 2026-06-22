@@ -8,11 +8,14 @@
 #include "bounds_repair.cuh"
 
 #include <thrust/copy.h>
+#include <thrust/functional.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/partition.h>
 #include <thrust/sort.h>
+#include <thrust/transform_reduce.h>
 #include <thrust/tuple.h>
 #include <cuda/std/functional>
+#include <mip_heuristics/deterministic_calibrator/work_model.hpp>
 #include <mip_heuristics/logger.cuh>
 #include <mip_heuristics/mip_constants.hpp>
 #include <utilities/copy_helpers.hpp>
@@ -70,32 +73,38 @@ f_t bounds_repair_t<i_t, f_t>::get_ii_violation(problem_t<i_t, f_t>& problem)
      min_act              = bound_presolve.upd.min_activity.data(),
      max_act              = bound_presolve.upd.max_activity.data(),
      cstr_violations_up   = cstr_violations_up.data(),
-     cstr_violations_down = cstr_violations_down.data(),
-     total_vio            = total_vio.data()] __device__(i_t cstr_idx) {
+     cstr_violations_down = cstr_violations_down.data()] __device__(i_t cstr_idx) {
       f_t cnst_lb = pb_v.constraint_lower_bounds[cstr_idx];
       f_t cnst_ub = pb_v.constraint_upper_bounds[cstr_idx];
       f_t eps     = get_cstr_tolerance<i_t, f_t>(
         cnst_lb, cnst_ub, pb_v.tolerances.absolute_tolerance, pb_v.tolerances.relative_tolerance);
-      f_t curr_cstr_violation_up   = max(0., min_act[cstr_idx] - (cnst_ub + eps));
-      f_t curr_cstr_violation_down = max(0., cnst_lb - eps - max_act[cstr_idx]);
-      f_t violation                = max(curr_cstr_violation_up, curr_cstr_violation_down);
-      if (violation >= ROUNDOFF_TOLERANCE) {
-        violated_cstr_map[cstr_idx] = 1;
-        atomicAdd(total_vio, violation);
-      } else {
-        violated_cstr_map[cstr_idx] = 0;
-      }
+      f_t curr_cstr_violation_up     = max(0., min_act[cstr_idx] - (cnst_ub + eps));
+      f_t curr_cstr_violation_down   = max(0., cnst_lb - eps - max_act[cstr_idx]);
+      f_t violation                  = max(curr_cstr_violation_up, curr_cstr_violation_down);
+      violated_cstr_map[cstr_idx]    = violation >= ROUNDOFF_TOLERANCE ? 1 : 0;
       cstr_violations_up[cstr_idx]   = curr_cstr_violation_up;
       cstr_violations_down[cstr_idx] = curr_cstr_violation_down;
     });
-  auto iter           = thrust::copy_if(handle_ptr->get_thrust_policy(),
+  auto iter         = thrust::copy_if(handle_ptr->get_thrust_policy(),
                               thrust::make_counting_iterator(0),
                               thrust::make_counting_iterator(0) + problem.n_constraints,
                               violated_cstr_map.data(),
                               violated_constraints.data(),
                               cuda::std::identity{});
-  h_n_violated_cstr   = iter - violated_constraints.data();
-  f_t total_violation = total_vio.value(handle_ptr->get_stream());
+  h_n_violated_cstr = iter - violated_constraints.data();
+  // Deterministic total violation: a tree reduction (cub) is run-to-run reproducible, unlike the
+  // previous float atomicAdd whose ordering flipped the best_violation argmin across runs.
+  f_t total_violation = thrust::transform_reduce(
+    handle_ptr->get_thrust_policy(),
+    thrust::make_counting_iterator(0),
+    thrust::make_counting_iterator(0) + problem.n_constraints,
+    [violated_cstr_map    = violated_cstr_map.data(),
+     cstr_violations_up   = cstr_violations_up.data(),
+     cstr_violations_down = cstr_violations_down.data()] __device__(i_t c) -> f_t {
+      return violated_cstr_map[c] ? max(cstr_violations_up[c], cstr_violations_down[c]) : f_t(0);
+    },
+    f_t(0),
+    thrust::plus<f_t>{});
   CUOPT_LOG_TRACE(
     "Repair: n_violated_cstr %d total_violation %f", h_n_violated_cstr, total_violation);
   return total_violation;
@@ -262,22 +271,24 @@ void bounds_repair_t<i_t, f_t>::compute_damages(problem_t<i_t, f_t>& problem, i_
     make_span(bound_presolve.upd.min_activity),
     make_span(bound_presolve.upd.max_activity));
   RAFT_CHECK_CUDA(handle_ptr->get_stream());
-  auto sort_iterator = thrust::make_zip_iterator(
-    thrust::make_tuple(candidates.cstr_delta.data(), candidates.damage.data()));
-  // sort the best moves so that we can filter
+  // Sort the candidate moves to filter the best ones. variable_index is part of the key as the
+  // final tie-breaker: compute_best_shift compacts candidates with an atomicAdd, so the array order
+  // is nondeterministic; tie-breaking on variable_index makes the sorted order (and thus the move
+  // selected by get_random_idx) reproducible across runs.
+  auto sort_iterator = thrust::make_zip_iterator(thrust::make_tuple(
+    candidates.cstr_delta.data(), candidates.damage.data(), candidates.variable_index.data()));
   thrust::sort_by_key(handle_ptr->get_thrust_policy(),
                       sort_iterator,
                       sort_iterator + n_candidates,
-                      thrust::make_zip_iterator(thrust::make_tuple(
-                        candidates.bound_shift.data(), candidates.variable_index.data())),
+                      candidates.bound_shift.data(),
                       [] __device__(auto tuple1, auto tuple2) -> bool {
-                        if (thrust::get<0>(tuple1) < thrust::get<0>(tuple2)) {
-                          return true;
-                        } else if (thrust::get<0>(tuple1) == thrust::get<0>(tuple2) &&
-                                   thrust::get<1>(tuple1) < thrust::get<1>(tuple2)) {
-                          return true;
+                        if (thrust::get<0>(tuple1) != thrust::get<0>(tuple2)) {
+                          return thrust::get<0>(tuple1) < thrust::get<0>(tuple2);
                         }
-                        return false;
+                        if (thrust::get<1>(tuple1) != thrust::get<1>(tuple2)) {
+                          return thrust::get<1>(tuple1) < thrust::get<1>(tuple2);
+                        }
+                        return thrust::get<2>(tuple1) < thrust::get<2>(tuple2);
                       });
 }
 
@@ -385,6 +396,15 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
   CUOPT_LOG_DEBUG("Running bounds repair");
   handle_ptr = handle_ptr_;
   timer      = timer_;
+  // Deterministic work accounting: clock the loop on the shared work counter and record the
+  // CALIBRATED per-move work each iteration (compute_best_shift + compute_damages + apply_move +
+  // ii-violation pass), so the repair budget is spent in work units reproducibly.
+  auto& context  = bound_presolve.context;
+  const bool det = context.gpu_heur_loop.deterministic;
+  if (det) {
+    context.ensure_work_features();
+    timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
+  }
   resize(problem);
   reset();
   best_violation = get_ii_violation(problem);
@@ -414,6 +434,13 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       continue;
     }
     no_candidate_in_a_row = 0;
+    if (det) {
+      const double rowsize = (curr_cstr >= 0 && curr_cstr < (i_t)context.work_row_sizes.size())
+                               ? (double)context.work_row_sizes[curr_cstr]
+                               : 0.0;
+      context.gpu_heur_loop.record_work(
+        calib::repair_work_per_move(context.work_features, (double)n_candidates, rowsize));
+    }
     CUOPT_LOG_TRACE("Repair: number of candidates %d", n_candidates);
     // among the ones that have a valid shift value, compute the damage
     compute_damages(problem, n_candidates);

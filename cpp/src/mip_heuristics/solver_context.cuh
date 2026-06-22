@@ -78,6 +78,16 @@ struct mip_solver_context_t {
     return t;
   }
 
+  // Switch an already-constructed orchestration timer (e.g. the rounding/repair budgets) onto the
+  // shared work clock in deterministic mode, so its budget is spent in calibrated work units and
+  // the loop it bounds terminates reproducibly. No-op in opportunistic mode.
+  void maybe_work_clock(timer_t& t) const
+  {
+    if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit);
+    }
+  }
+
   raft::handle_t const* const handle_ptr;
   problem_t<i_t, f_t>* problem_ptr;
   dual_simplex::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};
@@ -97,6 +107,9 @@ struct mip_solver_context_t {
   // pseudo-second work budget into a deterministic per-leaf iteration limit (wups == 1).
   calib::work_features_t work_features;
   bool work_features_ready{false};
+  // Per-constraint row sizes (host), used to feed the dynamic rowsize feature of the bounds-repair
+  // work model without a per-iteration device read.
+  std::vector<i_t> work_row_sizes;
 
   void ensure_work_features()
   {
@@ -107,6 +120,10 @@ struct mip_solver_context_t {
     handle_ptr->sync_stream();
     work_features = calib::compute_work_features(
       ro, co, (double)problem_ptr->n_variables, (double)problem_ptr->nnz);
+    work_row_sizes.resize(ro.size() > 0 ? ro.size() - 1 : 0);
+    for (std::size_t r = 0; r + 1 < ro.size(); ++r) {
+      work_row_sizes[r] = ro[r + 1] - ro[r];
+    }
     work_features_ready = true;
   }
 
