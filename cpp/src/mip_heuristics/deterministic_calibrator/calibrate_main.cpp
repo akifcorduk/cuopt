@@ -10,6 +10,7 @@
 #include <mip_heuristics/deterministic_calibrator/fj_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/mp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/pdlp_harness.hpp>
+#include <mip_heuristics/deterministic_calibrator/repair_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
 
 #include <algorithm>
@@ -438,6 +439,23 @@ void run_pdlp(const std::string& dataset_dir, const std::string& out_header)
   run_single_hinge("pdlp", pdlp_feature_names(), std::move(samples), out_header);
 }
 
+void run_repair(const std::string& dataset_dir, const std::string& out_header)
+{
+  std::vector<calibration_sample_t> samples;
+  for (const auto& name : kInstances) {
+    const std::string path = dataset_dir + "/" + name + ".mps";
+    std::printf("\n[instance] %s\n", name.c_str());
+    std::fflush(stdout);
+    try {
+      auto s = run_repair_calibration_sample(path, name);
+      samples.insert(samples.end(), s.begin(), s.end());
+    } catch (const std::exception& e) {
+      std::printf("  SKIP (%s)\n", e.what());
+    }
+  }
+  run_single_hinge("repair", repair_feature_names(), std::move(samples), out_header);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -457,8 +475,10 @@ int main(int argc, char** argv)
     run_pdlp(dataset_dir, out_header);
   } else if (algo == "mp") {
     run_mp(dataset_dir, out_header);
+  } else if (algo == "repair") {
+    run_repair(dataset_dir, out_header);
   } else {
-    std::printf("Unknown algo '%s' (expected fj|bp|pdlp|mp)\n", algo.c_str());
+    std::printf("Unknown algo '%s' (expected fj|bp|pdlp|mp|repair)\n", algo.c_str());
     return 2;
   }
   return 0;
