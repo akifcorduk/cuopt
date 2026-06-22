@@ -257,3 +257,13 @@ When a bug surfaces as **wrong-but-plausible** solver output (invalid lower boun
 - **`resources/numerical_debugging.md`** — methodology for locating catastrophic-cancellation sites, the cancellation patterns endemic to cMIR / flow-cover / MIR-style cut construction, and threshold guidance for numerical guards.
 
 Apply the *instrument-first, guard-at-the-exact-site* workflow it describes before patching — speculative fixes on these symptoms usually miss.
+
+## Determinism in the GPU solve path
+
+When a run in deterministic mode is not bitwise reproducible, the cause is almost always a GPU/parallel operation whose result order isn't pinned. Debug by comparing two runs' logs with timestamps stripped to find the *first* divergence, then check the operation just upstream of it. The common offenders:
+
+- **Non-stable sorts with tied keys.** `thrust::sort` / `thrust::sort_by_key` are not stable, so elements with equal keys get a relative order that varies run-to-run on the GPU. Give every sort a unique *final* tie-breaker (e.g. the variable or constraint index) so the comparator defines a total order. This matters even when the sort feeds something that "looks order-independent" — e.g. a priority list truncated by a budget will probe a different set of items if ties reorder. The same applies to any "pick by score" step where scores can tie.
+- **Float `atomicAdd` into a value that feeds control flow.** Atomic float summation order is nondeterministic, so the low bits of the result vary. If that sum drives an argmin/argmax, a threshold, or a loop's continuation, the divergence cascades. Use a deterministic tree reduction (`thrust::reduce` / `cub::DeviceReduce`) instead of accumulating with `atomicAdd`.
+- **Concurrent writes to a shared scalar from host threads.** An OpenMP taskloop whose tasks each `+=` one shared counter (e.g. a work/stat accumulator) both races and sums in nondeterministic order. Give each task its own accumulator and fold them in with a fixed order at the barrier (single-threaded), not per-task during the parallel region.
+
+The atomic/race issues bite hardest when the affected value gates a work-unit or time budget: a sub-ULP difference there changes how many iterations a downstream loop runs, which then changes everything after it.
