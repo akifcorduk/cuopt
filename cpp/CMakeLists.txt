@@ -804,6 +804,7 @@ if (BUILD_MIP_WORK_CALIBRATOR AND NOT BUILD_LP_ONLY)
             src/mip_heuristics/deterministic_calibrator/pdlp_harness.cu
             src/mip_heuristics/deterministic_calibrator/mp_harness.cu
             src/mip_heuristics/deterministic_calibrator/repair_harness.cu
+            src/mip_heuristics/deterministic_calibrator/fp_verify_harness.cu
     )
 
     set_target_properties(mip_work_calibrator

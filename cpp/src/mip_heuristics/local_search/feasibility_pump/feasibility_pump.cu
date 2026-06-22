@@ -219,8 +219,13 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
-  // NOTE: deterministic LP iteration cap + work accounting removed during the work-unit rebuild;
-  // the PDLP leaf will get its own calibrated work model (deterministic_calibrator/).
+  // Work-unit sub-budget: in deterministic mode the projection's wall-time budget is replaced by a
+  // calibrated PDLP iteration budget (work units == pseudo-seconds, wups == 1), so PDLP terminates
+  // on its own work-unit limit reproducibly. The global solver time limit still applies elsewhere.
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    lp_settings.iteration_limit = context.pdlp_iters_for_budget(time_limit);
+    lp_settings.time_limit      = std::numeric_limits<f_t>::infinity();
+  }
   auto solver_response = get_relaxed_lp_solution(temp_p, solution, lp_settings);
   cuopt_func_call(solution.test_variable_bounds(false));
   last_lp_time = old_remaining - timer.remaining_time();
@@ -288,7 +293,13 @@ bool feasibility_pump_t<i_t, f_t>::run_fj_cycle_escape(solution_t<i_t, f_t>& sol
   fj.settings.feasibility_run        = false;
   fj.settings.n_of_minimums_for_exit = 5000;
   fj.settings.time_limit             = std::min(3., timer.remaining_time());
-  is_feasible                        = fj.solve(solution);
+  // Work-unit sub-budget: replace FJ's wall-time budget with a calibrated FJ step budget in
+  // deterministic mode (FJ then terminates on its own work-unit limit).
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    fj.settings.iteration_limit = context.fj_steps_for_budget(fj.settings.time_limit);
+    fj.settings.time_limit      = std::numeric_limits<f_t>::infinity();
+  }
+  is_feasible = fj.solve(solution);
   // if FJ didn't change the solution, take last incumbent solution
   if (!is_feasible && cycle_queue.check_cycle(solution)) {
     CUOPT_LOG_DEBUG("cycle detected after FJ, taking last incumbent of fj");
@@ -310,6 +321,10 @@ bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& soluti
   fj.settings.feasibility_run        = true;
   fj.settings.n_of_minimums_for_exit = 5000;
   fj.settings.time_limit             = std::min(time_limit, timer.remaining_time());
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    fj.settings.iteration_limit = context.fj_steps_for_budget(fj.settings.time_limit);
+    fj.settings.time_limit      = std::numeric_limits<f_t>::infinity();
+  }
   cuopt_func_call(solution.test_variable_bounds(true));
   is_feasible = fj.solve(solution);
   cuopt_func_call(solution.test_variable_bounds(true));

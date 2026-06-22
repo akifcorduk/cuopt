@@ -7,13 +7,16 @@
 
 #include <cuopt/linear_programming/mip/solver_stats.hpp>
 
+#include <mip_heuristics/deterministic_calibrator/work_model.hpp>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
+#include <utilities/copy_helpers.hpp>
 #include <utilities/determinism_log.hpp>
 #include <utilities/termination_checker.hpp>
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 
@@ -89,6 +92,37 @@ struct mip_solver_context_t {
   // Work limit context for tracking work units in deterministic mode (shared across all timers in
   // GPU heuristic loop)
   work_limit_context_t gpu_heur_loop{"GPUHeur"};
+
+  // Calibrated work-unit model: static structural features (computed once) used to convert a
+  // pseudo-second work budget into a deterministic per-leaf iteration limit (wups == 1).
+  calib::work_features_t work_features;
+  bool work_features_ready{false};
+
+  void ensure_work_features()
+  {
+    if (work_features_ready) { return; }
+    auto stream = handle_ptr->get_stream();
+    auto ro     = cuopt::host_copy(problem_ptr->offsets, stream);
+    auto co     = cuopt::host_copy(problem_ptr->reverse_offsets, stream);
+    handle_ptr->sync_stream();
+    work_features = calib::compute_work_features(
+      ro, co, (double)problem_ptr->n_variables, (double)problem_ptr->nnz);
+    work_features_ready = true;
+  }
+
+  // Deterministic iteration budget for a leaf given a pseudo-second work budget (wups == 1).
+  i_t pdlp_iters_for_budget(f_t work_budget)
+  {
+    ensure_work_features();
+    const double wpi = calib::pdlp_work_per_iter(work_features);
+    return wpi > 0.0 ? std::max<i_t>(1, (i_t)(work_budget / wpi)) : 1;
+  }
+  i_t fj_steps_for_budget(f_t work_budget)
+  {
+    ensure_work_features();
+    const double wps = calib::fj_work_per_step(work_features, work_features.frontier_work_mean);
+    return wps > 0.0 ? std::max<i_t>(1, (i_t)(work_budget / wps)) : 1;
+  }
 
   // synchronization every 5 seconds for deterministic mode
   work_unit_scheduler_t work_unit_scheduler_{5.0};

@@ -8,6 +8,7 @@
 #include <mip_heuristics/deterministic_calibrator/bp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/calibrator.hpp>
 #include <mip_heuristics/deterministic_calibrator/fj_harness.hpp>
+#include <mip_heuristics/deterministic_calibrator/fp_verify_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/mp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/pdlp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/repair_harness.hpp>
@@ -477,8 +478,21 @@ int main(int argc, char** argv)
     run_mp(dataset_dir, out_header);
   } else if (algo == "repair") {
     run_repair(dataset_dir, out_header);
+  } else if (algo == "fpverify") {
+    int npass = 0, ntot = 0;
+    for (const auto& name : kInstances) {
+      const std::string path = dataset_dir + "/" + name + ".mps";
+      try {
+        ++ntot;
+        if (run_fp_verify(path, name)) { ++npass; }
+      } catch (const std::exception& e) {
+        std::printf("[%s] SKIP (%s)\n", name.c_str(), e.what());
+        --ntot;
+      }
+    }
+    std::printf("\n=== fpverify: %d/%d instances fully reproducible ===\n", npass, ntot);
   } else {
-    std::printf("Unknown algo '%s' (expected fj|bp|pdlp|mp|repair)\n", algo.c_str());
+    std::printf("Unknown algo '%s' (expected fj|bp|pdlp|mp|repair|fpverify)\n", algo.c_str());
     return 2;
   }
   return 0;
