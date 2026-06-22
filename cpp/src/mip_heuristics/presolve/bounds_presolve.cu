@@ -13,6 +13,7 @@
 #include <thrust/count.h>
 #include <thrust/extrema.h>
 #include <thrust/functional.h>
+#include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/transform_reduce.h>
@@ -24,6 +25,7 @@
 #include "bounds_presolve.cuh"
 #include "bounds_presolve_helpers.cuh"
 #include "bounds_update_helpers.cuh"
+#include "changed_feature_reduce.cuh"
 
 namespace cuopt::linear_programming::detail {
 
@@ -174,9 +176,23 @@ termination_criterion_t bound_presolve_t<i_t, f_t>::bound_update_loop(problem_t<
 {
   termination_criterion_t criteria = termination_criterion_t::ITERATION_LIMIT;
 
+  // Deterministic work accounting: clock the loop on accumulated work units (wups == 1) and record
+  // the CALIBRATED per-iteration work using the actual changed-constraint set (which shrinks as the
+  // fixpoint converges). settings.time_limit is interpreted as the work-unit budget.
+  const bool det = context.gpu_heur_loop.deterministic;
+  if (det) {
+    context.ensure_work_features();
+    timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
+  }
+
   i_t iter;
   upd.init_changed_constraints(pb.handle_ptr);
   for (iter = 0; iter < settings.iteration_limit; ++iter) {
+    if (det) {
+      const changed_feat_t cf = reduce_changed_features(pb, upd.changed_constraints);
+      context.gpu_heur_loop.record_work(
+        calib::bp_work_per_iter(context.work_features, cf.n, cf.nnz, cf.warp));
+    }
     calculate_activity(pb);
     if (timer.check_time_limit()) {
       criteria = termination_criterion_t::TIME_LIMIT;

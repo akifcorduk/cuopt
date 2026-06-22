@@ -18,6 +18,7 @@
 #include <cub/cub.cuh>
 #include "bounds_presolve_helpers.cuh"
 #include "bounds_update_helpers.cuh"
+#include "changed_feature_reduce.cuh"
 #include "multi_probe.cuh"
 
 #include <limits>
@@ -272,6 +273,15 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
   skip_0                           = false;
   skip_1                           = false;
 
+  // Deterministic work accounting: work-clock the loop (wups == 1) and record the CALIBRATED
+  // per-iteration work using the actual changed sets of BOTH probes (multi_probe runs the same
+  // activity/bounds-update kernels as bound presolve over two probe buffers).
+  const bool det = context.gpu_heur_loop.deterministic;
+  if (det) {
+    context.ensure_work_features();
+    timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
+  }
+
   i_t iter_0 = 0;
   i_t iter_1 = 0;
   if (init_changed_constraints) {
@@ -283,6 +293,12 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
     init_changed_constraints = true;
   }
   for (i_t iter = 0; iter < settings.iteration_limit; ++iter) {
+    if (det) {
+      const changed_feat_t c0 = reduce_changed_features(pb, upd_0.changed_constraints);
+      const changed_feat_t c1 = reduce_changed_features(pb, upd_1.changed_constraints);
+      context.gpu_heur_loop.record_work(calib::bp_work_per_iter(
+        context.work_features, c0.n + c1.n, c0.nnz + c1.nnz, c0.warp + c1.warp));
+    }
     if (timer.check_time_limit()) {
       criteria = termination_criterion_t::TIME_LIMIT;
       break;
