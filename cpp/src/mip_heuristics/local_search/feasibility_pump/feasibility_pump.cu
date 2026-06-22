@@ -293,12 +293,9 @@ bool feasibility_pump_t<i_t, f_t>::run_fj_cycle_escape(solution_t<i_t, f_t>& sol
   fj.settings.feasibility_run        = false;
   fj.settings.n_of_minimums_for_exit = 5000;
   fj.settings.time_limit             = std::min(3., timer.remaining_time());
-  // Work-unit sub-budget: replace FJ's wall-time budget with a calibrated FJ step budget in
-  // deterministic mode (FJ then terminates on its own work-unit limit).
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    fj.settings.iteration_limit = context.fj_steps_for_budget(fj.settings.time_limit);
-    fj.settings.time_limit      = std::numeric_limits<f_t>::infinity();
-  }
+  // Work-unit sub-budget (deterministic): FJ's host_loop runs a work-clocked termination checker
+  // keyed on settings.time_limit (interpreted as a work-unit budget, wups == 1) and records the
+  // calibrated per-batch work each iteration, so FJ terminates dynamically on its work-unit limit.
   is_feasible = fj.solve(solution);
   // if FJ didn't change the solution, take last incumbent solution
   if (!is_feasible && cycle_queue.check_cycle(solution)) {
@@ -321,10 +318,8 @@ bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& soluti
   fj.settings.feasibility_run        = true;
   fj.settings.n_of_minimums_for_exit = 5000;
   fj.settings.time_limit             = std::min(time_limit, timer.remaining_time());
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    fj.settings.iteration_limit = context.fj_steps_for_budget(fj.settings.time_limit);
-    fj.settings.time_limit      = std::numeric_limits<f_t>::infinity();
-  }
+  // Deterministic: settings.time_limit is FJ's work-unit budget; host_loop records calibrated
+  // per-batch work and stops on the work-unit limit.
   cuopt_func_call(solution.test_variable_bounds(true));
   is_feasible = fj.solve(solution);
   cuopt_func_call(solution.test_variable_bounds(true));

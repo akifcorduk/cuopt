@@ -1050,6 +1050,7 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 
   data.incumbent_quality.set_value_async(obj, handle_ptr->get_stream());
 
+  if (context.gpu_heur_loop.deterministic) { context.ensure_work_features(); }
   termination_checker_t timer(context.gpu_heur_loop, settings.time_limit, *context.termination);
   i_t steps;
   bool limit_reached = false;
@@ -1102,9 +1103,18 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
     // periodically recompute the LHS and violation scores
     // to correct any accumulated numerical errors
     if (lhs_refreshed) { refresh_lhs_and_violation(climber_stream, climber_idx); }
-    // NOTE: per-step work-unit recording removed during the work-unit rebuild. FJ's device
-    // frontier-work estimator (deterministic_batch_work) is still computed and will feed the
-    // calibrated FJ work model (deterministic_calibrator/) when FJ is wired back in.
+    // Dynamic work-unit accounting: record this batch's CALIBRATED work using the actual per-step
+    // frontier (deterministic_batch_work, reset per batch). The work-clocked `timer` (work budget
+    // == settings.time_limit in deterministic mode) then terminates FJ on its work-unit limit, with
+    // the cost reflecting each batch's actual workload rather than a fixed average.
+    if (context.gpu_heur_loop.deterministic && !limit_reached) {
+      const double batch_frontier = data.deterministic_batch_work.value(climber_stream);
+      const double per_step_frontier =
+        iterations_per_batch > 0 ? batch_frontier / (double)iterations_per_batch : batch_frontier;
+      const double batch_work = (double)iterations_per_batch *
+                                calib::fj_work_per_step(context.work_features, per_step_frontier);
+      timer.record_work(batch_work);
+    }
 
     // periodically synchronize and check the latest solution
     // feasible solution found!*view.break_condition

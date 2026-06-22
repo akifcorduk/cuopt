@@ -16,6 +16,7 @@
 #include <mip_heuristics/solver.cuh>
 #include <mip_heuristics/utils.cuh>
 #include <utilities/copy_helpers.hpp>
+#include <utilities/seed_generator.cuh>
 #include <utilities/timer.hpp>
 
 #include <pdlp/pdlp.cuh>
@@ -39,6 +40,50 @@ struct pdlp_run_t {
   double obj;
   double secs;
 };
+
+struct fj_run_t {
+  int iters;
+  unsigned hash;
+  double secs;
+};
+
+// Run FJ to a work-unit budget (settings.time_limit interpreted as work units in deterministic
+// mode; FJ records calibrated per-batch work and stops on the budget). Returns step count, solution
+// hash and wall time.
+fj_run_t run_fj_to_budget(mip_solver_context_t<int, double>& ctx, double budget)
+{
+  // Fixed seed so reproducibility reflects FJ determinism, not the advancing global seed (the
+  // deterministic solver path seeds deterministically too).
+  cuopt::seed_generator::set_seed(42);
+  solution_t<int, double> solution(*ctx.problem_ptr);
+  auto stream = solution.handle_ptr->get_stream();
+  thrust::fill(solution.handle_ptr->get_thrust_policy(),
+               solution.assignment.begin(),
+               solution.assignment.end(),
+               0.0);
+  solution.clamp_within_bounds();
+
+  fj_settings_t fj_settings;
+  fj_settings.time_limit             = budget;  // work-unit budget (deterministic)
+  fj_settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;
+  fj_settings.n_of_minimums_for_exit = 20000 * 1000;  // don't exit on minima; let the budget bind
+  fj_settings.update_weights         = true;
+  fj_settings.feasibility_run        = false;
+
+  fj_t<int, double> fj(ctx, fj_settings);
+  fj.reset_weights(stream, 1.0);
+  double zero = 0.0;
+  fj.objective_weight.set_value_async(zero, stream);
+  solution.handle_ptr->sync_stream();
+
+  auto t0 = std::chrono::steady_clock::now();
+  fj.solve(solution);
+  solution.handle_ptr->sync_stream();
+  auto t1 = std::chrono::steady_clock::now();
+  return {fj.climbers[0]->iterations.value(stream),
+          detail::compute_hash(solution.assignment, stream),
+          std::chrono::duration<double>(t1 - t0).count()};
+}
 
 pdlp_run_t run_pdlp_to_iters(problem_t<int, double>& problem, int iter_limit)
 {
@@ -108,6 +153,28 @@ bool run_fp_verify(const std::string& mps_path, const std::string& instance_name
       r2.secs,
       reproducible ? "YES" : "NO",
       time_ratio);
+    std::fflush(stdout);
+  }
+
+  // FJ dynamic work budget verification
+  std::printf("  [FJ] fj_work_per_step(mean frontier)=%.3e s\n",
+              calib::fj_work_per_step(ctx.work_features, ctx.work_features.frontier_work_mean));
+  for (double budget : {0.05, 0.2, 0.5}) {
+    auto r1                 = run_fj_to_budget(ctx, budget);
+    auto r2                 = run_fj_to_budget(ctx, budget);
+    const bool reproducible = (r1.iters == r2.iters) && (r1.hash == r2.hash);
+    if (!reproducible) { ok = false; }
+    std::printf(
+      "  FJ budget=%.3f s | run1(iters=%d hash=%x %.4fs) run2(iters=%d %.4fs) | reproducible=%s  "
+      "wall/budget=%.2f\n",
+      budget,
+      r1.iters,
+      r1.hash,
+      r1.secs,
+      r2.iters,
+      r2.secs,
+      reproducible ? "YES" : "NO",
+      budget > 0 ? r1.secs / budget : 0.0);
     std::fflush(stdout);
   }
   return ok;
