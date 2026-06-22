@@ -276,10 +276,17 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
   // Deterministic work accounting: work-clock the loop (wups == 1) and record the CALIBRATED
   // per-iteration work using the actual changed sets of BOTH probes (multi_probe runs the same
   // activity/bounds-update kernels as bound presolve over two probe buffers).
-  const bool det = context.gpu_heur_loop.deterministic;
+  const bool det        = context.gpu_heur_loop.deterministic;
+  const bool local_work = local_work_accumulator != nullptr;
   if (det) {
     context.ensure_work_features();
-    timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
+    // In probing-cache mode (local_work) the loop runs multi-threaded, so it must not work-clock or
+    // record onto the shared global counter; it relies on convergence/iteration_limit and tallies
+    // work into the per-task accumulator that the caller folds into the global clock at the
+    // barrier.
+    if (!local_work) {
+      timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
+    }
   }
 
   i_t iter_0 = 0;
@@ -296,8 +303,13 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
     if (det) {
       const changed_feat_t c0 = reduce_changed_features(pb, upd_0.changed_constraints);
       const changed_feat_t c1 = reduce_changed_features(pb, upd_1.changed_constraints);
-      context.gpu_heur_loop.record_work(calib::bp_work_per_iter(
-        context.work_features, c0.n + c1.n, c0.nnz + c1.nnz, c0.warp + c1.warp));
+      const double w          = calib::bp_work_per_iter(
+        context.work_features, c0.n + c1.n, c0.nnz + c1.nnz, c0.warp + c1.warp);
+      if (local_work) {
+        *local_work_accumulator += w;
+      } else {
+        context.gpu_heur_loop.record_work(w);
+      }
     }
     if (timer.check_time_limit()) {
       criteria = termination_criterion_t::TIME_LIMIT;

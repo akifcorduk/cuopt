@@ -75,8 +75,13 @@ class multi_probe_t {
   bool skip_0;
   bool skip_1;
   settings_t settings;
-  bool compute_stats             = true;
-  bool init_changed_constraints  = true;
+  bool compute_stats            = true;
+  bool init_changed_constraints = true;
+  // When non-null (multi-threaded probing cache), deterministic per-iteration work is added here
+  // instead of the shared global work counter, avoiding a cross-thread data race; the caller sums
+  // these per-task accumulators at the step barrier. nullptr => record straight to the global work
+  // clock and work-clock the loop (single-threaded use, e.g. rounding).
+  double* local_work_accumulator = nullptr;
   i_t infeas_constraints_count_0 = 0;
   i_t redund_constraints_count_0 = 0;
   i_t infeas_constraints_count_1 = 0;

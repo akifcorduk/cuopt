@@ -889,6 +889,15 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
     multi_probe_presolve_pool[i].resize(problem);
     multi_probe_presolve_pool[i].compute_stats = true;
   }
+  // Per-task deterministic work accumulators: each thread tallies its probing work locally to avoid
+  // racing on the shared global work counter; folded into the global clock at each step barrier.
+  const bool det_work = bound_presolve.context.gpu_heur_loop.deterministic;
+  std::vector<double> work_accum_pool(num_tasks, 0.0);
+  if (det_work) {
+    for (size_t i = 0; i < num_tasks; i++) {
+      multi_probe_presolve_pool[i].local_work_accumulator = &work_accum_pool[i];
+    }
+  }
 
   // Atomic variables for tracking progress
   std::atomic<size_t> n_of_implied_singletons(0);
@@ -939,6 +948,17 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
                                         problem.handle_ptr->get_device());
       }
     }  // implicit barrier that waits for all iterations to finish before proceeding
+
+    // Fold this step's per-task probing work into the global work clock deterministically (fixed
+    // summation order, single-threaded after the barrier).
+    if (det_work) {
+      double step_work = 0.0;
+      for (size_t t = 0; t < num_tasks; ++t) {
+        step_work += work_accum_pool[t];
+        work_accum_pool[t] = 0.0;
+      }
+      bound_presolve.context.gpu_heur_loop.record_work(step_work);
+    }
 
     apply_modification_queue_to_problem(modification_vector_pool, problem);
     // copy host bounds again, because we changed some problem bounds
