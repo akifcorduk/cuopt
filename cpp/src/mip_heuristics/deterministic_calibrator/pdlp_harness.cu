@@ -103,8 +103,10 @@ calibration_sample_t run_pdlp_calibration_sample(const std::string& mps_path,
   bf.col_nnz_var   = row_nnz_mean_var(h_rev_offsets).second;
 
   double row_warp_loads = 0.0;
+  double max_row_nnz    = 0.0;
   for (std::size_t r = 0; r + 1 < h_offsets.size(); ++r) {
     row_warp_loads += (double)(((h_offsets[r + 1] - h_offsets[r]) + 31) / 32);
+    max_row_nnz = std::max(max_row_nnz, (double)(h_offsets[r + 1] - h_offsets[r]));
   }
   double col_warp_loads = 0.0;
   for (std::size_t v = 0; v + 1 < h_rev_offsets.size(); ++v) {
@@ -145,6 +147,7 @@ calibration_sample_t run_pdlp_calibration_sample(const std::string& mps_path,
   s.instance               = instance_name;
   s.features               = std::move(features);
   s.measured_time_per_iter = median;
+  s.max_row_nnz            = max_row_nnz;
   return s;
 }
 

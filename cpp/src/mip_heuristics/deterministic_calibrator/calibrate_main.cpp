@@ -473,6 +473,7 @@ struct dump_row_t {
   std::string instance;
   double measured;
   std::vector<double> feat;  // raw harness feature vector (feat[0] == 1 intercept)
+  double max_row{0.0};       // longest constraint row (serialization count)
 };
 
 // Kernel-tagged raw samples for an algorithm on the current device.
@@ -524,7 +525,7 @@ void dump_mode(const std::string& algo, const std::string& dir, const std::strin
       << s.instance << ',' << s.measured_time_per_iter << ',' << s.features.size();
     for (double x : s.features)
       f << ',' << x;
-    f << '\n';
+    f << ',' << s.max_row_nnz << '\n';  // trailing serialization count (longest row)
   }
   std::printf("\nAppended %zu samples to %s\n", samples.size(), csv.c_str());
 }
@@ -559,6 +560,7 @@ std::vector<dump_row_t> load_rows(const std::vector<std::string>& csvs,
       const std::size_t nfeat = (std::size_t)std::stoul(tok[10]);
       for (std::size_t i = 0; i < nfeat && 11 + i < tok.size(); ++i)
         r.feat.push_back(std::stod(tok[11 + i]));
+      if (11 + nfeat < tok.size()) r.max_row = std::stod(tok[11 + nfeat]);
       rows.push_back(std::move(r));
     }
   }
@@ -577,7 +579,7 @@ double device_cv(const std::vector<dump_row_t>& rows,
     if (!only_gpu.empty() && std::string(r.g.name) != only_gpu) continue;
     std::vector<double> raw(r.feat.begin() + 1, r.feat.end());  // drop intercept
     double excess = use_hinge ? std::max(0.0, raw.back() - hinge_k * r.g.warp_capacity) : 0.0;
-    auto x        = device_terms(raw, r.g, excess);
+    auto x        = device_terms(raw, r.g, excess, r.max_row);
     double pred   = predict_work(coeffs, x);
     if (pred <= 0.0) continue;
     ratios.push_back(r.measured / pred);
@@ -621,7 +623,7 @@ void fit_single_device(const std::string& algo, const std::vector<std::string>& 
       double excess = use_hinge ? std::max(0.0, raw.back() - k * r.g.warp_capacity) : 0.0;
       calibration_sample_t s;
       s.instance               = r.instance;
-      s.features               = device_terms(raw, r.g, excess);
+      s.features               = device_terms(raw, r.g, excess, r.max_row);
       s.measured_time_per_iter = r.measured;
       samples.push_back(std::move(s));
     }

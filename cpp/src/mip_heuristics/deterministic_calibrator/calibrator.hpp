@@ -24,6 +24,11 @@ struct calibration_sample_t {
   std::string instance;
   std::vector<double> features;        // same layout as the linear model
   double measured_time_per_iter{0.0};  // seconds
+  // Longest constraint row (max nnz over rows). Recorded separately from `features` (so the legacy
+  // per-GPU model is untouched); the device-aware model uses it for a clock-bound serialization
+  // term (the longest row is processed by ~one warp, so its cost scales with clock, not SM
+  // count/bw).
+  double max_row_nnz{0.0};
 };
 
 struct calibration_result_t {

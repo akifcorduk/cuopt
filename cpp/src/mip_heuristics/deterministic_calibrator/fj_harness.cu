@@ -117,9 +117,11 @@ calibration_sample_t run_fj_calibration_sample(const std::string& mps_path,
   // constraint c containing v, the whole row of c. Averaged uniformly over variables this is
   // (sum_c rowsize_c^2) / n_vars.
   double sum_sq_rowsize = 0.0;
+  double max_row_nnz    = 0.0;
   for (std::size_t r = 0; r + 1 < h_offsets.size(); ++r) {
     const double rs = static_cast<double>(h_offsets[r + 1] - h_offsets[r]);
     sum_sq_rowsize += rs * rs;
+    max_row_nnz = std::max(max_row_nnz, rs);
   }
   const double frontier_work_mean =
     problem.n_variables > 0 ? sum_sq_rowsize / static_cast<double>(problem.n_variables) : 0.0;
@@ -160,6 +162,7 @@ calibration_sample_t run_fj_calibration_sample(const std::string& mps_path,
   sample.instance               = instance_name;
   sample.features               = std::move(features);
   sample.measured_time_per_iter = median_per_iter;
+  sample.max_row_nnz            = max_row_nnz;
   return sample;
 }
 
