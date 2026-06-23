@@ -91,7 +91,8 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
           (double)lp_response.get_additional_termination_information(0).number_of_steps_taken;
         if (lp_steps > 0.0) {
           this->context.gpu_heur_loop.record_work(
-            lp_steps * calib::pdlp_work_per_iter(this->context.work_features));
+            lp_steps * calib::pdlp_device_work_per_iter(this->context.work_features,
+                                                        this->context.gpu_features));
         }
       }
       if (lp_response.get_termination_status() == pdlp_termination_status_t::PrimalInfeasible ||

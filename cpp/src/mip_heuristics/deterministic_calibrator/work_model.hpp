@@ -13,10 +13,14 @@
 // computed once per problem (work_features_t); dynamic per-iteration quantities are passed in at
 // the call.
 
+#include <mip_heuristics/deterministic_calibrator/device_model.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/bp_work_coeffs.hpp>
+#include <mip_heuristics/deterministic_calibrator/generated/fj_device_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/fj_work_coeffs.hpp>
+#include <mip_heuristics/deterministic_calibrator/generated/pdlp_device_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/pdlp_work_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/repair_work_coeffs.hpp>
+#include <mip_heuristics/deterministic_calibrator/gpu_features.hpp>
 #include <mip_heuristics/deterministic_calibrator/linear_work_model.hpp>
 
 #include <algorithm>
@@ -181,6 +185,48 @@ inline double bp_work_per_iter(const work_features_t& f,
                         changed_warp_loads,
                         std::max(0.0, changed_warp_loads - bp_excess_warp_loads_threshold)};
   double w = dot(bp_activity_work_coeffs, x) + dot(bp_update_work_coeffs, x);
+  return w > 0.0 ? w : 0.0;
+}
+
+// ---- GPU-generic (device-aware) per-iteration predictors ----
+// These use the multi-GPU-fitted coefficients (generated/*_device_coeffs.hpp) and the runtime
+// device descriptor, so one coefficient set predicts per-iteration seconds on any GPU (no per-GPU
+// recalibration). The raw count vector and term order MUST match the calibrator's dump/fit exactly
+// (calibrate_main collect_samples + device_model::device_terms).
+
+// PDLP per inner iteration. raw = [n_vars, n_constraints, nnz, row_var, col_var, cons_warp,
+// var_warp, total_warp]; hinge on total_warp (threshold k*warp_capacity); serial = max_row_nnz.
+inline double pdlp_device_work_per_iter(const work_features_t& f, const gpu_features_t& g)
+{
+  const double total_warp = f.cons_warp_loads + f.var_warp_loads;
+  std::vector<double> raw{f.n_vars,
+                          f.n_constraints,
+                          f.nnz,
+                          f.row_nnz_var,
+                          f.col_nnz_var,
+                          f.cons_warp_loads,
+                          f.var_warp_loads,
+                          total_warp};
+  const double excess =
+    pdlp_device_use_hinge ? std::max(0.0, total_warp - pdlp_device_hinge_k * g.warp_capacity) : 0.0;
+  const std::vector<double> x = device_terms(raw, g, excess, f.max_row_nnz);
+  const double w              = dot(pdlp_device_coeffs, x);
+  return w > 0.0 ? w : 0.0;
+}
+
+// FJ per host-step. raw = [n_vars, n_constraints, nnz, row_var, col_var, frontier_work_step]; no
+// hinge; serial = max_row_nnz.
+inline double fj_device_work_per_step(const work_features_t& f,
+                                      const gpu_features_t& g,
+                                      double frontier_work_step)
+{
+  std::vector<double> raw{
+    f.n_vars, f.n_constraints, f.nnz, f.row_nnz_var, f.col_nnz_var, frontier_work_step};
+  const double excess         = fj_device_use_hinge
+                                  ? std::max(0.0, frontier_work_step - fj_device_hinge_k * g.warp_capacity)
+                                  : 0.0;
+  const std::vector<double> x = device_terms(raw, g, excess, f.max_row_nnz);
+  const double w              = dot(fj_device_coeffs, x);
   return w > 0.0 ? w : 0.0;
 }
 

@@ -1112,7 +1112,8 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
       const double per_step_frontier =
         iterations_per_batch > 0 ? batch_frontier / (double)iterations_per_batch : batch_frontier;
       const double batch_work = (double)iterations_per_batch *
-                                calib::fj_work_per_step(context.work_features, per_step_frontier);
+                                calib::fj_device_work_per_step(
+                                  context.work_features, context.gpu_features, per_step_frontier);
       timer.record_work(batch_work);
     }
 

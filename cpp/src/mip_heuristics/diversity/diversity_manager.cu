@@ -526,8 +526,9 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
       const double root_lp_steps =
         (double)lp_result.get_additional_termination_information(0).number_of_steps_taken;
       if (root_lp_steps > 0.0) {
-        context.gpu_heur_loop.record_work(root_lp_steps *
-                                          calib::pdlp_work_per_iter(context.work_features));
+        context.gpu_heur_loop.record_work(
+          root_lp_steps *
+          calib::pdlp_device_work_per_iter(context.work_features, context.gpu_features));
       }
     }
     {

@@ -106,6 +106,9 @@ struct mip_solver_context_t {
   // Calibrated work-unit model: static structural features (computed once) used to convert a
   // pseudo-second work budget into a deterministic per-leaf iteration limit (wups == 1).
   calib::work_features_t work_features;
+  // Device descriptor (cudaDeviceProp) for the GPU-generic work model. Constant per device, so it
+  // never affects determinism; queried once alongside the structural features.
+  calib::gpu_features_t gpu_features;
   bool work_features_ready{false};
   // Per-constraint row sizes (host), used to feed the dynamic rowsize feature of the bounds-repair
   // work model without a per-iteration device read.
@@ -120,6 +123,7 @@ struct mip_solver_context_t {
     handle_ptr->sync_stream();
     work_features = calib::compute_work_features(
       ro, co, (double)problem_ptr->n_variables, (double)problem_ptr->nnz);
+    gpu_features = calib::query_gpu_features(handle_ptr->get_device());
     work_row_sizes.resize(ro.size() > 0 ? ro.size() - 1 : 0);
     for (std::size_t r = 0; r + 1 < ro.size(); ++r) {
       work_row_sizes[r] = ro[r + 1] - ro[r];
@@ -131,13 +135,14 @@ struct mip_solver_context_t {
   i_t pdlp_iters_for_budget(f_t work_budget)
   {
     ensure_work_features();
-    const double wpi = calib::pdlp_work_per_iter(work_features);
+    const double wpi = calib::pdlp_device_work_per_iter(work_features, gpu_features);
     return wpi > 0.0 ? std::max<i_t>(1, (i_t)(work_budget / wpi)) : 1;
   }
   i_t fj_steps_for_budget(f_t work_budget)
   {
     ensure_work_features();
-    const double wps = calib::fj_work_per_step(work_features, work_features.frontier_work_mean);
+    const double wps =
+      calib::fj_device_work_per_step(work_features, gpu_features, work_features.frontier_work_mean);
     return wps > 0.0 ? std::max<i_t>(1, (i_t)(work_budget / wps)) : 1;
   }
 

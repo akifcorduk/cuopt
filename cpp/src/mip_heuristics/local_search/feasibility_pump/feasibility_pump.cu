@@ -236,8 +236,8 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     const double pdlp_iters =
       (double)solver_response.get_additional_termination_information().number_of_steps_taken;
     if (pdlp_iters > 0.0) {
-      context.gpu_heur_loop.record_work(pdlp_iters *
-                                        calib::pdlp_work_per_iter(context.work_features));
+      context.gpu_heur_loop.record_work(
+        pdlp_iters * calib::pdlp_device_work_per_iter(context.work_features, context.gpu_features));
     }
   }
   last_lp_time = old_remaining - timer.remaining_time();
