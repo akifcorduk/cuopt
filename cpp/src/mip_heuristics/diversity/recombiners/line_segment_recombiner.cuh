@@ -76,6 +76,9 @@ class line_segment_recombiner_t : public recombiner_t<i_t, f_t> {
     // copy the solution from A
     solution_t<i_t, f_t> offspring(guiding_solution);
     timer_t line_segment_timer{ls_recombiner_config_t::time_limit};
+    // Deterministic: spend the recombiner's sub-budget in work units so the line-segment search
+    // terminates reproducibly instead of on wall time.
+    this->context.maybe_work_clock(line_segment_timer);
     // TODO after we have the conic combination, detect the lambda change
     // (i.e. the integral variables flip on line segment)
     i_t n_points_to_search        = ls_recombiner_config_t::n_points_to_search;

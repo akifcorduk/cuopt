@@ -93,6 +93,13 @@ class recombiner_t {
                                                          n_remaining.data());
     i_t remaining_variables = this->n_remaining.value(a.handle_ptr->get_stream());
 
+    // assign_same_variables_kernel compacts the differing vars with an atomicAdd, so their order is
+    // nondeterministic. Sort to a canonical (ascending index) order so every downstream consumer
+    // (shuffle, set_difference, delta/probing construction) is reproducible across runs.
+    thrust::sort(a.handle_ptr->get_thrust_policy(),
+                 this->remaining_indices.data(),
+                 this->remaining_indices.data() + remaining_variables);
+
     auto vec_remaining_indices =
       host_copy(this->remaining_indices.data(), remaining_variables, a.handle_ptr->get_stream());
     auto vec_objective_coeffs = host_copy(offspring.problem_ptr->objective_coefficients.data(),

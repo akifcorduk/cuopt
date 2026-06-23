@@ -141,6 +141,27 @@ inline double repair_work_per_move(const work_features_t& f,
   return w > 0.0 ? w : 0.0;
 }
 
+// Cost of a single full constraint-activity pass (compute every constraint's LHS over all nnz).
+// This is exactly the kernel the bound-presolve activity model was calibrated on, evaluated for the
+// full constraint set, so it doubles as the per-point cost of line-segment search (get_quality) and
+// any other one-shot full activity evaluation. Activity-only (no bounds-update term).
+inline double activity_work_full(const work_features_t& f)
+{
+  std::vector<double> x{1.0,
+                        f.n_vars,
+                        f.n_constraints,
+                        f.nnz,
+                        f.row_nnz_var,
+                        f.col_nnz_var,
+                        f.max_row_nnz,
+                        f.n_constraints,
+                        f.nnz,
+                        f.cons_warp_loads,
+                        std::max(0.0, f.cons_warp_loads - bp_excess_warp_loads_threshold)};
+  double w = dot(bp_activity_work_coeffs, x);
+  return w > 0.0 ? w : 0.0;
+}
+
 // Bound-presolve per iteration: activity sub-kernel + bounds-update sub-kernel. Dynamic features
 // are the current changed-constraint set (n_changed, its nnz, its warp loads).
 inline double bp_work_per_iter(const work_features_t& f,

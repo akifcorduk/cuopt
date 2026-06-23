@@ -5,6 +5,7 @@
  */
 /* clang-format on */
 
+#include <mip_heuristics/deterministic_calibrator/work_model.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include "line_segment_search.cuh"
 
@@ -146,11 +147,21 @@ bool line_segment_search_t<i_t, f_t>::search_line_segment(
   }
   f_t best_feasible_cost   = std::numeric_limits<f_t>::max();
   bool initial_is_feasible = solution.get_feasible();
+  // Deterministic work accounting: each searched point does a full constraint-activity pass
+  // (tabulate + round_nearest + get_quality). Record that calibrated cost onto the shared work
+  // clock; the FJ solve that may follow already records its own work. The number of points is fixed
+  // (middle_first_iterator), so the loop itself is deterministic.
+  auto& context  = constraint_prop.context;
+  const bool det = context.gpu_heur_loop.deterministic;
+  if (det) { context.ensure_work_features(); }
   middle_first_iterator_t it(settings.n_points_to_search);
   int i;
   while (it.next(i)) {
     // make it one indexed
     i++;
+    if (det) {
+      context.gpu_heur_loop.record_work(calib::activity_work_full(context.work_features));
+    }
     CUOPT_LOG_DEBUG("Line segment point %d", i);
     thrust::tabulate(solution.handle_ptr->get_thrust_policy(),
                      solution.assignment.begin(),

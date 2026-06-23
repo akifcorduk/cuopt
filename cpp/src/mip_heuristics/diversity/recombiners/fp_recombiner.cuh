@@ -76,9 +76,24 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       lp_settings.return_first_feasible = true;
       lp_settings.save_state            = true;
       lp_settings.check_infeasibility   = true;
+      // Deterministic: bound the infeasibility-detection LP by a calibrated PDLP iteration budget
+      // (not wall time) so it stops reproducibly.
+      if (this->context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+        this->context.ensure_work_features();
+        lp_settings.iteration_limit = this->context.pdlp_iters_for_budget(lp_settings.time_limit);
+        lp_settings.time_limit      = std::numeric_limits<f_t>::infinity();
+      }
       // run lp with infeasibility detection on
       auto lp_response =
         get_relaxed_lp_solution(fixed_problem, fixed_assignment, offspring.lp_state, lp_settings);
+      if (this->context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+        const double lp_steps =
+          (double)lp_response.get_additional_termination_information(0).number_of_steps_taken;
+        if (lp_steps > 0.0) {
+          this->context.gpu_heur_loop.record_work(
+            lp_steps * calib::pdlp_work_per_iter(this->context.work_features));
+        }
+      }
       if (lp_response.get_termination_status() == pdlp_termination_status_t::PrimalInfeasible ||
           lp_response.get_termination_status() == pdlp_termination_status_t::DualInfeasible ||
           lp_response.get_termination_status() == pdlp_termination_status_t::TimeLimit) {
@@ -97,6 +112,7 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       offspring.assignment = std::move(fixed_assignment);
       cuopt_func_call(offspring.test_variable_bounds(false));
       timer_t timer(fp_recombiner_config_t::fp_time_limit);
+      this->context.maybe_work_clock(timer);
       fp.timer = timer;
       fp.cycle_queue.reset(offspring);
       fp.reset();
