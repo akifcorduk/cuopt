@@ -510,11 +510,26 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     pdlp_settings.presolver               = presolver_t::None;
     pdlp_settings.per_constraint_residual = true;
     set_pdlp_solver_mode(pdlp_settings);
-    // NOTE: deterministic PDLP work accounting removed during the work-unit rebuild; the PDLP leaf
-    // will get its own calibrated work model (deterministic_calibrator/) when wired back in.
+    // Deterministic root LP: replace the wall-clock budget with a calibrated PDLP iteration budget
+    // (work units == pseudo-seconds, wups == 1) so the root relaxation stops on a reproducible step
+    // count instead of wall time. The actual steps taken are recorded onto the shared work clock
+    // below so the root LP spends from the same budget as the rest of the heuristic path.
+    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      context.ensure_work_features();
+      pdlp_settings.iteration_limit = context.pdlp_iters_for_budget(lp_time_limit);
+      pdlp_settings.time_limit      = std::numeric_limits<f_t>::infinity();
+    }
     timer_t lp_timer(lp_time_limit);
     const auto root_lp_wall_start = std::chrono::steady_clock::now();
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
+    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      const double root_lp_steps =
+        (double)lp_result.get_additional_termination_information(0).number_of_steps_taken;
+      if (root_lp_steps > 0.0) {
+        context.gpu_heur_loop.record_work(root_lp_steps *
+                                          calib::pdlp_work_per_iter(context.work_features));
+      }
+    }
     {
       const int root_lp_steps =
         lp_result.get_additional_termination_information(0).number_of_steps_taken;

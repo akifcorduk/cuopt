@@ -573,7 +573,10 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
       }
       CUOPT_LOG_DEBUG("Running staged FP from beginning it %d", i);
       fp.relax_general_integers(solution);
+      // Deterministic: the binary-stage cutoff must be spent in work units (the shared work clock),
+      // not wall time, so the binary/integer staging of a mixed-integer FP is reproducible.
       timer_t binary_timer(timer.remaining_time() / 3);
+      context.maybe_work_clock(binary_timer);
       i_t binary_it_counter = 0;
       for (; binary_it_counter < 100; ++binary_it_counter) {
         population_ptr->add_external_solutions_to_population();
