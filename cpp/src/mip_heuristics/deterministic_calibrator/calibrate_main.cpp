@@ -9,15 +9,19 @@
 #include <mip_heuristics/deterministic_calibrator/calibrator.hpp>
 #include <mip_heuristics/deterministic_calibrator/fj_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/fp_verify_harness.hpp>
+#include <mip_heuristics/deterministic_calibrator/gpu_features.hpp>
 #include <mip_heuristics/deterministic_calibrator/mp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/pdlp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/repair_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
 
+#include <mip_heuristics/deterministic_calibrator/device_model.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -457,18 +461,256 @@ void run_repair(const std::string& dataset_dir, const std::string& out_header)
   run_single_hinge("repair", repair_feature_names(), std::move(samples), out_header);
 }
 
+// ============================ multi-GPU dump / fit ============================
+// Phase 1 (per GPU): `dump <algo> <dataset> <csv>` runs the harness on the current device and
+// appends raw samples + the device descriptor to a CSV. Phase 2 (once): `fit <algo> <csv...>`
+// loads every GPU's samples and fits ONE device-aware regression (device_model.hpp recipe), so the
+// emitted coefficients transfer across GPUs.
+
+struct dump_row_t {
+  gpu_features_t g;
+  std::string kernel;  // single | act | upd
+  std::string instance;
+  double measured;
+  std::vector<double> feat;  // raw harness feature vector (feat[0] == 1 intercept)
+};
+
+// Kernel-tagged raw samples for an algorithm on the current device.
+std::vector<std::pair<std::string, calibration_sample_t>> collect_samples(const std::string& algo,
+                                                                          const std::string& dir)
+{
+  std::vector<std::pair<std::string, calibration_sample_t>> out;
+  for (const auto& name : kInstances) {
+    const std::string path = dir + "/" + name + ".mps";
+    std::printf("\n[instance] %s\n", name.c_str());
+    std::fflush(stdout);
+    try {
+      if (algo == "fj") {
+        out.emplace_back("single", run_fj_calibration_sample(path, name));
+      } else if (algo == "pdlp") {
+        out.emplace_back("single", run_pdlp_calibration_sample(path, name));
+      } else if (algo == "repair") {
+        for (auto& s : run_repair_calibration_sample(path, name))
+          out.emplace_back("single", std::move(s));
+      } else if (algo == "bp") {
+        auto s = run_bp_calibration_samples(path, name);
+        for (auto& x : s.activity)
+          out.emplace_back("act", std::move(x));
+        for (auto& x : s.update)
+          out.emplace_back("upd", std::move(x));
+      } else if (algo == "mp") {
+        auto s = run_mp_calibration_samples(path, name);
+        for (auto& x : s.activity)
+          out.emplace_back("act", std::move(x));
+        for (auto& x : s.update)
+          out.emplace_back("upd", std::move(x));
+      }
+    } catch (const std::exception& e) {
+      std::printf("  SKIP (%s)\n", e.what());
+    }
+  }
+  return out;
+}
+
+void dump_mode(const std::string& algo, const std::string& dir, const std::string& csv)
+{
+  const gpu_features_t g = query_gpu_features(0);
+  print_gpu_features(g);
+  auto samples = collect_samples(algo, dir);
+  std::ofstream f(csv, std::ios::app);
+  for (const auto& [kernel, s] : samples) {
+    f << g.name << ',' << g.mem_bandwidth_gb_s << ',' << g.sm_count << ',' << g.sm_clock_ghz << ','
+      << g.l2_cache_mb << ',' << g.warp_capacity << ',' << algo << ',' << kernel << ','
+      << s.instance << ',' << s.measured_time_per_iter << ',' << s.features.size();
+    for (double x : s.features)
+      f << ',' << x;
+    f << '\n';
+  }
+  std::printf("\nAppended %zu samples to %s\n", samples.size(), csv.c_str());
+}
+
+std::vector<dump_row_t> load_rows(const std::vector<std::string>& csvs,
+                                  const std::string& algo,
+                                  const std::string& kernel)
+{
+  std::vector<dump_row_t> rows;
+  for (const auto& path : csvs) {
+    std::ifstream f(path);
+    std::string line;
+    while (std::getline(f, line)) {
+      if (line.empty()) continue;
+      std::vector<std::string> tok;
+      std::stringstream ss(line);
+      std::string t;
+      while (std::getline(ss, t, ','))
+        tok.push_back(t);
+      if (tok.size() < 11) continue;
+      if (tok[6] != algo || tok[7] != kernel) continue;
+      dump_row_t r;
+      std::snprintf(r.g.name, sizeof(r.g.name), "%s", tok[0].c_str());
+      r.g.mem_bandwidth_gb_s  = std::stod(tok[1]);
+      r.g.sm_count            = std::stod(tok[2]);
+      r.g.sm_clock_ghz        = std::stod(tok[3]);
+      r.g.l2_cache_mb         = std::stod(tok[4]);
+      r.g.warp_capacity       = std::stod(tok[5]);
+      r.kernel                = tok[7];
+      r.instance              = tok[8];
+      r.measured              = std::stod(tok[9]);
+      const std::size_t nfeat = (std::size_t)std::stoul(tok[10]);
+      for (std::size_t i = 0; i < nfeat && 11 + i < tok.size(); ++i)
+        r.feat.push_back(std::stod(tok[11 + i]));
+      rows.push_back(std::move(r));
+    }
+  }
+  return rows;
+}
+
+// CV of measured/predicted for a device-aware fit, optionally restricted to one GPU name.
+double device_cv(const std::vector<dump_row_t>& rows,
+                 const std::vector<double>& coeffs,
+                 double hinge_k,
+                 bool use_hinge,
+                 const std::string& only_gpu = std::string())
+{
+  std::vector<double> ratios;
+  for (const auto& r : rows) {
+    if (!only_gpu.empty() && std::string(r.g.name) != only_gpu) continue;
+    std::vector<double> raw(r.feat.begin() + 1, r.feat.end());  // drop intercept
+    double excess = use_hinge ? std::max(0.0, raw.back() - hinge_k * r.g.warp_capacity) : 0.0;
+    auto x        = device_terms(raw, r.g, excess);
+    double pred   = predict_work(coeffs, x);
+    if (pred <= 0.0) continue;
+    ratios.push_back(r.measured / pred);
+  }
+  if (ratios.empty()) return 1e30;
+  double mean = 0.0;
+  for (double v : ratios)
+    mean += v;
+  mean /= (double)ratios.size();
+  double var = 0.0;
+  for (double v : ratios)
+    var += (v - mean) * (v - mean);
+  var /= (double)ratios.size();
+  return std::sqrt(var) / mean;
+}
+
+// Single-kernel device-aware fit (fj has no hinge; pdlp/repair hinge on the last raw feature =
+// total warp loads, threshold k * warp_capacity).
+void fit_single_device(const std::string& algo, const std::vector<std::string>& csvs)
+{
+  auto rows = load_rows(csvs, algo, "single");
+  if (rows.size() < 3) {
+    std::printf("Not enough rows for %s (%zu)\n", algo.c_str(), rows.size());
+    return;
+  }
+  const bool use_hinge = (algo != "fj");
+  const std::vector<double> ks =
+    use_hinge ? std::vector<double>{0, 0.5, 1, 2, 4, 8, 16, 32} : std::vector<double>{0};
+
+  std::size_t n_raw   = rows.front().feat.size() - 1;
+  std::size_t n_terms = device_term_count(n_raw);
+
+  work_calibrator_t cal;
+  double best_cv = 1e30, best_k = 0;
+  calibration_result_t best_fit;
+  for (double k : ks) {
+    std::vector<calibration_sample_t> samples;
+    samples.reserve(rows.size());
+    for (const auto& r : rows) {
+      std::vector<double> raw(r.feat.begin() + 1, r.feat.end());
+      double excess = use_hinge ? std::max(0.0, raw.back() - k * r.g.warp_capacity) : 0.0;
+      calibration_sample_t s;
+      s.instance               = r.instance;
+      s.features               = device_terms(raw, r.g, excess);
+      s.measured_time_per_iter = r.measured;
+      samples.push_back(std::move(s));
+    }
+    auto fit  = cal.fit(samples, n_terms, work_calibrator_t::options_t{});
+    double cv = device_cv(rows, fit.coeffs, k, use_hinge);
+    std::printf("  [grid] k=%.2f -> CV=%.4f\n", k, cv);
+    if (cv < best_cv) {
+      best_cv  = cv;
+      best_k   = k;
+      best_fit = fit;
+    }
+  }
+  std::printf("\n=== %s device-aware fit ===\nrows=%zu best_k=%.2f COMBINED CV=%.4f\n",
+              algo.c_str(),
+              rows.size(),
+              best_k,
+              best_cv);
+  // Per-GPU CV breakdown (cross-GPU generality check).
+  std::vector<std::string> gpus;
+  for (const auto& r : rows) {
+    if (std::find(gpus.begin(), gpus.end(), std::string(r.g.name)) == gpus.end())
+      gpus.push_back(r.g.name);
+  }
+  for (const auto& gn : gpus) {
+    std::printf("  [per-gpu] %-28s CV=%.4f\n",
+                gn.c_str(),
+                device_cv(rows, best_fit.coeffs, best_k, use_hinge, gn));
+  }
+
+  const std::string out =
+    "cpp/src/mip_heuristics/deterministic_calibrator/generated/" + algo + "_device_coeffs.hpp";
+  std::ofstream f(out);
+  f << "/* clang-format off */\n/*\n * SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA "
+       "CORPORATION & AFFILIATES. All rights reserved.\n * SPDX-License-Identifier: Apache-2.0\n "
+       "*\n";
+  f << " * AUTO-GENERATED by mip_work_calibrator (device-aware, multi-GPU). Do not edit by hand.\n";
+  f << " * Algorithm: " << algo << "   GPU-generic (coeffs divide device rates at runtime)\n";
+  f << " * Combined CV: " << best_cv << "   hinge_k: " << best_k << "\n";
+  f << " */\n/* clang-format on */\n#pragma once\n\n#include <array>\n\n";
+  f << "namespace cuopt::linear_programming::detail::calib {\n\n";
+  f << "constexpr double " << algo << "_device_hinge_k = " << best_k << ";\n";
+  f << "constexpr bool " << algo << "_device_use_hinge = " << (use_hinge ? "true" : "false")
+    << ";\n\n";
+  f << "constexpr std::array<double, " << best_fit.coeffs.size() << "> " << algo
+    << "_device_coeffs = {\n";
+  for (double c : best_fit.coeffs)
+    f << "  " << c << ",\n";
+  f << "};\n\n}  // namespace cuopt::linear_programming::detail::calib\n";
+  std::printf("Wrote %s\n", out.c_str());
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
-  std::string algo        = argc > 1 ? argv[1] : "fj";
+  std::string cmd = argc > 1 ? argv[1] : "fj";
+
+  // Multi-GPU device-aware calibration commands.
+  if (cmd == "dump") {
+    // dump <algo> <dataset_dir> <csv_out>
+    std::string algo    = argc > 2 ? argv[2] : "pdlp";
+    std::string dataset = argc > 3 ? argv[3] : "datasets/mip/miplib2017";
+    std::string csv     = argc > 4 ? argv[4] : "/tmp/calib_samples.csv";
+    std::printf("=== dump %s -> %s ===\n", algo.c_str(), csv.c_str());
+    dump_mode(algo, dataset, csv);
+    return 0;
+  }
+  if (cmd == "fit") {
+    // fit <algo> <csv1> [csv2 ...]
+    std::string algo = argc > 2 ? argv[2] : "pdlp";
+    std::vector<std::string> csvs;
+    for (int i = 3; i < argc; ++i)
+      csvs.push_back(argv[i]);
+    if (csvs.empty()) csvs.push_back("/tmp/calib_samples.csv");
+    std::printf("=== fit %s (device-aware, %zu csv) ===\n", algo.c_str(), csvs.size());
+    fit_single_device(algo, csvs);
+    return 0;
+  }
+
+  std::string algo        = cmd;
   std::string dataset_dir = argc > 2 ? argv[2] : "datasets/mip/miplib2017";
   std::string out_header  = argc > 3 ? argv[3] : std::string();
 
   std::printf("=== deterministic work-unit calibration: %s ===\n", algo.c_str());
   std::printf("dataset_dir: %s\n", dataset_dir.c_str());
 
-  if (algo == "fj") {
+  if (algo == "gpuinfo") {
+    print_gpu_features(query_gpu_features(0));
+  } else if (algo == "fj") {
     run_fj(dataset_dir, out_header);
   } else if (algo == "bp") {
     run_bp(dataset_dir, out_header);
