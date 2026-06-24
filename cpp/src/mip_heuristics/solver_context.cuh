@@ -72,7 +72,8 @@ struct mip_solver_context_t {
   timer_t make_heuristic_timer(double time_limit) const
   {
     timer_t t(time_limit);
-    if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC &&
+        settings.work_limit < std::numeric_limits<f_t>::infinity()) {
       t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit);
     }
     return t;
@@ -83,7 +84,8 @@ struct mip_solver_context_t {
   // the loop it bounds terminates reproducibly. No-op in opportunistic mode.
   void maybe_work_clock(timer_t& t) const
   {
-    if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC &&
+        settings.work_limit < std::numeric_limits<f_t>::infinity()) {
       t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit);
     }
   }

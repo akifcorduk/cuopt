@@ -290,7 +290,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     return sol;
   }
 
-  context.work_unit_scheduler_.register_context(context.gpu_heur_loop);
+  if (!context.settings.heuristics_only) {
+    context.work_unit_scheduler_.register_context(context.gpu_heur_loop);
+  }
 
 #ifdef DETECT_SYMMETRY_AFTER_PRESOLVE
   // Detect symmetry after all presolve steps (PaPILO, cuOpt probing, bounds, trivial presolve).

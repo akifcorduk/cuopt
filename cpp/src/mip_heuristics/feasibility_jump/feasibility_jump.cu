@@ -1032,9 +1032,11 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
 template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
-  auto& data                     = *climbers[climber_idx];
-  auto v                         = data.view();  // == climber_views[climber_idx]
-  const bool use_graph           = true;
+  auto& data                = *climbers[climber_idx];
+  auto v                    = data.view();  // == climber_views[climber_idx]
+  const bool use_work_units = context.gpu_heur_loop.deterministic &&
+                              settings.work_limit < std::numeric_limits<double>::infinity();
+  const bool use_graph           = !use_work_units;
   const i_t iterations_per_batch = use_graph ? iterations_per_graph : 1;
 
   auto climber_stream = data.stream.view();
@@ -1050,8 +1052,11 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 
   data.incumbent_quality.set_value_async(obj, handle_ptr->get_stream());
 
-  if (context.gpu_heur_loop.deterministic) { context.ensure_work_features(); }
-  termination_checker_t timer(context.gpu_heur_loop, settings.time_limit, *context.termination);
+  if (use_work_units) { context.ensure_work_features(); }
+  termination_checker_t timer =
+    use_work_units
+      ? termination_checker_t(context.gpu_heur_loop, settings.work_limit, *context.termination)
+      : termination_checker_t(settings.time_limit, *context.termination);
   i_t steps;
   bool limit_reached = false;
   for (steps = 0; steps < std::numeric_limits<i_t>::max(); steps += iterations_per_batch) {
@@ -1287,7 +1292,12 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
   bool deterministic = (context.settings.determinism_mode & CUOPT_DETERMINISM_GPU_HEURISTICS);
   if (deterministic) {
     settings.time_limit = std::max((f_t)0.0, settings.time_limit);
-    settings.work_limit = settings.time_limit;
+    if (context.settings.work_limit < std::numeric_limits<f_t>::infinity()) {
+      settings.work_limit = settings.time_limit;
+      settings.time_limit = std::numeric_limits<f_t>::infinity();
+    } else {
+      settings.work_limit = std::numeric_limits<f_t>::infinity();
+    }
   }
   handle_ptr               = const_cast<raft::handle_t*>(solution.handle_ptr);
   pb_ptr                   = solution.problem_ptr;

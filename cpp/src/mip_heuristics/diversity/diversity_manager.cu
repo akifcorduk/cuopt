@@ -429,13 +429,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   // budgeting the path in work units (not wall clock): in deterministic mode the heuristic timer
   // ticks on accumulated GPU work units instead of wall-clock time, so control flow is
   // reproducible.
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    // When the user passes a finite --work-limit, it becomes the heuristic budget: drop the
-    // wall-time budget (set it to infinity) so the run stops purely on the absolute work-unit cap,
-    // reproducibly. Without --work-limit (infinity) this keeps the existing time-budgeted behavior.
-    if (context.settings.work_limit < std::numeric_limits<f_t>::infinity()) {
-      timer = timer_t(std::numeric_limits<f_t>::infinity());
-    }
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC &&
+      context.settings.work_limit < std::numeric_limits<f_t>::infinity()) {
+    const f_t remaining_work = std::max(
+      (f_t)0.0, context.settings.work_limit - (f_t)context.gpu_heur_loop.global_work_units_elapsed);
+    timer = timer_t(remaining_work);
     timer.use_work_clock(
       &context.gpu_heur_loop.global_work_units_elapsed, 1.0, context.settings.work_limit);
   }
