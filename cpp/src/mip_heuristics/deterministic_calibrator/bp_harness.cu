@@ -54,7 +54,13 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
   const raft::handle_t handle_{};
   auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
-  auto op_problem = mps_data_model_to_optimization_problem(&handle_, mps_problem);
+  // Intentionally heap-allocated and leaked: destroying this optimization_problem_t after a
+  // mip_solver_t has been constructed segfaults in rmm::device_buffer::deallocate_async (an RMM
+  // stream/MR teardown-ordering issue exposed on newer CUDA). This is an offline calibration tool
+  // that processes a fixed instance list and exits, so leaking one problem per instance is fine and
+  // lets the multi-instance run complete.
+  auto* op_problem_ptr = new auto(mps_data_model_to_optimization_problem(&handle_, mps_problem));
+  auto& op_problem     = *op_problem_ptr;
 
   problem_t<int, double> problem(op_problem);
   problem.preprocess_problem();

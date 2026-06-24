@@ -58,7 +58,10 @@ std::vector<calibration_sample_t> run_repair_calibration_sample(const std::strin
   const raft::handle_t handle_{};
   auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
-  auto op_problem = mps_data_model_to_optimization_problem(&handle_, mps_problem);
+  // Leaked on purpose: destroying this after a mip_solver_t exists segfaults in RMM async free
+  // (teardown-order issue on newer CUDA). Offline tool with a fixed instance list -> leak is fine.
+  auto* op_problem_ptr = new auto(mps_data_model_to_optimization_problem(&handle_, mps_problem));
+  auto& op_problem     = *op_problem_ptr;
 
   problem_t<int, double> problem(op_problem);
   problem.preprocess_problem();
