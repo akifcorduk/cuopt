@@ -408,11 +408,21 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   auto timer_raii_guard = cuopt::scope_guard([&]() {
     stats.total_solve_time =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
-    CUOPT_LOG_INFO("PHASE total: wall %.3fs heuristic work %.3fwu (%s)",
-                   stats.total_solve_time,
-                   context.gpu_heur_loop.global_work_units_elapsed,
-                   context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC ? "deterministic"
-                                                                                 : "opportunistic");
+    const bool det      = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+    const double wu     = context.gpu_heur_loop.global_work_units_elapsed;
+    const bool budgeted = det && context.settings.work_limit < std::numeric_limits<f_t>::infinity();
+    if (budgeted) {
+      CUOPT_LOG_INFO(
+        "PHASE total: wall %.3fs | heuristic work units used %.3f of %.3f budget (deterministic)",
+        stats.total_solve_time,
+        wu,
+        static_cast<double>(context.settings.work_limit));
+    } else {
+      CUOPT_LOG_INFO("PHASE total: wall %.3fs | heuristic work units used %.3f (%s)",
+                     stats.total_solve_time,
+                     wu,
+                     det ? "deterministic" : "opportunistic");
+    }
   });
 
   // Deterministic and opportunistic modes run the SAME heuristic path. Determinism is achieved by
