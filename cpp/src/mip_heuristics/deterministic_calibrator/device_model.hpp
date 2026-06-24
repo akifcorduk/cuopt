@@ -44,10 +44,17 @@ namespace cuopt::linear_programming::detail::calib {
 // row) gets a clock-bound term: the longest row is handled by ~one warp, so its cost scales with
 // the clock and is NOT helped by more SMs or bandwidth -- this is what makes a wide-row instance
 // behave the same (or worse) on a higher-bandwidth, more-SM GPU.
+// `working_set` is the data a single iteration actually touches and drives the L2-residency split;
+// it defaults to the static problem nnz (raw[2]) for single-pass leaves (pdlp/fj) and is set to the
+// changed-set nnz for per-iteration leaves (bp/mp). Each raw count is offered in THREE
+// device-scaled forms (memory-, occupancy- and clock-bound) so the fitted coefficients can capture
+// how each device property governs that count; the GPU enters only through its rates, keeping the
+// coeffs generic.
 inline std::vector<double> device_terms(const std::vector<double>& raw,
                                         const gpu_features_t& g,
                                         double hinge_excess,
-                                        double serial_count = 0.0)
+                                        double serial_count = 0.0,
+                                        double working_set  = -1.0)
 {
   const double bw      = g.mem_bandwidth_gb_s > 0.0 ? g.mem_bandwidth_gb_s : 1.0;
   const double occ     = (g.sm_count * g.sm_clock_ghz) > 0.0 ? g.sm_count * g.sm_clock_ghz : 1.0;
@@ -55,18 +62,19 @@ inline std::vector<double> device_terms(const std::vector<double>& raw,
   const double inv_clk = 1.0 / clk;
 
   std::vector<double> x;
-  x.reserve(2 * raw.size() + 6);
+  x.reserve(3 * raw.size() + 6);
   x.push_back(1.0);
   x.push_back(inv_clk);
   for (double r : raw) {
     x.push_back(r / bw);
     x.push_back(r / occ);
+    x.push_back(r / clk);
   }
-  // L2 residency split on the nnz working set (raw[2]); ~12 bytes per nnz (value + index).
-  const double nnz          = raw.size() > 2 ? raw[2] : 0.0;
+  // L2 residency split on the touched working set; ~12 bytes per nnz (value + index).
+  const double ws           = working_set >= 0.0 ? working_set : (raw.size() > 2 ? raw[2] : 0.0);
   const double l2_cap_nnz   = (g.l2_cache_mb * 1024.0 * 1024.0) / 12.0;
-  const double resident_nnz = nnz < l2_cap_nnz ? nnz : l2_cap_nnz;
-  const double spilled_nnz  = nnz - resident_nnz;
+  const double resident_nnz = ws < l2_cap_nnz ? ws : l2_cap_nnz;
+  const double spilled_nnz  = ws - resident_nnz;
   x.push_back(resident_nnz / occ);
   x.push_back(spilled_nnz / bw);
   x.push_back(serial_count / clk);
@@ -75,6 +83,6 @@ inline std::vector<double> device_terms(const std::vector<double>& raw,
 }
 
 // Number of device terms produced for `n_raw` raw count features (+ L2 split + serial + hinge).
-inline std::size_t device_term_count(std::size_t n_raw) { return 2 * n_raw + 6; }
+inline std::size_t device_term_count(std::size_t n_raw) { return 3 * n_raw + 6; }
 
 }  // namespace cuopt::linear_programming::detail::calib

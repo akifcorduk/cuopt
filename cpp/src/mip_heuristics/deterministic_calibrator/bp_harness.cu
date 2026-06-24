@@ -90,7 +90,6 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
     h_row_size[r] = static_cast<double>(h_offsets[r + 1] - h_offsets[r]);
     max_row_nnz   = std::max(max_row_nnz, h_row_size[r]);
   }
-
   bound_presolve_t<int, double> bp(solver.context);
   bp.resize(*pb);
   bp.settings.iteration_limit = kMaxIters;
@@ -106,6 +105,7 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
   struct point_times_t {
     std::vector<double> activity;
     std::vector<double> update;
+    long max_changed_row{0};  // longest row in the changed set (warp serialization depth)
   };
   std::map<std::tuple<long, long, long>, point_times_t> by_point;
   for (int rep = 0; rep < kRepeats; ++rep) {
@@ -119,12 +119,14 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
       long n_changed   = 0;
       long changed_nnz = 0;
       long warp_loads  = 0;  // sum ceil(rowsize/32): per-row reduction depth at warp granularity
+      long max_changed_row = 0;  // longest changed row: serialized by ~one warp -> latency-bound
       for (std::size_t c = 0; c < h_changed.size(); ++c) {
         if (h_changed[c] != 0) {
           const long rs = (long)h_row_size[c];
           n_changed += 1;
           changed_nnz += rs;
           warp_loads += (rs + 31) / 32;
+          max_changed_row = std::max(max_changed_row, rs);
         }
       }
 
@@ -140,6 +142,7 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
       auto& pt = by_point[{n_changed, changed_nnz, warp_loads}];
       pt.activity.push_back(std::chrono::duration<double>(t1 - t0).count());
       pt.update.push_back(std::chrono::duration<double>(t2 - t1).count());
+      pt.max_changed_row = max_changed_row;
 
       if (!updated) { break; }
       bp.upd.prepare_for_next_iteration(pb->handle_ptr);
@@ -170,12 +173,14 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
     a.instance               = tag;
     a.features               = features;
     a.measured_time_per_iter = med_act;
+    a.max_row_nnz            = static_cast<double>(pt.max_changed_row);
     out.activity.push_back(std::move(a));
 
     calibration_sample_t u;
     u.instance               = tag;
     u.features               = std::move(features);
     u.measured_time_per_iter = med_upd;
+    u.max_row_nnz            = static_cast<double>(pt.max_changed_row);
     out.update.push_back(std::move(u));
 
     std::printf(

@@ -115,7 +115,8 @@ calibration_sample_t run_fj_calibration_sample(const std::string& mps_path,
 
   // FJ dynamic feature: expected per-step frontier work. Flipping a variable v scans, for each
   // constraint c containing v, the whole row of c. Averaged uniformly over variables this is
-  // (sum_c rowsize_c^2) / n_vars.
+  // (sum_c rowsize_c^2) / n_vars. (Empirically a better per-step predictor than FJ's A^T*A*degree
+  // estimator, which over-weights high-degree variables that FJ rarely flips.)
   double sum_sq_rowsize = 0.0;
   double max_row_nnz    = 0.0;
   for (std::size_t r = 0; r + 1 < h_offsets.size(); ++r) {

@@ -20,9 +20,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace cuopt::linear_programming::detail::calib;
@@ -567,6 +569,93 @@ std::vector<dump_row_t> load_rows(const std::vector<std::string>& csvs,
   return rows;
 }
 
+// Median-aggregate repeated measurements of the SAME physical point (same GPU, instance, and
+// feature signature) collected across multiple calibration rounds. The harness is deterministic, so
+// across rounds a given point has bit-identical features and only its measured time jitters.
+// Without this, every noisy measurement is its own row and per-row jitter sets a CV floor (very
+// visible on fast GPUs, e.g. B200 pdlp where a few instances are bimodal across rounds). Taking the
+// median per point lets repeated collection actually drive CV down. First-appearance order is
+// preserved, so the act/upd lists used by the two-kernel pairing stay index-aligned.
+std::vector<dump_row_t> aggregate_rounds(const std::vector<dump_row_t>& rows)
+{
+  std::vector<dump_row_t> out;
+  std::vector<std::vector<double>> meas;
+  std::unordered_map<std::string, std::size_t> idx;
+  char buf[40];
+  for (const auto& r : rows) {
+    std::string key = std::string(r.g.name);
+    key += '|';
+    key += r.instance;
+    key += '|';
+    for (double v : r.feat) {
+      std::snprintf(buf, sizeof(buf), "%.6g:", v);
+      key += buf;
+    }
+    auto it = idx.find(key);
+    if (it == idx.end()) {
+      idx.emplace(std::move(key), out.size());
+      out.push_back(r);
+      meas.push_back({r.measured});
+    } else {
+      meas[it->second].push_back(r.measured);
+    }
+  }
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    auto& v = meas[i];
+    std::sort(v.begin(), v.end());
+    out[i].measured = v[v.size() / 2];  // median across rounds
+  }
+  return out;
+}
+
+// Experimental device recipe: identical to device_terms() but the L2-residency split is taken on an
+// explicit working-set nnz (the data a single iteration actually touches) instead of the static
+// problem nnz raw[2]. For per-iteration leaves (bp/mp) the touched set is the changed-constraints
+// nnz, which is what decides L2 residency vs HBM spill -- modeling it on the static nnz makes every
+// iteration look equally cache-resident and under-predicts the big early iterations. `working_set`
+// defaults to raw[2] so single-pass leaves (pdlp/fj/repair) behave exactly like device_terms().
+// Number of device terms produced by dev_terms() for n_raw raw counts.
+std::size_t dev_term_count(std::size_t n_raw) { return 3 * n_raw + 6; }
+
+// Enriched device recipe: every work count is offered in THREE device-scaled forms so NNLS can
+// LEARN how each device property governs that count (instead of hard-coding work ~ 1/bandwidth):
+//   count/mem_bw         streaming / HBM-bound
+//   count/(sm*clock)     occupancy / compute-bound
+//   count/clock          latency / serial-bound (keeps fast-bw GPUs like B200 from being predicted
+//                         "too fast": their clock is ordinary even though bandwidth is huge)
+// plus a clock-scaled launch latency, an L2-residency split on the actually-touched working set,
+// a longest-row serialization term, and the saturation hinge. Coefficients stay GPU-independent;
+// the GPU enters only through its rates, so one vector transfers across devices.
+std::vector<double> dev_terms(const std::vector<double>& raw,
+                              const gpu_features_t& g,
+                              double hinge_excess,
+                              double serial_count,
+                              double working_set)
+{
+  const double bw      = g.mem_bandwidth_gb_s > 0.0 ? g.mem_bandwidth_gb_s : 1.0;
+  const double occ     = (g.sm_count * g.sm_clock_ghz) > 0.0 ? g.sm_count * g.sm_clock_ghz : 1.0;
+  const double clk     = g.sm_clock_ghz > 0.0 ? g.sm_clock_ghz : 1.0;
+  const double inv_clk = 1.0 / clk;
+
+  std::vector<double> x;
+  x.reserve(3 * raw.size() + 6);
+  x.push_back(1.0);
+  x.push_back(inv_clk);
+  for (double r : raw) {
+    x.push_back(r / bw);
+    x.push_back(r / occ);
+    x.push_back(r / clk);
+  }
+  const double l2_cap_nnz   = (g.l2_cache_mb * 1024.0 * 1024.0) / 12.0;
+  const double resident_nnz = working_set < l2_cap_nnz ? working_set : l2_cap_nnz;
+  const double spilled_nnz  = working_set - resident_nnz;
+  x.push_back(resident_nnz / occ);
+  x.push_back(spilled_nnz / bw);
+  x.push_back(serial_count / clk);
+  x.push_back(hinge_excess / bw);
+  return x;
+}
+
 // CV of measured/predicted for a device-aware fit, optionally restricted to one GPU name.
 double device_cv(const std::vector<dump_row_t>& rows,
                  const std::vector<double>& coeffs,
@@ -578,9 +667,10 @@ double device_cv(const std::vector<dump_row_t>& rows,
   for (const auto& r : rows) {
     if (!only_gpu.empty() && std::string(r.g.name) != only_gpu) continue;
     std::vector<double> raw(r.feat.begin() + 1, r.feat.end());  // drop intercept
-    double excess = use_hinge ? std::max(0.0, raw.back() - hinge_k * r.g.warp_capacity) : 0.0;
-    auto x        = device_terms(raw, r.g, excess, r.max_row);
-    double pred   = predict_work(coeffs, x);
+    double excess  = use_hinge ? std::max(0.0, raw.back() - hinge_k * r.g.warp_capacity) : 0.0;
+    double working = raw.size() > 2 ? raw[2] : 0.0;
+    auto x         = dev_terms(raw, r.g, excess, r.max_row, working);
+    double pred    = predict_work(coeffs, x);
     if (pred <= 0.0) continue;
     ratios.push_back(r.measured / pred);
   }
@@ -600,7 +690,7 @@ double device_cv(const std::vector<dump_row_t>& rows,
 // total warp loads, threshold k * warp_capacity).
 void fit_single_device(const std::string& algo, const std::vector<std::string>& csvs)
 {
-  auto rows = load_rows(csvs, algo, "single");
+  auto rows = aggregate_rounds(load_rows(csvs, algo, "single"));
   if (rows.size() < 3) {
     std::printf("Not enough rows for %s (%zu)\n", algo.c_str(), rows.size());
     return;
@@ -610,25 +700,33 @@ void fit_single_device(const std::string& algo, const std::vector<std::string>& 
     use_hinge ? std::vector<double>{0, 0.5, 1, 2, 4, 8, 16, 32} : std::vector<double>{0};
 
   std::size_t n_raw   = rows.front().feat.size() - 1;
-  std::size_t n_terms = device_term_count(n_raw);
+  std::size_t n_terms = dev_term_count(n_raw);
 
   work_calibrator_t cal;
-  double best_cv = 1e30, best_k = 0;
-  calibration_result_t best_fit;
-  for (double k : ks) {
+  // Fit coefficients from a row subset at hinge k (used for the full fit and for
+  // leave-one-GPU-out).
+  auto fit_coeffs = [&](const std::vector<dump_row_t>& subset, double k) {
     std::vector<calibration_sample_t> samples;
-    samples.reserve(rows.size());
-    for (const auto& r : rows) {
+    samples.reserve(subset.size());
+    for (const auto& r : subset) {
       std::vector<double> raw(r.feat.begin() + 1, r.feat.end());
-      double excess = use_hinge ? std::max(0.0, raw.back() - k * r.g.warp_capacity) : 0.0;
+      double excess  = use_hinge ? std::max(0.0, raw.back() - k * r.g.warp_capacity) : 0.0;
+      double working = raw.size() > 2 ? raw[2] : 0.0;
       calibration_sample_t s;
       s.instance               = r.instance;
-      s.features               = device_terms(raw, r.g, excess, r.max_row);
+      s.features               = dev_terms(raw, r.g, excess, r.max_row, working);
       s.measured_time_per_iter = r.measured;
       samples.push_back(std::move(s));
     }
-    auto fit  = cal.fit(samples, n_terms, work_calibrator_t::options_t{});
-    double cv = device_cv(rows, fit.coeffs, k, use_hinge);
+    return cal.fit(samples, n_terms, work_calibrator_t::options_t{}).coeffs;
+  };
+
+  double best_cv = 1e30, best_k = 0;
+  calibration_result_t best_fit;
+  for (double k : ks) {
+    calibration_result_t fit;
+    fit.coeffs = fit_coeffs(rows, k);
+    double cv  = device_cv(rows, fit.coeffs, k, use_hinge);
     std::printf("  [grid] k=%.2f -> CV=%.4f\n", k, cv);
     if (cv < best_cv) {
       best_cv  = cv;
@@ -651,6 +749,33 @@ void fit_single_device(const std::string& algo, const std::vector<std::string>& 
     std::printf("  [per-gpu] %-28s CV=%.4f\n",
                 gn.c_str(),
                 device_cv(rows, best_fit.coeffs, best_k, use_hinge, gn));
+  }
+  // Leave-one-GPU-out: fit on the other GPUs, predict the held-out one. This is the real test that
+  // the trained device coefficients generalize to an unseen GPU (in-sample per-GPU CV can overfit 4
+  // GPUs). If LOGO ~ in-sample, the device model transfers; if it blows up, the basis is too rich.
+  for (const auto& gn : gpus) {
+    std::vector<dump_row_t> train;
+    for (const auto& r : rows)
+      if (std::string(r.g.name) != gn) train.push_back(r);
+    auto coeffs = fit_coeffs(train, best_k);
+    std::printf("  [logo]    %-28s CV=%.4f (held out)\n",
+                gn.c_str(),
+                device_cv(rows, coeffs, best_k, use_hinge, gn));
+  }
+  if (std::getenv("CALIB_RATIOS")) {
+    std::printf("  [ratios] meas/pred per (gpu,instance):\n");
+    for (const auto& r : rows) {
+      std::vector<double> raw(r.feat.begin() + 1, r.feat.end());
+      double excess  = use_hinge ? std::max(0.0, raw.back() - best_k * r.g.warp_capacity) : 0.0;
+      double working = raw.size() > 2 ? raw[2] : 0.0;
+      double pred = predict_work(best_fit.coeffs, dev_terms(raw, r.g, excess, r.max_row, working));
+      std::printf("    %-22s %-26s ratio=%.3f  meas=%.3e pred=%.3e\n",
+                  r.g.name,
+                  r.instance.c_str(),
+                  r.measured / pred,
+                  r.measured,
+                  pred);
+    }
   }
 
   const std::string out =
@@ -680,8 +805,8 @@ void fit_single_device(const std::string& algo, const std::vector<std::string>& 
 // threshold k*warp_capacity; serial = max_row.
 void fit_two_kernel_device(const std::string& algo, const std::vector<std::string>& csvs)
 {
-  auto act = load_rows(csvs, algo, "act");
-  auto upd = load_rows(csvs, algo, "upd");
+  auto act = aggregate_rounds(load_rows(csvs, algo, "act"));
+  auto upd = aggregate_rounds(load_rows(csvs, algo, "upd"));
   if (act.size() < 3 || act.size() != upd.size()) {
     std::printf("Not enough / mismatched rows for %s (act=%zu upd=%zu)\n",
                 algo.c_str(),
@@ -690,8 +815,16 @@ void fit_two_kernel_device(const std::string& algo, const std::vector<std::strin
     return;
   }
   const std::size_t n_raw   = act.front().feat.size() - 1;
-  const std::size_t n_terms = device_term_count(n_raw);
+  const std::size_t n_terms = dev_term_count(n_raw);
   const std::vector<double> ks{0, 0.5, 1, 2, 4, 8, 16, 32};
+
+  // Working set actually touched per iteration drives L2 residency. bp/mp touch only the changed
+  // constraints, so the L2 split is taken on changed_constraints_nnz (raw[7]) rather than the
+  // static problem nnz. Helper pulls that value from a raw feature vector.
+  const std::size_t ws_idx = 7;  // changed_constraints_nnz (raw index, intercept dropped)
+  auto ws                  = [&](const std::vector<double>& raw) {
+    return ws_idx < raw.size() ? raw[ws_idx] : (raw.size() > 2 ? raw[2] : 0.0);
+  };
 
   // Combined CV of (meas_act + meas_upd) / (pred_act + pred_upd), optionally for one GPU.
   auto combined_cv = [&](const std::vector<double>& ca,
@@ -705,8 +838,8 @@ void fit_two_kernel_device(const std::string& algo, const std::vector<std::strin
       std::vector<double> rawu(upd[i].feat.begin() + 1, upd[i].feat.end());
       const double exa = std::max(0.0, rawa.back() - k * act[i].g.warp_capacity);
       const double exu = std::max(0.0, rawu.back() - k * upd[i].g.warp_capacity);
-      const double p   = predict_work(ca, device_terms(rawa, act[i].g, exa, act[i].max_row)) +
-                       predict_work(cu, device_terms(rawu, upd[i].g, exu, upd[i].max_row));
+      const double p = predict_work(ca, dev_terms(rawa, act[i].g, exa, act[i].max_row, ws(rawa))) +
+                       predict_work(cu, dev_terms(rawu, upd[i].g, exu, upd[i].max_row, ws(rawu)));
       const double m = act[i].measured + upd[i].measured;
       if (p > 0.0) ratios.push_back(m / p);
     }
@@ -722,33 +855,39 @@ void fit_two_kernel_device(const std::string& algo, const std::vector<std::strin
   };
 
   work_calibrator_t cal;
-  double best_cv = 1e30, best_k = 0;
-  calibration_result_t best_act, best_upd;
-  for (double k : ks) {
+  // Fit {activity, update} coeffs at hinge k, optionally excluding one GPU (for leave-one-GPU-out).
+  auto fit_au = [&](double k, const std::string& exclude_gpu) {
     std::vector<calibration_sample_t> A, U;
     for (std::size_t i = 0; i < act.size(); ++i) {
+      if (!exclude_gpu.empty() && std::string(act[i].g.name) == exclude_gpu) continue;
       std::vector<double> rawa(act[i].feat.begin() + 1, act[i].feat.end());
       std::vector<double> rawu(upd[i].feat.begin() + 1, upd[i].feat.end());
       const double exa = std::max(0.0, rawa.back() - k * act[i].g.warp_capacity);
       const double exu = std::max(0.0, rawu.back() - k * upd[i].g.warp_capacity);
       calibration_sample_t a;
-      a.features               = device_terms(rawa, act[i].g, exa, act[i].max_row);
+      a.features               = dev_terms(rawa, act[i].g, exa, act[i].max_row, ws(rawa));
       a.measured_time_per_iter = act[i].measured;
       A.push_back(std::move(a));
       calibration_sample_t u;
-      u.features               = device_terms(rawu, upd[i].g, exu, upd[i].max_row);
+      u.features               = dev_terms(rawu, upd[i].g, exu, upd[i].max_row, ws(rawu));
       u.measured_time_per_iter = upd[i].measured;
       U.push_back(std::move(u));
     }
-    auto af         = cal.fit(A, n_terms, work_calibrator_t::options_t{});
-    auto uf         = cal.fit(U, n_terms, work_calibrator_t::options_t{});
-    const double cv = combined_cv(af.coeffs, uf.coeffs, k, std::string());
+    return std::make_pair(cal.fit(A, n_terms, work_calibrator_t::options_t{}).coeffs,
+                          cal.fit(U, n_terms, work_calibrator_t::options_t{}).coeffs);
+  };
+
+  double best_cv = 1e30, best_k = 0;
+  calibration_result_t best_act, best_upd;
+  for (double k : ks) {
+    auto [ca, cu]   = fit_au(k, std::string());
+    const double cv = combined_cv(ca, cu, k, std::string());
     std::printf("  [grid] k=%.2f -> combined CV=%.4f\n", k, cv);
     if (cv < best_cv) {
-      best_cv  = cv;
-      best_k   = k;
-      best_act = af;
-      best_upd = uf;
+      best_cv         = cv;
+      best_k          = k;
+      best_act.coeffs = ca;
+      best_upd.coeffs = cu;
     }
   }
   std::printf("\n=== %s device-aware fit (two-kernel) ===\nrows=%zu best_k=%.2f COMBINED CV=%.4f\n",
@@ -764,6 +903,31 @@ void fit_two_kernel_device(const std::string& algo, const std::vector<std::strin
     std::printf("  [per-gpu] %-28s CV=%.4f\n",
                 gn.c_str(),
                 combined_cv(best_act.coeffs, best_upd.coeffs, best_k, gn));
+  // Leave-one-GPU-out: fit on the other GPUs, predict the held-out one (generalization check).
+  for (const auto& gn : gpus) {
+    auto [ca, cu] = fit_au(best_k, gn);
+    std::printf(
+      "  [logo]    %-28s CV=%.4f (held out)\n", gn.c_str(), combined_cv(ca, cu, best_k, gn));
+  }
+  if (std::getenv("CALIB_RATIOS")) {
+    std::printf("  [ratios] meas/pred per (gpu,instance):\n");
+    for (std::size_t i = 0; i < act.size(); ++i) {
+      std::vector<double> rawa(act[i].feat.begin() + 1, act[i].feat.end());
+      std::vector<double> rawu(upd[i].feat.begin() + 1, upd[i].feat.end());
+      const double exa = std::max(0.0, rawa.back() - best_k * act[i].g.warp_capacity);
+      const double exu = std::max(0.0, rawu.back() - best_k * upd[i].g.warp_capacity);
+      const double p =
+        predict_work(best_act.coeffs, dev_terms(rawa, act[i].g, exa, act[i].max_row, ws(rawa))) +
+        predict_work(best_upd.coeffs, dev_terms(rawu, upd[i].g, exu, upd[i].max_row, ws(rawu)));
+      const double m = act[i].measured + upd[i].measured;
+      std::printf("    %-22s %-26s ratio=%.3f  meas=%.3e pred=%.3e\n",
+                  act[i].g.name,
+                  act[i].instance.c_str(),
+                  m / p,
+                  m,
+                  p);
+    }
+  }
 
   const std::string out = "cpp/src/mip_heuristics/deterministic_calibrator/generated/" + algo +
                           "_device_two_kernel_coeffs.hpp";
