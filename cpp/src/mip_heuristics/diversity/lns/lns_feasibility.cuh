@@ -385,11 +385,14 @@ class lns_feasibility_t {
     }
     solution_t<i_t, f_t> best_solution(solution);
 
-    static constexpr i_t ruin_schedule[]       = {16, 32, 64, 128, 256, 512, 1024, 2048};
-    static constexpr size_t ruin_schedule_size = sizeof(ruin_schedule) / sizeof(ruin_schedule[0]);
     weight_t<i_t, f_t> weights(problem_ptr->n_constraints, problem_ptr->handle_ptr);
-    size_t attempted_repairs = 0;
-    size_t accepted_repairs  = 0;
+    const i_t min_ruin = 10;
+    const i_t max_ruin = std::max(min_ruin, std::min<i_t>(2048, problem_ptr->n_integer_vars / 2));
+    const i_t grow_after_failures = 5;
+    i_t ruin_count                = min_ruin;
+    i_t failure_streak            = 0;
+    size_t attempted_repairs      = 0;
+    size_t accepted_repairs       = 0;
     for (size_t attempt = 0; attempt < feasibility_lns_config_t::max_attempts; ++attempt) {
       if (lns_timer.check_time_limit()) {
         CUOPT_LOG_INFO("Standalone LNS time limit hit after %lu attempts (%.2fs elapsed)",
@@ -402,7 +405,6 @@ class lns_feasibility_t {
         unsat_before <=
           static_cast<i_t>(feasibility_lns_config_t::violated_constraint_ruin_unsat_limit) &&
         attempt % 2 == 0;
-      const i_t ruin_count       = ruin_schedule[attempt % ruin_schedule_size];
       auto [candidate, accepted] = use_violated_constraint_ruin
                                      ? violated_constraint_ruin_repair(solution, weights, attempt)
                                      : ruin_repair(solution, weights, ruin_count, attempt);
@@ -420,6 +422,15 @@ class lns_feasibility_t {
         solution.get_total_excess(),
         candidate.get_total_excess(),
         lns_timer.elapsed_time());
+      if (!use_violated_constraint_ruin) {
+        if (accepted) {
+          ruin_count     = std::max(min_ruin, ruin_count / 2);
+          failure_streak = 0;
+        } else if (++failure_streak >= grow_after_failures) {
+          ruin_count     = std::min(max_ruin, ruin_count * 2);
+          failure_streak = 0;
+        }
+      }
       if (!accepted) {
         CUOPT_LOG_INFO(" ");
         continue;
@@ -570,11 +581,17 @@ class lns_feasibility_t {
 
     const i_t candidate_unsat = n_unsatisfied_constraints(candidate);
     const i_t incumbent_unsat = n_unsatisfied_constraints(incumbent);
-    // TODO either sat constraints or score better but limit the unsat constraint increase
-    // TODO if solutions are equivalent accept the new candidate
+    const f_t candidate_score = get_tardiness_penalty(candidate);
+    const f_t incumbent_score = get_tardiness_penalty(incumbent);
+
+    // Reject candidates whose infeasibility regresses by more than this magnitude.
+    const i_t max_unsat_increase = std::max<i_t>(5 * incumbent_unsat, 10);
+    if (candidate_unsat - incumbent_unsat > max_unsat_increase) { return false; }
+
     if (candidate_unsat < incumbent_unsat) { return true; }
-    if (candidate_unsat > incumbent_unsat) { return false; }
-    return candidate.get_total_excess() + OBJECTIVE_EPSILON < incumbent.get_total_excess();
+    if (candidate_score + OBJECTIVE_EPSILON < incumbent_score) { return true; }
+    return candidate_unsat == incumbent_unsat &&
+           candidate_score <= incumbent_score + OBJECTIVE_EPSILON;
   }
 
   bool seed_repair(solution_t<i_t, f_t>& solution, timer_t& lns_timer)
