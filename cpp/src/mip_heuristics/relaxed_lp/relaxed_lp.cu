@@ -12,7 +12,9 @@
 #include <mip_heuristics/utils.cuh>
 #include <pdlp/solve.cuh>
 
+#include <algorithm>
 #include <limits>
+#include <optional>
 
 #include <pdlp/pdlp.cuh>
 
@@ -54,6 +56,23 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   // one. Auto-derivation from time removed during the work-unit rebuild; the PDLP leaf will get its
   // own calibrated work model (deterministic_calibrator/).
   if (settings.iteration_limit > 0) { pdlp_settings.iteration_limit = settings.iteration_limit; }
+  // Deterministic work accounting (centralized for all relaxed-LP callers): when a work clock is
+  // attached, treat time_limit as a pseudo-second work budget, cap PDLP to a reproducible iteration
+  // count, and disable the wall clock so only the iteration cap governs. The steps actually taken
+  // are charged onto the clock after run_solver below.
+  const bool det_work = settings.work_context != nullptr && settings.work_context->deterministic &&
+                        settings.work_per_iter > 0.0;
+  if (det_work) {
+    const i_t cap = std::max<i_t>(1, (i_t)(settings.time_limit / settings.work_per_iter));
+    pdlp_settings.iteration_limit =
+      settings.iteration_limit > 0 ? std::min<i_t>(settings.iteration_limit, cap) : cap;
+    pdlp_settings.time_limit = std::numeric_limits<f_t>::infinity();
+  }
+  // Per-leaf diagnostic attribution for relaxed LP (only when a caller attached a work clock).
+  std::optional<cuopt::leaf_work_scope_t> leaf_scope;
+  if (settings.work_context != nullptr) {
+    leaf_scope.emplace(*settings.work_context, cuopt::heur_leaf_t::relaxed_lp);
+  }
   pdlp_settings.concurrent_halt         = settings.concurrent_halt;
   pdlp_settings.per_constraint_residual = settings.per_constraint_residual;
   pdlp_settings.first_primal_feasible   = settings.return_first_feasible;
@@ -93,6 +112,13 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   auto start_time = timer_t(pdlp_settings.time_limit);
   lp_solver.set_inside_mip(true);
   auto solver_response = lp_solver.run_solver(start_time);
+
+  // Charge the PDLP steps actually taken onto the shared work clock (deterministic mode only).
+  if (det_work) {
+    const double lp_steps =
+      (double)solver_response.get_additional_termination_information(0).number_of_steps_taken;
+    if (lp_steps > 0.0) { settings.work_context->record_work(lp_steps * settings.work_per_iter); }
+  }
 
   if (solver_response.get_primal_solution().size() != 0 &&
       solver_response.get_dual_solution().size() != 0 && settings.save_state) {

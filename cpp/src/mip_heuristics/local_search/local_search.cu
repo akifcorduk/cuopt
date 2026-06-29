@@ -510,6 +510,11 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
     relaxed_lp_settings_t lp_settings;
     lp_settings.time_limit = std::min(lp_run_time, timer.remaining_time());
     lp_settings.tolerance  = solution.problem_ptr->tolerances.absolute_tolerance;
+    // Deterministic mode: cap + charge this rounding-fallback LP onto the shared work clock.
+    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      lp_settings.work_context  = &context.gpu_heur_loop;
+      lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
+    }
     run_lp_with_vars_fixed(
       *solution.problem_ptr, solution, solution.problem_ptr->integer_indices, lp_settings);
   } else {

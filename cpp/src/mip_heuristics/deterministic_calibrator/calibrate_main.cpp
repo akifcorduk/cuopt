@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -478,48 +479,68 @@ struct dump_row_t {
   double max_row{0.0};       // longest constraint row (serialization count)
 };
 
-// Kernel-tagged raw samples for an algorithm on the current device.
-std::vector<std::pair<std::string, calibration_sample_t>> collect_samples(const std::string& algo,
-                                                                          const std::string& dir)
+// Every <instance>.mps basename (no extension) under `dir`, sorted. Lets `dump` cover the full
+// MIPLIB set instead of the hardcoded kInstances calibration subset.
+std::vector<std::string> list_instances(const std::string& dir)
+{
+  namespace fs = std::filesystem;
+  std::vector<std::string> names;
+  std::error_code ec;
+  for (const auto& e : fs::directory_iterator(dir, ec)) {
+    if (e.is_regular_file() && e.path().extension() == ".mps") {
+      names.push_back(e.path().stem().string());
+    }
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+// Kernel-tagged raw samples for an algorithm on the current device, for ONE instance.
+std::vector<std::pair<std::string, calibration_sample_t>> collect_one(const std::string& algo,
+                                                                      const std::string& dir,
+                                                                      const std::string& name)
 {
   std::vector<std::pair<std::string, calibration_sample_t>> out;
-  for (const auto& name : kInstances) {
-    const std::string path = dir + "/" + name + ".mps";
-    std::printf("\n[instance] %s\n", name.c_str());
-    std::fflush(stdout);
-    try {
-      if (algo == "fj") {
-        out.emplace_back("single", run_fj_calibration_sample(path, name));
-      } else if (algo == "pdlp") {
-        out.emplace_back("single", run_pdlp_calibration_sample(path, name));
-      } else if (algo == "repair") {
-        for (auto& s : run_repair_calibration_sample(path, name))
-          out.emplace_back("single", std::move(s));
-      } else if (algo == "bp") {
-        auto s = run_bp_calibration_samples(path, name);
-        for (auto& x : s.activity)
-          out.emplace_back("act", std::move(x));
-        for (auto& x : s.update)
-          out.emplace_back("upd", std::move(x));
-      } else if (algo == "mp") {
-        auto s = run_mp_calibration_samples(path, name);
-        for (auto& x : s.activity)
-          out.emplace_back("act", std::move(x));
-        for (auto& x : s.update)
-          out.emplace_back("upd", std::move(x));
-      }
-    } catch (const std::exception& e) {
-      std::printf("  SKIP (%s)\n", e.what());
+  const std::string path = dir + "/" + name + ".mps";
+  std::printf("\n[instance] %s\n", name.c_str());
+  std::fflush(stdout);
+  try {
+    if (algo == "fj") {
+      out.emplace_back("single", run_fj_calibration_sample(path, name));
+    } else if (algo == "pdlp") {
+      out.emplace_back("single", run_pdlp_calibration_sample(path, name));
+    } else if (algo == "repair") {
+      for (auto& s : run_repair_calibration_sample(path, name))
+        out.emplace_back("single", std::move(s));
+    } else if (algo == "bp") {
+      auto s = run_bp_calibration_samples(path, name);
+      for (auto& x : s.activity)
+        out.emplace_back("act", std::move(x));
+      for (auto& x : s.update)
+        out.emplace_back("upd", std::move(x));
+    } else if (algo == "mp") {
+      auto s = run_mp_calibration_samples(path, name);
+      for (auto& x : s.activity)
+        out.emplace_back("act", std::move(x));
+      for (auto& x : s.update)
+        out.emplace_back("upd", std::move(x));
     }
+  } catch (const std::exception& e) {
+    std::printf("  SKIP (%s)\n", e.what());
   }
   return out;
 }
 
-void dump_mode(const std::string& algo, const std::string& dir, const std::string& csv)
+// Append one instance's samples to the CSV and flush, so a crash/OOM on a later instance never
+// loses already-collected rows (the full-MIPLIB dump is best driven one instance per process from
+// the shell with a timeout, for crash isolation).
+void dump_instance(const std::string& algo,
+                   const std::string& dir,
+                   const std::string& csv,
+                   const std::string& name,
+                   const gpu_features_t& g)
 {
-  const gpu_features_t g = query_gpu_features(0);
-  print_gpu_features(g);
-  auto samples = collect_samples(algo, dir);
+  auto samples = collect_one(algo, dir, name);
   std::ofstream f(csv, std::ios::app);
   for (const auto& [kernel, s] : samples) {
     f << g.name << ',' << g.mem_bandwidth_gb_s << ',' << g.sm_count << ',' << g.sm_clock_ghz << ','
@@ -529,7 +550,21 @@ void dump_mode(const std::string& algo, const std::string& dir, const std::strin
       f << ',' << x;
     f << ',' << s.max_row_nnz << '\n';  // trailing serialization count (longest row)
   }
-  std::printf("\nAppended %zu samples to %s\n", samples.size(), csv.c_str());
+  f.flush();
+  std::printf("  appended %zu samples\n", samples.size());
+}
+
+void dump_mode(const std::string& algo,
+               const std::string& dir,
+               const std::string& csv,
+               const std::vector<std::string>& names)
+{
+  const gpu_features_t g = query_gpu_features(0);
+  print_gpu_features(g);
+  for (const auto& name : names) {
+    dump_instance(algo, dir, csv, name, g);
+  }
+  std::printf("\nDumped %zu instances to %s\n", names.size(), csv.c_str());
 }
 
 std::vector<dump_row_t> load_rows(const std::vector<std::string>& csvs,
@@ -563,6 +598,14 @@ std::vector<dump_row_t> load_rows(const std::vector<std::string>& csvs,
       for (std::size_t i = 0; i < nfeat && 11 + i < tok.size(); ++i)
         r.feat.push_back(std::stod(tok[11 + i]));
       if (11 + nfeat < tok.size()) r.max_row = std::stod(tok[11 + nfeat]);
+      // Drop degenerate samples: a non-positive or non-finite measured time (e.g. an instance where
+      // PDLP made no step progress, so the two-point estimate is 0) makes the relative-error system
+      // (features/measured) blow up to inf and poisons the NNLS fit into NaN coefficients.
+      if (!std::isfinite(r.measured) || r.measured <= 0.0) continue;
+      bool feat_ok = true;
+      for (double v : r.feat)
+        if (!std::isfinite(v)) feat_ok = false;
+      if (!feat_ok) continue;
       rows.push_back(std::move(r));
     }
   }
@@ -961,12 +1004,22 @@ int main(int argc, char** argv)
 
   // Multi-GPU device-aware calibration commands.
   if (cmd == "dump") {
-    // dump <algo> <dataset_dir> <csv_out>
+    // dump <algo> <dataset_dir> <csv_out> [instance]
+    // With [instance] omitted, dumps EVERY <instance>.mps under <dataset_dir> (full MIPLIB). Pass a
+    // single instance to drive the dump one process per instance from the shell (crash isolation +
+    // per-instance timeout): for f in *.mps; do timeout N mip_work_calibrator dump <algo> <dir>
+    // <csv> $(basename $f .mps); done
     std::string algo    = argc > 2 ? argv[2] : "pdlp";
     std::string dataset = argc > 3 ? argv[3] : "datasets/mip/miplib2017";
     std::string csv     = argc > 4 ? argv[4] : "/tmp/calib_samples.csv";
-    std::printf("=== dump %s -> %s ===\n", algo.c_str(), csv.c_str());
-    dump_mode(algo, dataset, csv);
+    std::vector<std::string> names;
+    if (argc > 5) {
+      names.push_back(argv[5]);
+    } else {
+      names = list_instances(dataset);
+    }
+    std::printf("=== dump %s -> %s (%zu instances) ===\n", algo.c_str(), csv.c_str(), names.size());
+    dump_mode(algo, dataset, csv, names);
     return 0;
   }
   if (cmd == "fit") {

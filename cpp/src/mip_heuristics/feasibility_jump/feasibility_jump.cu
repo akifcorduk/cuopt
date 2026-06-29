@@ -1423,6 +1423,11 @@ i_t fj_t<i_t, f_t>::solve(solution_t<i_t, f_t>& solution)
 
   if (deterministic) {
     auto total_work_end = context.gpu_heur_loop.current_work();
+    const double fj_wall =
+      std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - total_time_start)
+        .count();
+    context.gpu_heur_loop.add_leaf(
+      cuopt::heur_leaf_t::fj, fj_wall, total_work_end - total_work_start);
     CUOPT_LOG_DEBUG("FJ: worked %fwu for %d iterations, %g seconds",
                     total_work_end - total_work_start,
                     iterations,

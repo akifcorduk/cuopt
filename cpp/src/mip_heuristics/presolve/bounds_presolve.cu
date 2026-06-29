@@ -184,14 +184,15 @@ termination_criterion_t bound_presolve_t<i_t, f_t>::bound_update_loop(problem_t<
     context.ensure_work_features();
     timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
   }
+  cuopt::leaf_work_scope_t leaf_scope(context.gpu_heur_loop, cuopt::heur_leaf_t::bounds_presolve);
 
   i_t iter;
   upd.init_changed_constraints(pb.handle_ptr);
   for (iter = 0; iter < settings.iteration_limit; ++iter) {
     if (det) {
       const changed_feat_t cf = reduce_changed_features(pb, upd.changed_constraints);
-      context.gpu_heur_loop.record_work(
-        calib::bp_work_per_iter(context.work_features, cf.n, cf.nnz, cf.warp));
+      context.gpu_heur_loop.record_work(calib::bp_device_work_per_iter(
+        context.work_features, context.gpu_features, cf.n, cf.nnz, cf.warp));
     }
     calculate_activity(pb);
     if (timer.check_time_limit()) {

@@ -22,6 +22,7 @@
 #include "multi_probe.cuh"
 
 #include <limits>
+#include <optional>
 
 namespace cuopt::linear_programming::detail {
 
@@ -288,6 +289,10 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
       timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
     }
   }
+  // Per-leaf diagnostic attribution only on the single-threaded (non-probing-cache) path; the
+  // local_work path runs multi-threaded and must not touch the shared (non-atomic) accumulators.
+  std::optional<cuopt::leaf_work_scope_t> leaf_scope;
+  if (!local_work) { leaf_scope.emplace(context.gpu_heur_loop, cuopt::heur_leaf_t::multi_probe); }
 
   i_t iter_0 = 0;
   i_t iter_1 = 0;
@@ -303,8 +308,11 @@ termination_criterion_t multi_probe_t<i_t, f_t>::bound_update_loop(problem_t<i_t
     if (det) {
       const changed_feat_t c0 = reduce_changed_features(pb, upd_0.changed_constraints);
       const changed_feat_t c1 = reduce_changed_features(pb, upd_1.changed_constraints);
-      const double w          = calib::bp_work_per_iter(
-        context.work_features, c0.n + c1.n, c0.nnz + c1.nnz, c0.warp + c1.warp);
+      const double w          = calib::bp_device_work_per_iter(context.work_features,
+                                                      context.gpu_features,
+                                                      c0.n + c1.n,
+                                                      c0.nnz + c1.nnz,
+                                                      c0.warp + c1.warp);
       if (local_work) {
         *local_work_accumulator += w;
       } else {

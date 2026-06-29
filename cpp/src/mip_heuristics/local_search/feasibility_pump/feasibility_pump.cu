@@ -219,27 +219,17 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
-  // Work-unit sub-budget: in deterministic mode the projection's wall-time budget is replaced by a
-  // calibrated PDLP iteration budget (work units == pseudo-seconds, wups == 1), so PDLP terminates
-  // on its own work-unit limit reproducibly. The global solver time limit still applies elsewhere.
+  // Work-unit sub-budget (centralized): attach the shared work clock so the projection's PDLP is
+  // capped to a reproducible iteration count (work units == pseudo-seconds, wups == 1) and the
+  // steps it takes are charged onto the clock, with the wall attributed to the relaxed_lp leaf.
+  // Replaces the previous manual cap + charge (get_relaxed_lp_solution now does both).
   if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    lp_settings.iteration_limit = context.pdlp_iters_for_budget(time_limit);
-    lp_settings.time_limit      = std::numeric_limits<f_t>::infinity();
+    context.ensure_work_features();
+    lp_settings.work_context  = &context.gpu_heur_loop;
+    lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
   }
   auto solver_response = get_relaxed_lp_solution(temp_p, solution, lp_settings);
   cuopt_func_call(solution.test_variable_bounds(false));
-  // Deterministic: charge the projection's actual PDLP work onto the shared work clock so the
-  // global work budget reflects the (dominant) projection effort and the heuristic loop terminates
-  // reproducibly in work units.
-  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
-    context.ensure_work_features();
-    const double pdlp_iters =
-      (double)solver_response.get_additional_termination_information().number_of_steps_taken;
-    if (pdlp_iters > 0.0) {
-      context.gpu_heur_loop.record_work(
-        pdlp_iters * calib::pdlp_device_work_per_iter(context.work_features, context.gpu_features));
-    }
-  }
   last_lp_time = old_remaining - timer.remaining_time();
   lp_time += last_lp_time;
   n_calls++;

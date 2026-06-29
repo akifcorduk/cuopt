@@ -423,6 +423,27 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
                      wu,
                      det ? "deterministic" : "opportunistic");
     }
+    // Per-leaf attribution: wall vs charged work. A leaf with wall >> work is under-charged (mis-
+    // or un-calibrated); the "unaccounted" remainder catches any wall-consuming leaf with no scope
+    // at all. Diagnostic only (these measurements never gate control flow).
+    if (det) {
+      auto& g            = context.gpu_heur_loop;
+      double summed_wall = 0.0;
+      for (int i = 0; i < work_limit_context_t::n_leaves; ++i) {
+        if (g.leaf_calls[i] == 0) { continue; }
+        summed_wall += g.leaf_wall[i];
+        const double ratio = g.leaf_work[i] > 0.0 ? g.leaf_wall[i] / g.leaf_work[i] : 0.0;
+        CUOPT_LOG_INFO("PHASE leaf %-16s wall %9.3fs work %9.3fwu calls %-7ld wall/work %.3f",
+                       heur_leaf_name(static_cast<heur_leaf_t>(i)),
+                       g.leaf_wall[i],
+                       g.leaf_work[i],
+                       g.leaf_calls[i],
+                       ratio);
+      }
+      CUOPT_LOG_INFO("PHASE leaf %-16s wall %9.3fs (wall not attributed to any instrumented leaf)",
+                     "unaccounted",
+                     std::max(0.0, stats.total_solve_time - summed_wall));
+    }
   });
 
   // Deterministic and opportunistic modes run the SAME heuristic path. Determinism is achieved by
@@ -528,7 +549,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
       pdlp_settings.time_limit      = std::numeric_limits<f_t>::infinity();
     }
     timer_t lp_timer(lp_time_limit);
-    const auto root_lp_wall_start = std::chrono::steady_clock::now();
+    const auto root_lp_wall_start    = std::chrono::steady_clock::now();
+    const double root_lp_work_before = context.gpu_heur_loop.global_work_units_elapsed;
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
     if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
       const double root_lp_steps =
@@ -546,6 +568,10 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
         std::chrono::duration<double>(std::chrono::steady_clock::now() - root_lp_wall_start)
           .count();
       CUOPT_LOG_INFO("PHASE root_lp: wall %.3fs (pdlp steps %d)", root_lp_wall, root_lp_steps);
+      context.gpu_heur_loop.add_leaf(
+        cuopt::heur_leaf_t::root_lp,
+        root_lp_wall,
+        context.gpu_heur_loop.global_work_units_elapsed - root_lp_work_before);
     }
 
     // The concurrent root LP can fail to produce a usable solution -- e.g. the barrier
@@ -897,6 +923,12 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   lp_settings.return_first_feasible   = false;
   lp_settings.save_state              = true;
   lp_settings.per_constraint_residual = true;
+  // Deterministic mode: cap this offspring LP by a reproducible iteration count and charge its PDLP
+  // steps onto the shared work clock (this is the hot relaxed-LP that previously ran uncharged).
+  if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+    lp_settings.work_context  = &context.gpu_heur_loop;
+    lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
+  }
   run_lp_with_vars_fixed(*lp_offspring.problem_ptr,
                          lp_offspring,
                          lp_offspring.problem_ptr->integer_indices,

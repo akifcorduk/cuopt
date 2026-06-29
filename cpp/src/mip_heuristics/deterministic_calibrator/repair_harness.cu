@@ -25,6 +25,9 @@
 #include <chrono>
 #include <cstdio>
 #include <limits>
+#include <map>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace cuopt::linear_programming::detail::calib {
@@ -40,8 +43,8 @@ std::vector<std::string> repair_feature_names()
 
 namespace {
 
-constexpr int kRepeats  = 3;
-constexpr int kMaxMoves = 200;
+constexpr int kRepeats  = 5;
+constexpr int kMaxMoves = 400;
 
 double median(std::vector<double> v)
 {
@@ -83,8 +86,11 @@ std::vector<calibration_sample_t> run_repair_calibration_sample(const std::strin
   // total warp loads of the full ii-violation activity pass (sum ceil(rowsize/32) over
   // constraints).
   double total_warp_loads = 0.0;
+  double max_row_nnz      = 0.0;
   for (std::size_t r = 0; r + 1 < h_offsets.size(); ++r) {
+    const double rs = (double)(h_offsets[r + 1] - h_offsets[r]);
     total_warp_loads += (double)(((h_offsets[r + 1] - h_offsets[r]) + 31) / 32);
+    max_row_nnz = std::max(max_row_nnz, rs);
   }
   {
     auto h_rev = cuopt::host_copy(pb->reverse_offsets, stream);
@@ -102,7 +108,12 @@ std::vector<calibration_sample_t> run_repair_calibration_sample(const std::strin
   repair.timer      = cuopt::timer_t(std::numeric_limits<double>::infinity());
   repair.resize(*pb);
 
-  std::vector<double> times, ncands, rowsizes;
+  // Per-move times bucketed by the dynamic feature point (n_candidates, chosen-constraint rowsize).
+  // Emitting one sample per distinct point (instead of a single per-instance median) lets the
+  // regression actually observe the per-move cost slope in n_candidates and rowsize, which are the
+  // dynamic inputs the runtime repair work model varies. Mirrors the bp/mp per-point bucketing.
+  std::map<std::pair<long, long>, std::vector<double>> by_point;
+  long total_moves = 0;
   for (int rep = 0; rep < kRepeats; ++rep) {
     // Recreate the infeasible state: fix every integer variable to its lower bound.
     thrust::for_each(pb->handle_ptr->get_thrust_policy(),
@@ -134,12 +145,11 @@ std::vector<calibration_sample_t> run_repair_calibration_sample(const std::strin
       pb->handle_ptr->sync_stream();
       auto t1 = std::chrono::steady_clock::now();
 
-      const double rs = (curr_cstr + 1 < (int)h_offsets.size())
-                          ? (double)(h_offsets[curr_cstr + 1] - h_offsets[curr_cstr])
-                          : 0.0;
-      times.push_back(std::chrono::duration<double>(t1 - t0).count());
-      ncands.push_back((double)n_cand);
-      rowsizes.push_back(rs);
+      const long rs = (curr_cstr + 1 < (int)h_offsets.size())
+                        ? (long)(h_offsets[curr_cstr + 1] - h_offsets[curr_cstr])
+                        : 0L;
+      by_point[{(long)n_cand, rs}].push_back(std::chrono::duration<double>(t1 - t0).count());
+      ++total_moves;
     }
     // restore original bounds for the next repeat
     raft::copy(pb->variable_bounds.data(),
@@ -149,31 +159,39 @@ std::vector<calibration_sample_t> run_repair_calibration_sample(const std::strin
     pb->handle_ptr->sync_stream();
   }
 
-  if (times.size() < 3) {
+  if (total_moves < 3) {
     std::printf(
-      "    [%s] no/low repair activity (%zu moves) -> skip\n", instance_name.c_str(), times.size());
+      "    [%s] no/low repair activity (%ld moves) -> skip\n", instance_name.c_str(), total_moves);
     return {};
   }
 
-  std::vector<double> features;
-  bf.append_to(features);
-  features.push_back(median(ncands));
-  features.push_back(median(rowsizes));
-  features.push_back(total_warp_loads);
+  std::vector<calibration_sample_t> out;
+  int point_idx = 0;
+  for (auto& [key, ts] : by_point) {
+    const double med = median(ts);
+    if (med <= 0.0) { continue; }
+    const double n_cand = (double)key.first;
+    const double rs     = (double)key.second;
+    std::vector<double> features;
+    bf.append_to(features);
+    features.push_back(n_cand);
+    features.push_back(rs);
+    features.push_back(total_warp_loads);
 
-  calibration_sample_t s;
-  s.instance               = instance_name;
-  s.features               = std::move(features);
-  s.measured_time_per_iter = median(times);
-  std::printf("    [%s] moves=%zu median %.3e s/move  n_cand=%.0f rowsize=%.0f warp=%.0f\n",
+    calibration_sample_t s;
+    s.instance               = instance_name + "#p" + std::to_string(point_idx++);
+    s.features               = std::move(features);
+    s.measured_time_per_iter = med;
+    s.max_row_nnz            = max_row_nnz;
+    out.push_back(std::move(s));
+  }
+  std::printf("    [%s] %zu distinct (n_cand,rowsize) points over %ld moves, warp=%.0f\n",
               instance_name.c_str(),
-              times.size(),
-              s.measured_time_per_iter,
-              median(ncands),
-              median(rowsizes),
+              out.size(),
+              total_moves,
               total_warp_loads);
   std::fflush(stdout);
-  return {s};
+  return out;
 }
 
 }  // namespace cuopt::linear_programming::detail::calib

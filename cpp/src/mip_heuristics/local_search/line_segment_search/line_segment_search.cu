@@ -154,13 +154,15 @@ bool line_segment_search_t<i_t, f_t>::search_line_segment(
   auto& context  = constraint_prop.context;
   const bool det = context.gpu_heur_loop.deterministic;
   if (det) { context.ensure_work_features(); }
+  cuopt::leaf_work_scope_t leaf_scope(context.gpu_heur_loop, cuopt::heur_leaf_t::line_segment);
   middle_first_iterator_t it(settings.n_points_to_search);
   int i;
   while (it.next(i)) {
     // make it one indexed
     i++;
     if (det) {
-      context.gpu_heur_loop.record_work(calib::activity_work_full(context.work_features));
+      context.gpu_heur_loop.record_work(
+        calib::activity_work_full_device(context.work_features, context.gpu_features));
     }
     CUOPT_LOG_DEBUG("Line segment point %d", i);
     thrust::tabulate(solution.handle_ptr->get_thrust_policy(),

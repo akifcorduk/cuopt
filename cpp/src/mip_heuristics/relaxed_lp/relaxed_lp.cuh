@@ -12,6 +12,7 @@
 #include <mip_heuristics/presolve/bounds_presolve.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/solution/solution.cuh>
+#include <utilities/work_limit_context.hpp>
 #include "lp_state.cuh"
 
 namespace cuopt::linear_programming::detail {
@@ -31,6 +32,14 @@ struct relaxed_lp_settings_t {
   bool per_constraint_residual      = true;
   bool has_initial_primal           = true;
   std::atomic<int>* concurrent_halt = nullptr;
+  // Deterministic work accounting. When work_context is set (and in deterministic mode) the relaxed
+  // LP interprets time_limit as a pseudo-second work budget: PDLP is capped to a reproducible
+  // iteration count (work_budget / work_per_iter) and the steps it actually takes are charged onto
+  // the shared work clock. This is what keeps relaxed-LP solves from burning uncharged wall time
+  // (the GA offspring LP and rounding-fallback LP previously did). work_per_iter is the calibrated
+  // pdlp_device_work_per_iter for the parent problem (mirrors the fp_recombiner wiring).
+  cuopt::work_limit_context_t* work_context = nullptr;
+  double work_per_iter                      = 0.0;
 };
 
 template <typename i_t, typename f_t>

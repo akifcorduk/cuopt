@@ -405,6 +405,7 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
     context.ensure_work_features();
     timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed, 1.0);
   }
+  cuopt::leaf_work_scope_t leaf_scope(context.gpu_heur_loop, cuopt::heur_leaf_t::bounds_repair);
   resize(problem);
   reset();
   best_violation = get_ii_violation(problem);
@@ -438,8 +439,8 @@ bool bounds_repair_t<i_t, f_t>::repair_problem(problem_t<i_t, f_t>& problem,
       const double rowsize = (curr_cstr >= 0 && curr_cstr < (i_t)context.work_row_sizes.size())
                                ? (double)context.work_row_sizes[curr_cstr]
                                : 0.0;
-      context.gpu_heur_loop.record_work(
-        calib::repair_work_per_move(context.work_features, (double)n_candidates, rowsize));
+      context.gpu_heur_loop.record_work(calib::repair_device_work_per_move(
+        context.work_features, context.gpu_features, (double)n_candidates, rowsize));
     }
     CUOPT_LOG_TRACE("Repair: number of candidates %d", n_candidates);
     // among the ones that have a valid shift value, compute the damage

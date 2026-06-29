@@ -148,6 +148,15 @@ struct mip_solver_context_t {
     return wps > 0.0 ? std::max<i_t>(1, (i_t)(work_budget / wps)) : 1;
   }
 
+  // Calibrated PDLP work per inner iteration for the current problem (wups == 1). Used by
+  // relaxed-LP callers to attach work accounting to a relaxed_lp_settings_t (cap + charge), so
+  // their PDLP solves spend from the shared work clock instead of burning uncharged wall time.
+  double pdlp_work_per_iter_now()
+  {
+    ensure_work_features();
+    return calib::pdlp_device_work_per_iter(work_features, gpu_features);
+  }
+
   // synchronization every 5 seconds for deterministic mode
   work_unit_scheduler_t work_unit_scheduler_{5.0};
 

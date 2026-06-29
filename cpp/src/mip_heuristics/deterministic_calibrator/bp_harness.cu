@@ -169,18 +169,22 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
     features.push_back((double)warp_loads);
 
     const std::string tag = instance_name + "#p" + std::to_string(point_idx++);
+    // Serialization term = the problem's static deepest row (max_row_nnz). The runtime work model
+    // can supply this cheaply (work_features.max_row_nnz); the dynamic longest-changed-row is not
+    // available per iteration without an extra reduction, so fit and runtime both use the static
+    // value to keep the device coefficients transferable.
     calibration_sample_t a;
     a.instance               = tag;
     a.features               = features;
     a.measured_time_per_iter = med_act;
-    a.max_row_nnz            = static_cast<double>(pt.max_changed_row);
+    a.max_row_nnz            = max_row_nnz;
     out.activity.push_back(std::move(a));
 
     calibration_sample_t u;
     u.instance               = tag;
     u.features               = std::move(features);
     u.measured_time_per_iter = med_upd;
-    u.max_row_nnz            = static_cast<double>(pt.max_changed_row);
+    u.max_row_nnz            = max_row_nnz;
     out.update.push_back(std::move(u));
 
     std::printf(

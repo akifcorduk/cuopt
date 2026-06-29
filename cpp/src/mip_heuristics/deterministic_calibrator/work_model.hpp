@@ -14,11 +14,13 @@
 // the call.
 
 #include <mip_heuristics/deterministic_calibrator/device_model.hpp>
+#include <mip_heuristics/deterministic_calibrator/generated/bp_device_two_kernel_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/bp_work_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/fj_device_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/fj_work_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/pdlp_device_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/pdlp_work_coeffs.hpp>
+#include <mip_heuristics/deterministic_calibrator/generated/repair_device_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/generated/repair_work_coeffs.hpp>
 #include <mip_heuristics/deterministic_calibrator/gpu_features.hpp>
 #include <mip_heuristics/deterministic_calibrator/linear_work_model.hpp>
@@ -227,6 +229,80 @@ inline double fj_device_work_per_step(const work_features_t& f,
                                   : 0.0;
   const std::vector<double> x = device_terms(raw, g, excess, f.max_row_nnz);
   const double w              = dot(fj_device_coeffs, x);
+  return w > 0.0 ? w : 0.0;
+}
+
+// Bound-presolve (and multi_probe) per iteration, GPU-generic. activity + bounds-update sub-kernels
+// share the same raw vector. raw layout MUST match the calibrator's bp dump/fit exactly:
+//   [n_vars, n_constraints, nnz, row_var, col_var, max_row_nnz, n_changed, changed_nnz,
+//    changed_warp]
+// hinge on changed_warp (k*warp_capacity); serial = static max_row_nnz; L2 working set =
+// changed_nnz (the data a single iteration actually touches).
+inline double bp_device_work_per_iter(const work_features_t& f,
+                                      const gpu_features_t& g,
+                                      double n_changed_constraints,
+                                      double changed_constraints_nnz,
+                                      double changed_warp_loads)
+{
+  std::vector<double> raw{f.n_vars,
+                          f.n_constraints,
+                          f.nnz,
+                          f.row_nnz_var,
+                          f.col_nnz_var,
+                          f.max_row_nnz,
+                          n_changed_constraints,
+                          changed_constraints_nnz,
+                          changed_warp_loads};
+  const double excess = std::max(0.0, changed_warp_loads - bp_device_hinge_k * g.warp_capacity);
+  const std::vector<double> x =
+    device_terms(raw, g, excess, f.max_row_nnz, changed_constraints_nnz);
+  const double w = dot(bp_device_activity_coeffs, x) + dot(bp_device_update_coeffs, x);
+  return w > 0.0 ? w : 0.0;
+}
+
+// Cost of a single full constraint-activity pass (line-segment get_quality etc.), GPU-generic.
+// Activity-only evaluation of the bp device model over the FULL constraint set (changed == all).
+inline double activity_work_full_device(const work_features_t& f, const gpu_features_t& g)
+{
+  std::vector<double> raw{f.n_vars,
+                          f.n_constraints,
+                          f.nnz,
+                          f.row_nnz_var,
+                          f.col_nnz_var,
+                          f.max_row_nnz,
+                          f.n_constraints,
+                          f.nnz,
+                          f.cons_warp_loads};
+  const double excess = std::max(0.0, f.cons_warp_loads - bp_device_hinge_k * g.warp_capacity);
+  const std::vector<double> x = device_terms(raw, g, excess, f.max_row_nnz, f.nnz);
+  const double w              = dot(bp_device_activity_coeffs, x);
+  return w > 0.0 ? w : 0.0;
+}
+
+// Bound-repair per move, GPU-generic. raw layout MUST match the calibrator's repair dump/fit:
+//   [n_vars, n_constraints, nnz, row_var, col_var, n_candidates, cur_cstr_rowsize,
+//   total_warp_loads]
+// hinge on total_warp_loads (k*warp_capacity) when enabled; serial = static max_row_nnz; working
+// set = nnz (default).
+inline double repair_device_work_per_move(const work_features_t& f,
+                                          const gpu_features_t& g,
+                                          double n_candidates,
+                                          double cur_cstr_rowsize)
+{
+  std::vector<double> raw{f.n_vars,
+                          f.n_constraints,
+                          f.nnz,
+                          f.row_nnz_var,
+                          f.col_nnz_var,
+                          n_candidates,
+                          cur_cstr_rowsize,
+                          f.cons_warp_loads};
+  const double excess =
+    repair_device_use_hinge
+      ? std::max(0.0, f.cons_warp_loads - repair_device_hinge_k * g.warp_capacity)
+      : 0.0;
+  const std::vector<double> x = device_terms(raw, g, excess, f.max_row_nnz);
+  const double w              = dot(repair_device_coeffs, x);
   return w > 0.0 ? w : 0.0;
 }
 
