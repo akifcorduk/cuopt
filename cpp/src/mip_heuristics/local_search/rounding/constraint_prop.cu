@@ -1057,6 +1057,12 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     lp_settings.tolerance             = orig_sol.problem_ptr->tolerances.absolute_tolerance;
     lp_settings.save_state            = false;
     lp_settings.return_first_feasible = true;
+    // Deterministic mode: cap + charge this post-rounding LP onto the shared work clock (it runs in
+    // the rounding/fast-solution path and otherwise burns uncharged wall time).
+    if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
+      lp_settings.work_context  = &context.gpu_heur_loop;
+      lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
+    }
     run_lp_with_vars_fixed(*orig_sol.problem_ptr,
                            orig_sol,
                            orig_sol.problem_ptr->integer_indices,
