@@ -1145,6 +1145,32 @@ static optimization_problem_solution_t<i_t, f_t> run_batch_pdlp_fixed(
                 off_size,
                 bs);
 
+  // Warm-start vectors may be shared (broadcast to every climber) or per-climber. The solver wraps
+  // the input with modulo indexing, so only these two exact sizes round-trip correctly; a multiple
+  // in between would silently wrap and seed climbers with the wrong iterate.
+  if (settings.has_initial_primal_solution()) {
+    const size_t ip_size = settings.get_initial_primal_solution().size();
+    cuopt_expects(ip_size == n_vars || ip_size == bs * n_vars,
+                  error_type_t::ValidationError,
+                  "run_batch_pdlp fixed path: initial_primal_solution size (%zu) must equal "
+                  "n_variables (%zu, shared/broadcast across climbers) or fixed_batch_size * "
+                  "n_variables (%zu, per-climber).",
+                  ip_size,
+                  n_vars,
+                  bs * n_vars);
+  }
+  if (settings.has_initial_dual_solution()) {
+    const size_t id_size = settings.get_initial_dual_solution().size();
+    cuopt_expects(id_size == n_constraints || id_size == bs * n_constraints,
+                  error_type_t::ValidationError,
+                  "run_batch_pdlp fixed path: initial_dual_solution size (%zu) must equal "
+                  "n_constraints (%zu, shared/broadcast across climbers) or fixed_batch_size * "
+                  "n_constraints (%zu, per-climber).",
+                  id_size,
+                  n_constraints,
+                  bs * n_constraints);
+  }
+
   pdlp_solver_settings_t<i_t, f_t> batch_settings = settings;
   apply_batch_settings_overrides(settings, batch_settings);
 

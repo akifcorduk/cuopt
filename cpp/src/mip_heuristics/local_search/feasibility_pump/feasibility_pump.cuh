@@ -200,18 +200,20 @@ class feasibility_pump_t {
   fp_batch_config_t batch_config;
   // Cached unified projection problem (fixed structure across climbers and outer iterations).
   std::unique_ptr<cuopt::linear_programming::optimization_problem_t<i_t, f_t>> unified_problem;
-  i_t unified_n_int        = 0;  // number of integer variables (== number of aux distance vars)
-  i_t unified_n_vars       = 0;  // original n_variables (without aux distance vars)
-  i_t unified_n_vars_total = 0;  // original + aux distance vars
-  i_t unified_n_constr     = 0;  // original n_constraints (without abs-value constraints)
+  i_t unified_n_int          = 0;  // number of integer variables (== number of aux distance vars)
+  i_t unified_n_vars         = 0;  // original n_variables (without aux distance vars)
+  i_t unified_n_vars_total   = 0;  // original + aux distance vars
+  i_t unified_n_constr       = 0;  // original n_constraints (without abs-value constraints)
   i_t unified_n_constr_total = 0;  // original + 2 * n_int abs-value constraints
   // Host copies needed to rebuild per-iteration objective / per-climber constraint bounds.
-  std::vector<i_t> h_integer_indices_cache;          // integer variable column indices
-  std::vector<f_t> h_base_constraint_lower;          // original constraint lower bounds
-  std::vector<f_t> h_base_constraint_upper;          // original constraint upper bounds
-  std::vector<f_t> h_var_lower;                      // original variable lower bounds
-  std::vector<f_t> h_var_upper;                      // original variable upper bounds
+  std::vector<i_t> h_integer_indices_cache;  // integer variable column indices
+  std::vector<f_t> h_base_constraint_lower;  // original constraint lower bounds
+  std::vector<f_t> h_base_constraint_upper;  // original constraint upper bounds
+  std::vector<f_t> h_var_lower;              // original variable lower bounds
+  std::vector<f_t> h_var_upper;              // original variable upper bounds
   i_t reseed_count = 0;
+  // L1 distance of the last selected projected cloud point to its seed (logged per trajectory).
+  f_t last_selected_l1 = 0.;
   f_t best_excess;
   rmm::device_uvector<f_t>& lp_optimal_solution;
   std::mt19937 rng;
@@ -228,6 +230,13 @@ class feasibility_pump_t {
   // concatenated [reseed_count * n_variables]. Declared last so its stream-aware initialization
   // ordering in the constructor is unambiguous.
   rmm::device_uvector<f_t> reseed_points;
+  // Per-climber PDLP warm start carried across projections within a single batched FP descent:
+  // the previous projection's primal [n_points * unified_n_vars_total] and dual
+  // [n_points * unified_n_constr_total]. Reset whenever the unified problem is rebuilt or a new
+  // descent starts; only used when the climber count matches the stored one.
+  rmm::device_uvector<f_t> warm_start_primal;
+  rmm::device_uvector<f_t> warm_start_dual;
+  i_t warm_start_n_points = 0;
 };
 
 }  // namespace cuopt::linear_programming::detail

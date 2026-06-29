@@ -393,8 +393,14 @@ template <typename i_t, typename f_t>
 void pdlp_solver_t<i_t, f_t>::set_initial_primal_solution(
   const rmm::device_uvector<f_t>& initial_primal_solution)
 {
-  cuopt_assert(initial_primal_solution.size() % primal_size_h_ == 0,
-               "Initial primal solution size must be divisible by primal_size_h_");
+  // Accept either a per-climber-sized vector (broadcast to every climber) or a full batch-sized
+  // vector (one distinct warm start per climber). problem_wrap_container's modulo indexing makes
+  // the broadcast a 1:1 copy when the input already covers the whole batch.
+  cuopt_assert(
+    initial_primal_solution.size() == (size_t)primal_size_h_ ||
+      initial_primal_solution.size() == (size_t)primal_size_h_ * climber_strategies_.size(),
+    "Initial primal solution must be per-climber-sized (broadcast) or batch-sized "
+    "(per-climber)");
   initial_primal_.resize(primal_size_h_ * climber_strategies_.size(), stream_view_);
   // In batch case initial_primal_ can be larger than the given initial_primal_solution
   cub::DeviceTransform::Transform(problem_wrap_container(initial_primal_solution),
@@ -408,8 +414,12 @@ template <typename i_t, typename f_t>
 void pdlp_solver_t<i_t, f_t>::set_initial_dual_solution(
   const rmm::device_uvector<f_t>& initial_dual_solution)
 {
-  cuopt_assert(initial_dual_solution.size() % dual_size_h_ == 0,
-               "Initial dual solution size must be divisible by dual_size_h_");
+  // Per-climber-sized (broadcast) or full batch-sized (one warm start per climber); see
+  // set_initial_primal_solution.
+  cuopt_assert(initial_dual_solution.size() == (size_t)dual_size_h_ ||
+                 initial_dual_solution.size() == (size_t)dual_size_h_ * climber_strategies_.size(),
+               "Initial dual solution must be per-climber-sized (broadcast) or batch-sized "
+               "(per-climber)");
   initial_dual_.resize(dual_size_h_ * climber_strategies_.size(), stream_view_);
   cub::DeviceTransform::Transform(problem_wrap_container(initial_dual_solution),
                                   initial_dual_.data(),
