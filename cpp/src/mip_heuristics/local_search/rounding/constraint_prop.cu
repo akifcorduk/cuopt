@@ -5,6 +5,7 @@
  */
 /* clang-format on */
 
+#include <mip_heuristics/deterministic_calibrator/work_model.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 #include <mip_heuristics/utils.cuh>
@@ -199,6 +200,13 @@ void constraint_prop_t<i_t, f_t>::sort_by_implied_slack_consumption(solution_t<i
                  return thrust::get<1>(a) < thrust::get<1>(b);
                });
   sol.handle_ptr->sync_stream();
+  // Charge the implied-slack constraint pass (a full activity pass) + the comparator sort.
+  if (context.gpu_heur_loop.deterministic) {
+    context.ensure_work_features();
+    context.gpu_heur_loop.record_work(
+      calib::activity_work_full_device(context.work_features, context.gpu_features) +
+      calib::sort_work((double)vars.size(), context.gpu_features));
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -289,6 +297,10 @@ void constraint_prop_t<i_t, f_t>::sort_by_interval_and_frac(solution_t<i_t, f_t>
              random_vector.size(),
              sol.handle_ptr->get_stream());
   sort_subsections<i_t, f_t>(vars, device_random_vector, subsection_offsets, sol.handle_ptr);
+  if (context.gpu_heur_loop.deterministic) {
+    context.ensure_work_features();
+    context.gpu_heur_loop.record_work(calib::sort_work((double)vars.size(), context.gpu_features));
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -307,6 +319,10 @@ void constraint_prop_t<i_t, f_t>::sort_by_frac(solution_t<i_t, f_t>& sol,
                  if (frac_1 != frac_2) { return frac_1 < frac_2; }
                  return v_idx_1 < v_idx_2;
                });
+  if (context.gpu_heur_loop.deterministic) {
+    context.ensure_work_features();
+    context.gpu_heur_loop.record_work(calib::sort_work((double)vars.size(), context.gpu_features));
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -847,6 +863,13 @@ bool constraint_prop_t<i_t, f_t>::is_problem_ii(problem_t<i_t, f_t>& problem)
   bounds_update.calculate_activity_on_problem_bounds(problem);
   bounds_update.calculate_infeasible_redundant_constraints(problem);
   bool problem_ii = bounds_update.infeas_constraints_count > 0;
+  // Work-account the full constraint-activity pass this does (otherwise it lands in the unaccounted
+  // bucket and the work budget under-counts the rounding phase).
+  if (context.gpu_heur_loop.deterministic) {
+    context.ensure_work_features();
+    context.gpu_heur_loop.record_work(
+      calib::activity_work_full_device(context.work_features, context.gpu_features));
+  }
   return problem_ii;
 }
 

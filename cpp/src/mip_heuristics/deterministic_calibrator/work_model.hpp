@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -276,6 +277,19 @@ inline double activity_work_full_device(const work_features_t& f, const gpu_feat
   const double excess = std::max(0.0, f.cons_warp_loads - bp_device_hinge_k * g.warp_capacity);
   const std::vector<double> x = device_terms(raw, g, excess, f.max_row_nnz, f.nnz);
   const double w              = dot(bp_device_activity_coeffs, x);
+  return w > 0.0 ? w : 0.0;
+}
+
+// Cost of a comparator-based GPU key sort over n elements. thrust uses merge sort for a custom
+// comparator (~n*log2(n) comparisons, each reading a couple of keys), so it is bandwidth-bound and
+// device-scaled. Used to work-account the rounding-loop sorts (sort_by_frac / interval / slack).
+inline double sort_work(double n_elements, const gpu_features_t& g)
+{
+  if (n_elements <= 1.0) { return 0.0; }
+  const double bw                       = g.mem_bandwidth_gb_s > 0.0 ? g.mem_bandwidth_gb_s : 1.0;
+  const double comparisons              = n_elements * std::log2(n_elements);
+  constexpr double bytes_per_comparison = 16.0;  // ~two 8-byte keys read per comparison
+  const double w                        = (comparisons * bytes_per_comparison) / (bw * 1e9);
   return w > 0.0 ? w : 0.0;
 }
 
