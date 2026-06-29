@@ -227,7 +227,12 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
   CUOPT_LOG_INFO("Starting cuOpt presolve");
   timer_t presolve_timer(time_limit);
 
+  auto bp_t0     = std::chrono::steady_clock::now();
   auto term_crit = ls.constraint_prop.bounds_update.solve(*problem_ptr);
+  problem_ptr->handle_ptr->sync_stream();
+  CUOPT_LOG_INFO("PRESOLVE bounds_update.solve: wall %.3fs iters %d",
+                 std::chrono::duration<double>(std::chrono::steady_clock::now() - bp_t0).count(),
+                 ls.constraint_prop.bounds_update.solve_iter);
   if (ls.constraint_prop.bounds_update.infeas_constraints_count > 0) {
     stats.presolve_time = timer.elapsed_time();
     return false;
@@ -255,8 +260,12 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
     timer_t probing_timer =
       det ? context.make_heuristic_timer(time_for_probing_cache) : timer_t{time_for_probing_cache};
     // this function computes probing cache, finds singletons, substitutions and changes the problem
+    auto pc_t0 = std::chrono::steady_clock::now();
     bool problem_is_infeasible =
       compute_probing_cache(ls.constraint_prop.bounds_update, *problem_ptr, probing_timer);
+    problem_ptr->handle_ptr->sync_stream();
+    CUOPT_LOG_INFO("PRESOLVE probing_cache: wall %.3fs",
+                   std::chrono::duration<double>(std::chrono::steady_clock::now() - pc_t0).count());
     if (problem_is_infeasible) { return false; }
   }
   const bool remap_cache_ids           = true;

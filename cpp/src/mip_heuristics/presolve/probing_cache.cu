@@ -928,14 +928,20 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
   std::atomic<bool> problem_is_infeasible(false);
   size_t last_it_implied_singletons = 0;
   bool early_exit                   = false;
-  const size_t step_size            = min((size_t)2048, priority_indices.size());
+  // In deterministic mode probing work is only folded into the global work clock at the step
+  // barrier, so the budget can only be enforced between steps. Use a smaller step so a large
+  // variable set (e.g. supportcase6 probes ~130k vars) cannot run a single huge unbudgeted step.
+  const size_t step_size = det_work ? min((size_t)512, priority_indices.size())
+                                    : min((size_t)2048, priority_indices.size());
 
   // The pool buffers above were allocated on the main stream.
   // Each OMP thread below uses its own stream, so we must ensure all allocations
   // are visible before any per-thread kernel can reference that memory.
   problem.handle_ptr->sync_stream();
 
-  CUOPT_LOG_INFO("Running probing cache with %zu tasks", num_tasks);
+  CUOPT_LOG_INFO("Running probing cache with %zu tasks (%zu candidate vars)",
+                 num_tasks,
+                 priority_indices.size());
 
   // Main parallel loop
   for (size_t step_start = 0; step_start < priority_indices.size(); step_start += step_size) {
@@ -980,6 +986,13 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
         step_work += work_accum_pool[t];
         work_accum_pool[t] = 0.0;
       }
+      // Per-probe host overhead (per-variable stream sync + host bound copies) dominates probing
+      // wall on large variable sets but is invisible to the changed-set compute model, so the work
+      // clock barely advanced (~1 unit per 2048 probes that cost ~40s). Charge a fixed cost per
+      // probed variable so the work budget actually bounds the number of probes. ~constant per
+      // probe (host-side, roughly GPU-independent); tune alongside cuopt_presolve_work_limit.
+      constexpr double k_probe_host_overhead = 0.02;  // work units (~seconds, wups==1) per probe
+      step_work += (double)(step_end - step_start) * k_probe_host_overhead;
       bound_presolve.context.gpu_heur_loop.record_work(step_work);
     }
 
