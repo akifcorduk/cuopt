@@ -63,7 +63,8 @@ fj_t<i_t, f_t>::fj_t(mip_solver_context_t<i_t, f_t>& context_, fj_settings_t in_
     work_id_to_nonbin_var_idx(pb_ptr->coefficients.size(), pb_ptr->handle_ptr->get_stream()),
     row_size_bin_prefix_sum(pb_ptr->binary_indices.size(), pb_ptr->handle_ptr->get_stream()),
     row_size_nonbin_prefix_sum(pb_ptr->nonbinary_indices.size(), pb_ptr->handle_ptr->get_stream()),
-    work_ids_for_related_vars(pb_ptr->n_variables, pb_ptr->handle_ptr->get_stream())
+    work_ids_for_related_vars(pb_ptr->n_variables, pb_ptr->handle_ptr->get_stream()),
+    trajectory_buffer(0, pb_ptr->handle_ptr->get_stream())
 {
   setval_launch_dims =
     get_launch_dims_update_assignment_kernel<i_t, f_t>(TPB_setval, pb_ptr->handle_ptr);
@@ -822,6 +823,20 @@ void fj_t<i_t, f_t>::refresh_lhs_and_violation(const rmm::cuda_stream_view& stre
 }
 
 template <typename i_t, typename f_t>
+void fj_t<i_t, f_t>::set_trajectory_capacity(i_t capacity, const rmm::cuda_stream_view& stream)
+{
+  trajectory_capacity = std::max(i_t(0), capacity);
+  trajectory_count    = 0;
+  trajectory_buffer.resize(static_cast<size_t>(trajectory_capacity) * pb_ptr->n_variables, stream);
+}
+
+template <typename i_t, typename f_t>
+void fj_t<i_t, f_t>::reset_trajectory()
+{
+  trajectory_count = 0;
+}
+
+template <typename i_t, typename f_t>
 i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
 {
   auto& data = *climbers[climber_idx];
@@ -926,6 +941,18 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
           climber_stream.synchronize();
           improvement_callback(user_obj, h_assignment);
         }
+      }
+
+      // Option-B trajectory capture for the batched-PDLP feasibility pump: record climber 0's
+      // visited (incumbent) iterate at this sync point until the capacity is filled.
+      if (settings.record_trajectory && climber_idx == 0 &&
+          trajectory_count < trajectory_capacity) {
+        raft::copy(trajectory_buffer.data() +
+                     static_cast<size_t>(trajectory_count) * solution.problem_ptr->n_variables,
+                   data.incumbent_assignment.data(),
+                   solution.problem_ptr->n_variables,
+                   climber_stream);
+        trajectory_count++;
       }
 
       if (limit_reached) { break; }

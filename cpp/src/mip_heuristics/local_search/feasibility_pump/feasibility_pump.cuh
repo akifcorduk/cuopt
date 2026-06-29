@@ -13,9 +13,12 @@
 #include <mip_heuristics/solution/solution.cuh>
 #include <utilities/timer.hpp>
 
+#include <cuopt/linear_programming/optimization_problem.hpp>
+
 #include <thrust/count.h>
 
 #include <deque>
+#include <memory>
 
 namespace cuopt::linear_programming::detail {
 
@@ -100,6 +103,19 @@ struct fp_config_t {
   double cycle_distance_reduction_ration = 0.1;
 };
 
+// Target range for the batched-PDLP feasibility-pump cloud size. compute_optimal_batch_size is
+// clamped into [min, max]; if the memory cap falls below min we use the cap, and if it is below
+// fallback_threshold we fall back to the single-point feasibility pump.
+struct fp_batch_config_t {
+  int target_min_batch_size = 128;
+  int target_max_batch_size = 2048;
+  int fallback_threshold    = 8;
+  double fj_seed_time_ratio = 0.2;  // 20% FJ run to seed the cloud trajectory
+  // Cap on the fraction of the cloud filled with reseed (previous-iteration projected) points, so
+  // fresh FJ-trajectory points and perturbed-LP-optimal padding always contribute diversity.
+  double reseed_fraction = 0.8;
+};
+
 template <typename i_t, typename f_t>
 class feasibility_pump_t {
  public:
@@ -121,6 +137,40 @@ class feasibility_pump_t {
   void perturbate(solution_t<i_t, f_t>& solution);
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
   bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
+
+  // ---- Batched-PDLP feasibility pump (cloud projection) ----
+  // Outer-loop entry point: projects a cloud of integer points simultaneously onto the LP polytope
+  // with batched PDLP, collapses to one point (min L1, tie-break max integer count) for
+  // round/cycle-break, and reseeds the next cloud. Falls back to run_single_fp_descent when the
+  // memory-aware batch size is too small. Returns true if a feasible solution was found.
+  bool run_batched_fp_cloud(solution_t<i_t, f_t>& solution);
+  // Builds the fixed unified projection problem once (one aux distance var + 2 abs-value
+  // constraints per integer variable). Per-climber variation is only in the added constraints'
+  // lower bounds (+/- val_j) and the shared alpha-blended objective.
+  void build_unified_projection_problem(solution_t<i_t, f_t>& solution);
+  // Memory-aware cloud size clamped into [target_min, target_max]; 0 means "fall back to single".
+  i_t compute_cloud_batch_size(solution_t<i_t, f_t>& solution);
+  // Assembles up to batch_size integer cloud points into d_cloud (concatenated [batch_size *
+  // n_variables]); returns the number of distinct points actually written.
+  i_t assemble_cloud(solution_t<i_t, f_t>& solution,
+                     i_t batch_size,
+                     bool first_iteration,
+                     rmm::device_uvector<f_t>& d_cloud,
+                     bool& seed_found_feasible);
+  // Runs the batch projection for the assembled cloud and writes the per-climber projected primals
+  // back into d_projected (concatenated [n_points * n_variables]). Returns false if the solve
+  // produced no usable primal.
+  bool project_cloud(solution_t<i_t, f_t>& solution,
+                     i_t n_points,
+                     const rmm::device_uvector<f_t>& d_cloud,
+                     rmm::device_uvector<f_t>& d_projected);
+  // Selects the best projected point (min L1 distance to its seed, tie-break max integer count)
+  // and copies it into solution.assignment. Returns the selected climber index.
+  i_t select_cloud_point(solution_t<i_t, f_t>& solution,
+                         i_t n_points,
+                         const rmm::device_uvector<f_t>& d_cloud,
+                         const rmm::device_uvector<f_t>& d_projected);
+
   bool round(solution_t<i_t, f_t>& solution);
   bool handle_cycle(solution_t<i_t, f_t>& solution);
   bool restart_fp(solution_t<i_t, f_t>& solution);
@@ -145,6 +195,23 @@ class feasibility_pump_t {
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
   rmm::device_uvector<var_t> orig_variable_types;
+
+  // ---- Batched-PDLP feasibility pump state ----
+  fp_batch_config_t batch_config;
+  // Cached unified projection problem (fixed structure across climbers and outer iterations).
+  std::unique_ptr<cuopt::linear_programming::optimization_problem_t<i_t, f_t>> unified_problem;
+  i_t unified_n_int        = 0;  // number of integer variables (== number of aux distance vars)
+  i_t unified_n_vars       = 0;  // original n_variables (without aux distance vars)
+  i_t unified_n_vars_total = 0;  // original + aux distance vars
+  i_t unified_n_constr     = 0;  // original n_constraints (without abs-value constraints)
+  i_t unified_n_constr_total = 0;  // original + 2 * n_int abs-value constraints
+  // Host copies needed to rebuild per-iteration objective / per-climber constraint bounds.
+  std::vector<i_t> h_integer_indices_cache;          // integer variable column indices
+  std::vector<f_t> h_base_constraint_lower;          // original constraint lower bounds
+  std::vector<f_t> h_base_constraint_upper;          // original constraint upper bounds
+  std::vector<f_t> h_var_lower;                      // original variable lower bounds
+  std::vector<f_t> h_var_upper;                      // original variable upper bounds
+  i_t reseed_count = 0;
   f_t best_excess;
   rmm::device_uvector<f_t>& lp_optimal_solution;
   std::mt19937 rng;
@@ -157,6 +224,10 @@ class feasibility_pump_t {
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
+  // Promising points carried from the previous iteration (nearest-rounded projected cloud),
+  // concatenated [reseed_count * n_variables]. Declared last so its stream-aware initialization
+  // ordering in the constructor is unambiguous.
+  rmm::device_uvector<f_t> reseed_points;
 };
 
 }  // namespace cuopt::linear_programming::detail

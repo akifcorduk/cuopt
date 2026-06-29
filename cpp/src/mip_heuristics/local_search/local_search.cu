@@ -777,7 +777,13 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
       break;
     }
-    is_feasible = fp.run_single_fp_descent(solution);
+    // Batched-PDLP cloud feasibility pump projects a cloud of integer points simultaneously and
+    // collapses to a single point for rounding/cycle-breaking. It internally falls back to the
+    // single-point descent when the memory-aware batch size is too small or precision is not double.
+    // Batched-PDLP cloud feasibility pump projects a cloud of integer points simultaneously and
+    // collapses to a single point for rounding/cycle-breaking. It internally falls back to the
+    // single-point descent when the memory-aware batch size is too small or precision is not double.
+    is_feasible = fp.run_batched_fp_cloud(solution);
     population_ptr->add_external_solutions_to_population();
     CUOPT_LOG_DEBUG("Population size at iteration %d: %d", i, population_ptr->current_size());
     if (context.preempt_heuristic_solver_.load()) {

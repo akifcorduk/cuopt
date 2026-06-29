@@ -114,6 +114,10 @@ struct fj_settings_t {
   bool feasibility_run        = true;
   fj_load_balancing_mode_t load_balancing_mode{fj_load_balancing_mode_t::AUTO};
   double baseline_objective_for_longer_run{std::numeric_limits<double>::lowest()};
+  // When true, climber 0 records its visited (incumbent) iterates at each periodic sync of the
+  // host loop into the trajectory buffer, up to the configured capacity. Used by the batched-PDLP
+  // feasibility pump to seed a cloud of starting points (see feasibility_pump_t).
+  bool record_trajectory = false;
 };
 
 struct fj_move_t {
@@ -239,6 +243,15 @@ class fj_t {
   // executed after a roudning FJ run if any fractionals remain to eliminate them
   void round_remaining_fractionals(solution_t<i_t, f_t>& solution, i_t climber_idx = 0);
 
+  // Trajectory recording (Option B for the batched-PDLP feasibility pump). Allocates a device
+  // buffer holding up to `capacity` visited iterates (each of size pb.n_variables) and clears the
+  // recorded count. Recording only happens while settings.record_trajectory is true.
+  void set_trajectory_capacity(i_t capacity, const rmm::cuda_stream_view& stream);
+  void reset_trajectory();
+  // Concatenated [count * n_variables] buffer of recorded iterates (climber 0).
+  const rmm::device_uvector<f_t>& get_trajectory_buffer() const { return trajectory_buffer; }
+  i_t get_trajectory_count() const { return trajectory_count; }
+
  public:
   mip_solver_context_t<i_t, f_t>& context;
   problem_t<i_t, f_t>* pb_ptr;
@@ -267,6 +280,12 @@ class fj_t {
   rmm::device_uvector<fj_load_balancing_workid_mapping_t> work_id_to_bin_var_idx;
   rmm::device_uvector<fj_load_balancing_workid_mapping_t> work_id_to_nonbin_var_idx;
   rmm::device_uvector<i_t> work_ids_for_related_vars;
+
+  // Visited-iterate trajectory of climber 0, captured at the host-loop sync points when
+  // settings.record_trajectory is true. Stored as a flat [trajectory_count * n_variables] buffer.
+  rmm::device_uvector<f_t> trajectory_buffer;
+  i_t trajectory_count    = 0;
+  i_t trajectory_capacity = 0;
 
   cuopt::manual_cuda_graph_t step_graph_;
 

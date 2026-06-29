@@ -46,6 +46,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -4442,6 +4443,138 @@ TEST(pdlp_class, big_batch_fixed_path)
                          primal_solution,
                          1e-4,
                          false);
+}
+
+// Mirrors big_batch_fixed_path but exercises the batched-PDLP feasibility-pump "unified projection
+// problem": for every integer variable j we always create an aux distance var d_j >= 0 and two
+// abs-value constraints (d_j - x_j >= -val_j, d_j + x_j >= val_j) so that d_j = |x_j - val_j| at
+// optimum. Only the abs-value rows' lower bounds (+/- val_j) vary per climber; the structure and
+// objective are shared. The test projects a cloud of integer points onto a tiny polytope, checks
+// each projection is the L1-closest feasible point, and that the min-L1 (tie-break max-integer)
+// selection picks the expected climber.
+TEST(pdlp_class, batched_fp_unified_projection_and_selection)
+{
+  const raft::handle_t handle_{};
+  auto stream = handle_.get_stream();
+
+  // Original problem: x0, x1 in [0, 5], single constraint 0 <= x0 + x1 <= 3. Both are "integer".
+  constexpr int n_vars   = 2;
+  constexpr int n_constr = 1;
+  constexpr int n_int    = 2;  // x0, x1
+  const std::vector<int> integer_cols = {0, 1};
+  const double inf                    = std::numeric_limits<double>::infinity();
+
+  const int n_vars_total   = n_vars + n_int;           // 4
+  const int n_constr_total = n_constr + 2 * n_int;     // 5
+
+  // Unified CSR: original row then 2 abs-value rows per integer var (columns sorted ascending).
+  // row0 : x0 + x1                       -> (x0,1),(x1,1)
+  // row1 : d0 - x0 >= -val0              -> (x0,-1),(d0,1)
+  // row2 : d0 + x0 >=  val0              -> (x0, 1),(d0,1)
+  // row3 : d1 - x1 >= -val1              -> (x1,-1),(d1,1)
+  // row4 : d1 + x1 >=  val1              -> (x1, 1),(d1,1)
+  std::vector<int> offsets = {0, 2, 4, 6, 8, 10};
+  std::vector<int> indices = {0, 1, 0, 2, 0, 2, 1, 3, 1, 3};
+  std::vector<double> values = {1, 1, -1, 1, 1, 1, -1, 1, 1, 1};
+
+  std::vector<double> vlb = {0, 0, 0, 0};
+  std::vector<double> vub = {5, 5, 5, 5};
+  // Shared objective: distance-only (alpha = 0), so the LP is the exact L1 projection.
+  std::vector<double> obj = {0, 0, 1, 1};
+
+  cuopt::linear_programming::optimization_problem_t<int, double> op(&handle_);
+  op.set_maximize(false);
+  op.set_csr_constraint_matrix(values.data(),
+                               static_cast<int>(values.size()),
+                               indices.data(),
+                               static_cast<int>(indices.size()),
+                               offsets.data(),
+                               static_cast<int>(offsets.size()));
+  // Shared (un-expanded) constraint bounds so compute_optimal_batch_size sees the base sizes.
+  std::vector<double> base_clb = {0, 0, 0, 0, 0};
+  std::vector<double> base_cub = {3, inf, inf, inf, inf};
+  op.set_constraint_lower_bounds(base_clb.data(), n_constr_total);
+  op.set_constraint_upper_bounds(base_cub.data(), n_constr_total);
+  op.set_objective_coefficients(obj.data(), n_vars_total);
+  op.set_variable_lower_bounds(vlb.data(), n_vars_total);
+  op.set_variable_upper_bounds(vub.data(), n_vars_total);
+
+  // Cloud of integer target points. Distances to the polytope {x0 + x1 <= 3}:
+  //   (0,0) feasible          -> distance 0
+  //   (5,5) -> max sum to 3   -> distance 10 - 3 = 7
+  //   (2,2) -> reduce sum to 3-> distance 4 - 3  = 1
+  const std::vector<std::array<double, n_int>> cloud = {{0, 0}, {5, 5}, {2, 2}};
+  const int batch_size                               = static_cast<int>(cloud.size());
+  const std::vector<double> expected_distance        = {0.0, 7.0, 1.0};
+
+  // Per-climber constraint bounds: original row shared, abs-value rows carry +/- val.
+  std::vector<double> all_clb;
+  std::vector<double> all_cub;
+  all_clb.reserve(batch_size * n_constr_total);
+  all_cub.reserve(batch_size * n_constr_total);
+  for (int c = 0; c < batch_size; ++c) {
+    all_clb.push_back(0.0);  // row0 lower
+    all_cub.push_back(3.0);  // row0 upper
+    for (int k = 0; k < n_int; ++k) {
+      const double val = cloud[c][k];
+      all_clb.push_back(-val);  // C1 lower
+      all_cub.push_back(inf);
+      all_clb.push_back(val);   // C2 lower
+      all_cub.push_back(inf);
+    }
+  }
+  assign_device_uvector_from_host(op.get_constraint_lower_bounds(), all_clb, stream);
+  assign_device_uvector_from_host(op.get_constraint_upper_bounds(), all_cub, stream);
+
+  pdlp_solver_settings_t<int, double> solver_settings;
+  solver_settings.method                          = cuopt::linear_programming::method_t::PDLP;
+  solver_settings.presolver                       = presolver_t::None;
+  solver_settings.fixed_batch_size                = batch_size;
+  solver_settings.generate_batch_primal_dual_solution = true;
+  solver_settings.set_optimality_tolerance(1e-6);
+
+  auto sol = cuopt::linear_programming::run_batch_pdlp(op, solver_settings);
+
+  ASSERT_EQ(sol.get_primal_solution().size(),
+            static_cast<size_t>(batch_size) * n_vars_total);
+
+  // Replicate the min-L1 (tie-break max-integer-count) selection used in run_batched_fp_cloud.
+  const double int_tol = 1e-4;
+  int best_c           = -1;
+  double best_l1       = std::numeric_limits<double>::infinity();
+  int best_int_count   = -1;
+  for (int c = 0; c < batch_size; ++c) {
+    EXPECT_EQ((int)sol.get_termination_status(c), CUOPT_TERMINATION_STATUS_OPTIMAL);
+    const auto primal =
+      host_copy(extract_subvector(sol.get_primal_solution(),
+                                  static_cast<size_t>(c) * n_vars_total,
+                                  n_vars_total),
+                stream);
+    handle_.sync_stream();
+
+    double l1      = 0.0;
+    int int_count  = 0;
+    for (int k = 0; k < n_int; ++k) {
+      const double xk  = primal[integer_cols[k]];
+      const double dk  = primal[n_vars + k];
+      l1 += std::abs(xk - cloud[c][k]);
+      // The aux distance var must equal |x_k - val_k| at optimum.
+      EXPECT_NEAR(dk, std::abs(xk - cloud[c][k]), 1e-3);
+      if (std::abs(xk - std::round(xk)) <= int_tol) int_count++;
+    }
+    EXPECT_NEAR(l1, expected_distance[c], 1e-2);
+
+    const bool better = (l1 < best_l1) || (l1 == best_l1 && int_count > best_int_count);
+    if (better) {
+      best_l1        = l1;
+      best_int_count = int_count;
+      best_c         = c;
+    }
+  }
+
+  // Climber 0 (target already feasible, distance 0) must be selected.
+  EXPECT_EQ(best_c, 0);
+  EXPECT_NEAR(best_l1, 0.0, 1e-3);
 }
 
 TEST(pdlp_class, batch_bound_objective_rescaling_factors_match_input_expansion)
