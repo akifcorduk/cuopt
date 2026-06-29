@@ -243,14 +243,17 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
     run_probing_cache = false;
   }
   if (run_probing_cache) {
-    // Run probing cache before trivial presolve to discover variable implications
-    const f_t max_time_on_probing = diversity_config.max_time_on_probing;
-    f_t time_for_probing_cache    = std::min(max_time_on_probing, time_limit);
-    // In deterministic mode the probing cache is work-clocked (reproducible budget) instead of
-    // wall-clocked; compute_probing_cache also runs single-threaded in that mode.
-    timer_t probing_timer = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC
-                              ? context.make_heuristic_timer(time_for_probing_cache)
-                              : timer_t{time_for_probing_cache};
+    // Run probing cache before trivial presolve to discover variable implications.
+    // In deterministic mode the probing-cache budget is spent in work units (reproducible), so use
+    // the dedicated tunable cuopt_presolve_work_limit; in opportunistic mode keep the wall-clock
+    // cap.
+    const bool det             = context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+    const f_t probing_budget   = det ? context.settings.heuristic_params.cuopt_presolve_work_limit
+                                     : diversity_config.max_time_on_probing;
+    f_t time_for_probing_cache = std::min(probing_budget, time_limit);
+    // compute_probing_cache also runs single-threaded in deterministic mode.
+    timer_t probing_timer =
+      det ? context.make_heuristic_timer(time_for_probing_cache) : timer_t{time_for_probing_cache};
     // this function computes probing cache, finds singletons, substitutions and changes the problem
     bool problem_is_infeasible =
       compute_probing_cache(ls.constraint_prop.bounds_update, *problem_ptr, probing_timer);

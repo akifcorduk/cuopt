@@ -590,11 +590,16 @@ void set_presolve_options(papilo::Presolve<f_t>& presolver,
                           f_t relative_tolerance,
                           f_t time_limit,
                           bool dual_postsolve,
-                          i_t num_cpu_threads)
+                          i_t num_cpu_threads,
+                          i_t max_rounds)
 {
   presolver.getPresolveOptions().tlim    = time_limit;
   presolver.getPresolveOptions().threads = num_cpu_threads;  //  user setting or  0 (automatic)
   presolver.getPresolveOptions().feastol = 1e-5;
+  // Deterministic iteration limit: bound the number of presolve rounds so presolve cannot run
+  // unboundedly (in deterministic mode the wall-clock tlim is infinite, so rounds are the only
+  // reproducible cap). <=0 keeps Papilo's default (-1, unlimited).
+  if (max_rounds > 0) { presolver.getPresolveOptions().maxrounds = max_rounds; }
   if (dual_postsolve) {
     presolver.getPresolveOptions().componentsmaxint = -1;
     presolver.getPresolveOptions().detectlindep     = 0;
@@ -610,11 +615,14 @@ void set_presolve_parameters(papilo::Presolve<f_t>& presolver,
   // It looks like a copy. But this copy has the pointers to relevant variables in papilo
   auto params = presolver.getParameters();
   if (category == problem_category_t::MIP) {
-    // Papilo has work unit measurements for probing. Because of this when the first batch fails to
-    // produce any reductions, the algorithm stops. To avoid stopping the algorithm, we set a
-    // minimum badge size to a huge value. The time limit makes sure that we exit if it takes too
-    // long
-    int min_badgesize = std::max(ncols / 2, 32);
+    // Papilo has work-unit measurements for probing: when a badge produces no reductions the
+    // algorithm stops. A large minbadgesize keeps the first badge big enough to find reductions
+    // (so probing doesn't stop prematurely), but an *uncapped* ncols/2 forces a single probing pass
+    // to span the whole problem, making probing run effectively unbounded on large MIPs (e.g. bab2
+    // presolve > 900s with a deterministic, infinite wall-clock tlim). Cap the badge so it stays
+    // large enough for reductions while Papilo's per-badge working limit (~2*nnz) and the presolve
+    // round cap (presolve_max_rounds) bound total probing work deterministically.
+    int min_badgesize = std::min(std::max(ncols / 2, 32), 1024);
     params.setParameter("probing.minbadgesize", min_badgesize);
     params.setParameter("cliquemerging.enabled", true);
     params.setParameter("cliquemerging.maxcalls", 50);
@@ -666,7 +674,8 @@ third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply(
   f_t absolute_tolerance,
   f_t relative_tolerance,
   double time_limit,
-  i_t num_cpu_threads)
+  i_t num_cpu_threads,
+  i_t max_rounds)
 {
   presolver_ = presolver;
   maximize_  = op_problem.get_sense();
@@ -697,7 +706,8 @@ third_party_presolve_result_t<i_t, f_t> third_party_presolve_t<i_t, f_t>::apply(
                                  relative_tolerance,
                                  time_limit,
                                  dual_postsolve,
-                                 num_cpu_threads);
+                                 num_cpu_threads,
+                                 max_rounds);
   set_presolve_parameters(
     papilo_presolver, category, op_problem.get_n_constraints(), op_problem.get_n_variables());
 
