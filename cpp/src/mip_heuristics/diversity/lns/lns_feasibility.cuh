@@ -8,12 +8,20 @@
 #pragma once
 
 #include <mip_heuristics/diversity/recombiners/recombiner_configs.hpp>
+#include <mip_heuristics/local_search/local_search.cuh>
 #include <mip_heuristics/local_search/rounding/constraint_prop.cuh>
 #include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/presolve/trivial_presolve.cuh>
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 #include <mip_heuristics/solution/solution.cuh>
 #include <utilities/copy_helpers.hpp>
 #include <utilities/seed_generator.cuh>
+
+#include <branch_and_bound/branch_and_bound.hpp>
+#include <dual_simplex/simplex_solver_settings.hpp>
+#include <dual_simplex/solve.hpp>
+#include <dual_simplex/tic_toc.hpp>
+#include <pdlp/initial_scaling_strategy/initial_scaling.cuh>
 
 #include <thrust/copy.h>
 #include <thrust/count.h>
@@ -88,6 +96,19 @@ struct lns_tardiness_penalty_t {
   {
     const f_t excess = sol_view.lower_excess[idx] + sol_view.upper_excess[idx];
     return excess > rel_tol ? excess * static_cast<f_t>(1 + tardiness[idx]) : f_t{0};
+  }
+};
+
+template <typename i_t, typename f_t>
+struct lns_weighted_violation_count_t {
+  typename solution_t<i_t, f_t>::view_t sol_view;
+  const i_t* tardiness;
+  f_t rel_tol;
+
+  __device__ f_t operator()(i_t idx) const
+  {
+    const f_t excess = sol_view.lower_excess[idx] + sol_view.upper_excess[idx];
+    return excess > rel_tol ? static_cast<f_t>(1 + tardiness[idx]) : f_t{0};
   }
 };
 
@@ -328,13 +349,14 @@ struct lns_ruined_delta_t {
 template <typename i_t, typename f_t>
 class lns_feasibility_t {
  public:
-  lns_feasibility_t(mip_solver_context_t<i_t, f_t>& context_,
-                    constraint_prop_t<i_t, f_t>& constraint_prop_)
+  lns_feasibility_t(mip_solver_context_t<i_t, f_t>& context_, local_search_t<i_t, f_t>& ls_)
     : context(context_),
+      ls(ls_),
       problem_ptr(context.problem_ptr),
-      constraint_prop(constraint_prop_),
+      constraint_prop(ls_.constraint_prop),
       candidate_scores(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
       related_candidate_vars(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
+      violated_seed_pool(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
       related_neighbor_offsets(0, problem_ptr->handle_ptr->get_stream()),
       related_neighbor_vars(0, problem_ptr->handle_ptr->get_stream()),
       related_pair_offsets(0, problem_ptr->handle_ptr->get_stream()),
@@ -383,23 +405,113 @@ class lns_feasibility_t {
                      lns_timer.elapsed_time());
       return finalize_feasible_solution(solution);
     }
+
+    // Quick Feasibility-Jump burst from the seed (POC step 1: "super quick FJ"). FJ is the
+    // strongest feasibility engine; starting the ruin/repair loop from its result gives a much
+    // better incumbent than the LP-rounded seed alone.
+    if (!lns_timer.check_time_limit()) {
+      solution_t<i_t, f_t> fj_sol(solution);
+      const f_t fj_budget = std::min<f_t>(feasibility_lns_config_t::fj_polish_initial_time_limit,
+                                          lns_timer.remaining_time());
+      const bool fj_feasible = fj_polish(fj_sol, fj_budget, "lns_fj_initial");
+      fj_sol.compute_feasibility();
+      CUOPT_LOG_INFO("Standalone LNS initial FJ: feasible %d, unsat %d, excess %.6e (%.2fs elapsed)",
+                     fj_feasible,
+                     n_unsatisfied_constraints(fj_sol),
+                     fj_sol.get_total_excess(),
+                     lns_timer.elapsed_time());
+      if (fj_feasible) {
+        solution.copy_from(fj_sol);
+        return finalize_feasible_solution(solution);
+      }
+      if (is_better_feasibility_state(fj_sol, solution)) { solution.copy_from(fj_sol); }
+    }
     solution_t<i_t, f_t> best_solution(solution);
 
     weight_t<i_t, f_t> weights(problem_ptr->n_constraints, problem_ptr->handle_ptr);
-    const i_t min_ruin = 10;
-    const i_t max_ruin = std::max(min_ruin, std::min<i_t>(2048, problem_ptr->n_integer_vars / 2));
+    // Keep ruin sets small: small neighborhoods repair fast and preserve most of the
+    // current structure. Growing the ruin set toward "re-randomize everything" destroys
+    // progress, so cap it and grow additively (not by doubling) on stalls.
+    const i_t min_ruin = 8;
+    const i_t max_ruin = std::max(min_ruin, std::min<i_t>(64, problem_ptr->n_integer_vars / 2));
     const i_t grow_after_failures = 5;
     i_t ruin_count                = min_ruin;
     i_t failure_streak            = 0;
     size_t attempted_repairs      = 0;
     size_t accepted_repairs       = 0;
+    size_t attempts_since_fj          = feasibility_lns_config_t::fj_polish_min_attempts_between;
+    size_t attempts_since_sub_mip     = feasibility_lns_config_t::sub_mip_repair_min_attempts_between;
     for (size_t attempt = 0; attempt < feasibility_lns_config_t::max_attempts; ++attempt) {
+      ++attempts_since_fj;
+      ++attempts_since_sub_mip;
       if (lns_timer.check_time_limit()) {
         CUOPT_LOG_INFO("Standalone LNS time limit hit after %lu attempts (%.2fs elapsed)",
                        attempted_repairs,
                        lns_timer.elapsed_time());
         break;
       }
+
+      // Periodic Feasibility-Jump polish whenever the incumbent is close to feasible. The
+      // bounds-propagation repair grinds the last few violations down very slowly (often one
+      // unit per accepted move), so we periodically hand the near-feasible incumbent to FJ,
+      // which can resolve the remaining violations in a single short burst. FJ keeps its own
+      // (persistent, weight-updated) state, so repeated calls explore different moves.
+      const i_t best_unsat = n_unsatisfied_constraints(best_solution);
+      if (best_unsat > 0 &&
+          best_unsat <= static_cast<i_t>(feasibility_lns_config_t::fj_polish_unsat_threshold) &&
+          attempts_since_fj >= feasibility_lns_config_t::fj_polish_min_attempts_between) {
+        attempts_since_fj = 0;
+        solution_t<i_t, f_t> fj_sol(best_solution);
+        const f_t fj_budget = std::min<f_t>(feasibility_lns_config_t::fj_polish_time_limit,
+                                            lns_timer.remaining_time());
+        const bool fj_feasible = fj_polish(fj_sol, fj_budget, "lns_fj_polish");
+        fj_sol.compute_feasibility();
+        CUOPT_LOG_INFO(
+          "Standalone LNS FJ polish: feasible %d, unsat %d -> %d, excess %.6e (%.2fs elapsed)",
+          fj_feasible,
+          best_unsat,
+          n_unsatisfied_constraints(fj_sol),
+          fj_sol.get_total_excess(),
+          lns_timer.elapsed_time());
+        if (fj_feasible) {
+          solution.copy_from(fj_sol);
+          best_solution.copy_from(fj_sol);
+          return finalize_feasible_solution(solution);
+        }
+        if (is_better_feasibility_state(fj_sol, best_solution)) {
+          best_solution.copy_from(fj_sol);
+          solution.copy_from(fj_sol);
+        }
+      }
+
+      // Mini-MIP repair when stuck at a small number of violated constraints that the cheaper
+      // repairs cannot close.
+      const i_t sub_mip_best_unsat = n_unsatisfied_constraints(best_solution);
+      if (sub_mip_best_unsat > 0 &&
+          sub_mip_best_unsat <=
+            static_cast<i_t>(feasibility_lns_config_t::sub_mip_repair_unsat_threshold) &&
+          attempts_since_sub_mip >=
+            feasibility_lns_config_t::sub_mip_repair_min_attempts_between &&
+          !lns_timer.check_time_limit()) {
+        attempts_since_sub_mip       = 0;
+        const i_t sub_mip_unsat_pre  = sub_mip_best_unsat;
+        const bool sub_mip_feasible  = sub_mip_repair(best_solution);
+        best_solution.compute_feasibility();
+        CUOPT_LOG_INFO(
+          "Standalone LNS sub-MIP repair: feasible %d, unsat %d -> %d (%.2fs elapsed)",
+          sub_mip_feasible,
+          sub_mip_unsat_pre,
+          n_unsatisfied_constraints(best_solution),
+          lns_timer.elapsed_time());
+        if (sub_mip_feasible) {
+          solution.copy_from(best_solution);
+          return finalize_feasible_solution(solution);
+        }
+        if (is_better_feasibility_state(best_solution, solution)) {
+          solution.copy_from(best_solution);
+        }
+      }
+
       const i_t unsat_before = n_unsatisfied_constraints(solution);
       const bool use_violated_constraint_ruin =
         unsat_before <=
@@ -424,10 +536,10 @@ class lns_feasibility_t {
         lns_timer.elapsed_time());
       if (!use_violated_constraint_ruin) {
         if (accepted) {
-          ruin_count     = std::max(min_ruin, ruin_count / 2);
+          ruin_count     = std::max(min_ruin, ruin_count - min_ruin);
           failure_streak = 0;
         } else if (++failure_streak >= grow_after_failures) {
-          ruin_count     = std::min(max_ruin, ruin_count * 2);
+          ruin_count     = std::min(max_ruin, ruin_count + min_ruin);
           failure_streak = 0;
         }
       }
@@ -668,6 +780,23 @@ class lns_feasibility_t {
       thrust::plus<f_t>());
   }
 
+  // Guided-Local-Search score: sum over currently violated constraints of their weight
+  // (1 + tardiness). Unlike the excess-weighted penalty, this weights the violation
+  // *indicator*, so it does not reward spreading the same total excess across many
+  // constraints. Minimizing it drives the search toward fewer (weighted) violations.
+  f_t get_weighted_violation_count(solution_t<i_t, f_t>& sol) const
+  {
+    const auto sol_view = sol.view();
+    const f_t rel_tol   = sol.problem_ptr->tolerances.relative_tolerance;
+    return thrust::transform_reduce(
+      sol.handle_ptr->get_thrust_policy(),
+      thrust::make_counting_iterator<i_t>(0),
+      thrust::make_counting_iterator<i_t>(sol.problem_ptr->n_constraints),
+      lns_weighted_violation_count_t<i_t, f_t>{sol_view, constraint_tardiness.data(), rel_tol},
+      f_t{0},
+      thrust::plus<f_t>());
+  }
+
 #if LNS_DEBUG
   std::pair<cudaEvent_t, cudaEvent_t> start_kernel_timer(cudaStream_t stream) const
   {
@@ -825,34 +954,64 @@ class lns_feasibility_t {
                                solution_t<i_t, f_t>& candidate,
                                const weight_t<i_t, f_t>& weights) const
   {
+    // Feasibility-phase acceptance (Guided-Local-Search style): accept the candidate if it
+    // reduces the number of unsatisfied constraints OR lowers the tardiness-weighted penalty
+    // sum. Because persistently violated constraints accumulate tardiness (their weight grows),
+    // this rule lets the search trade one set of violations for another and escape the plateaus
+    // that a strict descent on the raw unsatisfied count gets stuck in.
     const i_t current_unsat   = n_unsatisfied_constraints(current);
     const i_t candidate_unsat = n_unsatisfied_constraints(candidate);
     if (candidate_unsat < current_unsat) { return true; }
-    if (candidate_unsat > current_unsat) { return false; }
 
-    const f_t current_excess   = current.get_total_excess();
-    const f_t candidate_excess = candidate.get_total_excess();
-    if (candidate_excess + OBJECTIVE_EPSILON < current_excess) { return true; }
-    if (current_excess + OBJECTIVE_EPSILON < candidate_excess) { return false; }
-
-    const f_t current_tardiness_penalty   = get_tardiness_penalty(current);
-    const f_t candidate_tardiness_penalty = get_tardiness_penalty(candidate);
-    if (candidate_tardiness_penalty + OBJECTIVE_EPSILON < current_tardiness_penalty) {
+    const f_t current_score   = get_weighted_violation_count(current);
+    const f_t candidate_score = get_weighted_violation_count(candidate);
+    if (candidate_score + OBJECTIVE_EPSILON < current_score) { return true; }
+    // On ties in weighted violation count, prefer the state that is numerically closer to
+    // feasibility (smaller total excess), which is easier for the next repair to finish off.
+    if (candidate_score <= current_score + OBJECTIVE_EPSILON &&
+        candidate.get_total_excess() + OBJECTIVE_EPSILON < current.get_total_excess()) {
       return true;
     }
-    if (current_tardiness_penalty + OBJECTIVE_EPSILON < candidate_tardiness_penalty) {
-      return false;
-    }
-
-    return candidate.get_quality(weights) + OBJECTIVE_EPSILON < current.get_quality(weights);
+    return false;
   }
 
  public:
+  // Pick the seed variable for the related-ruin expansion. With high probability the seed is
+  // drawn from the integer variables that participate in a currently violated constraint, so
+  // the ruined set covers infeasibility and the repair can reduce the number of unsatisfied
+  // constraints. Otherwise (or when the solution is feasible) it falls back to uniform random.
+  i_t pick_seed_var(solution_t<i_t, f_t>& sol)
+  {
+    const i_t n_integer_vars = problem_ptr->n_integer_vars;
+    auto stream              = sol.handle_ptr->get_stream();
+    std::uniform_int_distribution<i_t> uniform_dist(0, n_integer_vars - 1);
+
+    std::uniform_real_distribution<double> coin(0., 1.);
+    if (coin(rng) < feasibility_lns_config_t::violated_seed_probability) {
+      constexpr i_t block_size = 256;
+      const i_t grid_size = std::min<i_t>(4096, (n_integer_vars + block_size - 1) / block_size);
+      lns_compute_violation_seed_scores_kernel<i_t, f_t><<<grid_size, block_size, 0, stream>>>(
+        sol.view(), problem_ptr->integer_indices.data(), n_integer_vars, candidate_scores.data());
+      RAFT_CUDA_TRY(cudaPeekAtLastError());
+      auto pool_end = thrust::copy_if(sol.handle_ptr->get_thrust_policy(),
+                                      thrust::make_counting_iterator<i_t>(0),
+                                      thrust::make_counting_iterator<i_t>(n_integer_vars),
+                                      violated_seed_pool.begin(),
+                                      lns_negative_score_t<i_t, f_t>{candidate_scores.data()});
+      const i_t violated_count = static_cast<i_t>(pool_end - violated_seed_pool.begin());
+      if (violated_count > 0) {
+        std::uniform_int_distribution<i_t> pool_dist(0, violated_count - 1);
+        const i_t integer_pos = violated_seed_pool.element(pool_dist(rng), stream);
+        return integer_indices_host[integer_pos];
+      }
+    }
+    return integer_indices_host[uniform_dist(rng)];
+  }
+
   i_t select_related_ruin_vars(solution_t<i_t, f_t>& sol, i_t target_ruin_count)
   {
     const i_t n_integer_vars = problem_ptr->n_integer_vars;
     if (n_integer_vars == 0) { return 0; }
-    const i_t* integer_indices = problem_ptr->integer_indices.data();
 
     // TODO do target_count as small as possible. 10-20 variables
     const i_t target_count   = target_ruin_count <= 0
@@ -867,11 +1026,7 @@ class lns_feasibility_t {
                  ruined_var_flags.end(),
                  i_t{0});
 
-    i_t seed_pos = 0;
-    std::uniform_int_distribution<i_t> seed_dist(0, n_integer_vars - 1);
-    seed_pos = seed_dist(rng);
-
-    const i_t seed_var = integer_indices_host[seed_pos];
+    const i_t seed_var = pick_seed_var(sol);
 #if LNS_DEBUG
     auto seed_kernel_timer = start_kernel_timer(stream);
 #endif
@@ -1028,10 +1183,17 @@ class lns_feasibility_t {
     log_violation_summary(offspring, "Standalone LNS fixed after unset");
 #endif
 
-    const auto old_repair_iterations               = constraint_prop.max_n_failed_repair_iterations;
-    constraint_prop.max_n_failed_repair_iterations = feasibility_lns_config_t::n_repair_iterations;
-    const f_t cp_remaining_before                  = lns_timer.remaining_time();
-    constraint_prop.apply_round(offspring, cp_remaining_before, lns_timer);
+    const auto old_repair_iterations = constraint_prop.max_n_failed_repair_iterations;
+    constraint_prop.max_n_failed_repair_iterations =
+      feasibility_lns_config_t::repair_max_failed_iterations;
+    const f_t cp_remaining_before = lns_timer.remaining_time();
+    // Bound each repair to a small slice so the ruin/repair loop iterates fast instead of
+    // letting a single constraint-propagation call consume all remaining time.
+    const f_t cp_budget =
+      std::min<f_t>(feasibility_lns_config_t::repair_time_limit, lns_timer.remaining_time());
+    timer_t cp_timer(cp_budget);
+    constraint_prop.apply_round(
+      offspring, feasibility_lns_config_t::lp_after_bounds_prop_time_limit, cp_timer);
     constraint_prop.max_n_failed_repair_iterations = old_repair_iterations;
 #if LNS_DEBUG
     CUOPT_LOG_INFO("Standalone LNS constraint propagation: feasible %d, remaining %.6e -> %.6e",
@@ -1132,6 +1294,136 @@ class lns_feasibility_t {
     return repair_current_ruin_set(current, weights, attempt, "violated_constraint");
   }
 
+  // Run cuOpt's Feasibility Jump (feasibility mode, with weight updates) on the given solution
+  // for a bounded budget. Used to build a strong starting point and to close out near-feasible
+  // incumbents that the bounds-propagation repair would otherwise reduce too slowly.
+  bool fj_polish(solution_t<i_t, f_t>& sol, f_t time_limit, const char* source)
+  {
+    if (time_limit <= 0.) { return sol.get_feasible(); }
+    // Reset FJ constraint weights to the same baseline (1.0) that a fresh FJ run uses, before
+    // each burst. do_fj_solve updates weights in place and the LNS calls it many times over a
+    // run; without a reset the weights accumulate across calls and eventually distort FJ's
+    // landscape, making later polishes ineffective.
+    ls.fj.reset_weights(sol.handle_ptr->get_stream(), f_t{1});
+    ls.fj.settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;
+    ls.fj.settings.n_of_minimums_for_exit = 500;
+    ls.fj.settings.update_weights         = true;
+    ls.fj.settings.feasibility_run        = true;
+    ls.do_fj_solve(sol, ls.fj, time_limit, source);
+    return sol.compute_feasibility();
+  }
+
+  // Mini-MIP repair: free the integer variables that appear in violated constraints, fix every
+  // other integer variable, and solve the residual sub-MIP exactly with dual-simplex branch and
+  // bound under a strict time budget. This resolves the "stuck at a few violated constraints"
+  // plateaus that the bounds-propagation and FJ repairs grind on indefinitely. Mirrors the
+  // sub-MIP recombiner. Returns true if it produced a feasible solution (written into best).
+  bool sub_mip_repair(solution_t<i_t, f_t>& best_solution)
+  {
+    namespace dual_simplex = cuopt::linear_programming::dual_simplex;
+    // The host-side B&B build cost scales with the full problem size, so only attempt this on
+    // small models where it is cheap; on large models it would burn the whole time budget.
+    if (problem_ptr->n_constraints >
+          static_cast<i_t>(feasibility_lns_config_t::sub_mip_repair_max_constraints) ||
+        problem_ptr->n_variables >
+          static_cast<i_t>(feasibility_lns_config_t::sub_mip_repair_max_problem_vars)) {
+      return false;
+    }
+    best_solution.compute_feasibility();
+    auto stream = best_solution.handle_ptr->get_stream();
+
+    thrust::fill(best_solution.handle_ptr->get_thrust_policy(),
+                 ruined_var_flags.begin(),
+                 ruined_var_flags.end(),
+                 i_t{0});
+    constexpr i_t block_size = 256;
+    const i_t grid_size =
+      std::min<i_t>(4096, (best_solution.problem_ptr->n_constraints + block_size - 1) / block_size);
+    lns_mark_violated_constraint_integer_vars_kernel<i_t, f_t><<<grid_size, block_size, 0, stream>>>(
+      best_solution.view(),
+      ruined_var_flags.data(),
+      best_solution.problem_ptr->tolerances.relative_tolerance);
+    RAFT_CUDA_TRY(cudaPeekAtLastError());
+    const i_t n_free = thrust::count(best_solution.handle_ptr->get_thrust_policy(),
+                                     ruined_var_flags.begin(),
+                                     ruined_var_flags.end(),
+                                     i_t{1});
+    if (n_free < 1 ||
+        n_free > static_cast<i_t>(feasibility_lns_config_t::sub_mip_repair_max_free_vars)) {
+      return false;
+    }
+    const i_t n_vars_to_fix = build_vars_to_fix();
+    vars_to_fix.resize(n_vars_to_fix, stream);
+
+    solution_t<i_t, f_t> offspring(best_solution);
+    auto [fixed_problem, fixed_assignment, variable_map] = offspring.fix_variables(vars_to_fix);
+
+    pdlp_initial_scaling_strategy_t<i_t, f_t> scaling(
+      fixed_problem.handle_ptr,
+      fixed_problem,
+      context.settings.hyper_params.default_l_inf_ruiz_iterations,
+      static_cast<f_t>(context.settings.hyper_params.default_alpha_pock_chambolle_rescaling),
+      fixed_problem.reverse_coefficients,
+      fixed_problem.reverse_offsets,
+      fixed_problem.reverse_constraints,
+      nullptr,
+      context.settings.hyper_params,
+      static_cast<i_t>(1),
+      true);
+    scaling.scale_problem();
+    fixed_problem.presolve_data.reset_additional_vars(fixed_problem, offspring.handle_ptr);
+    fixed_problem.presolve_data.initialize_var_mapping(fixed_problem, offspring.handle_ptr);
+    trivial_presolve(fixed_problem);
+    fixed_problem.check_problem_representation(true);
+    if (fixed_problem.n_integer_vars <= 8) { return false; }
+
+    sub_mip_solution_vector.clear();
+    dual_simplex::user_problem_t<i_t, f_t> bb_problem(offspring.handle_ptr);
+    dual_simplex::simplex_solver_settings_t<i_t, f_t> bb_settings;
+    fixed_problem.get_host_user_problem(bb_problem);
+    dual_simplex::mip_solution_t<i_t, f_t> bb_solution(1);
+    bb_solution.resize(bb_problem.num_cols);
+    bb_settings.time_limit           = std::min<f_t>(
+      feasibility_lns_config_t::sub_mip_repair_time_limit, lns_timer.remaining_time());
+    bb_settings.print_presolve_stats = false;
+    bb_settings.absolute_mip_gap_tol = context.settings.tolerances.absolute_mip_gap;
+    bb_settings.relative_mip_gap_tol = context.settings.tolerances.relative_mip_gap;
+    bb_settings.integer_tol          = context.settings.tolerances.integrality_tolerance;
+    bb_settings.num_threads          = 1;
+    bb_settings.reliability_branching = 0;
+    bb_settings.max_cut_passes        = 0;
+    bb_settings.clique_cuts           = 0;
+    bb_settings.sub_mip               = 1;
+    bb_settings.strong_branching_simplex_iteration_limit = 200;
+    bb_settings.log.log               = false;
+    bb_settings.solution_callback =
+      [this](std::vector<f_t>& sol, f_t /*objective*/) { sub_mip_solution_vector.push_back(sol); };
+    dual_simplex::probing_implied_bound_t<i_t, f_t> empty_probing(bb_problem.num_cols);
+    dual_simplex::branch_and_bound_t<i_t, f_t> bb(
+      bb_problem, bb_settings, dual_simplex::tic(), empty_probing);
+    bb.solve(bb_solution);
+    if (sub_mip_solution_vector.empty()) { return false; }
+
+    rmm::device_uvector<f_t> post(bb_solution.x.size(), offspring.handle_ptr->get_stream());
+    raft::copy(post.data(),
+               bb_solution.x.data(),
+               bb_solution.x.size(),
+               offspring.handle_ptr->get_stream());
+    fixed_problem.post_process_assignment(post, false);
+    offspring.handle_ptr->sync_stream();
+    std::swap(fixed_assignment, post);
+    rmm::device_uvector<f_t> dummy(0, offspring.handle_ptr->get_stream());
+    scaling.unscale_solutions(fixed_assignment, dummy);
+    offspring.unfix_variables(fixed_assignment, variable_map);
+    offspring.clamp_within_bounds();
+    const bool feasible = offspring.compute_feasibility();
+    if (feasible || is_better_feasibility_state(offspring, best_solution)) {
+      best_solution.copy_from(offspring);
+      return feasible;
+    }
+    return false;
+  }
+
   void lp_polish_with_integers_fixed(
     solution_t<i_t, f_t>& solution,
     f_t time_limit = static_cast<f_t>(feasibility_lns_config_t::lp_after_bounds_prop_time_limit))
@@ -1139,6 +1431,10 @@ class lns_feasibility_t {
     if (solution.get_feasible() || time_limit <= 0.) { return; }
     if (solution.problem_ptr->n_variables == solution.problem_ptr->n_integer_vars) { return; }
 
+    // The LP polish (continuous vars re-optimized with integers fixed) can occasionally
+    // return an iterate that violates more constraints than the input. Snapshot first and
+    // revert if the polish does not improve the feasibility state.
+    solution_t<i_t, f_t> pre_polish(solution);
     relaxed_lp_settings_t lp_settings;
     lp_settings.time_limit            = time_limit;
     lp_settings.tolerance             = solution.problem_ptr->tolerances.absolute_tolerance;
@@ -1150,13 +1446,18 @@ class lns_feasibility_t {
                            lp_settings,
                            static_cast<bound_presolve_t<i_t, f_t>*>(nullptr));
     solution.compute_feasibility();
+    if (!solution.get_feasible() && !is_better_feasibility_state(solution, pre_polish)) {
+      solution.copy_from(pre_polish);
+    }
   }
 
   mip_solver_context_t<i_t, f_t>& context;
+  local_search_t<i_t, f_t>& ls;
   problem_t<i_t, f_t>* problem_ptr;
   constraint_prop_t<i_t, f_t>& constraint_prop;
   rmm::device_uvector<f_t> candidate_scores;
   rmm::device_uvector<i_t> related_candidate_vars;
+  rmm::device_uvector<i_t> violated_seed_pool;
   rmm::device_uvector<i_t> related_neighbor_offsets;
   rmm::device_uvector<i_t> related_neighbor_vars;
   rmm::device_uvector<i_t> related_pair_offsets;
@@ -1167,6 +1468,7 @@ class lns_feasibility_t {
   rmm::device_uvector<i_t> constraint_tardiness;
   std::vector<i_t> integer_indices_host;
   std::vector<i_t> related_neighbor_offsets_host;
+  std::vector<std::vector<f_t>> sub_mip_solution_vector;
   std::mt19937 rng;
   timer_t lns_timer{0.};
 };

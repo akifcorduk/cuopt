@@ -183,7 +183,7 @@ bool diversity_manager_t<i_t, f_t>::run_lns_feasibility_phase(solution_t<i_t, f_
                                                               f_t time_limit)
 {
   raft::common::nvtx::range fun_scope("run_lns_feasibility_phase");
-  lns_feasibility_t<i_t, f_t> lns_feasibility(context, ls.constraint_prop);
+  lns_feasibility_t<i_t, f_t> lns_feasibility(context, ls);
   return lns_feasibility.run(solution, time_limit);
 }
 

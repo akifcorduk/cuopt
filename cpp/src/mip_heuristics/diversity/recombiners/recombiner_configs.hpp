@@ -48,6 +48,38 @@ struct feasibility_lns_config_t {
   static constexpr double beta                            = 1.;
   static constexpr size_t n_repair_iterations             = 100;
   static constexpr size_t violated_constraint_ruin_unsat_limit = 128;
+  // Per-repair constraint-propagation wall-clock budget. The repair loop is meant to
+  // iterate very fast, so each ruin/repair gets a small slice rather than all remaining time.
+  static constexpr double repair_time_limit = 0.2;
+  // Max failed repair iterations inside a single bounded constraint-propagation call.
+  static constexpr size_t repair_max_failed_iterations = 8;
+  // Probability of seeding the related-ruin from a variable that sits in a violated
+  // constraint (vs. a uniformly random integer variable). Seeding inside violated
+  // constraints lets the repair actually reduce the number of unsatisfied constraints.
+  static constexpr double violated_seed_probability = 0.9;
+  // Feasibility Jump is cuOpt's strongest feasibility local search; the LNS uses it both to
+  // build a strong initial solution and to "finish off" near-feasible incumbents that the
+  // bounds-propagation repair grinds down too slowly. These bound the FJ work.
+  static constexpr double fj_polish_initial_time_limit = 1.0;
+  static constexpr double fj_polish_time_limit         = 0.5;
+  // Only invoke the (relatively expensive) FJ polish when the incumbent is close to feasible.
+  static constexpr size_t fj_polish_unsat_threshold = 64;
+  // Throttle: minimum number of attempts between consecutive FJ polish calls.
+  static constexpr size_t fj_polish_min_attempts_between = 20;
+  // Mini-MIP repair: when the incumbent is stuck at a small number of violated constraints that
+  // neither bounds-propagation nor FJ can close, free the integer variables of the violated
+  // constraints, fix the rest, and solve the resulting small sub-MIP exactly (dual-simplex B&B)
+  // with a strict time budget.
+  static constexpr size_t sub_mip_repair_unsat_threshold     = 16;
+  static constexpr size_t sub_mip_repair_max_free_vars       = 400;
+  static constexpr double sub_mip_repair_time_limit          = 1.5;
+  static constexpr size_t sub_mip_repair_min_attempts_between = 30;
+  // The sub-MIP repair rebuilds the full (bounds-fixed) problem on the host for dual-simplex
+  // branch and bound, so its per-call cost scales with the *whole* problem size, not the freed
+  // subset. On large models a single call can burn many seconds, so only enable it for problems
+  // small enough that the host build + B&B is cheap.
+  static constexpr size_t sub_mip_repair_max_constraints   = 8000;
+  static constexpr size_t sub_mip_repair_max_problem_vars  = 15000;
 };
 
 struct ls_recombiner_config_t {
