@@ -105,8 +105,17 @@ class solution_t {
     // if there is an index calculation or some other logic then use getters
     // void compute_all_constraints();
     // void compute_constraints_with_delta(i_t var_id, f_t delta);
-    // bool is_constraint_feasible(i_t index);
-    // f_t get_excess_of_constraint(i_t index);
+
+    // Total constraint violation (lower + upper excess) of a single constraint.
+    __device__ f_t get_excess_of_constraint(i_t constraint_idx) const
+    {
+      return lower_excess[constraint_idx] + upper_excess[constraint_idx];
+    }
+    // A constraint is feasible when its total excess is within the given tolerance.
+    __device__ bool is_constraint_feasible(i_t constraint_idx, f_t tolerance) const
+    {
+      return get_excess_of_constraint(constraint_idx) <= tolerance;
+    }
 
     typename problem_t<i_t, f_t>::view_t problem;
     raft::device_span<f_t> assignment;

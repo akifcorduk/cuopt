@@ -177,16 +177,18 @@ template <typename i_t, typename f_t>
 __global__ void lns_mark_violated_constraint_integer_vars_kernel(
   typename solution_t<i_t, f_t>::view_t sol_view, i_t* ruined_vars, f_t rel_tol)
 {
-  for (i_t constraint_idx = blockIdx.x * blockDim.x + threadIdx.x;
-       constraint_idx < sol_view.problem.n_constraints;
-       constraint_idx += blockDim.x * gridDim.x) {
-    if ((sol_view.lower_excess[constraint_idx] + sol_view.upper_excess[constraint_idx]) <=
-        rel_tol) {
-      continue;
-    }
-    for (i_t offset = sol_view.problem.offsets[constraint_idx];
-         offset < sol_view.problem.offsets[constraint_idx + 1];
-         ++offset) {
+  static constexpr i_t warp_size = 32;
+  const i_t global_thread        = blockIdx.x * blockDim.x + threadIdx.x;
+  const i_t global_warp          = global_thread / warp_size;
+  const i_t lane                 = threadIdx.x & (warp_size - 1);
+  const i_t n_warps              = (blockDim.x * gridDim.x) / warp_size;
+
+  // One warp per constraint; the warp's lanes cooperatively scan that constraint's variables.
+  for (i_t constraint_idx = global_warp; constraint_idx < sol_view.problem.n_constraints;
+       constraint_idx += n_warps) {
+    if (sol_view.is_constraint_feasible(constraint_idx, rel_tol)) { continue; }
+    const auto [row_begin, row_end] = sol_view.problem.range_for_constraint(constraint_idx);
+    for (i_t offset = row_begin + lane; offset < row_end; offset += warp_size) {
       const i_t var_idx = sol_view.problem.variables[offset];
       if (sol_view.problem.is_integer_var(var_idx)) { atomicExch(&ruined_vars[var_idx], i_t{1}); }
     }
@@ -241,19 +243,27 @@ __global__ void lns_compute_violation_seed_scores_kernel(typename solution_t<i_t
                                                          i_t n_integer_vars,
                                                          f_t* seed_scores)
 {
-  const f_t rel_tol = sol.problem.tolerances.relative_tolerance;
-  for (i_t integer_pos = blockIdx.x * blockDim.x + threadIdx.x; integer_pos < n_integer_vars;
-       integer_pos += blockDim.x * gridDim.x) {
-    const i_t var_idx = integer_indices[integer_pos];
-    f_t violation_sum = 0.;
-    for (i_t offset = sol.problem.reverse_offsets[var_idx];
-         offset < sol.problem.reverse_offsets[var_idx + 1];
-         ++offset) {
-      const i_t constraint_idx = sol.problem.reverse_constraints[offset];
-      violation_sum += sol.lower_excess[constraint_idx] + sol.upper_excess[constraint_idx];
+  static constexpr i_t warp_size = 32;
+  const f_t rel_tol              = sol.problem.tolerances.relative_tolerance;
+  const i_t global_thread        = blockIdx.x * blockDim.x + threadIdx.x;
+  const i_t global_warp          = global_thread / warp_size;
+  const i_t lane                 = threadIdx.x & (warp_size - 1);
+  const i_t n_warps              = (blockDim.x * gridDim.x) / warp_size;
+
+  // One warp per integer variable; the warp's lanes cooperatively sum the violation of the
+  // constraints the variable appears in, then warp-reduce.
+  for (i_t integer_pos = global_warp; integer_pos < n_integer_vars; integer_pos += n_warps) {
+    const i_t var_idx                     = integer_indices[integer_pos];
+    const auto [reverse_beg, reverse_end] = sol.problem.reverse_range_for_var(var_idx);
+    f_t violation_sum                     = 0.;
+    for (i_t offset = reverse_beg + lane; offset < reverse_end; offset += warp_size) {
+      violation_sum += sol.get_excess_of_constraint(sol.problem.reverse_constraints[offset]);
     }
-    seed_scores[integer_pos] =
-      violation_sum > rel_tol ? -violation_sum : std::numeric_limits<f_t>::infinity();
+    violation_sum = raft::warpReduce(violation_sum);
+    if (lane == 0) {
+      seed_scores[integer_pos] =
+        violation_sum > rel_tol ? -violation_sum : std::numeric_limits<f_t>::infinity();
+    }
   }
 }
 
@@ -988,8 +998,10 @@ class lns_feasibility_t {
 
     std::uniform_real_distribution<double> coin(0., 1.);
     if (coin(rng) < feasibility_lns_config_t::violated_seed_probability) {
-      constexpr i_t block_size = 256;
-      const i_t grid_size = std::min<i_t>(4096, (n_integer_vars + block_size - 1) / block_size);
+      constexpr i_t block_size      = 256;
+      constexpr i_t warps_per_block = block_size / 32;
+      const i_t grid_size =
+        std::min<i_t>(4096, (n_integer_vars + warps_per_block - 1) / warps_per_block);
       lns_compute_violation_seed_scores_kernel<i_t, f_t><<<grid_size, block_size, 0, stream>>>(
         sol.view(), problem_ptr->integer_indices.data(), n_integer_vars, candidate_scores.data());
       RAFT_CUDA_TRY(cudaPeekAtLastError());
@@ -1271,9 +1283,10 @@ class lns_feasibility_t {
                  ruined_var_flags.begin(),
                  ruined_var_flags.end(),
                  i_t{0});
-    constexpr i_t block_size = 256;
-    const i_t grid_size =
-      std::min<i_t>(4096, (current.problem_ptr->n_constraints + block_size - 1) / block_size);
+    constexpr i_t block_size      = 256;
+    constexpr i_t warps_per_block = block_size / 32;
+    const i_t grid_size           = std::min<i_t>(
+      4096, (current.problem_ptr->n_constraints + warps_per_block - 1) / warps_per_block);
 #if LNS_DEBUG
     auto mark_kernel_timer = start_kernel_timer(stream);
 #endif
@@ -1336,9 +1349,10 @@ class lns_feasibility_t {
                  ruined_var_flags.begin(),
                  ruined_var_flags.end(),
                  i_t{0});
-    constexpr i_t block_size = 256;
-    const i_t grid_size =
-      std::min<i_t>(4096, (best_solution.problem_ptr->n_constraints + block_size - 1) / block_size);
+    constexpr i_t block_size      = 256;
+    constexpr i_t warps_per_block = block_size / 32;
+    const i_t grid_size           = std::min<i_t>(
+      4096, (best_solution.problem_ptr->n_constraints + warps_per_block - 1) / warps_per_block);
     lns_mark_violated_constraint_integer_vars_kernel<i_t, f_t><<<grid_size, block_size, 0, stream>>>(
       best_solution.view(),
       ruined_var_flags.data(),
@@ -1428,6 +1442,8 @@ class lns_feasibility_t {
     solution_t<i_t, f_t>& solution,
     f_t time_limit = static_cast<f_t>(feasibility_lns_config_t::lp_after_bounds_prop_time_limit))
   {
+    // Never let the LP polish run past the overall LNS deadline.
+    time_limit = std::min<f_t>(time_limit, lns_timer.remaining_time());
     if (solution.get_feasible() || time_limit <= 0.) { return; }
     if (solution.problem_ptr->n_variables == solution.problem_ptr->n_integer_vars) { return; }
 
