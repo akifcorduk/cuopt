@@ -422,22 +422,14 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver_with_lns()
 
   CUOPT_LOG_INFO("Running isolated standalone LNS feasibility phase");
   solution_t<i_t, f_t> lns_sol(*problem_ptr);
-  rmm::device_uvector<i_t> no_fixed_vars(0, problem_ptr->handle_ptr->get_stream());
   relaxed_lp_settings_t lp_seed_settings;
   lp_seed_settings.time_limit            = std::min<f_t>(1., timer.remaining_time() / 4);
   lp_seed_settings.tolerance             = problem_ptr->tolerances.absolute_tolerance;
   lp_seed_settings.save_state            = false;
   lp_seed_settings.return_first_feasible = true;
-  run_lp_with_vars_fixed(*problem_ptr,
-                         lns_sol,
-                         no_fixed_vars,
-                         lp_seed_settings,
-                         static_cast<bound_presolve_t<i_t, f_t>*>(nullptr));
+  get_relaxed_lp_solution(*problem_ptr, lns_sol, lp_seed_settings);
+  // round_nearest clamps to variable bounds, so the rounded seed is always within bounds.
   lns_sol.round_nearest();
-  lns_sol.compute_feasibility();
-  if (lns_sol.compute_max_variable_violation() > problem_ptr->tolerances.absolute_tolerance) {
-    lns_sol.assign_random_within_bounds(1.0, true);
-  }
   run_lns_feasibility_phase(lns_sol, timer.remaining_time());
   return lns_sol;
 };

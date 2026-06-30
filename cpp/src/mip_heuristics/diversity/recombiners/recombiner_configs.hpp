@@ -70,6 +70,12 @@ struct feasibility_lns_config_t {
   // neither bounds-propagation nor FJ can close, free the integer variables of the violated
   // constraints, fix the rest, and solve the resulting small sub-MIP exactly (dual-simplex B&B)
   // with a strict time budget.
+  // Disabled by default: with the incumbent's values fixed, the residual sub-MIP is almost
+  // always infeasible on the tested instances (the fixed part is itself part of the
+  // infeasibility), so the dual-simplex B&B finds no solution and only wastes time. The 1-hop
+  // related-variable neighborhood expansion did not change this. Kept behind a flag for future
+  // iteration (e.g. relaxing fixed constraints / smarter free-set selection).
+  static constexpr bool sub_mip_repair_enabled               = false;
   static constexpr size_t sub_mip_repair_unsat_threshold     = 16;
   static constexpr size_t sub_mip_repair_max_free_vars       = 400;
   static constexpr double sub_mip_repair_time_limit          = 1.5;

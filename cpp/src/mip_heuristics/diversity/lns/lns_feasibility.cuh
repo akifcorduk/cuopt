@@ -195,6 +195,37 @@ __global__ void lns_mark_violated_constraint_integer_vars_kernel(
   }
 }
 
+// Expand a seed set of ruined variables by one hop over the problem's variable-variable
+// "related variables" graph: for every seed-marked variable, also mark its related integer
+// variables, up to a global budget so densely coupled problems do not free everything. Reads
+// the seed flags from a snapshot so the expansion is exactly one hop.
+template <typename i_t, typename f_t>
+__global__ void lns_expand_related_integer_vars_kernel(typename problem_t<i_t, f_t>::view_t problem,
+                                                       const i_t* seed_flags,
+                                                       i_t* ruined_vars,
+                                                       i_t* add_counter,
+                                                       i_t add_budget)
+{
+  static constexpr i_t warp_size = 32;
+  const i_t global_thread        = blockIdx.x * blockDim.x + threadIdx.x;
+  const i_t global_warp          = global_thread / warp_size;
+  const i_t lane                 = threadIdx.x & (warp_size - 1);
+  const i_t n_warps              = (blockDim.x * gridDim.x) / warp_size;
+
+  for (i_t var_idx = global_warp; var_idx < problem.n_variables; var_idx += n_warps) {
+    if (seed_flags[var_idx] == 0) { continue; }
+    const auto [related_begin, related_end] = problem.range_for_related_vars(var_idx);
+    for (i_t offset = related_begin + lane; offset < related_end; offset += warp_size) {
+      const i_t related_var = problem.related_variables[offset];
+      if (!problem.is_integer_var(related_var) || ruined_vars[related_var] != 0) { continue; }
+      // Claim a slot in the global budget; only mark if we are still under it.
+      if (atomicAdd(add_counter, i_t{1}) < add_budget) {
+        atomicExch(&ruined_vars[related_var], i_t{1});
+      }
+    }
+  }
+}
+
 template <typename i_t, typename f_t>
 __global__ void lns_compute_seed_neighbor_scores_kernel(
   const f_t* assignment,
@@ -367,6 +398,8 @@ class lns_feasibility_t {
       candidate_scores(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
       related_candidate_vars(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
       violated_seed_pool(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
+      seed_mark_snapshot(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
+      expand_counter(problem_ptr->handle_ptr->get_stream()),
       related_neighbor_offsets(0, problem_ptr->handle_ptr->get_stream()),
       related_neighbor_vars(0, problem_ptr->handle_ptr->get_stream()),
       related_pair_offsets(0, problem_ptr->handle_ptr->get_stream()),
@@ -497,7 +530,7 @@ class lns_feasibility_t {
       // Mini-MIP repair when stuck at a small number of violated constraints that the cheaper
       // repairs cannot close.
       const i_t sub_mip_best_unsat = n_unsatisfied_constraints(best_solution);
-      if (sub_mip_best_unsat > 0 &&
+      if (feasibility_lns_config_t::sub_mip_repair_enabled && sub_mip_best_unsat > 0 &&
           sub_mip_best_unsat <=
             static_cast<i_t>(feasibility_lns_config_t::sub_mip_repair_unsat_threshold) &&
           attempts_since_sub_mip >=
@@ -1358,14 +1391,47 @@ class lns_feasibility_t {
       ruined_var_flags.data(),
       best_solution.problem_ptr->tolerances.relative_tolerance);
     RAFT_CUDA_TRY(cudaPeekAtLastError());
+
+    const i_t max_free =
+      static_cast<i_t>(feasibility_lns_config_t::sub_mip_repair_max_free_vars);
+    const i_t seed_count = thrust::count(best_solution.handle_ptr->get_thrust_policy(),
+                                         ruined_var_flags.begin(),
+                                         ruined_var_flags.end(),
+                                         i_t{1});
+    // Expand the freed set by one hop over the related-variable graph so the residual sub-MIP
+    // also contains the variables coupled to the violated constraints (otherwise freeing only
+    // the violated constraints' own variables usually yields an infeasible sub-MIP). The
+    // expansion is budget-capped so densely coupled problems do not free everything.
+    if (seed_count > 0 && seed_count < max_free &&
+        problem_ptr->related_variables_offsets.size() ==
+          static_cast<size_t>(problem_ptr->n_variables) + 1) {
+      expand_counter.set_value_to_zero_async(stream);
+      raft::copy(seed_mark_snapshot.data(),
+                 ruined_var_flags.data(),
+                 problem_ptr->n_variables,
+                 stream);
+      const i_t expand_grid = std::min<i_t>(
+        4096, (problem_ptr->n_variables + warps_per_block - 1) / warps_per_block);
+      lns_expand_related_integer_vars_kernel<i_t, f_t><<<expand_grid, block_size, 0, stream>>>(
+        problem_ptr->view(),
+        seed_mark_snapshot.data(),
+        ruined_var_flags.data(),
+        expand_counter.data(),
+        max_free - seed_count);
+      RAFT_CUDA_TRY(cudaPeekAtLastError());
+    }
+
     const i_t n_free = thrust::count(best_solution.handle_ptr->get_thrust_policy(),
                                      ruined_var_flags.begin(),
                                      ruined_var_flags.end(),
                                      i_t{1});
-    if (n_free < 1 ||
-        n_free > static_cast<i_t>(feasibility_lns_config_t::sub_mip_repair_max_free_vars)) {
-      return false;
-    }
+#if LNS_DEBUG
+    CUOPT_LOG_INFO("Standalone LNS sub-MIP free vars: seed %d -> expanded %d (cap %d)",
+                   seed_count,
+                   n_free,
+                   max_free);
+#endif
+    if (n_free < 1 || n_free > max_free) { return false; }
     const i_t n_vars_to_fix = build_vars_to_fix();
     vars_to_fix.resize(n_vars_to_fix, stream);
 
@@ -1416,6 +1482,12 @@ class lns_feasibility_t {
     dual_simplex::branch_and_bound_t<i_t, f_t> bb(
       bb_problem, bb_settings, dual_simplex::tic(), empty_probing);
     bb.solve(bb_solution);
+#if LNS_DEBUG
+    CUOPT_LOG_INFO("Standalone LNS sub-MIP B&B: free %d, fixed-problem int vars %d, solutions %lu",
+                   n_free,
+                   fixed_problem.n_integer_vars,
+                   sub_mip_solution_vector.size());
+#endif
     if (sub_mip_solution_vector.empty()) { return false; }
 
     rmm::device_uvector<f_t> post(bb_solution.x.size(), offspring.handle_ptr->get_stream());
@@ -1474,6 +1546,8 @@ class lns_feasibility_t {
   rmm::device_uvector<f_t> candidate_scores;
   rmm::device_uvector<i_t> related_candidate_vars;
   rmm::device_uvector<i_t> violated_seed_pool;
+  rmm::device_uvector<i_t> seed_mark_snapshot;
+  rmm::device_scalar<i_t> expand_counter;
   rmm::device_uvector<i_t> related_neighbor_offsets;
   rmm::device_uvector<i_t> related_neighbor_vars;
   rmm::device_uvector<i_t> related_pair_offsets;
