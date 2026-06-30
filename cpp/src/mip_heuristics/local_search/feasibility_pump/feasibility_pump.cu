@@ -61,7 +61,6 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     rng(cuopt::seed_generator::get_seed()),
     timer(20.),
     reseed_points(0, context.problem_ptr->handle_ptr->get_stream()),
-    warm_start_primal(0, context.problem_ptr->handle_ptr->get_stream()),
     warm_start_dual(0, context.problem_ptr->handle_ptr->get_stream())
 {
 }
@@ -254,7 +253,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
 
 // round will use inevitable infeasibility while propagating the bounds
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
+bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution, bool update_last_rounding)
 {
   bool result;
   CUOPT_LOG_DEBUG("Rounding the point");
@@ -269,11 +268,14 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
   constraint_prop.max_time_for_bounds_prop = old_time;
   // result = solution.round_nearest();
   cuopt_func_call(solution.test_variable_bounds(true));
-  // copy the last rounding
-  raft::copy(last_rounding.data(),
-             solution.assignment.data(),
-             solution.assignment.size(),
-             solution.handle_ptr->get_stream());
+  // copy the last rounding (skipped when rounding a side candidate, e.g. the best cloud climber,
+  // so it does not disturb climber 0's classic-FP trajectory state)
+  if (update_last_rounding) {
+    raft::copy(last_rounding.data(),
+               solution.assignment.data(),
+               solution.assignment.size(),
+               solution.handle_ptr->get_stream());
+  }
   if (result) {
     CUOPT_LOG_DEBUG("New feasible solution with objective %g", solution.get_user_objective());
   }

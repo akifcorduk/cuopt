@@ -402,12 +402,24 @@ void pdlp_solver_t<i_t, f_t>::set_initial_primal_solution(
     "Initial primal solution must be per-climber-sized (broadcast) or batch-sized "
     "(per-climber)");
   initial_primal_.resize(primal_size_h_ * climber_strategies_.size(), stream_view_);
-  // In batch case initial_primal_ can be larger than the given initial_primal_solution
-  cub::DeviceTransform::Transform(problem_wrap_container(initial_primal_solution),
-                                  initial_primal_.data(),
-                                  initial_primal_.size(),
-                                  cuda::std::identity{},
-                                  stream_view_);
+  // In batch case initial_primal_ can be larger than the given initial_primal_solution.
+  // A warm-start primal carried from a previous solve can be non-finite or out of bounds (w.r.t.
+  // the current problem); feeding that in can blow PDHG up into a dual NaN. Clamp it within the
+  // variable bounds (NaN -> 0 first), as the relaxed-LP warm start does via
+  // clamp_within_var_bounds.
+  using f_t2 = typename type_2<f_t>::type;
+  cub::DeviceTransform::Transform(
+    cuda::std::make_tuple(problem_wrap_container(initial_primal_solution),
+                          problem_wrap_container(op_problem_scaled_.variable_bounds)),
+    initial_primal_.data(),
+    initial_primal_.size(),
+    [] __device__(f_t x, f_t2 bnd) -> f_t {
+      if (!isfinite(x)) { x = f_t(0); }
+      const f_t lo = get_lower(bnd);
+      const f_t hi = get_upper(bnd);
+      return (x < lo) ? lo : ((x > hi) ? hi : x);
+    },
+    stream_view_);
 }
 
 template <typename i_t, typename f_t>
@@ -421,11 +433,15 @@ void pdlp_solver_t<i_t, f_t>::set_initial_dual_solution(
                "Initial dual solution must be per-climber-sized (broadcast) or batch-sized "
                "(per-climber)");
   initial_dual_.resize(dual_size_h_ * climber_strategies_.size(), stream_view_);
-  cub::DeviceTransform::Transform(problem_wrap_container(initial_dual_solution),
-                                  initial_dual_.data(),
-                                  initial_dual_.size(),
-                                  cuda::std::identity{},
-                                  stream_view_);
+  // A warm-start dual carried from a previous solve can contain non-finite values (w.r.t. the
+  // current problem); feeding those in makes A^T y NaN. Clamp them to zero, as the relaxed-LP warm
+  // start does before set_initial_dual_solution.
+  cub::DeviceTransform::Transform(
+    problem_wrap_container(initial_dual_solution),
+    initial_dual_.data(),
+    initial_dual_.size(),
+    [] __device__(f_t x) { return isfinite(x) ? x : f_t(0); },
+    stream_view_);
 }
 
 static bool time_limit_reached(const timer_t& timer) { return timer.check_time_limit(); }
