@@ -729,6 +729,57 @@ double device_cv(const std::vector<dump_row_t>& rows,
   return std::sqrt(var) / mean;
 }
 
+// Median / within-band / p10-p90 diagnostics of measured/predicted (the shipped metric), optionally
+// for one GPU. Complements device_cv (which reports mean-based dispersion).
+struct dev_ratio_stats_t {
+  double median{0.0}, within10{0.0}, within25{0.0}, p10{0.0}, p90{0.0};
+  std::size_t n{0};
+};
+dev_ratio_stats_t device_ratio_stats(const std::vector<dump_row_t>& rows,
+                                      const std::vector<double>& coeffs,
+                                      double hinge_k,
+                                      bool use_hinge,
+                                      const std::string& only_gpu = std::string())
+{
+  std::vector<double> r;
+  for (const auto& row : rows) {
+    if (!only_gpu.empty() && std::string(row.g.name) != only_gpu) continue;
+    std::vector<double> raw(row.feat.begin() + 1, row.feat.end());
+    double excess  = use_hinge ? std::max(0.0, raw.back() - hinge_k * row.g.warp_capacity) : 0.0;
+    double working = raw.size() > 2 ? raw[2] : 0.0;
+    double pred    = predict_work(coeffs, dev_terms(raw, row.g, excess, row.max_row, working));
+    if (pred <= 0.0) continue;
+    r.push_back(row.measured / pred);
+  }
+  dev_ratio_stats_t s;
+  s.n = r.size();
+  if (r.empty()) return s;
+  std::size_t in10 = 0, in25 = 0;
+  for (double v : r) {
+    if (std::abs(v - 1.0) <= 0.10) ++in10;
+    if (std::abs(v - 1.0) <= 0.25) ++in25;
+  }
+  std::sort(r.begin(), r.end());
+  s.median   = r[r.size() / 2];
+  s.p10      = r[(std::size_t)(0.10 * (r.size() - 1))];
+  s.p90      = r[(std::size_t)(0.90 * (r.size() - 1))];
+  s.within10 = (double)in10 / (double)r.size();
+  s.within25 = (double)in25 / (double)r.size();
+  return s;
+}
+
+// Build fitter options, allowing CALIB_HUBER / CALIB_L1 / CALIB_L2 / CALIB_PIN_MEAN env overrides so
+// the robust/elastic-net knobs can be swept without recompiling.
+work_calibrator_t::options_t fit_options()
+{
+  work_calibrator_t::options_t o;
+  if (const char* e = std::getenv("CALIB_HUBER")) o.huber_delta = std::atof(e);
+  if (const char* e = std::getenv("CALIB_L1")) o.l1 = std::atof(e);
+  if (const char* e = std::getenv("CALIB_L2")) o.l2 = std::atof(e);
+  if (std::getenv("CALIB_PIN_MEAN")) o.pin_median = false;
+  return o;
+}
+
 // Single-kernel device-aware fit (fj has no hinge; pdlp/repair hinge on the last raw feature =
 // total warp loads, threshold k * warp_capacity).
 void fit_single_device(const std::string& algo, const std::vector<std::string>& csvs)
@@ -761,7 +812,7 @@ void fit_single_device(const std::string& algo, const std::vector<std::string>& 
       s.measured_time_per_iter = r.measured;
       samples.push_back(std::move(s));
     }
-    return cal.fit(samples, n_terms, work_calibrator_t::options_t{}).coeffs;
+    return cal.fit(samples, n_terms, fit_options()).coeffs;
   };
 
   double best_cv = 1e30, best_k = 0;
@@ -777,11 +828,20 @@ void fit_single_device(const std::string& algo, const std::vector<std::string>& 
       best_fit = fit;
     }
   }
-  std::printf("\n=== %s device-aware fit ===\nrows=%zu best_k=%.2f COMBINED CV=%.4f\n",
-              algo.c_str(),
-              rows.size(),
-              best_k,
-              best_cv);
+  {
+    auto s = device_ratio_stats(rows, best_fit.coeffs, best_k, use_hinge);
+    std::printf("\n=== %s device-aware fit ===\nrows=%zu best_k=%.2f COMBINED CV=%.4f\n",
+                algo.c_str(),
+                rows.size(),
+                best_k,
+                best_cv);
+    std::printf("  median ratio=%.3f  within10%%=%.1f%%  within25%%=%.1f%%  p10=%.3f p90=%.3f\n",
+                s.median,
+                100.0 * s.within10,
+                100.0 * s.within25,
+                s.p10,
+                s.p90);
+  }
   // Per-GPU CV breakdown (cross-GPU generality check).
   std::vector<std::string> gpus;
   for (const auto& r : rows) {
@@ -916,8 +976,36 @@ void fit_two_kernel_device(const std::string& algo, const std::vector<std::strin
       u.measured_time_per_iter = upd[i].measured;
       U.push_back(std::move(u));
     }
-    return std::make_pair(cal.fit(A, n_terms, work_calibrator_t::options_t{}).coeffs,
-                          cal.fit(U, n_terms, work_calibrator_t::options_t{}).coeffs);
+    return std::make_pair(cal.fit(A, n_terms, fit_options()).coeffs,
+                          cal.fit(U, n_terms, fit_options()).coeffs);
+  };
+
+  // Combined median ratio / within-band over (meas_act+meas_upd)/(pred_act+pred_upd).
+  auto combined_stats = [&](const std::vector<double>& ca, const std::vector<double>& cu, double k) {
+    std::vector<double> r;
+    for (std::size_t i = 0; i < act.size(); ++i) {
+      std::vector<double> rawa(act[i].feat.begin() + 1, act[i].feat.end());
+      std::vector<double> rawu(upd[i].feat.begin() + 1, upd[i].feat.end());
+      const double exa = std::max(0.0, rawa.back() - k * act[i].g.warp_capacity);
+      const double exu = std::max(0.0, rawu.back() - k * upd[i].g.warp_capacity);
+      const double p = predict_work(ca, dev_terms(rawa, act[i].g, exa, act[i].max_row, ws(rawa))) +
+                       predict_work(cu, dev_terms(rawu, upd[i].g, exu, upd[i].max_row, ws(rawu)));
+      const double m = act[i].measured + upd[i].measured;
+      if (p > 0.0) r.push_back(m / p);
+    }
+    dev_ratio_stats_t s;
+    s.n = r.size();
+    if (r.empty()) return s;
+    std::size_t in10 = 0, in25 = 0;
+    for (double v : r) {
+      if (std::abs(v - 1.0) <= 0.10) ++in10;
+      if (std::abs(v - 1.0) <= 0.25) ++in25;
+    }
+    std::sort(r.begin(), r.end());
+    s.median   = r[r.size() / 2];
+    s.within10 = (double)in10 / (double)r.size();
+    s.within25 = (double)in25 / (double)r.size();
+    return s;
   };
 
   double best_cv = 1e30, best_k = 0;
@@ -938,6 +1026,13 @@ void fit_two_kernel_device(const std::string& algo, const std::vector<std::strin
               act.size(),
               best_k,
               best_cv);
+  {
+    auto s = combined_stats(best_act.coeffs, best_upd.coeffs, best_k);
+    std::printf("  median ratio=%.3f  within10%%=%.1f%%  within25%%=%.1f%%\n",
+                s.median,
+                100.0 * s.within10,
+                100.0 * s.within25);
+  }
   std::vector<std::string> gpus;
   for (const auto& r : act)
     if (std::find(gpus.begin(), gpus.end(), std::string(r.g.name)) == gpus.end())
