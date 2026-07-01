@@ -778,11 +778,6 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
   // letting the batched path be enabled / benchmarked without a rebuild.
   static const bool use_batched_fp = std::getenv("CUOPT_FP_BATCHED") != nullptr;
   if (!use_batched_fp) { return run_single_fp_descent(solution); }
-  // Batch PDLP requires double precision; fall back to the single-point pump otherwise.
-  if constexpr (!std::is_same_v<f_t, double>) {
-    CUOPT_LOG_INFO("Batched FP cloud requires double precision; falling back to single FP");
-    return run_single_fp_descent(solution);
-  }
 
   if (unified_problem == nullptr || unified_n_vars != solution.problem_ptr->n_variables ||
       unified_n_constr != solution.problem_ptr->n_constraints) {
