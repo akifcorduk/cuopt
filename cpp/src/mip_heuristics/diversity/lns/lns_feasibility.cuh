@@ -41,6 +41,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <random>
@@ -261,11 +262,44 @@ __global__ void lns_expand_related_integer_vars_kernel(typename problem_t<i_t, f
   }
 }
 
-// Score the seed's related integer neighbors, drawn from the problem's bounded related-variables
-// graph (compute_related_variables applies its own memory/time safeguards), by how far each
-// neighbor's current value sits from the seed's: a larger difference gives a more negative score
-// so it is selected first by the ascending sort. Ineligible neighbors (the seed itself, a
-// non-integer variable, or one already ruined) get +inf and sort to the back, never selected.
+// Per-constraint coefficient norms (one warp per constraint): inf-norm (max |a_ij|) and l1-norm
+// (sum |a_ij|). Used to normalize related-neighbor similarity so a single large-coefficient
+// (big-M) constraint cannot dominate.
+template <typename i_t, typename f_t>
+__global__ void lns_compute_row_norms_kernel(typename problem_t<i_t, f_t>::view_t problem,
+                                             f_t* row_inf_norm,
+                                             f_t* row_l1_norm)
+{
+  const i_t lane = threadIdx.x & 31;
+  for (i_t row = blockIdx.x; row < problem.n_constraints; row += gridDim.x) {
+    const auto [row_begin, row_end] = problem.range_for_constraint(row);
+    f_t local_inf                   = f_t{0};
+    f_t local_l1                    = f_t{0};
+    for (i_t offset = row_begin + lane; offset < row_end; offset += 32) {
+      const f_t a = abs(problem.coefficients[offset]);
+      local_inf   = max(local_inf, a);
+      local_l1 += a;
+    }
+    for (int shift = 16; shift > 0; shift >>= 1) {
+      local_inf = max(local_inf, __shfl_down_sync(0xffffffffu, local_inf, shift));
+      local_l1 += __shfl_down_sync(0xffffffffu, local_l1, shift);
+    }
+    if (lane == 0) {
+      row_inf_norm[row] = local_inf;
+      row_l1_norm[row]  = local_l1;
+    }
+  }
+}
+
+// Score the seed's related integer neighbors (from the problem's bounded related-variables graph)
+// so the most related ones sort first (lowest score).
+// Default (use_similarity == false): plain current-value divergence, score = -|x_seed - x_k|, so
+// the neighbors whose value diverges most from the seed are selected first.
+// Similarity experiment (use_similarity == true): combine, over shared constraints,
+//   d_j = alpha * |ahat_ij - ahat_kj| + (1 - alpha) * |ahat_ij x_i - ahat_kj x_k|
+// with ahat_ij = a_ij / ||a_j||_inf (kills big-M dominance), weighted-averaged by the scale-free
+// per-constraint weight w_j = ||a_j||_1 / ||a_j||_inf, minus jaccard_weight * Jaccard(C(i),C(k)).
+// Ineligible neighbors (the seed itself, non-integer, or already ruined) get +inf.
 template <typename i_t, typename f_t>
 __global__ void lns_score_related_neighbors_kernel(const f_t* assignment,
                                                    i_t seed_var,
@@ -273,18 +307,76 @@ __global__ void lns_score_related_neighbors_kernel(const f_t* assignment,
                                                    i_t neighbor_count,
                                                    typename problem_t<i_t, f_t>::view_t problem,
                                                    const i_t* ruined_vars,
+                                                   const f_t* row_inf_norm,
+                                                   const f_t* row_l1_norm,
+                                                   f_t alpha,
+                                                   f_t jaccard_weight,
+                                                   bool use_similarity,
                                                    f_t* candidate_scores,
                                                    i_t* candidate_vars)
 {
-  const f_t seed_value = assignment[seed_var];
-  for (i_t pos = blockIdx.x * blockDim.x + threadIdx.x; pos < neighbor_count;
-       pos += blockDim.x * gridDim.x) {
+  static constexpr i_t warp_size            = 32;
+  const i_t global_warp                     = (blockIdx.x * blockDim.x + threadIdx.x) / warp_size;
+  const i_t lane                            = threadIdx.x & (warp_size - 1);
+  const i_t n_warps                         = (blockDim.x * gridDim.x) / warp_size;
+  const f_t seed_value                      = assignment[seed_var];
+  const auto [seed_rev_begin, seed_rev_end] = problem.reverse_range_for_var(seed_var);
+  const f_t seed_degree                     = static_cast<f_t>(seed_rev_end - seed_rev_begin);
+
+  for (i_t pos = global_warp; pos < neighbor_count; pos += n_warps) {
     const i_t candidate_var = related_neighbors[pos];
-    candidate_vars[pos]     = candidate_var;
-    const bool eligible     = candidate_var != seed_var && problem.is_integer_var(candidate_var) &&
+    if (lane == 0) { candidate_vars[pos] = candidate_var; }
+    const bool eligible = candidate_var != seed_var && problem.is_integer_var(candidate_var) &&
                           ruined_vars[candidate_var] == 0;
-    candidate_scores[pos] = eligible ? -abs(seed_value - assignment[candidate_var])
-                                     : std::numeric_limits<f_t>::infinity();
+    if (!eligible) {
+      if (lane == 0) { candidate_scores[pos] = std::numeric_limits<f_t>::infinity(); }
+      continue;
+    }
+    const f_t candidate_value = assignment[candidate_var];
+    if (!use_similarity) {
+      if (lane == 0) { candidate_scores[pos] = -abs(seed_value - candidate_value); }
+      continue;
+    }
+
+    f_t weighted_dissim = f_t{0};
+    f_t weight_sum      = f_t{0};
+    f_t intersection    = f_t{0};
+    for (i_t rev = seed_rev_begin + lane; rev < seed_rev_end; rev += warp_size) {
+      const i_t constraint            = problem.reverse_constraints[rev];
+      const f_t seed_coeff            = problem.reverse_coefficients[rev];
+      const auto [row_begin, row_end] = problem.range_for_constraint(constraint);
+      f_t candidate_coeff             = f_t{0};
+      bool shared                     = false;
+      for (i_t offset = row_begin; offset < row_end; ++offset) {
+        if (problem.variables[offset] == candidate_var) {
+          candidate_coeff = problem.coefficients[offset];
+          shared          = true;
+          break;
+        }
+      }
+      if (!shared) { continue; }
+      const f_t inf_norm = row_inf_norm[constraint];
+      if (!(inf_norm > f_t{0})) { continue; }
+      const f_t seed_hat      = seed_coeff / inf_norm;
+      const f_t candidate_hat = candidate_coeff / inf_norm;
+      const f_t weight        = row_l1_norm[constraint] / inf_norm;
+      const f_t structural    = abs(seed_hat - candidate_hat);
+      const f_t state         = abs(seed_hat * seed_value - candidate_hat * candidate_value);
+      weighted_dissim += weight * (alpha * structural + (f_t{1} - alpha) * state);
+      weight_sum += weight;
+      intersection += f_t{1};
+    }
+    weighted_dissim = raft::warpReduce(weighted_dissim);
+    weight_sum      = raft::warpReduce(weight_sum);
+    intersection    = raft::warpReduce(intersection);
+    if (lane == 0) {
+      const auto [cand_rev_begin, cand_rev_end] = problem.reverse_range_for_var(candidate_var);
+      const f_t candidate_degree                = static_cast<f_t>(cand_rev_end - cand_rev_begin);
+      const f_t uni                             = seed_degree + candidate_degree - intersection;
+      const f_t jaccard                         = uni > f_t{0} ? intersection / uni : f_t{0};
+      const f_t sim_mean    = weight_sum > f_t{0} ? weighted_dissim / weight_sum : f_t{0};
+      candidate_scores[pos] = sim_mean - jaccard_weight * jaccard;
+    }
   }
 }
 
@@ -439,6 +531,8 @@ class lns_feasibility_t {
       vars_to_fix(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
       ruined_var_flags(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       constraint_tardiness(problem_ptr->n_constraints, problem_ptr->handle_ptr->get_stream()),
+      row_inf_norm(problem_ptr->n_constraints, problem_ptr->handle_ptr->get_stream()),
+      row_l1_norm(problem_ptr->n_constraints, problem_ptr->handle_ptr->get_stream()),
       rng(cuopt::seed_generator::get_seed())
   {
     auto stream = problem_ptr->handle_ptr->get_stream();
@@ -447,6 +541,7 @@ class lns_feasibility_t {
                  constraint_tardiness.end(),
                  i_t{0});
     init_related_ruin_host_data();
+    init_similarity_metric();
   }
 
   bool run(solution_t<i_t, f_t>& solution, f_t time_limit)
@@ -688,6 +783,29 @@ class lns_feasibility_t {
       problem_ptr->n_integer_vars,
       static_cast<unsigned long>(problem_ptr->related_variables.size()));
 #endif
+  }
+
+  // Related-neighbor scoring is value divergence by default; the structural+state similarity
+  // metric (see design_summaries/lns_feasibility/SIMILARITY_METRIC.md) is an experiment enabled
+  // only when CUOPT_LNS_SIM_ALPHA is set. CUOPT_LNS_SIM_JW overrides the Jaccard weight. When the
+  // similarity metric is on we precompute per-constraint coefficient norms once.
+  void init_similarity_metric()
+  {
+    const char* alpha_env = std::getenv("CUOPT_LNS_SIM_ALPHA");
+    sim_use_similarity    = alpha_env != nullptr;
+    sim_alpha             = sim_use_similarity ? static_cast<f_t>(std::atof(alpha_env))
+                                               : static_cast<f_t>(feasibility_lns_config_t::similarity_alpha);
+    const char* jw_env    = std::getenv("CUOPT_LNS_SIM_JW");
+    sim_jaccard_weight    = jw_env != nullptr
+                              ? static_cast<f_t>(std::atof(jw_env))
+                              : static_cast<f_t>(feasibility_lns_config_t::similarity_jaccard_weight);
+
+    if (!sim_use_similarity || problem_ptr->n_constraints == 0) { return; }
+    auto stream         = problem_ptr->handle_ptr->get_stream();
+    const i_t grid_size = std::min<i_t>(4096, problem_ptr->n_constraints);
+    lns_compute_row_norms_kernel<i_t, f_t>
+      <<<grid_size, 32, 0, stream>>>(problem_ptr->view(), row_inf_norm.data(), row_l1_norm.data());
+    RAFT_CUDA_TRY(cudaPeekAtLastError());
   }
 
   bool finalize_feasible_solution(solution_t<i_t, f_t>& solution)
@@ -1093,8 +1211,11 @@ class lns_feasibility_t {
 #endif
     if (neighbor_count <= 0) { return 1; }
 
-    constexpr i_t score_block = 256;
-    const i_t score_grid = std::min<i_t>(4096, (neighbor_count + score_block - 1) / score_block);
+    constexpr i_t score_block     = 256;
+    constexpr i_t warps_per_block = score_block / 32;
+    // One warp scores one neighbor (it scans the seed's shared constraints cooperatively).
+    const i_t score_grid =
+      std::min<i_t>(4096, (neighbor_count + warps_per_block - 1) / warps_per_block);
 #if LNS_DEBUG
     auto score_kernel_timer = start_kernel_timer(stream);
 #endif
@@ -1105,6 +1226,11 @@ class lns_feasibility_t {
       neighbor_count,
       problem_ptr->view(),
       ruined_var_flags.data(),
+      row_inf_norm.data(),
+      row_l1_norm.data(),
+      sim_alpha,
+      sim_jaccard_weight,
+      sim_use_similarity,
       candidate_scores.data(),
       related_candidate_vars.data());
     RAFT_CUDA_TRY(cudaPeekAtLastError());
@@ -1549,6 +1675,11 @@ class lns_feasibility_t {
   rmm::device_uvector<i_t> vars_to_fix;
   rmm::device_uvector<i_t> ruined_var_flags;
   rmm::device_uvector<i_t> constraint_tardiness;
+  rmm::device_uvector<f_t> row_inf_norm;
+  rmm::device_uvector<f_t> row_l1_norm;
+  f_t sim_alpha{0.5};
+  f_t sim_jaccard_weight{1.0};
+  bool sim_use_similarity{false};
   std::vector<i_t> integer_indices_host;
   std::vector<i_t> related_variables_offsets_host;
   std::vector<std::vector<f_t>> sub_mip_solution_vector;

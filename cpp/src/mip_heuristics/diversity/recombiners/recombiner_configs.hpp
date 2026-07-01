@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -46,7 +46,13 @@ struct feasibility_lns_config_t {
   static constexpr double lp_after_bounds_prop_time_limit = 0.25;
   static constexpr double alpha                           = 1.;
   static constexpr double beta                            = 1.;
-  static constexpr size_t n_repair_iterations             = 100;
+  // Related-neighbor similarity metric experiment (see
+  // design_summaries/lns_feasibility/SIMILARITY_METRIC.md). Enabled only when CUOPT_LNS_SIM_ALPHA
+  // is set; default scoring is value divergence. similarity_alpha in [0,1] trades structural vs
+  // state similarity; similarity_jaccard_weight scales the shared-constraint Jaccard term.
+  static constexpr double similarity_alpha                     = 0.5;
+  static constexpr double similarity_jaccard_weight            = 1.0;
+  static constexpr size_t n_repair_iterations                  = 100;
   static constexpr size_t violated_constraint_ruin_unsat_limit = 128;
   // Per-repair constraint-propagation wall-clock budget. The repair loop is meant to
   // iterate very fast, so each ruin/repair gets a small slice rather than all remaining time.
@@ -75,17 +81,17 @@ struct feasibility_lns_config_t {
   // infeasibility), so the dual-simplex B&B finds no solution and only wastes time. The 1-hop
   // related-variable neighborhood expansion did not change this. Kept behind a flag for future
   // iteration (e.g. relaxing fixed constraints / smarter free-set selection).
-  static constexpr bool sub_mip_repair_enabled               = false;
-  static constexpr size_t sub_mip_repair_unsat_threshold     = 16;
-  static constexpr size_t sub_mip_repair_max_free_vars       = 400;
-  static constexpr double sub_mip_repair_time_limit          = 1.5;
+  static constexpr bool sub_mip_repair_enabled                = false;
+  static constexpr size_t sub_mip_repair_unsat_threshold      = 16;
+  static constexpr size_t sub_mip_repair_max_free_vars        = 400;
+  static constexpr double sub_mip_repair_time_limit           = 1.5;
   static constexpr size_t sub_mip_repair_min_attempts_between = 30;
   // The sub-MIP repair rebuilds the full (bounds-fixed) problem on the host for dual-simplex
   // branch and bound, so its per-call cost scales with the *whole* problem size, not the freed
   // subset. On large models a single call can burn many seconds, so only enable it for problems
   // small enough that the host build + B&B is cheap.
-  static constexpr size_t sub_mip_repair_max_constraints   = 8000;
-  static constexpr size_t sub_mip_repair_max_problem_vars  = 15000;
+  static constexpr size_t sub_mip_repair_max_constraints  = 8000;
+  static constexpr size_t sub_mip_repair_max_problem_vars = 15000;
 };
 
 struct ls_recombiner_config_t {
