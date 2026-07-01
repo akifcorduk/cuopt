@@ -178,19 +178,32 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
 {
   cuopt_assert(unified_problem != nullptr, "Unified problem must be built first");
   // Per-climber constraint bounds (the +/- val_j rows) drive the dominant memory term; the
-  // objective is shared across climbers.
-  const size_t mem_cap = cuopt::linear_programming::compute_optimal_batch_size(
-    *unified_problem, /*per_climber_objectives=*/false, /*per_climber_constraint_bounds=*/true);
-  if (mem_cap < (size_t)batch_config.fallback_threshold) {
-    CUOPT_LOG_INFO("Cloud batch size memory cap %zu below fallback threshold %d; using single FP",
-                   mem_cap,
-                   batch_config.fallback_threshold);
+  // objective is shared across climbers. collect_solutions=true budgets the per-climber
+  // primal/dual/reduced-cost outputs we request via generate_batch_primal_dual_solution (otherwise
+  // they are unaccounted and the cloud OOMs on large problems).
+  const size_t mem_cap =
+    cuopt::linear_programming::compute_optimal_batch_size(*unified_problem,
+                                                          /*per_climber_objectives=*/false,
+                                                          /*per_climber_constraint_bounds=*/true,
+                                                          /*collect_solutions=*/true);
+  // PDLP's estimate still ignores our warm-start primal/dual buffers and the concurrent B&B
+  // allocations, and it sizes against a single free-memory snapshot; use only a fraction of it.
+  const size_t conservative_cap =
+    (size_t)std::floor(batch_config.memory_headroom_fraction * (double)mem_cap);
+  if (conservative_cap < (size_t)batch_config.fallback_threshold) {
+    CUOPT_LOG_INFO(
+      "Cloud batch size cap %zu (conservative, mem-fit %zu) below fallback threshold %d; using "
+      "single FP",
+      conservative_cap,
+      mem_cap,
+      batch_config.fallback_threshold);
     return 0;
   }
-  i_t bs = (i_t)std::min<size_t>(mem_cap, (size_t)batch_config.target_max_batch_size);
-  CUOPT_LOG_INFO("Cloud batch size %d (memory cap %zu, target [%d, %d])",
+  i_t bs = (i_t)std::min<size_t>(conservative_cap, (size_t)batch_config.target_max_batch_size);
+  CUOPT_LOG_INFO("Cloud batch size %d (mem-fit cap %zu, conservative cap %zu, target [%d, %d])",
                  bs,
                  mem_cap,
+                 conservative_cap,
                  batch_config.target_min_batch_size,
                  batch_config.target_max_batch_size);
   return bs;

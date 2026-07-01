@@ -114,6 +114,11 @@ struct fp_batch_config_t {
   // Cap on the fraction of the cloud filled with reseed (previous-iteration projected) points, so
   // fresh FJ-trajectory points and perturbed-LP-optimal padding always contribute diversity.
   double reseed_fraction = 0.8;
+  // Fraction of PDLP's memory-fit batch size to actually use. PDLP sizes the batch against a single
+  // cudaMemGetInfo free-memory snapshot and does not account for our per-climber warm-start
+  // primal/dual buffers, nor for the branch-and-bound solver that allocates heavily on the same
+  // device concurrently. Stay well under the device limit on purpose.
+  double memory_headroom_fraction = 0.5;
 };
 
 template <typename i_t, typename f_t>
