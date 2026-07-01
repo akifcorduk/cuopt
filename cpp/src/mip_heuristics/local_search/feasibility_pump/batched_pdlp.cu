@@ -760,10 +760,11 @@ template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_batched_fp_cloud");
-  // A/B switch: CUOPT_FP_SINGLE forces the regular single-point FP (the outer loop drives
-  // restarts), so the batched cloud can be benchmarked against the classic pump with one build.
-  static const bool force_single_fp = std::getenv("CUOPT_FP_SINGLE") != nullptr;
-  if (force_single_fp) { return run_single_fp_descent(solution); }
+  // Default to the previous single-point FP; the batched-PDLP cloud is opt-in via CUOPT_FP_BATCHED
+  // (the outer loop drives restarts either way). Keeps the classic behaviour by default while
+  // letting the batched path be enabled / benchmarked without a rebuild.
+  static const bool use_batched_fp = std::getenv("CUOPT_FP_BATCHED") != nullptr;
+  if (!use_batched_fp) { return run_single_fp_descent(solution); }
   // Batch PDLP requires double precision; fall back to the single-point pump otherwise.
   if constexpr (!std::is_same_v<f_t, double>) {
     CUOPT_LOG_INFO("Batched FP cloud requires double precision; falling back to single FP");
