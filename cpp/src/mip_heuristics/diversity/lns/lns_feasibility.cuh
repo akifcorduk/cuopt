@@ -261,45 +261,30 @@ __global__ void lns_expand_related_integer_vars_kernel(typename problem_t<i_t, f
   }
 }
 
+// Score the seed's related integer neighbors, drawn from the problem's bounded related-variables
+// graph (compute_related_variables applies its own memory/time safeguards), by how far each
+// neighbor's current value sits from the seed's: a larger difference gives a more negative score
+// so it is selected first by the ascending sort. Ineligible neighbors (the seed itself, a
+// non-integer variable, or one already ruined) get +inf and sort to the back, never selected.
 template <typename i_t, typename f_t>
-__global__ void lns_compute_seed_neighbor_scores_kernel(
-  const f_t* assignment,
-  i_t seed_var,
-  const i_t* neighbor_vars,
-  const i_t* pair_offsets,
-  const typename type_2<f_t>::type* pair_coefficients,
-  i_t neighbor_count,
-  const i_t* ruined_vars,
-  f_t* candidate_scores,
-  i_t* candidate_vars)
+__global__ void lns_score_related_neighbors_kernel(const f_t* assignment,
+                                                   i_t seed_var,
+                                                   const i_t* related_neighbors,
+                                                   i_t neighbor_count,
+                                                   typename problem_t<i_t, f_t>::view_t problem,
+                                                   const i_t* ruined_vars,
+                                                   f_t* candidate_scores,
+                                                   i_t* candidate_vars)
 {
-  static constexpr i_t warp_size = 32;
-  const i_t global_thread        = blockIdx.x * blockDim.x + threadIdx.x;
-  const i_t global_warp          = global_thread / warp_size;
-  const i_t lane                 = threadIdx.x & (warp_size - 1);
-  const i_t n_warps              = (blockDim.x * gridDim.x) / warp_size;
-  const f_t seed_value           = assignment[seed_var];
-
-  for (i_t neighbor_pos = global_warp; neighbor_pos < neighbor_count; neighbor_pos += n_warps) {
-    const i_t candidate_var = neighbor_vars[neighbor_pos];
-    const i_t pair_begin    = pair_offsets[neighbor_pos];
-    const i_t pair_end      = pair_offsets[neighbor_pos + 1];
-
-    f_t difference_sum = 0.;
-    for (i_t pair_pos = pair_begin + lane; pair_pos < pair_end; pair_pos += warp_size) {
-      const auto coeff_pair = pair_coefficients[pair_pos];
-      difference_sum += abs(coeff_pair.x * seed_value - coeff_pair.y * assignment[candidate_var]);
-    }
-    difference_sum = raft::warpReduce(difference_sum);
-
-    if (lane == 0) {
-      candidate_vars[neighbor_pos] = candidate_var;
-      candidate_scores[neighbor_pos] =
-        ruined_vars[candidate_var] == 0
-          ? -feasibility_lns_config_t::alpha * static_cast<f_t>(pair_end - pair_begin) +
-              feasibility_lns_config_t::beta * difference_sum
-          : std::numeric_limits<f_t>::infinity();
-    }
+  const f_t seed_value = assignment[seed_var];
+  for (i_t pos = blockIdx.x * blockDim.x + threadIdx.x; pos < neighbor_count;
+       pos += blockDim.x * gridDim.x) {
+    const i_t candidate_var = related_neighbors[pos];
+    candidate_vars[pos]     = candidate_var;
+    const bool eligible     = candidate_var != seed_var && problem.is_integer_var(candidate_var) &&
+                          ruined_vars[candidate_var] == 0;
+    candidate_scores[pos] = eligible ? -abs(seed_value - assignment[candidate_var])
+                                     : std::numeric_limits<f_t>::infinity();
   }
 }
 
@@ -445,16 +430,12 @@ class lns_feasibility_t {
       ls(ls_),
       problem_ptr(context.problem_ptr),
       constraint_prop(ls_.constraint_prop),
-      candidate_scores(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
-      related_candidate_vars(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
+      candidate_scores(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
+      related_candidate_vars(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       violated_seed_pool(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
       seed_mark_snapshot(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       expand_counter(problem_ptr->handle_ptr->get_stream()),
-      related_neighbor_offsets(0, problem_ptr->handle_ptr->get_stream()),
-      related_neighbor_vars(0, problem_ptr->handle_ptr->get_stream()),
-      related_pair_offsets(0, problem_ptr->handle_ptr->get_stream()),
-      related_pair_coefficients(0, problem_ptr->handle_ptr->get_stream()),
-      ruin_vars(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
+      ruin_vars(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       vars_to_fix(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
       ruined_var_flags(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       constraint_tardiness(problem_ptr->n_constraints, problem_ptr->handle_ptr->get_stream()),
@@ -465,7 +446,7 @@ class lns_feasibility_t {
                  constraint_tardiness.begin(),
                  constraint_tardiness.end(),
                  i_t{0});
-    build_relatedness_cache();
+    init_related_ruin_host_data();
   }
 
   bool run(solution_t<i_t, f_t>& solution, f_t time_limit)
@@ -678,90 +659,29 @@ class lns_feasibility_t {
   }
 
  private:
-  using f_t2 = typename type_2<f_t>::type;
-
-  void build_relatedness_cache()
+  // The related ruin reuses the problem's related-variables graph (built once by
+  // compute_related_variables, which caps itself and leaves the graph empty if it would exceed
+  // the memory/time budget). We mirror only its (bounded) offsets on the host so a seed's
+  // neighbor slice is an O(1) lookup; the adjacency itself is read on-device. When the graph is
+  // unavailable the related ruin degrades to seed-only and the loop leans on the
+  // violated-constraint ruin.
+  void init_related_ruin_host_data()
   {
-    raft::common::nvtx::range fun_scope("standalone_lns_build_relatedness_cache");
-    auto stream              = problem_ptr->handle_ptr->get_stream();
-    const i_t n_variables    = problem_ptr->n_variables;
-    const i_t n_integer_vars = problem_ptr->n_integer_vars;
-
-    auto h_integer_indices = cuopt::host_copy(problem_ptr->integer_indices, stream);
-    integer_indices_host   = h_integer_indices;
-
-    std::vector<i_t> h_neighbor_offsets(n_variables + 1, 0);
-    std::vector<i_t> h_neighbor_vars;
-    std::vector<i_t> h_pair_offsets(1, 0);
-    std::vector<f_t2> h_pair_coefficients;
-
-    if (n_variables == 0 || n_integer_vars == 0) {
-      related_neighbor_offsets_host = h_neighbor_offsets;
-      related_neighbor_offsets      = cuopt::device_copy(h_neighbor_offsets, stream);
-      related_neighbor_vars.resize(0, stream);
-      related_pair_offsets = cuopt::device_copy(h_pair_offsets, stream);
-      related_pair_coefficients.resize(0, stream);
-      return;
+    raft::common::nvtx::range fun_scope("standalone_lns_init_related_ruin_host_data");
+    auto stream          = problem_ptr->handle_ptr->get_stream();
+    integer_indices_host = cuopt::host_copy(problem_ptr->integer_indices, stream);
+    related_variables_offsets_host.clear();
+    if (problem_ptr->related_variables_offsets.size() ==
+        static_cast<size_t>(problem_ptr->n_variables) + 1) {
+      related_variables_offsets_host =
+        cuopt::host_copy(problem_ptr->related_variables_offsets, stream);
     }
-
-    auto h_reverse_offsets      = cuopt::host_copy(problem_ptr->reverse_offsets, stream);
-    auto h_reverse_constraints  = cuopt::host_copy(problem_ptr->reverse_constraints, stream);
-    auto h_reverse_coefficients = cuopt::host_copy(problem_ptr->reverse_coefficients, stream);
-    auto h_offsets              = cuopt::host_copy(problem_ptr->offsets, stream);
-    auto h_variables            = cuopt::host_copy(problem_ptr->variables, stream);
-    auto h_coefficients         = cuopt::host_copy(problem_ptr->coefficients, stream);
-
-    std::vector<uint8_t> is_integer_var(n_variables, 0);
-    for (const auto var_idx : h_integer_indices) {
-      is_integer_var[var_idx] = 1;
-    }
-
-    for (i_t var_idx = 0; var_idx < n_variables; ++var_idx) {
-      if (!is_integer_var[var_idx]) {
-        h_neighbor_offsets[var_idx + 1] = static_cast<i_t>(h_neighbor_vars.size());
-        continue;
-      }
-
-      std::map<i_t, std::vector<f_t2>> neighbor_coefficients;
-      for (i_t reverse_pos = h_reverse_offsets[var_idx];
-           reverse_pos < h_reverse_offsets[var_idx + 1];
-           ++reverse_pos) {
-        const i_t constraint_idx = h_reverse_constraints[reverse_pos];
-        const f_t var_coeff      = h_reverse_coefficients[reverse_pos];
-        for (i_t row_pos = h_offsets[constraint_idx]; row_pos < h_offsets[constraint_idx + 1];
-             ++row_pos) {
-          const i_t neighbor_var = h_variables[row_pos];
-          if (neighbor_var == var_idx || !is_integer_var[neighbor_var]) { continue; }
-          f_t2 coeff_pair;
-          coeff_pair.x = var_coeff;
-          coeff_pair.y = h_coefficients[row_pos];
-          neighbor_coefficients[neighbor_var].push_back(coeff_pair);
-        }
-      }
-
-      for (auto& [neighbor_var, coeff_pairs] : neighbor_coefficients) {
-        h_neighbor_vars.push_back(neighbor_var);
-        h_pair_coefficients.insert(
-          h_pair_coefficients.end(), coeff_pairs.begin(), coeff_pairs.end());
-        h_pair_offsets.push_back(static_cast<i_t>(h_pair_coefficients.size()));
-      }
-      h_neighbor_offsets[var_idx + 1] = static_cast<i_t>(h_neighbor_vars.size());
-    }
-
-    related_neighbor_offsets_host = h_neighbor_offsets;
-    related_neighbor_offsets      = cuopt::device_copy(h_neighbor_offsets, stream);
-    related_neighbor_vars         = cuopt::device_copy(h_neighbor_vars, stream);
-    related_pair_offsets          = cuopt::device_copy(h_pair_offsets, stream);
-    related_pair_coefficients     = cuopt::device_copy(h_pair_coefficients, stream);
-
 #if LNS_DEBUG
     CUOPT_LOG_INFO(
-      "Standalone LNS relatedness cache: variables %d, integer vars %d, "
-      "neighbor pairs %lu, coefficient pairs %lu",
-      n_variables,
-      n_integer_vars,
-      static_cast<unsigned long>(h_neighbor_vars.size()),
-      static_cast<unsigned long>(h_pair_coefficients.size()));
+      "Standalone LNS related ruin graph: variables %d, integer vars %d, related edges %lu",
+      problem_ptr->n_variables,
+      problem_ptr->n_integer_vars,
+      static_cast<unsigned long>(problem_ptr->related_variables.size()));
 #endif
   }
 
@@ -1153,38 +1073,38 @@ class lns_feasibility_t {
 #endif
     if (selected_count <= 1) { return 1; }
 
-    const i_t neighbor_begin = related_neighbor_offsets_host[seed_var];
-    const i_t neighbor_end   = related_neighbor_offsets_host[seed_var + 1];
+    // Neighbor set = the seed's slice of the problem's bounded related-variables graph. When that
+    // graph is unavailable (compute_related_variables left it empty), degrade to seed-only.
+    if (related_variables_offsets_host.size() != static_cast<size_t>(n_variables) + 1) { return 1; }
+    const i_t neighbor_begin = related_variables_offsets_host[seed_var];
+    const i_t neighbor_end   = related_variables_offsets_host[seed_var + 1];
     const i_t neighbor_count = neighbor_end - neighbor_begin;
 #if LNS_DEBUG
     CUOPT_LOG_INFO(
-      "Standalone LNS related ruin seed: var %d, selected target %d, "
-      "neighbor candidates %d",
+      "Standalone LNS related ruin seed: var %d, selected target %d, neighbor candidates %d",
       seed_var,
       selected_count,
       neighbor_count);
 #endif
     if (neighbor_count <= 0) { return 1; }
 
-    static constexpr i_t warp_size = 32;
-    const i_t warp_grid_size       = std::min<i_t>(
-      4096, (neighbor_count + (block_size / warp_size) - 1) / (block_size / warp_size));
+    constexpr i_t score_block = 256;
+    const i_t score_grid = std::min<i_t>(4096, (neighbor_count + score_block - 1) / score_block);
 #if LNS_DEBUG
     auto score_kernel_timer = start_kernel_timer(stream);
 #endif
-    lns_compute_seed_neighbor_scores_kernel<i_t, f_t>
-      <<<warp_grid_size, block_size, 0, stream>>>(sol.assignment.data(),
-                                                  seed_var,
-                                                  related_neighbor_vars.data() + neighbor_begin,
-                                                  related_pair_offsets.data() + neighbor_begin,
-                                                  related_pair_coefficients.data(),
-                                                  neighbor_count,
-                                                  ruined_var_flags.data(),
-                                                  candidate_scores.data(),
-                                                  related_candidate_vars.data());
+    lns_score_related_neighbors_kernel<i_t, f_t><<<score_grid, score_block, 0, stream>>>(
+      sol.assignment.data(),
+      seed_var,
+      problem_ptr->related_variables.data() + neighbor_begin,
+      neighbor_count,
+      problem_ptr->view(),
+      ruined_var_flags.data(),
+      candidate_scores.data(),
+      related_candidate_vars.data());
     RAFT_CUDA_TRY(cudaPeekAtLastError());
 #if LNS_DEBUG
-    log_kernel_timer(score_kernel_timer, "lns_compute_seed_neighbor_scores_kernel", stream);
+    log_kernel_timer(score_kernel_timer, "lns_score_related_neighbors_kernel", stream);
 #endif
 
     thrust::sort_by_key(sol.handle_ptr->get_thrust_policy(),
@@ -1196,14 +1116,19 @@ class lns_feasibility_t {
 #if LNS_DEBUG
     auto mark_neighbor_kernel_timer = start_kernel_timer(stream);
 #endif
+    // Mark the lowest-score (most value-divergent) eligible neighbors. Ineligible neighbors carry
+    // +inf and sort to the back, so skip any non-finite score instead of ruining a non-integer or
+    // already-ruined variable.
     thrust::for_each_n(
       sol.handle_ptr->get_thrust_policy(),
       thrust::counting_iterator<i_t>(0),
       additional_count,
       [ruined_var_flags_ptr       = ruined_var_flags.data(),
        ruin_vars_ptr              = ruin_vars.data(),
+       candidate_scores_ptr       = candidate_scores.data(),
        related_candidate_vars_ptr = related_candidate_vars.data()] __device__(i_t idx) {
-        i_t var                   = related_candidate_vars_ptr[idx];
+        if (!isfinite(candidate_scores_ptr[idx])) { return; }
+        const i_t var             = related_candidate_vars_ptr[idx];
         ruined_var_flags_ptr[var] = 1;
         ruin_vars_ptr[var]        = 1;
       });
@@ -1615,16 +1540,12 @@ class lns_feasibility_t {
   rmm::device_uvector<i_t> violated_seed_pool;
   rmm::device_uvector<i_t> seed_mark_snapshot;
   rmm::device_scalar<i_t> expand_counter;
-  rmm::device_uvector<i_t> related_neighbor_offsets;
-  rmm::device_uvector<i_t> related_neighbor_vars;
-  rmm::device_uvector<i_t> related_pair_offsets;
-  rmm::device_uvector<f_t2> related_pair_coefficients;
   rmm::device_uvector<i_t> ruin_vars;
   rmm::device_uvector<i_t> vars_to_fix;
   rmm::device_uvector<i_t> ruined_var_flags;
   rmm::device_uvector<i_t> constraint_tardiness;
   std::vector<i_t> integer_indices_host;
-  std::vector<i_t> related_neighbor_offsets_host;
+  std::vector<i_t> related_variables_offsets_host;
   std::vector<std::vector<f_t>> sub_mip_solution_vector;
   std::mt19937 rng;
   timer_t lns_timer{0.};
