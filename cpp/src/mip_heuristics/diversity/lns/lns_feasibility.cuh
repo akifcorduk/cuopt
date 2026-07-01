@@ -516,6 +516,14 @@ class lns_feasibility_t {
     size_t accepted_repairs       = 0;
     size_t attempts_since_fj      = feasibility_lns_config_t::fj_polish_min_attempts_between;
     size_t attempts_since_sub_mip = feasibility_lns_config_t::sub_mip_repair_min_attempts_between;
+    // Ruin-strategy policy (see design_summaries/lns_feasibility/RUIN_STRATEGY.md): the related
+    // ruin is the strongest option, but only when the problem's related-variables graph is
+    // available. On very large/dense models compute_related_variables leaves that graph empty, so
+    // the related ruin degrades to a seed-only (single-variable) neighborhood and wastes attempts;
+    // there the violated-constraint ruin (which frees every integer var in a violated constraint)
+    // repairs far more per attempt. Pick the strategy accordingly.
+    const bool related_graph_available =
+      related_variables_offsets_host.size() == static_cast<size_t>(problem_ptr->n_variables) + 1;
     for (size_t attempt = 0; attempt < feasibility_lns_config_t::max_attempts; ++attempt) {
       ++attempts_since_fj;
       ++attempts_since_sub_mip;
@@ -585,14 +593,11 @@ class lns_feasibility_t {
         }
       }
 
-      const i_t unsat_before = n_unsatisfied_constraints(solution);
-      const bool use_violated_constraint_ruin =
-        unsat_before <=
-          static_cast<i_t>(feasibility_lns_config_t::violated_constraint_ruin_unsat_limit) &&
-        attempt % 2 == 0;
-      auto [candidate, accepted] = use_violated_constraint_ruin
-                                     ? violated_constraint_ruin_repair(solution, weights, attempt)
-                                     : ruin_repair(solution, weights, ruin_count, attempt);
+      const i_t unsat_before                  = n_unsatisfied_constraints(solution);
+      const bool use_violated_constraint_ruin = !related_graph_available;
+      auto [candidate, accepted]              = use_violated_constraint_ruin
+                                                  ? violated_constraint_ruin_repair(solution, weights, attempt)
+                                                  : ruin_repair(solution, weights, ruin_count, attempt);
       ++attempted_repairs;
       // repair_current_ruin_set already leaves the candidate with valid feasibility state
       // (unfix_variables + LP polish both call compute_feasibility), so we do not recompute here.
