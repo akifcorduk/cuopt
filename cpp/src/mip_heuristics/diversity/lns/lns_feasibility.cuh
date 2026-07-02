@@ -808,26 +808,33 @@ class lns_feasibility_t {
 #endif
   }
 
-  // Related-neighbor scoring is value divergence by default; the structural+state similarity
-  // metric (see design_summaries/lns_feasibility/SIMILARITY_METRIC.md) is an experiment enabled
-  // only when CUOPT_LNS_SIM_ALPHA is set. CUOPT_LNS_SIM_JW overrides the Jaccard weight. When the
-  // similarity metric is on we precompute per-constraint coefficient norms once.
+  // Related-neighbor scoring defaults to the scheduled structural->state similarity policy (see
+  // design_summaries/lns_feasibility/SIMILARITY_METRIC.md), which has the best aggregate
+  // feasibility over the loop-reaching MIPLIB2017 set. Overrides: CUOPT_LNS_SIM_OFF=1 forces plain
+  // value divergence; CUOPT_LNS_SIM_ALPHA=<a> uses fixed-alpha similarity (for A/B).
+  // CUOPT_LNS_SIM_JW overrides the Jaccard weight. When similarity is on we precompute
+  // per-constraint coefficient norms once.
   void init_similarity_metric()
   {
-    // CUOPT_LNS_SIM_SCHED=1 -> scheduled hybrid (divergence early, then structural->state).
-    // CUOPT_LNS_SIM_ALPHA=<a> -> fixed-alpha similarity (for A/B). Either one enables the metric;
-    // scheduled takes precedence for the alpha value. Default (neither) is value divergence.
-    const char* sched_env = std::getenv("CUOPT_LNS_SIM_SCHED");
+    const char* off_env   = std::getenv("CUOPT_LNS_SIM_OFF");
     const char* alpha_env = std::getenv("CUOPT_LNS_SIM_ALPHA");
-    sim_scheduled         = sched_env != nullptr;
-    sim_use_similarity    = sim_scheduled || alpha_env != nullptr;
-    sim_alpha             = alpha_env != nullptr ? static_cast<f_t>(std::atof(alpha_env))
-                                                 : static_cast<f_t>(feasibility_lns_config_t::similarity_alpha);
-    const char* jw_env    = std::getenv("CUOPT_LNS_SIM_JW");
-    sim_jaccard_weight    = jw_env != nullptr
-                              ? static_cast<f_t>(std::atof(jw_env))
-                              : static_cast<f_t>(feasibility_lns_config_t::similarity_jaccard_weight);
-    sim_div_attempts = static_cast<i_t>(feasibility_lns_config_t::similarity_divergence_attempts);
+    if (off_env != nullptr) {
+      sim_use_similarity = false;
+      sim_scheduled      = false;
+    } else if (alpha_env != nullptr) {
+      sim_use_similarity = true;
+      sim_scheduled      = false;
+    } else {
+      sim_use_similarity = true;
+      sim_scheduled      = true;
+    }
+    sim_alpha          = alpha_env != nullptr ? static_cast<f_t>(std::atof(alpha_env))
+                                              : static_cast<f_t>(feasibility_lns_config_t::similarity_alpha);
+    const char* jw_env = std::getenv("CUOPT_LNS_SIM_JW");
+    sim_jaccard_weight = jw_env != nullptr
+                           ? static_cast<f_t>(std::atof(jw_env))
+                           : static_cast<f_t>(feasibility_lns_config_t::similarity_jaccard_weight);
+    sim_div_attempts   = static_cast<i_t>(feasibility_lns_config_t::similarity_divergence_attempts);
     sim_transition =
       static_cast<i_t>(feasibility_lns_config_t::similarity_alpha_transition_attempts);
 
