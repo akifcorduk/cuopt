@@ -775,10 +775,10 @@ template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_batched_fp_cloud");
-  // Batched-PDLP cloud is the default path; set CUOPT_FP_SINGLE to force the classic single-point
-  // FP (the outer loop drives restarts either way).
-  static const bool use_single_fp = std::getenv("CUOPT_FP_SINGLE") != nullptr;
-  if (use_single_fp) { return run_single_fp_descent(solution); }
+  // Default to the classic single-point FP; enable the batched-PDLP cloud with CUOPT_FP_BATCHED
+  // (the outer loop drives restarts either way).
+  static const bool use_batched_fp = std::getenv("CUOPT_FP_BATCHED") != nullptr;
+  if (!use_batched_fp) { return run_single_fp_descent(solution); }
 
   if (unified_problem == nullptr || unified_n_vars != solution.problem_ptr->n_variables ||
       unified_n_constr != solution.problem_ptr->n_constraints) {
