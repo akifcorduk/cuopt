@@ -50,8 +50,13 @@ struct feasibility_lns_config_t {
   // design_summaries/lns_feasibility/SIMILARITY_METRIC.md). Enabled only when CUOPT_LNS_SIM_ALPHA
   // is set; default scoring is value divergence. similarity_alpha in [0,1] trades structural vs
   // state similarity; similarity_jaccard_weight scales the shared-constraint Jaccard term.
-  static constexpr double similarity_alpha                     = 0.5;
-  static constexpr double similarity_jaccard_weight            = 1.0;
+  static constexpr double similarity_alpha          = 0.5;
+  static constexpr double similarity_jaccard_weight = 1.0;
+  // Scheduled similarity policy (CUOPT_LNS_SIM_SCHED): use value divergence for the first
+  // similarity_divergence_attempts ruin attempts, then ramp alpha from 1 (structural) down to 0
+  // (state) over similarity_alpha_transition_attempts, blending structural -> state similarity.
+  static constexpr size_t similarity_divergence_attempts       = 5;
+  static constexpr size_t similarity_alpha_transition_attempts = 50;
   static constexpr size_t n_repair_iterations                  = 100;
   static constexpr size_t violated_constraint_ruin_unsat_limit = 128;
   // Per-repair constraint-propagation wall-clock budget. The repair loop is meant to
