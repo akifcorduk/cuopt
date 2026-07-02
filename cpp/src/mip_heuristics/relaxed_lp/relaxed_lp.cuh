@@ -40,6 +40,13 @@ struct relaxed_lp_settings_t {
   // pdlp_device_work_per_iter for the parent problem (mirrors the fp_recombiner wiring).
   cuopt::work_limit_context_t* work_context = nullptr;
   double work_per_iter                      = 0.0;
+  // Fixed per-call work charged in deterministic mode on top of work_per_iter * steps. The PDLP work
+  // model (work_per_iter) only captures the per-step marginal cost; the fixed host/launch overhead
+  // of a solve (solver construction, cuSPARSE setup, initial-solution copies, stream syncs, log
+  // flush) is invisible to it. Instances that fire hundreds of thousands of tiny warm-started
+  // relaxed LPs (e.g. triptim1, cbs-cta) were therefore dominated by uncharged overhead and blew
+  // past the work budget. Charging a fixed cost per call bounds the number of relaxed-LP solves.
+  double call_overhead = 0.0;
 };
 
 template <typename i_t, typename f_t>

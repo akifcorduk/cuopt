@@ -107,6 +107,7 @@ solver_settings_t<i_t, f_t>::solver_settings_t() : pdlp_settings(), mip_settings
     {CUOPT_MIP_HYPER_HEURISTIC_PRESOLVE_TIME_RATIO, &mip_settings.heuristic_params.presolve_time_ratio, f_t(0.0), f_t(1.0), f_t(0.1), "fraction of total time for presolve"},
     {CUOPT_MIP_HYPER_HEURISTIC_PRESOLVE_MAX_TIME, &mip_settings.heuristic_params.presolve_max_time, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(60.0), "hard cap on presolve seconds"},
     {CUOPT_MIP_HYPER_HEURISTIC_CUOPT_PRESOLVE_WORK_LIMIT, &mip_settings.heuristic_params.cuopt_presolve_work_limit, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(30.0), "cuOpt presolve (probing cache) work-unit budget in deterministic mode"},
+    {CUOPT_MIP_HYPER_HEURISTIC_RELAXED_LP_CALL_OVERHEAD, &mip_settings.heuristic_params.relaxed_lp_call_overhead, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(0.008), "fixed per-call work charged for each relaxed-LP solve in deterministic mode (host/launch overhead)"},
     {CUOPT_MIP_HYPER_HEURISTIC_ROOT_LP_TIME_RATIO, &mip_settings.heuristic_params.root_lp_time_ratio, f_t(0.0), f_t(1.0), f_t(0.1), "fraction of total time for root LP"},
     {CUOPT_MIP_HYPER_HEURISTIC_ROOT_LP_MAX_TIME, &mip_settings.heuristic_params.root_lp_max_time, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(15.0), "hard cap on root LP seconds"},
     {CUOPT_MIP_HYPER_HEURISTIC_RINS_TIME_LIMIT, &mip_settings.heuristic_params.rins_time_limit, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(3.0), "per-call RINS sub-MIP time"},

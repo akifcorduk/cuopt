@@ -1085,6 +1085,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
     if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
       lp_settings.work_context  = &context.gpu_heur_loop;
       lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
+      lp_settings.call_overhead = context.settings.heuristic_params.relaxed_lp_call_overhead;
     }
     run_lp_with_vars_fixed(*orig_sol.problem_ptr,
                            orig_sol,

@@ -113,11 +113,18 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   lp_solver.set_inside_mip(true);
   auto solver_response = lp_solver.run_solver(start_time);
 
-  // Charge the PDLP steps actually taken onto the shared work clock (deterministic mode only).
+  // Charge the PDLP steps actually taken onto the shared work clock (deterministic mode only), plus
+  // a fixed per-call host/launch overhead. The step model captures only the per-step marginal cost;
+  // without the fixed per-call term, code paths that fire hundreds of thousands of tiny warm-started
+  // solves (e.g. triptim1, cbs-cta) charge almost nothing and run ~2x too many calls to fill the
+  // budget, so the heuristic-phase wall blows past --work-limit. The overhead is charged even when
+  // the solve takes 0 steps, since the call still paid the construction/setup cost.
   if (det_work) {
     const double lp_steps =
       (double)solver_response.get_additional_termination_information(0).number_of_steps_taken;
-    if (lp_steps > 0.0) { settings.work_context->record_work(lp_steps * settings.work_per_iter); }
+    double call_work = settings.call_overhead;
+    if (lp_steps > 0.0) { call_work += lp_steps * settings.work_per_iter; }
+    if (call_work > 0.0) { settings.work_context->record_work(call_work); }
   }
 
   if (solver_response.get_primal_solution().size() != 0 &&

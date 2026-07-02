@@ -40,6 +40,15 @@ struct mip_heuristics_hyper_params_t {
   i_t cycle_detection_length             = 30;      // FP assignment cycle ring buffer
   f_t relaxed_lp_time_limit              = 1.0;     // base relaxed LP time cap in heuristics
   f_t related_vars_time_limit            = 30.0;    // time for related-variable structure build
+  f_t relaxed_lp_call_overhead           = 0.008;   // fixed per-call work (~seconds, wups==1) charged
+                                                    // for each relaxed-LP solve in deterministic
+                                                    // mode: the PDLP step model only captures the
+                                                    // per-step marginal cost, so instances that fire
+                                                    // hundreds of thousands of tiny warm-started
+                                                    // solves were dominated by uncharged host/launch
+                                                    // overhead (solver construction, cuSPARSE setup,
+                                                    // stream syncs). Bounds the number of relaxed-LP
+                                                    // calls against the shared work budget.
 };
 
 }  // namespace cuopt::linear_programming

@@ -514,6 +514,7 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
     if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
       lp_settings.work_context  = &context.gpu_heur_loop;
       lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
+      lp_settings.call_overhead = context.settings.heuristic_params.relaxed_lp_call_overhead;
     }
     run_lp_with_vars_fixed(
       *solution.problem_ptr, solution, solution.problem_ptr->integer_indices, lp_settings);

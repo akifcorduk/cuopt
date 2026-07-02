@@ -940,6 +940,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
     lp_settings.work_context  = &context.gpu_heur_loop;
     lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
+    lp_settings.call_overhead = context.settings.heuristic_params.relaxed_lp_call_overhead;
   }
   run_lp_with_vars_fixed(*lp_offspring.problem_ptr,
                          lp_offspring,

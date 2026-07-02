@@ -227,6 +227,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     context.ensure_work_features();
     lp_settings.work_context  = &context.gpu_heur_loop;
     lp_settings.work_per_iter = context.pdlp_work_per_iter_now();
+    lp_settings.call_overhead = context.settings.heuristic_params.relaxed_lp_call_overhead;
   }
   auto solver_response = get_relaxed_lp_solution(temp_p, solution, lp_settings);
   cuopt_func_call(solution.test_variable_bounds(false));
