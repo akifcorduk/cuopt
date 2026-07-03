@@ -459,14 +459,23 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
     const i_t nvt       = unified_n_vars_total;
     const i_t nv        = n_vars;
     const f_t* cloud_pp = d_cloud.data();
+    const f_t* vlb_ptr  = op.get_variable_lower_bounds().data();
+    const f_t* vub_ptr  = op.get_variable_upper_bounds().data();
     f_t* pinit          = primal_init.data();
+    // The warm start must be finite and within the variable bounds: an out-of-bounds or non-finite
+    // primal seed makes PDHG diverge into a NaN primal weight. Mirrors relaxed_lp's
+    // clamp_within_var_bounds before set_initial_primal_solution.
     thrust::for_each(solution.handle_ptr->get_thrust_policy(),
                      thrust::make_counting_iterator<size_t>(0),
                      thrust::make_counting_iterator<size_t>((size_t)n_points * nvt),
                      [=] __device__(size_t g) {
                        const size_t c = g / (size_t)nvt;
                        const i_t loc  = (i_t)(g % (size_t)nvt);
-                       pinit[g] = (loc < nv) ? cloud_pp[c * (size_t)nv + (size_t)loc] : f_t(0);
+                       f_t v = (loc < nv) ? cloud_pp[c * (size_t)nv + (size_t)loc] : f_t(0);
+                       if (!isfinite(v)) v = f_t(0);
+                       const f_t lo = vlb_ptr[loc];
+                       const f_t hi = vub_ptr[loc];
+                       pinit[g]     = (v < lo) ? lo : ((v > hi) ? hi : v);
                      });
   }
   settings.set_initial_primal_solution(primal_init.data(), (i_t)primal_init.size(), stream);
@@ -492,7 +501,9 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                        const size_t c = g / (size_t)nct_l;
                        const i_t r    = (i_t)(g % (size_t)nct_l);
                        const i_t src  = (c < (size_t)carry) ? (i_t)c : best;
-                       dinit[g]       = wdual[(size_t)src * (size_t)nct_l + (size_t)r];
+                       // Sanitize the carried-over dual: a non-finite dual makes A^T y NaN.
+                       const f_t v = wdual[(size_t)src * (size_t)nct_l + (size_t)r];
+                       dinit[g]    = isfinite(v) ? v : f_t(0);
                      });
     settings.set_initial_dual_solution(dual_init.data(), (i_t)dual_init.size(), stream);
     CUOPT_LOG_INFO(
