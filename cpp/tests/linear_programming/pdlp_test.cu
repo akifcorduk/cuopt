@@ -4535,7 +4535,7 @@ TEST(pdlp_class, batched_fp_unified_projection_and_selection)
   // Shared objective: distance-only (alpha = 0), so the LP is the exact L1 projection.
   std::vector<double> obj = {0, 0, 1, 1};
 
-  cuopt::linear_programming::optimization_problem_t<int, double> op(&handle_);
+  cuopt::mathematical_optimization::optimization_problem_t<int, double> op(&handle_);
   op.set_maximize(false);
   op.set_csr_constraint_matrix(values.data(),
                                static_cast<int>(values.size()),
@@ -4580,13 +4580,13 @@ TEST(pdlp_class, batched_fp_unified_projection_and_selection)
   assign_device_uvector_from_host(op.get_constraint_upper_bounds(), all_cub, stream);
 
   pdlp_solver_settings_t<int, double> solver_settings;
-  solver_settings.method                              = cuopt::linear_programming::method_t::PDLP;
-  solver_settings.presolver                           = presolver_t::None;
-  solver_settings.fixed_batch_size                    = batch_size;
+  solver_settings.method           = cuopt::mathematical_optimization::method_t::PDLP;
+  solver_settings.presolver        = presolver_t::None;
+  solver_settings.fixed_batch_size = batch_size;
   solver_settings.generate_batch_primal_dual_solution = true;
   solver_settings.set_optimality_tolerance(1e-6);
 
-  auto sol = cuopt::linear_programming::run_batch_pdlp(op, solver_settings);
+  auto sol = cuopt::mathematical_optimization::run_batch_pdlp(op, solver_settings);
 
   ASSERT_EQ(sol.get_primal_solution().size(), static_cast<size_t>(batch_size) * n_vars_total);
 

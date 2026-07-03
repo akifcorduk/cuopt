@@ -13,7 +13,7 @@
 #include <mip_heuristics/solution/solution.cuh>
 #include <utilities/timer.hpp>
 
-#include <cuopt/linear_programming/optimization_problem.hpp>
+#include <cuopt/mathematical_optimization/optimization_problem.hpp>
 
 #include <thrust/count.h>
 
@@ -234,7 +234,8 @@ class feasibility_pump_t {
   // ---- Batched-PDLP feasibility pump state ----
   fp_batch_config_t batch_config;
   // Cached unified projection problem (fixed structure across climbers and outer iterations).
-  std::unique_ptr<cuopt::linear_programming::optimization_problem_t<i_t, f_t>> unified_problem;
+  std::unique_ptr<cuopt::mathematical_optimization::optimization_problem_t<i_t, f_t>>
+    unified_problem;
   i_t unified_n_int          = 0;  // number of integer variables (== number of aux distance vars)
   i_t unified_n_vars         = 0;  // original n_variables (without aux distance vars)
   i_t unified_n_vars_total   = 0;  // original + aux distance vars

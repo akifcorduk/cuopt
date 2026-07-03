@@ -14,9 +14,9 @@
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 #include <mip_heuristics/utils.cuh>
 
-#include <cuopt/linear_programming/optimization_problem.hpp>
-#include <cuopt/linear_programming/pdlp/solver_settings.hpp>
-#include <cuopt/linear_programming/pdlp/solver_solution.hpp>
+#include <cuopt/mathematical_optimization/optimization_problem.hpp>
+#include <cuopt/mathematical_optimization/pdlp/solver_settings.hpp>
+#include <cuopt/mathematical_optimization/pdlp/solver_solution.hpp>
 #include <pdlp/pdlp.cuh>
 #include <pdlp/solve.cuh>
 
@@ -37,7 +37,7 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/tabulate.h>
 
-namespace cuopt::linear_programming::detail {
+namespace cuopt::mathematical_optimization::mip {
 
 // Defined in feasibility_pump.cu: maps the fraction of integral integer-vars to an LP tolerance
 // (looser when far from integral, tighter as it converges).
@@ -147,8 +147,9 @@ void feasibility_pump_t<i_t, f_t>::build_unified_projection_problem(solution_t<i
     obj[unified_n_vars + k] = 1.;
   }
 
-  unified_problem = std::make_unique<cuopt::linear_programming::optimization_problem_t<i_t, f_t>>(
-    solution.handle_ptr);
+  unified_problem =
+    std::make_unique<cuopt::mathematical_optimization::optimization_problem_t<i_t, f_t>>(
+      solution.handle_ptr);
   auto& op = *unified_problem;
   op.set_maximize(false);
   op.set_csr_constraint_matrix(values.data(),
@@ -181,11 +182,11 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
   // objective is shared across climbers. collect_solutions=true budgets the per-climber
   // primal/dual/reduced-cost outputs we request via generate_batch_primal_dual_solution (otherwise
   // they are unaccounted and the cloud OOMs on large problems).
-  const size_t mem_cap =
-    cuopt::linear_programming::compute_optimal_batch_size(*unified_problem,
-                                                          /*per_climber_objectives=*/false,
-                                                          /*per_climber_constraint_bounds=*/true,
-                                                          /*collect_solutions=*/true);
+  const size_t mem_cap = cuopt::mathematical_optimization::compute_optimal_batch_size(
+    *unified_problem,
+    /*per_climber_objectives=*/false,
+    /*per_climber_constraint_bounds=*/true,
+    /*collect_solutions=*/true);
   // PDLP's estimate still ignores our warm-start primal/dual buffers and the concurrent B&B
   // allocations, and it sizes against a single free-memory snapshot; use only a fraction of it.
   const size_t conservative_cap =
@@ -434,7 +435,7 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                    });
 
   pdlp_solver_settings_t<i_t, f_t> settings;
-  settings.method                              = cuopt::linear_programming::method_t::PDLP;
+  settings.method                              = cuopt::mathematical_optimization::method_t::PDLP;
   settings.presolver                           = presolver_t::None;
   settings.fixed_batch_size                    = n_points;
   settings.generate_batch_primal_dual_solution = true;
@@ -516,7 +517,7 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
     CUOPT_LOG_INFO("Batch projection warm start: primal from current points (cold dual)");
   }
 
-  auto sol     = cuopt::linear_programming::run_batch_pdlp(op, settings);
+  auto sol     = cuopt::mathematical_optimization::run_batch_pdlp(op, settings);
   auto& primal = sol.get_primal_solution();
   // The fixed-batch solve always returns a full per-climber primal/dual (pre-sized in pdlp.cu);
   // anything else is a contract violation, not a recoverable case.
@@ -1073,4 +1074,4 @@ INSTANTIATE_BATCHED(double)
 
 #undef INSTANTIATE_BATCHED
 
-}  // namespace cuopt::linear_programming::detail
+}  // namespace cuopt::mathematical_optimization::mip
