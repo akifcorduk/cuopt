@@ -519,10 +519,21 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
 
   auto sol     = cuopt::mathematical_optimization::run_batch_pdlp(op, settings);
   auto& primal = sol.get_primal_solution();
-  // The fixed-batch solve always returns a full per-climber primal/dual (pre-sized in pdlp.cu);
-  // anything else is a contract violation, not a recoverable case.
-  cuopt_assert(primal.size() == (size_t)n_points * unified_n_vars_total,
-               "Batch projection primal size mismatch");
+  auto& dual   = sol.get_dual_solution();
+  // A failed batch solve (LP error, or out of memory under concurrent B&B pressure) surfaces as an
+  // empty / undersized primal-dual rather than throwing. Skip this projection so the caller can
+  // round the current point and continue, instead of copying out of bounds.
+  if (primal.size() != (size_t)n_points * unified_n_vars_total ||
+      dual.size() != (size_t)n_points * nct) {
+    CUOPT_LOG_INFO(
+      "Batch projection returned no usable solution (primal %zu, dual %zu; expected %zu / %zu); "
+      "skipping projection",
+      primal.size(),
+      dual.size(),
+      (size_t)n_points * unified_n_vars_total,
+      (size_t)n_points * nct);
+    return false;
+  }
   d_projected.resize((size_t)n_points * n_vars, stream);
   for (i_t c = 0; c < n_points; ++c) {
     raft::copy(d_projected.data() + (size_t)c * n_vars,
@@ -532,8 +543,6 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   }
 
   // Persist this projection's full per-climber dual to warm start the next projection's dual.
-  auto& dual = sol.get_dual_solution();
-  cuopt_assert(dual.size() == (size_t)n_points * nct, "Batch projection dual size mismatch");
   warm_start_dual.resize(dual.size(), stream);
   raft::copy(warm_start_dual.data(), dual.data(), dual.size(), stream);
   warm_start_n_points = n_points;
