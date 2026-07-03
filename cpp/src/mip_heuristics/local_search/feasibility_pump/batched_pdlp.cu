@@ -438,9 +438,9 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   settings.presolver                           = presolver_t::None;
   settings.fixed_batch_size                    = n_points;
   settings.generate_batch_primal_dual_solution = true;
-  // Projection base time: each batch-PDLP projection gets a 2s base budget (still capped so a
+  // Projection base time: each batch-PDLP projection gets a 1s base budget (still capped so a
   // single projection cannot consume more than a tenth of the remaining time).
-  const f_t rlp_base  = 2.0;
+  const f_t rlp_base  = 1.0;
   settings.time_limit = std::max(0.05, std::min((double)rlp_base, timer.remaining_time() / 10.));
   // Integer-ratio-adaptive LP tolerance, driven by climber 0's integrality (same schedule as the
   // single-point FP): loose while climber 0 is far from integral, tightening as it converges. The
@@ -786,10 +786,10 @@ template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_batched_fp_cloud");
-  // Default to the classic single-point FP; enable the batched-PDLP cloud with CUOPT_FP_BATCHED
-  // (the outer loop drives restarts either way).
-  static const bool use_batched_fp = std::getenv("CUOPT_FP_BATCHED") != nullptr;
-  if (!use_batched_fp) { return run_single_fp_descent(solution); }
+  // Batched-PDLP cloud is the default path; set CUOPT_FP_SINGLE to force the classic single-point
+  // FP (the outer loop drives restarts either way).
+  static const bool use_single_fp = std::getenv("CUOPT_FP_SINGLE") != nullptr;
+  if (use_single_fp) { return run_single_fp_descent(solution); }
 
   if (unified_problem == nullptr || unified_n_vars != solution.problem_ptr->n_variables ||
       unified_n_constr != solution.problem_ptr->n_constraints) {
