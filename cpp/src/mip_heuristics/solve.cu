@@ -351,6 +351,17 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         ? max_time_limit
         : settings.time_limit;
 
+    // Deterministic mode with only a (finite) time limit and no explicit --work-limit: engage the
+    // internal work clock (sized to the time budget, wups ~ 1) so the internal algorithms follow a
+    // reproducible work-unit path, and truncate the run at the wall-clock time limit (a
+    // jitter-tolerated stop that does not change the path, only where it ends). With an explicit
+    // --work-limit the run stays fully reproducible (no wall cutoff).
+    if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC &&
+        settings.work_limit >= std::numeric_limits<f_t>::infinity()) {
+      settings.work_limit                = time_limit;
+      settings.deterministic_wall_cutoff = true;
+    }
+
     // Create log stream for file logging and add it to default logger
     init_logger_t log(settings.log_file, settings.log_to_console);
     // Init libraies before to not include it in solve time

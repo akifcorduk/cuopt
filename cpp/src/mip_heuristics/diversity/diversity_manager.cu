@@ -467,8 +467,13 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     const f_t remaining_work = std::max(
       (f_t)0.0, context.settings.work_limit - (f_t)context.gpu_heur_loop.global_work_units_elapsed);
     timer = timer_t(remaining_work);
-    timer.use_work_clock(
-      &context.gpu_heur_loop.global_work_units_elapsed, 1.0, context.settings.work_limit);
+    // heur_wall_remaining() is infinity unless the deterministic wall-cutoff is active
+    // (deterministic
+    // + time limit, no --work-limit), in which case the loop is truncated at the wall time limit.
+    timer.use_work_clock(&context.gpu_heur_loop.global_work_units_elapsed,
+                         1.0,
+                         context.settings.work_limit,
+                         context.heur_wall_remaining());
   }
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");

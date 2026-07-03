@@ -42,6 +42,15 @@ class timer_t {
   bool check_time_limit() const noexcept
   {
     if (work_units_ != nullptr && *work_units_ >= work_limit_abs_) { return true; }
+    // Work-clock + wall cutoff: in deterministic mode with only a time limit (no --work-limit) the
+    // internal budgets follow the deterministic work clock, but the overall run still stops at the
+    // wall-clock deadline (a jitter-tolerated truncation of the same work-unit path).
+    // wall_time_limit_ is the wall budget relative to this timer's begin; infinity => disabled
+    // (pure work clock).
+    if (work_units_ != nullptr && wall_time_limit_ < std::numeric_limits<double>::infinity() &&
+        std::chrono::duration<double>(steady_clock::now() - begin).count() >= wall_time_limit_) {
+      return true;
+    }
     return elapsed_time() >= time_limit;
   }
 
@@ -53,14 +62,19 @@ class timer_t {
   // work_per_second converts work units back into seconds so existing time-based budgets keep
   // working. @p work_limit_abs is an absolute global work-unit cap (infinity => disabled).
   // Passed as a raw double* to avoid a header dependency cycle.
+  // @p wall_time_limit is an optional wall-clock deadline (seconds from this timer's begin): when
+  // finite, the work-clocked timer ALSO stops once that much wall time elapses. Used for the
+  // deterministic-path + wall-cutoff mode (deterministic, time limit, no --work-limit).
   void use_work_clock(const double* work_units,
                       double work_per_second,
-                      double work_limit_abs = std::numeric_limits<double>::infinity()) noexcept
+                      double work_limit_abs  = std::numeric_limits<double>::infinity(),
+                      double wall_time_limit = std::numeric_limits<double>::infinity()) noexcept
   {
     work_units_      = work_units;
     work_per_second_ = work_per_second > 0.0 ? work_per_second : 1.0;
     work_begin_      = work_units != nullptr ? *work_units : 0.0;
     work_limit_abs_  = work_limit_abs;
+    wall_time_limit_ = wall_time_limit;
   }
 
   double elapsed_time() const noexcept
@@ -119,6 +133,9 @@ class timer_t {
   double work_begin_{0.0};
   // Absolute global work-unit cap (work-clock only). infinity => no work-unit limit.
   double work_limit_abs_{std::numeric_limits<double>::infinity()};
+  // Optional wall-clock deadline (seconds from begin) enforced on a work-clocked timer. infinity =>
+  // disabled (pure work clock, fully reproducible).
+  double wall_time_limit_{std::numeric_limits<double>::infinity()};
 };
 
 }  // namespace cuopt

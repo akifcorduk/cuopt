@@ -115,12 +115,18 @@ class mip_solver_settings_t {
   friend class problem_checking_t;
   tolerances_t tolerances;
 
-  f_t time_limit                = std::numeric_limits<f_t>::infinity();
-  f_t work_limit                = std::numeric_limits<f_t>::infinity();
-  f_t semi_continuous_big_m     = f_t(1e10);
-  i_t node_limit                = std::numeric_limits<i_t>::max();
-  bool heuristics_only          = false;
-  i_t reliability_branching     = -1;
+  f_t time_limit = std::numeric_limits<f_t>::infinity();
+  f_t work_limit = std::numeric_limits<f_t>::infinity();
+  // Internal (not a user parameter): set when deterministic mode is requested with only a time
+  // limit (no explicit --work-limit). In that case work_limit is set to the time limit so the
+  // internal work clock engages for a reproducible work-unit path, and the run is truncated at the
+  // wall-clock time limit (a jitter-tolerated stop). Left false when an explicit --work-limit is
+  // given (fully reproducible, no wall cutoff).
+  bool deterministic_wall_cutoff = false;
+  f_t semi_continuous_big_m      = f_t(1e10);
+  i_t node_limit                 = std::numeric_limits<i_t>::max();
+  bool heuristics_only           = false;
+  i_t reliability_branching      = -1;
   i_t num_cpu_threads           = -1;  // -1 means use default number of threads in branch and bound
   i_t symmetry                  = -1;
   i_t max_cut_passes            = 10;  // number of cut passes to make

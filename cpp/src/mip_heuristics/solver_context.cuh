@@ -17,6 +17,7 @@
 #include <utilities/work_unit_scheduler.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <memory>
 
@@ -47,19 +48,30 @@ struct mip_solver_context_t {
                                 mip_solver_settings_t<i_t, f_t> settings_)
     : handle_ptr(handle_ptr_),
       problem_ptr(problem_ptr_),
-      root_termination(settings_.determinism_mode == CUOPT_MODE_DETERMINISTIC
-                         ? std::numeric_limits<f_t>::infinity()
-                         : settings_.time_limit,
+      root_termination(settings_.deterministic_wall_cutoff
+                         ? settings_.work_limit
+                         : (settings_.determinism_mode == CUOPT_MODE_DETERMINISTIC
+                              ? std::numeric_limits<f_t>::infinity()
+                              : settings_.time_limit),
                        cuopt::termination_checker_t::root_tag_t{}),
       settings(settings_)
   {
-    // FJ derives child work-budget checkers from this root. In deterministic mode the root is an
-    // infinite wall clock so it never injects wall-clock nondeterminism; budgets are work-based.
+    // FJ derives child work-budget checkers from this root. In fully-reproducible deterministic
+    // mode (explicit --work-limit) the root is an infinite wall clock so it never injects
+    // wall-clock nondeterminism; budgets are work-based. When deterministic_wall_cutoff is set
+    // (deterministic + time limit, no --work-limit) the root carries the finite wall deadline so
+    // the run is truncated at the time limit while the internal budgets still follow the work
+    // clock.
     termination = &root_termination;
     cuopt_assert(problem_ptr != nullptr, "problem_ptr is nullptr");
     stats.set_solution_bound(problem_ptr->maximize ? std::numeric_limits<f_t>::infinity()
                                                    : -std::numeric_limits<f_t>::infinity());
     gpu_heur_loop.deterministic = settings.determinism_mode == CUOPT_MODE_DETERMINISTIC;
+    if (settings.deterministic_wall_cutoff) {
+      heur_wall_deadline_ = std::chrono::steady_clock::now() +
+                            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                              std::chrono::duration<double>(settings.work_limit));
+    }
   }
 
   mip_solver_context_t(const mip_solver_context_t&)            = delete;
@@ -69,12 +81,27 @@ struct mip_solver_context_t {
   // work units (reproducible) instead of wall-clock time; work units are calibrated to seconds
   // (wups == 1), and the absolute --work-limit is the reproducible global stop. The work clock only
   // advances once leaves are wired to record calibrated work (see deterministic_calibrator/).
+  // Remaining wall time until the deterministic wall-cutoff deadline (seconds); infinity when no
+  // wall cutoff is active (opportunistic mode, or deterministic mode with an explicit
+  // --work-limit).
+  double heur_wall_remaining() const
+  {
+    if (heur_wall_deadline_ == std::chrono::steady_clock::time_point::max()) {
+      return std::numeric_limits<double>::infinity();
+    }
+    return std::max(
+      0.0,
+      std::chrono::duration<double>(heur_wall_deadline_ - std::chrono::steady_clock::now())
+        .count());
+  }
+
   timer_t make_heuristic_timer(double time_limit) const
   {
     timer_t t(time_limit);
     if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC &&
         settings.work_limit < std::numeric_limits<f_t>::infinity()) {
-      t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit);
+      t.use_work_clock(
+        &gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit, heur_wall_remaining());
     }
     return t;
   }
@@ -86,7 +113,8 @@ struct mip_solver_context_t {
   {
     if (settings.determinism_mode == CUOPT_MODE_DETERMINISTIC &&
         settings.work_limit < std::numeric_limits<f_t>::infinity()) {
-      t.use_work_clock(&gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit);
+      t.use_work_clock(
+        &gpu_heur_loop.global_work_units_elapsed, 1.0, settings.work_limit, heur_wall_remaining());
     }
   }
 
@@ -104,6 +132,13 @@ struct mip_solver_context_t {
   // Work limit context for tracking work units in deterministic mode (shared across all timers in
   // GPU heuristic loop)
   work_limit_context_t gpu_heur_loop{"GPUHeur"};
+
+  // Absolute wall-clock deadline for the deterministic wall-cutoff mode (deterministic + time
+  // limit, no --work-limit). time_point::max() => no wall cutoff (fully reproducible). Heuristic
+  // timers read the remaining wall via heur_wall_remaining() so the run is truncated at the time
+  // limit while internal budgets follow the deterministic work clock.
+  std::chrono::steady_clock::time_point heur_wall_deadline_{
+    std::chrono::steady_clock::time_point::max()};
 
   // Calibrated work-unit model: static structural features (computed once) used to convert a
   // pseudo-second work budget into a deterministic per-leaf iteration limit (wups == 1).
