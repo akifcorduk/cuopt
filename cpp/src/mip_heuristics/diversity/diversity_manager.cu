@@ -547,8 +547,9 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     pdlp_settings.time_limit            = lp_time_limit;
     pdlp_settings.first_primal_feasible = false;
     pdlp_settings.concurrent_halt       = &global_concurrent_halt;
-    // PDLP-only for now: the concurrent method races PDLP/Barrier/DualSimplex (nondeterministic
-    // winner); only PDLP has the deterministic iteration-count stop-gap, so restrict to it.
+    // PDLP-only: concurrent root LP needs extra OMP threads for barrier/dual-simplex workers.
+    // Heuristic-only with num_cpu_threads == 1 cannot run that race; PDLP also has the
+    // deterministic iteration-count stop-gap when work budgeting is enabled.
     pdlp_settings.method                  = method_t::PDLP;
     pdlp_settings.inside_mip              = true;
     pdlp_settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable2;

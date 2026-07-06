@@ -787,9 +787,9 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     num_threads = settings_const.num_cpu_threads;
   }
 
-  const bool deterministic_heuristics_only =
-    settings_const.heuristics_only && settings_const.determinism_mode == CUOPT_MODE_DETERMINISTIC;
-  if (num_threads < 2 && !deterministic_heuristics_only) {
+  // Heuristic-only runs the GPU diversity workflow without B&B; a single thread is enough
+  // (root LP is PDLP-only in diversity_manager::run_solver).
+  if (num_threads < 2 && !settings_const.heuristics_only) {
     CUOPT_LOG_ERROR("The MIP solver requires at least 2 CPU threads!");
     return mip_solution_t<i_t, f_t>{
       cuopt::logic_error("The number of CPU threads is less than the expected minimum (2).",
