@@ -61,7 +61,9 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     rng(cuopt::seed_generator::get_seed()),
     timer(20.),
     reseed_points(0, context.problem_ptr->handle_ptr->get_stream()),
-    warm_start_dual(0, context.problem_ptr->handle_ptr->get_stream())
+    warm_start_dual(0, context.problem_ptr->handle_ptr->get_stream()),
+    batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream()),
+    batch_dual_init(0, context.problem_ptr->handle_ptr->get_stream())
 {
 }
 
@@ -311,9 +313,16 @@ bool feasibility_pump_t<i_t, f_t>::run_fj_cycle_escape(solution_t<i_t, f_t>& sol
 }
 
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& solution, f_t time_limit)
+bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& solution,
+                                                    f_t time_limit,
+                                                    i_t trajectory_capacity)
 {
   CUOPT_LOG_DEBUG("Running 20%% with %f time limit", time_limit);
+  auto stream = solution.handle_ptr->get_stream();
+  if (trajectory_capacity > 0) {
+    fj.set_trajectory_capacity(trajectory_capacity, stream);
+    fj.settings.record_trajectory = true;
+  }
   bool is_feasible;
   fj.settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;
   fj.settings.update_weights         = true;
@@ -321,7 +330,8 @@ bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& soluti
   fj.settings.n_of_minimums_for_exit = 5000;
   fj.settings.time_limit             = std::min(time_limit, timer.remaining_time());
   cuopt_func_call(solution.test_variable_bounds(true));
-  is_feasible = fj.solve(solution);
+  is_feasible                   = fj.solve(solution);
+  fj.settings.record_trajectory = false;
   cuopt_func_call(solution.test_variable_bounds(true));
   // if FJ didn't change the solution, take last incumbent solution
   if (!is_feasible) {
