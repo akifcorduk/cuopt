@@ -250,7 +250,7 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     bool run_early_cpufj = problem.has_papilo_presolve_data() &&
                            settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                            problem.original_problem_ptr->get_n_integers() > 0;
-    run_early_cpufj      = false;
+    run_early_cpufj = false;
     if (run_early_cpufj) {
       auto early_fj_start = std::chrono::steady_clock::now();
       auto* presolver_ptr = problem.presolve_data.papilo_presolve_ptr;
@@ -487,7 +487,7 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
 
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                         op_problem.get_n_integers() > 0 && op_problem.get_n_constraints() > 0;
-    run_early_fj      = false;
+    run_early_fj = false;
     f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
     if (run_early_fj) {
       auto early_fj_start = std::chrono::steady_clock::now();
@@ -781,10 +781,13 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
     num_threads = settings_const.num_cpu_threads;
   }
 
-  if (num_threads < 2) {
-    CUOPT_LOG_ERROR("The MIP solver requires at least 2 CPU threads!");
+  // The concurrent B&B + heuristics path needs a second thread for branch and bound; the
+  // heuristics-only path (which runs the single-threaded CPU LNS) is fine with one thread.
+  const i_t min_threads = settings_const.heuristics_only ? 1 : 2;
+  if (num_threads < min_threads) {
+    CUOPT_LOG_ERROR("The MIP solver requires at least %d CPU thread(s)!", min_threads);
     return mip_solution_t<i_t, f_t>{
-      cuopt::logic_error("The number of CPU threads is less than the expected minimum (2).",
+      cuopt::logic_error("The number of CPU threads is less than the expected minimum.",
                          cuopt::error_type_t::RuntimeError),
       op_problem.get_handle_ptr()->get_stream()};
   }
