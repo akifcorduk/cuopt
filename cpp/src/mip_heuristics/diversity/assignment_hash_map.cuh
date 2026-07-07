@@ -13,6 +13,17 @@ namespace cuopt {
 namespace mathematical_optimization {
 namespace mip {
 
+// Boost-style hash combine. Host+device callable so the same recurrence is shared between the
+// device solution hasher (assignment_hash_map_t) and host-side integer-assignment hashing.
+struct combine_hash {
+  HDI size_t operator()(size_t hash_1, size_t hash_2) const
+  {
+    const size_t magic_constant = 0x9e3779b97f4a7c15;
+    hash_1 ^= hash_2 + magic_constant + (hash_1 << 12) + (hash_1 >> 4);
+    return hash_1;
+  }
+};
+
 template <typename i_t, typename f_t>
 class assignment_hash_map_t {
  public:

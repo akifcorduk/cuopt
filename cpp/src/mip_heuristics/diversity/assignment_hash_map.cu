@@ -18,15 +18,6 @@ namespace cuopt {
 namespace mathematical_optimization {
 namespace mip {
 
-struct combine_hash {
-  DI size_t operator()(size_t hash_1, size_t hash_2)
-  {
-    const std::size_t magic_constant = 0x9e3779b97f4a7c15;
-    hash_1 ^= hash_2 + magic_constant + (hash_1 << 12) + (hash_1 >> 4);
-    return hash_1;
-  }
-};
-
 template <typename i_t, typename f_t, int TPB>
 __global__ void hash_solution_kernel(raft::device_span<size_t> assignment,
                                      raft::device_span<size_t> reduction_buffer)

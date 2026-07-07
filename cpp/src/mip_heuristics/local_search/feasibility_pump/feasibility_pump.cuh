@@ -103,9 +103,9 @@ struct fp_config_t {
   double cycle_distance_reduction_ration = 0.1;
 };
 
-// Target range for the batched-PDLP feasibility-pump cloud size. compute_optimal_batch_size is
-// clamped into [min, max]; if the memory cap falls below min we use the cap, and if it is below
-// fallback_threshold we fall back to the single-point feasibility pump.
+// Target range for the batched-PDLP feasibility-pump cloud size. PDLP's SpMM benchmark picks the
+// SM-efficient batch size, clamped into [min, max]; if it falls below fallback_threshold we fall
+// back to the single-point feasibility pump.
 struct fp_batch_config_t {
   int target_min_batch_size = 128;
   int target_max_batch_size = 2048;
@@ -114,11 +114,6 @@ struct fp_batch_config_t {
   // Cap on the fraction of the cloud filled with reseed (previous-iteration projected) points, so
   // fresh FJ-trajectory points and perturbed-LP-optimal padding always contribute diversity.
   double reseed_fraction = 0.8;
-  // Fraction of PDLP's memory-fit batch size to actually use. PDLP sizes the batch against a single
-  // cudaMemGetInfo free-memory snapshot and does not account for our per-climber warm-start
-  // primal/dual buffers, nor for the branch-and-bound solver that allocates heavily on the same
-  // device concurrently. Stay well under the device limit on purpose.
-  double memory_headroom_fraction = 0.5;
 };
 
 template <typename i_t, typename f_t>
@@ -150,10 +145,11 @@ class feasibility_pump_t {
   // memory-aware batch size is too small. Returns true if a feasible solution was found.
   bool run_batched_fp_cloud(solution_t<i_t, f_t>& solution);
   // Builds the fixed unified projection problem once (one aux distance var + 2 abs-value
-  // constraints per integer variable). Per-climber variation is only in the added constraints'
-  // lower bounds (+/- val_j) and the shared alpha-blended objective.
+  // constraints per integer variable). Per-climber variation is in the added constraints'
+  // lower bounds (+/- val_j) and per-climber alpha-blended objectives.
   void build_unified_projection_problem(solution_t<i_t, f_t>& solution);
-  // Memory-aware cloud size clamped into [target_min, target_max]; 0 means "fall back to single".
+  // SM-efficiency cloud size (SpMM benchmark) clamped into [target_min, target_max]; 0 means
+  // "fall back to single".
   i_t compute_cloud_batch_size(solution_t<i_t, f_t>& solution);
   // Assembles up to batch_size integer cloud points into d_cloud (concatenated [batch_size *
   // n_variables]); returns the number of distinct points actually written.
@@ -163,9 +159,9 @@ class feasibility_pump_t {
                      rmm::device_uvector<f_t>& d_cloud,
                      bool& seed_found_feasible);
   // Runs the batch projection for the assembled cloud and writes the per-climber projected primals
-  // back into d_projected (concatenated [n_points * n_variables]). Returns false if the solve
-  // produced no usable primal.
-  bool project_cloud(solution_t<i_t, f_t>& solution,
+  // back into d_projected (concatenated [n_points * n_variables]). Throws if the solve produces no
+  // usable primal-dual (the batch solve must not fail here).
+  void project_cloud(solution_t<i_t, f_t>& solution,
                      i_t n_points,
                      const rmm::device_uvector<f_t>& d_cloud,
                      rmm::device_uvector<f_t>& d_projected);
@@ -266,6 +262,10 @@ class feasibility_pump_t {
   // concatenated [reseed_count * n_variables]. Declared last so its stream-aware initialization
   // ordering in the constructor is unambiguous.
   rmm::device_uvector<f_t> reseed_points;
+  // Per-climber alpha for the distance/original-objective blend in batch projection. Slot 0 mirrors
+  // config.alpha; reset to default_alpha when a diversity climber is freshly seeded (FJ trajectory
+  // or perturbed LP-optimal padding).
+  std::vector<f_t> climber_alphas;
   // Per-climber PDLP dual warm start carried across projections within a single batched FP descent:
   // the previous projection's dual [warm_start_n_points * unified_n_constr_total], the previous
   // best (selected) climber index, and how many leading climbers of the current cloud are

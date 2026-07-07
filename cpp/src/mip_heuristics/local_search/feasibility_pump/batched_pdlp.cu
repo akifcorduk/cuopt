@@ -8,6 +8,7 @@
 #include "feasibility_pump.cuh"
 
 #include <cuopt/error.hpp>
+#include <mip_heuristics/diversity/assignment_hash_map.cuh>
 #include <mip_heuristics/diversity/diversity_manager.cuh>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/problem/host_helper.cuh>
@@ -17,9 +18,11 @@
 #include <cuopt/mathematical_optimization/optimization_problem.hpp>
 #include <cuopt/mathematical_optimization/pdlp/solver_settings.hpp>
 #include <cuopt/mathematical_optimization/pdlp/solver_solution.hpp>
+#include <pdlp/optimal_batch_size_handler/optimal_batch_size_handler.hpp>
 #include <pdlp/pdlp.cuh>
 #include <pdlp/solve.cuh>
 
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 
@@ -29,7 +32,6 @@
 #include <raft/sparse/detail/cusparse_wrappers.h>
 #include <raft/core/cusparse_macros.hpp>
 #include <raft/linalg/binary_op.cuh>
-#include <utilities/seed_generator.cuh>
 
 #include <thrust/copy.h>
 #include <thrust/for_each.h>
@@ -42,6 +44,46 @@ namespace cuopt::mathematical_optimization::mip {
 // Defined in feasibility_pump.cu: maps the fraction of integral integer-vars to an LP tolerance
 // (looser when far from integral, tighter as it converges).
 double get_tolerance_from_ratio(double ratio_integer, double absolute_tol);
+
+template <typename Iterator>
+static double vector_l2_norm(Iterator first, Iterator last)
+{
+  return std::sqrt(std::inner_product(first, last, first, 0.0));
+}
+
+// Blend distance + original objective for one climber at the given alpha (does not mutate alpha).
+template <typename f_t>
+static void blend_projection_objective(f_t alpha,
+                                       f_t l2_norm_of_original_obj,
+                                       f_t l2_norm_of_distance_obj,
+                                       const std::vector<f_t>& orig_obj_vector,
+                                       const std::vector<f_t>& dist_objective,
+                                       std::vector<f_t>& out)
+{
+  f_t distance_weight = (1. - alpha) / l2_norm_of_distance_obj;
+  f_t orig_obj_weight = alpha / l2_norm_of_original_obj;
+  if (!isfinite(orig_obj_weight)) { orig_obj_weight = 0.; }
+  cuopt_expects(isfinite(orig_obj_weight), error_type_t::RuntimeError, "Weight should be finite!");
+  for (size_t i = 0; i < out.size(); ++i) {
+    f_t orig_obj = i < orig_obj_vector.size() ? orig_obj_vector[i] : 0.;
+    out[i]       = dist_objective[i] * distance_weight + orig_obj_weight * orig_obj;
+    cuopt_expects(isfinite(out[i]), error_type_t::RuntimeError, "Weight should be finite!");
+  }
+}
+
+// Hash the integer components of a host assignment slice, using the shared combine_hash recurrence
+// (same as the device assignment_hash_map_t). Seeded with the integer count, matching the device
+// hasher's th_hash = assignment.size() convention.
+template <typename i_t, typename f_t>
+static size_t integer_assignment_hash(const std::vector<i_t>& integer_cols, const f_t* x)
+{
+  combine_hash combine;
+  size_t h = integer_cols.size();
+  for (i_t col : integer_cols) {
+    h = combine(h, (size_t)std::llround(x[col]));
+  }
+  return h;
+}
 
 // ---------------------------------------------------------------------------
 // Batched-PDLP feasibility pump (cloud projection)
@@ -178,36 +220,24 @@ template <typename i_t, typename f_t>
 i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>& solution)
 {
   cuopt_assert(unified_problem != nullptr, "Unified problem must be built first");
-  // Per-climber constraint bounds (the +/- val_j rows) drive the dominant memory term; the
-  // objective is shared across climbers. collect_solutions=true budgets the per-climber
-  // primal/dual/reduced-cost outputs we request via generate_batch_primal_dual_solution (otherwise
-  // they are unaccounted and the cloud OOMs on large problems).
-  const size_t mem_cap = cuopt::mathematical_optimization::compute_optimal_batch_size(
-    *unified_problem,
-    /*per_climber_objectives=*/false,
-    /*per_climber_constraint_bounds=*/true,
-    /*collect_solutions=*/true);
-  // PDLP's estimate still ignores our warm-start primal/dual buffers and the concurrent B&B
-  // allocations, and it sizes against a single free-memory snapshot; use only a fraction of it.
-  const size_t conservative_cap =
-    (size_t)std::floor(batch_config.memory_headroom_fraction * (double)mem_cap);
-  if (conservative_cap < (size_t)batch_config.fallback_threshold) {
+  const size_t efficient_cap = static_cast<size_t>(
+    pdlp::optimal_batch_size_handler(*unified_problem, batch_config.target_max_batch_size));
+  if (efficient_cap < (size_t)batch_config.fallback_threshold) {
     CUOPT_LOG_INFO(
-      "Cloud batch size cap %zu (conservative, mem-fit %zu) below fallback threshold %d; using "
-      "single FP",
-      conservative_cap,
-      mem_cap,
+      "Cloud batch size cap %zu (SM-efficient) below fallback threshold %d; using single FP",
+      efficient_cap,
       batch_config.fallback_threshold);
     return 0;
   }
-  i_t bs = (i_t)std::min<size_t>(conservative_cap, (size_t)batch_config.target_max_batch_size);
-  CUOPT_LOG_INFO("Cloud batch size %d (mem-fit cap %zu, conservative cap %zu, target [%d, %d])",
-                 bs,
-                 mem_cap,
-                 conservative_cap,
+  const size_t clamped = std::clamp(efficient_cap,
+                                    static_cast<size_t>(batch_config.target_min_batch_size),
+                                    static_cast<size_t>(batch_config.target_max_batch_size));
+  CUOPT_LOG_INFO("Cloud batch size %zu (SM-efficient cap %zu, target [%d, %d])",
+                 clamped,
+                 efficient_cap,
                  batch_config.target_min_batch_size,
                  batch_config.target_max_batch_size);
-  return bs;
+  return static_cast<i_t>(clamped);
 }
 
 template <typename i_t, typename f_t>
@@ -253,6 +283,7 @@ i_t feasibility_pump_t<i_t, f_t>::assemble_cloud(solution_t<i_t, f_t>& solution,
   }
 
   // (2) Fresh 20% FJ trajectory points captured from a single descent (Option B).
+  i_t fj_added = 0;
   if (count < batch_size) {
     cuopt_func_call(solution.test_variable_bounds(true));
     solution.round_nearest();
@@ -267,12 +298,7 @@ i_t feasibility_pump_t<i_t, f_t>::assemble_cloud(solution_t<i_t, f_t>& solution,
     fj.settings.n_of_minimums_for_exit = 5000;
     fj.settings.time_limit             = std::min(fj_time, timer.remaining_time());
     fj.settings.record_trajectory      = true;
-    // Record up to a full cloud worth of candidates (not just the remaining slots): many will share
-    // integer values and get filtered below, so oversampling lets FJ still contribute enough
-    // integer-distinct points.
     fj.set_trajectory_capacity(batch_size, stream);
-    // The seeding 20% FJ both records its visited trajectory (cloud seeds) AND may itself reach a
-    // feasible solution; if it does, signal the caller to exit instead of projecting a cloud.
     bool fj_feasible              = fj.solve(solution);
     fj.settings.record_trajectory = false;
     if (fj_feasible && solution.compute_feasibility()) { seed_found_feasible = true; }
@@ -280,20 +306,23 @@ i_t feasibility_pump_t<i_t, f_t>::assemble_cloud(solution_t<i_t, f_t>& solution,
     if (traj > 0) {
       auto h_traj = cuopt::host_copy(fj.get_trajectory_buffer(), stream);
       solution.handle_ptr->sync_stream();
-      // Keep the cloud integer-diverse. The FJ incumbent often only moves its continuous part
-      // between sync points, so consecutive iterates differ in just a handful of integer
-      // components; projecting those near-duplicates wastes cloud slots. Instead of a strict
-      // one-to-one match, require a candidate to differ from every already-added point (including
-      // the reseed points above) in at least max(1% of the integers, 2) integer components.
       const i_t min_int_diff =
         std::min(std::max(unified_n_int, 1), std::max(2, (i_t)std::ceil(0.01 * unified_n_int)));
-      std::vector<long long> accepted_int_vals;  // flat [n_accepted * unified_n_int]
+      std::vector<long long> accepted_int_vals;
       accepted_int_vals.reserve((size_t)batch_size * unified_n_int);
       std::vector<long long> cand(unified_n_int);
       auto extract_int = [&](const f_t* pt) {
         for (i_t k = 0; k < unified_n_int; ++k) {
           cand[k] = std::llround(pt[h_integer_indices_cache[k]]);
         }
+      };
+      auto hash_in_climber_history = [&](size_t hsh) {
+        for (const auto& hist : climber_hash_history) {
+          for (size_t prev : hist) {
+            if (prev == hsh) return true;
+          }
+        }
+        return false;
       };
       auto too_close = [&]() {
         i_t n_accepted = (i_t)(accepted_int_vals.size() / std::max(unified_n_int, 1));
@@ -311,46 +340,43 @@ i_t feasibility_pump_t<i_t, f_t>::assemble_cloud(solution_t<i_t, f_t>& solution,
         extract_int(h_points.data() + (size_t)c * n_vars);
         accepted_int_vals.insert(accepted_int_vals.end(), cand.begin(), cand.end());
       }
-      i_t added_unique = 0;
       for (i_t t = 0; t < traj && count < batch_size; ++t) {
         const f_t* pt = h_traj.data() + (size_t)t * n_vars;
+        if (hash_in_climber_history(integer_assignment_hash(h_integer_indices_cache, pt))) {
+          continue;
+        }
         extract_int(pt);
         if (too_close()) continue;
         std::copy(pt, pt + n_vars, h_points.begin() + (size_t)count * n_vars);
         accepted_int_vals.insert(accepted_int_vals.end(), cand.begin(), cand.end());
         count++;
-        added_unique++;
+        fj_added++;
       }
-      CUOPT_LOG_INFO("Cloud seeding: %d FJ trajectory points, %d added (>= %d integer diffs apart)",
-                     traj,
-                     added_unique,
-                     min_int_diff);
+      CUOPT_LOG_INFO(
+        "Cloud seeding: %d FJ trajectory points, %d added (>= %d integer diffs apart, excluding "
+        "climber hashes)",
+        traj,
+        fj_added,
+        min_int_diff);
     }
   }
 
-  // (3) Pad to batch_size with perturbed nearest-roundings of the LP optimal.
-  if (count < batch_size && lp_optimal_solution.size() == (size_t)n_vars) {
-    auto h_lp_opt = cuopt::host_copy(lp_optimal_solution, stream);
+  // (3) Fill every remaining slot with perturbed integers of the current assignment. The cloud is
+  // always seeded to the full batch_size (never shrinks): FJ contributes what it can, perturbation
+  // covers the rest with diverse points.
+  if (count < batch_size) {
+    auto h_assignment = cuopt::host_copy(solution.assignment, stream);
     solution.handle_ptr->sync_stream();
-    std::vector<f_t> base(n_vars);
-    for (i_t j = 0; j < n_vars; ++j) {
-      base[j] = h_lp_opt[j];
-    }
-    raft::random::PCGenerator pcg(cuopt::seed_generator::get_seed(), 0, 0);
-    for (i_t k = 0; k < unified_n_int; ++k) {
-      i_t col   = h_integer_indices_cache[k];
-      base[col] = round_nearest(h_lp_opt[col], h_var_lower[col], h_var_upper[col], int_tol, pcg);
-    }
+    const i_t pad_start = count;
     std::uniform_real_distribution<double> unit(0., 1.);
     constexpr double perturb_ratio = 0.1;
     while (count < batch_size) {
-      std::vector<f_t> pt = base;
+      std::vector<f_t> pt(h_assignment.begin(), h_assignment.begin() + n_vars);
       for (i_t k = 0; k < unified_n_int; ++k) {
         if (unit(rng) >= perturb_ratio) continue;
         i_t col = h_integer_indices_cache[k];
         f_t lb  = h_var_lower[col];
         f_t ub  = h_var_upper[col];
-        // Same uniform-within-bounds integer sampling as solution_t::assign_random_within_bounds.
         if (lb == -std::numeric_limits<f_t>::infinity()) {
           pt[col] = std::floor(ub + int_tol);
         } else if (ub == std::numeric_limits<f_t>::infinity()) {
@@ -363,6 +389,8 @@ i_t feasibility_pump_t<i_t, f_t>::assemble_cloud(solution_t<i_t, f_t>& solution,
       }
       append_point(pt);
     }
+    CUOPT_LOG_INFO("Cloud seeding: padded %d points from perturbed assignment to fill batch",
+                   count - pad_start);
   }
 
   if (count == 0) return 0;
@@ -380,7 +408,7 @@ i_t feasibility_pump_t<i_t, f_t>::assemble_cloud(solution_t<i_t, f_t>& solution,
 }
 
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
+void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                                                  i_t n_points,
                                                  const rmm::device_uvector<f_t>& d_cloud,
                                                  rmm::device_uvector<f_t>& d_projected)
@@ -390,14 +418,39 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   auto& op         = *unified_problem;
   const i_t n_vars = unified_n_vars;
   const i_t nct    = unified_n_constr_total;
+  const i_t nvt    = unified_n_vars_total;
 
-  // Shared alpha-blended objective (distance part + alpha * original objective).
-  std::vector<f_t> obj(unified_n_vars_total, 0.);
+  if ((i_t)climber_alphas.size() < n_points) { climber_alphas.resize(n_points, default_alpha); }
+
+  std::vector<f_t> dist_base(nvt, 0.);
   for (i_t k = 0; k < unified_n_int; ++k) {
-    obj[unified_n_vars + k] = 1.;
+    dist_base[unified_n_vars + k] = 1.;
   }
-  adjust_objective_with_original(solution, obj);
-  raft::copy(op.get_objective_coefficients().data(), obj.data(), obj.size(), stream);
+  std::vector<f_t> orig_obj_vector =
+    cuopt::host_copy(solution.problem_ptr->objective_coefficients, stream);
+  solution.handle_ptr->sync_stream();
+  const f_t l2_norm_of_original_obj =
+    vector_l2_norm(orig_obj_vector.begin(), orig_obj_vector.end());
+  const f_t l2_norm_of_distance_obj = vector_l2_norm(dist_base.begin(), dist_base.end());
+
+  std::vector<f_t> h_obj((size_t)n_points * nvt);
+  std::vector<f_t> climber_obj(nvt);
+  for (i_t c = 0; c < n_points; ++c) {
+    climber_alphas[c] *= config.alpha_decrease_factor;
+    climber_obj = dist_base;
+    blend_projection_objective(climber_alphas[c],
+                               l2_norm_of_original_obj,
+                               l2_norm_of_distance_obj,
+                               orig_obj_vector,
+                               dist_base,
+                               climber_obj);
+    std::copy(climber_obj.begin(), climber_obj.end(), h_obj.begin() + (size_t)c * nvt);
+  }
+  config.alpha = climber_alphas[0];
+
+  auto& d_obj = op.get_objective_coefficients();
+  d_obj.resize((size_t)n_points * nvt, stream);
+  raft::copy(d_obj.data(), h_obj.data(), h_obj.size(), stream);
 
   // Per-climber constraint bounds expanded directly on device (this is the dominant per-iteration
   // term, 2 * n_points * n_constr_total): original rows reuse the problem's shared bounds, the
@@ -520,20 +573,15 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   auto sol     = cuopt::mathematical_optimization::run_batch_pdlp(op, settings);
   auto& primal = sol.get_primal_solution();
   auto& dual   = sol.get_dual_solution();
-  // A failed batch solve (LP error, or out of memory under concurrent B&B pressure) surfaces as an
-  // empty / undersized primal-dual rather than throwing. Skip this projection so the caller can
-  // round the current point and continue, instead of copying out of bounds.
-  if (primal.size() != (size_t)n_points * unified_n_vars_total ||
-      dual.size() != (size_t)n_points * nct) {
-    CUOPT_LOG_INFO(
-      "Batch projection returned no usable solution (primal %zu, dual %zu; expected %zu / %zu); "
-      "skipping projection",
-      primal.size(),
-      dual.size(),
-      (size_t)n_points * unified_n_vars_total,
-      (size_t)n_points * nct);
-    return false;
-  }
+  cuopt_expects(primal.size() == (size_t)n_points * unified_n_vars_total &&
+                  dual.size() == (size_t)n_points * nct,
+                error_type_t::RuntimeError,
+                "Batch projection returned no usable solution (primal %zu, dual %zu; expected %zu "
+                "/ %zu)",
+                primal.size(),
+                dual.size(),
+                (size_t)n_points * unified_n_vars_total,
+                (size_t)n_points * nct);
   d_projected.resize((size_t)n_points * n_vars, stream);
   for (i_t c = 0; c < n_points; ++c) {
     raft::copy(d_projected.data() + (size_t)c * n_vars,
@@ -547,7 +595,6 @@ bool feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   raft::copy(warm_start_dual.data(), dual.data(), dual.size(), stream);
   warm_start_n_points = n_points;
   solution.handle_ptr->sync_stream();
-  return true;
 }
 
 template <typename i_t, typename f_t>
@@ -812,9 +859,10 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
   auto stream         = solution.handle_ptr->get_stream();
   const i_t n_vars    = unified_n_vars;
   const f_t inf       = std::numeric_limits<f_t>::infinity();
-  reseed_count        = 0;   // persistent trajectories don't use assemble_cloud's reseed step
+  reseed_count        = 0;   // persistent trajectories — no assemble_cloud reseed step
   warm_start_n_points = 0;   // cold dual at descent start
   climber0_int_ratio  = 0.;  // start loose; tightens as climber 0 converges (like the single FP)
+  config.alpha        = default_alpha;
   // Climber 0 begins from the nearest rounding (classic FP start).
   solution.round_nearest();
   raft::copy(last_rounding.data(), solution.assignment.data(), solution.assignment.size(), stream);
@@ -827,16 +875,6 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
   i_t n_points         = 0;
   bool first_iteration = true;
   i_t trajectory       = 0;
-
-  // FNV-1a hash of the integer components of a host assignment slice.
-  auto int_hash = [&](const f_t* x) {
-    size_t h = 1469598103934665603ull;
-    for (i_t k = 0; k < unified_n_int; ++k) {
-      long long v = std::llround(x[h_integer_indices_cache[k]]);
-      h           = (h ^ (size_t)v) * 1099511628211ull;
-    }
-    return h;
-  };
 
   CUOPT_LOG_INFO("Starting batched FP cloud: batch size %d, integers %d, vars %d, constraints %d",
                  batch_size,
@@ -868,6 +906,8 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
         CUOPT_LOG_INFO("Empty cloud; falling back to single FP");
         return run_single_fp_descent(solution);
       }
+      climber_alphas.assign(n_points, default_alpha);
+      climber_alphas[0] = config.alpha;
       climber_hash_history.assign(n_points, {});
       first_iteration = false;
     } else {
@@ -882,11 +922,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
     CUOPT_LOG_INFO(
       "Batched FP trajectory %d: cloud %d points (slot 0 = climber 0)", trajectory, n_points);
 
-    if (!project_cloud(solution, n_points, d_cloud, d_projected)) {
-      bool is_feasible = round(solution);
-      if (is_feasible && solution.compute_feasibility()) { return true; }
-      return false;
-    }
+    project_cloud(solution, n_points, d_cloud, d_projected);
 
     // ---- Climber 0 (slot 0): full classic FP with internal restarts (the only CP round) ----
     raft::copy(solution.assignment.data(), d_projected.data(), n_vars, stream);
@@ -920,7 +956,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
       f_t* seed_c = new_seed.data() + (size_t)c * n_vars;
       probing_cache_sequential_round(
         solution, h_proj.data() + (size_t)c * n_vars, h_lb_scratch, h_ub_scratch, seed_c);
-      size_t hsh      = int_hash(seed_c);
+      size_t hsh      = integer_assignment_hash(h_integer_indices_cache, seed_c);
       climber_hash[c] = hsh;
       feas_host[c]    = host_assignment_feasible(seed_c) ? 1 : 0;
       // integer-assignment cycle: this climber's new rounding repeats one of its recent roundings
@@ -1003,6 +1039,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
         std::copy(h_pool.begin() + (size_t)src * n_vars,
                   h_pool.begin() + (size_t)(src + 1) * n_vars,
                   new_seed.begin() + (size_t)c * n_vars);
+        climber_alphas[c] = default_alpha;
         pool_idx++;
         climber_hash_history[c].clear();
       }
@@ -1051,7 +1088,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
     solution_t<int, F_TYPE>&);                                                                     \
   template int feasibility_pump_t<int, F_TYPE>::assemble_cloud(                                    \
     solution_t<int, F_TYPE>&, int, bool, rmm::device_uvector<F_TYPE>&, bool&);                     \
-  template bool feasibility_pump_t<int, F_TYPE>::project_cloud(solution_t<int, F_TYPE>&,           \
+  template void feasibility_pump_t<int, F_TYPE>::project_cloud(solution_t<int, F_TYPE>&,           \
                                                                int,                                \
                                                                const rmm::device_uvector<F_TYPE>&, \
                                                                rmm::device_uvector<F_TYPE>&);      \
