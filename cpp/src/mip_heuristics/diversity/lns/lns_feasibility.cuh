@@ -226,15 +226,14 @@ __global__ void lns_mark_violated_constraint_integer_vars_kernel(
     const auto [row_begin, row_end] = sol_view.problem.range_for_constraint(constraint_idx);
     for (i_t offset = row_begin + lane; offset < row_end; offset += warp_size) {
       const i_t var_idx = sol_view.problem.variables[offset];
-      if (sol_view.problem.is_integer_var(var_idx)) { atomicExch(&ruined_vars[var_idx], i_t{1}); }
+      atomicExch(&ruined_vars[var_idx], i_t{1});
     }
   }
 }
 
 // Expand a seed set of ruined variables by one hop over the problem's variable-variable
-// "related variables" graph: for every seed-marked variable, also mark its related integer
-// variables, up to a global budget so densely coupled problems do not free everything. Reads
-// the seed flags from a snapshot so the expansion is exactly one hop.
+// "related variables" graph: for every seed-marked variable, also mark its related variables,
+// up to a global budget so densely coupled problems do not free everything.
 template <typename i_t, typename f_t>
 __global__ void lns_expand_related_integer_vars_kernel(typename problem_t<i_t, f_t>::view_t problem,
                                                        const i_t* seed_flags,
@@ -253,7 +252,7 @@ __global__ void lns_expand_related_integer_vars_kernel(typename problem_t<i_t, f
     const auto [related_begin, related_end] = problem.range_for_related_vars(var_idx);
     for (i_t offset = related_begin + lane; offset < related_end; offset += warp_size) {
       const i_t related_var = problem.related_variables[offset];
-      if (!problem.is_integer_var(related_var) || ruined_vars[related_var] != 0) { continue; }
+      if (ruined_vars[related_var] != 0) { continue; }
       // Claim a slot in the global budget; only mark if we are still under it.
       if (atomicAdd(add_counter, i_t{1}) < add_budget) {
         atomicExch(&ruined_vars[related_var], i_t{1});
@@ -309,10 +308,9 @@ __global__ void lns_score_divergence_kernel(const f_t* assignment,
        pos += blockDim.x * gridDim.x) {
     const i_t candidate_var = related_neighbors[pos];
     candidate_vars[pos]     = candidate_var;
-    const bool eligible     = candidate_var != seed_var && problem.is_integer_var(candidate_var) &&
-                          ruined_vars[candidate_var] == 0;
-    candidate_scores[pos] = eligible ? -abs(seed_value - assignment[candidate_var])
-                                     : std::numeric_limits<f_t>::infinity();
+    const bool eligible     = candidate_var != seed_var && ruined_vars[candidate_var] == 0;
+    candidate_scores[pos]   = eligible ? -abs(seed_value - assignment[candidate_var])
+                                       : std::numeric_limits<f_t>::infinity();
   }
 }
 
@@ -383,8 +381,7 @@ __global__ void lns_finalize_similarity_scores_kernel(i_t seed_var,
        pos += blockDim.x * gridDim.x) {
     const i_t candidate_var = related_neighbors[pos];
     candidate_vars[pos]     = candidate_var;
-    const bool eligible     = candidate_var != seed_var && problem.is_integer_var(candidate_var) &&
-                          ruined_vars[candidate_var] == 0;
+    const bool eligible     = candidate_var != seed_var && ruined_vars[candidate_var] == 0;
     if (!eligible) {
       candidate_scores[pos] = std::numeric_limits<f_t>::infinity();
       continue;
@@ -402,8 +399,7 @@ __global__ void lns_finalize_similarity_scores_kernel(i_t seed_var,
 
 template <typename i_t, typename f_t>
 __global__ void lns_compute_violation_seed_scores_kernel(typename solution_t<i_t, f_t>::view_t sol,
-                                                         const i_t* integer_indices,
-                                                         i_t n_integer_vars,
+                                                         i_t n_variables,
                                                          f_t* seed_scores)
 {
   static constexpr i_t warp_size = 32;
@@ -413,10 +409,7 @@ __global__ void lns_compute_violation_seed_scores_kernel(typename solution_t<i_t
   const i_t lane                 = threadIdx.x & (warp_size - 1);
   const i_t n_warps              = (blockDim.x * gridDim.x) / warp_size;
 
-  // One warp per integer variable; the warp's lanes cooperatively sum the violation of the
-  // constraints the variable appears in, then warp-reduce.
-  for (i_t integer_pos = global_warp; integer_pos < n_integer_vars; integer_pos += n_warps) {
-    const i_t var_idx                     = integer_indices[integer_pos];
+  for (i_t var_idx = global_warp; var_idx < n_variables; var_idx += n_warps) {
     const auto [reverse_beg, reverse_end] = sol.problem.reverse_range_for_var(var_idx);
     f_t violation_sum                     = 0.;
     for (i_t offset = reverse_beg + lane; offset < reverse_end; offset += warp_size) {
@@ -424,7 +417,7 @@ __global__ void lns_compute_violation_seed_scores_kernel(typename solution_t<i_t
     }
     violation_sum = raft::warpReduce(violation_sum);
     if (lane == 0) {
-      seed_scores[integer_pos] =
+      seed_scores[var_idx] =
         violation_sum > rel_tol ? -violation_sum : std::numeric_limits<f_t>::infinity();
     }
   }
@@ -544,11 +537,11 @@ class lns_feasibility_t {
       constraint_prop(ls_.constraint_prop),
       candidate_scores(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       related_candidate_vars(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
-      violated_seed_pool(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
+      violated_seed_pool(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       seed_mark_snapshot(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       expand_counter(problem_ptr->handle_ptr->get_stream()),
       ruin_vars(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
-      vars_to_fix(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream()),
+      vars_to_fix(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       ruined_var_flags(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream()),
       constraint_tardiness(problem_ptr->n_constraints, problem_ptr->handle_ptr->get_stream()),
       row_inf_norm(problem_ptr->n_constraints, problem_ptr->handle_ptr->get_stream()),
@@ -626,7 +619,7 @@ class lns_feasibility_t {
     // current structure. Growing the ruin set toward "re-randomize everything" destroys
     // progress, so cap it and grow additively (not by doubling) on stalls.
     const i_t min_ruin = 8;
-    const i_t max_ruin = std::max(min_ruin, std::min<i_t>(64, problem_ptr->n_integer_vars / 2));
+    const i_t max_ruin = std::max(min_ruin, std::min<i_t>(64, problem_ptr->n_variables / 2));
     const i_t grow_after_failures = 5;
     i_t ruin_count                = min_ruin;
     i_t failure_streak            = 0;
@@ -638,7 +631,7 @@ class lns_feasibility_t {
     // ruin is the strongest option, but only when the problem's related-variables graph is
     // available. On very large/dense models compute_related_variables leaves that graph empty, so
     // the related ruin degrades to a seed-only (single-variable) neighborhood and wastes attempts;
-    // there the violated-constraint ruin (which frees every integer var in a violated constraint)
+    // there the violated-constraint ruin (which frees every variable in a violated constraint)
     // repairs far more per attempt. Pick the strategy accordingly.
     const bool related_graph_available =
       related_variables_offsets_host.size() == static_cast<size_t>(problem_ptr->n_variables) + 1;
@@ -1178,49 +1171,48 @@ class lns_feasibility_t {
 
  public:
   // Pick the seed variable for the related-ruin expansion. With high probability the seed is
-  // drawn from the integer variables that participate in a currently violated constraint, so
+  // drawn from the variables that participate in a currently violated constraint, so
   // the ruined set covers infeasibility and the repair can reduce the number of unsatisfied
   // constraints. Otherwise (or when the solution is feasible) it falls back to uniform random.
   i_t pick_seed_var(solution_t<i_t, f_t>& sol)
   {
-    const i_t n_integer_vars = problem_ptr->n_integer_vars;
-    auto stream              = sol.handle_ptr->get_stream();
-    std::uniform_int_distribution<i_t> uniform_dist(0, n_integer_vars - 1);
+    const i_t n_variables = problem_ptr->n_variables;
+    auto stream           = sol.handle_ptr->get_stream();
+    std::uniform_int_distribution<i_t> uniform_dist(0, n_variables - 1);
 
     std::uniform_real_distribution<double> coin(0., 1.);
     if (coin(rng) < feasibility_lns_config_t::violated_seed_probability) {
       constexpr i_t block_size      = 256;
       constexpr i_t warps_per_block = block_size / 32;
       const i_t grid_size =
-        std::min<i_t>(4096, (n_integer_vars + warps_per_block - 1) / warps_per_block);
-      lns_compute_violation_seed_scores_kernel<i_t, f_t><<<grid_size, block_size, 0, stream>>>(
-        sol.view(), problem_ptr->integer_indices.data(), n_integer_vars, candidate_scores.data());
+        std::min<i_t>(4096, (n_variables + warps_per_block - 1) / warps_per_block);
+      lns_compute_violation_seed_scores_kernel<i_t, f_t>
+        <<<grid_size, block_size, 0, stream>>>(sol.view(), n_variables, candidate_scores.data());
       RAFT_CUDA_TRY(cudaPeekAtLastError());
       auto pool_end            = thrust::copy_if(sol.handle_ptr->get_thrust_policy(),
                                       thrust::make_counting_iterator<i_t>(0),
-                                      thrust::make_counting_iterator<i_t>(n_integer_vars),
+                                      thrust::make_counting_iterator<i_t>(n_variables),
                                       violated_seed_pool.begin(),
                                       lns_negative_score_t<i_t, f_t>{candidate_scores.data()});
       const i_t violated_count = static_cast<i_t>(pool_end - violated_seed_pool.begin());
       if (violated_count > 0) {
         std::uniform_int_distribution<i_t> pool_dist(0, violated_count - 1);
-        const i_t integer_pos = violated_seed_pool.element(pool_dist(rng), stream);
-        return integer_indices_host[integer_pos];
+        return violated_seed_pool.element(pool_dist(rng), stream);
       }
     }
-    return integer_indices_host[uniform_dist(rng)];
+    return uniform_dist(rng);
   }
 
   i_t select_related_ruin_vars(solution_t<i_t, f_t>& sol, i_t target_ruin_count, size_t attempt)
   {
-    const i_t n_integer_vars = problem_ptr->n_integer_vars;
-    if (n_integer_vars == 0) { return 0; }
+    const i_t n_variables = problem_ptr->n_variables;
+    if (n_variables == 0) { return 0; }
 
     // TODO do target_count as small as possible. 10-20 variables
     const i_t target_count   = target_ruin_count <= 0
                                  ? static_cast<i_t>(feasibility_lns_config_t::ruin_count)
                                  : target_ruin_count;
-    const i_t selected_count = std::min(std::max<i_t>(2, target_count), n_integer_vars / 2);
+    const i_t selected_count = std::min(std::max<i_t>(2, target_count), n_variables / 2);
     auto stream              = sol.handle_ptr->get_stream();
     if (selected_count <= 0) { return 0; }
 
@@ -1370,10 +1362,10 @@ class lns_feasibility_t {
  private:
   i_t build_vars_to_fix()
   {
-    vars_to_fix.resize(problem_ptr->n_integer_vars, problem_ptr->handle_ptr->get_stream());
+    vars_to_fix.resize(problem_ptr->n_variables, problem_ptr->handle_ptr->get_stream());
     auto end = thrust::copy_if(problem_ptr->handle_ptr->get_thrust_policy(),
-                               problem_ptr->integer_indices.begin(),
-                               problem_ptr->integer_indices.end(),
+                               thrust::make_counting_iterator<i_t>(0),
+                               thrust::make_counting_iterator<i_t>(problem_ptr->n_variables),
                                vars_to_fix.begin(),
                                lns_not_ruined_var_t<i_t>{ruined_var_flags.data()});
     return static_cast<i_t>(end - vars_to_fix.begin());
@@ -1406,7 +1398,7 @@ class lns_feasibility_t {
   {
     raft::common::nvtx::range fun_scope("standalone_lns_feasibility_ruin_repair");
     const i_t n_vars_to_fix = build_vars_to_fix();
-    const i_t ruin_count    = problem_ptr->n_integer_vars - n_vars_to_fix;
+    const i_t ruin_count    = problem_ptr->n_variables - n_vars_to_fix;
     if (ruin_count < 1) { return std::make_pair(solution_t<i_t, f_t>(current), false); }
     vars_to_fix.resize(n_vars_to_fix, current.handle_ptr->get_stream());
 #if LNS_DEBUG
@@ -1554,8 +1546,7 @@ class lns_feasibility_t {
                                            ruined_var_flags.begin(),
                                            ruined_var_flags.end(),
                                            i_t{1});
-    CUOPT_LOG_INFO("Standalone LNS violated-constraint ruin selected %d integer variables",
-                   marked_count);
+    CUOPT_LOG_INFO("Standalone LNS violated-constraint ruin selected %d variables", marked_count);
 #endif
     return repair_current_ruin_set(current, weights, attempt, "violated_constraint");
   }
@@ -1579,8 +1570,8 @@ class lns_feasibility_t {
     return sol.compute_feasibility();
   }
 
-  // Mini-MIP repair: free the integer variables that appear in violated constraints, fix every
-  // other integer variable, and solve the residual sub-MIP exactly with dual-simplex branch and
+  // Mini-MIP repair: free the variables that appear in violated constraints, fix every
+  // other variable, and solve the residual sub-MIP exactly with dual-simplex branch and
   // bound under a strict time budget. This resolves the "stuck at a few violated constraints"
   // plateaus that the bounds-propagation and FJ repairs grind on indefinitely. Mirrors the
   // sub-MIP recombiner. Returns true if it produced a feasible solution (written into best).

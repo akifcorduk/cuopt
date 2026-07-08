@@ -67,13 +67,10 @@ class lns_feasibility_cpu_t {
 
     bool accepted_any = false;
 
-    // Seed repair: a single constraint-propagation rounding over all integer variables.
+    // Seed repair: a single constraint-propagation rounding over all variables.
     {
       std::vector<f_t> repaired = x;
-      std::vector<char> ruined(n_vars, 0);
-      for (i_t v : integer_indices) {
-        ruined[v] = 1;
-      }
+      std::vector<char> ruined(n_vars, 1);
       if (constraint_prop_round(repaired, ruined) &&
           is_better_state(eval_state(repaired), eval_state(x))) {
         x            = std::move(repaired);
@@ -107,19 +104,37 @@ class lns_feasibility_cpu_t {
 
     // Small ruin sets repair fast and preserve structure; grow additively on stalls.
     const i_t min_ruin = 8;
-    const i_t max_ruin = std::max(min_ruin, std::min<i_t>(64, n_int / 2));
+    const i_t max_ruin = std::max(min_ruin, std::min<i_t>(64, n_vars / 2));
     i_t ruin_count     = min_ruin;
     i_t failure_streak = 0;
 
     const bool related_graph_available = related_offsets.size() == static_cast<size_t>(n_vars) + 1;
     size_t attempts_since_fj           = 20;
 
+    constexpr f_t LNS_RATE_LOG_INTERVAL_S = f_t{5.0};
+    size_t completed_iterations           = 0;
+    f_t next_rate_log_time                = LNS_RATE_LOG_INTERVAL_S;
+
     for (size_t attempt = 0; attempt < 1000000; ++attempt) {
       ++attempts_since_fj;
       if (lns_timer.check_time_limit()) { break; }
+      ++completed_iterations;
 
       // Periodic FJ polish when the incumbent is close to feasible.
       state_t best_state = eval_state(best);
+
+      const f_t elapsed = lns_timer.elapsed_time();
+      if (elapsed >= next_rate_log_time) {
+        CUOPT_LOG_INFO(
+          "CPU LNS progress: %.2fs elapsed, %lu iterations, %.1f it/s, best unsat %d, excess %.6e",
+          elapsed,
+          completed_iterations,
+          completed_iterations / std::max<f_t>(elapsed, f_t{1e-6}),
+          best_state.unsat,
+          best_state.total_excess);
+        next_rate_log_time += LNS_RATE_LOG_INTERVAL_S;
+      }
+
       if (best_state.unsat > 0 && best_state.unsat <= 64 && attempts_since_fj >= 20) {
         attempts_since_fj   = 0;
         std::vector<f_t> xf = best;
@@ -182,11 +197,17 @@ class lns_feasibility_cpu_t {
     }
 
     if (is_better_state(eval_state(best), eval_state(x))) { x = best; }
-    state_t final_state = eval_state(x);
-    CUOPT_LOG_INFO("CPU LNS finished: unsat %d, excess %.6e, accepted_any %d",
-                   final_state.unsat,
-                   final_state.total_excess,
-                   accepted_any);
+    state_t final_state     = eval_state(x);
+    const f_t total_elapsed = lns_timer.elapsed_time();
+    CUOPT_LOG_INFO(
+      "CPU LNS finished: unsat %d, excess %.6e, accepted_any %d, %lu iterations in %.2fs (%.1f "
+      "it/s)",
+      final_state.unsat,
+      final_state.total_excess,
+      accepted_any,
+      completed_iterations,
+      total_elapsed,
+      completed_iterations / std::max<f_t>(total_elapsed, f_t{1e-6}));
     if (final_state.unsat == 0) {
       CUOPT_LOG_INFO("CPU LNS feasible at loop exit (%.2fs elapsed)", lns_timer.elapsed_time());
       return finalize(solution, x);
@@ -341,15 +362,15 @@ class lns_feasibility_cpu_t {
            cand.tardiness_penalty <= inc.tardiness_penalty + OBJECTIVE_EPSILON;
   }
 
-  // With high probability draw the seed from an integer variable that sits in a violated
-  // constraint, so the ruined neighborhood actually covers infeasibility.
+  // With high probability draw the seed from a variable that sits in a violated constraint, so the
+  // ruined neighborhood actually covers infeasibility.
   i_t pick_seed_var(const std::vector<f_t>& lhs)
   {
     std::uniform_real_distribution<double> coin(0., 1.);
-    if (!integer_indices.empty() && coin(rng) < 0.9) {
+    if (n_vars > 0 && coin(rng) < 0.9) {
       std::vector<i_t> pool;
-      pool.reserve(integer_indices.size());
-      for (i_t v : integer_indices) {
+      pool.reserve(n_vars);
+      for (i_t v = 0; v < n_vars; ++v) {
         f_t violation = 0;
         for (i_t p = rev_offsets[v]; p < rev_offsets[v + 1]; ++p) {
           violation += excess_of(rev_constraints[p], lhs[rev_constraints[p]]);
@@ -361,25 +382,25 @@ class lns_feasibility_cpu_t {
         return pool[dist(rng)];
       }
     }
-    std::uniform_int_distribution<size_t> dist(0, integer_indices.size() - 1);
-    return integer_indices[dist(rng)];
+    std::uniform_int_distribution<size_t> dist(0, n_vars - 1);
+    return dist(rng);
   }
 
   bool eligible_neighbor(i_t candidate, i_t seed, const std::vector<char>& ruined) const
   {
-    return candidate != seed && var_is_int[candidate] && ruined[candidate] == 0;
+    return candidate != seed && ruined[candidate] == 0;
   }
 
-  // Related ruin: seed + its most similar (structurally/state) related-integer neighbors.
+  // Related ruin: seed + its most similar (structurally/state) related neighbors.
   i_t select_related_ruin(const std::vector<f_t>& x,
                           const std::vector<f_t>& lhs,
                           i_t target_ruin_count,
                           size_t attempt,
                           std::vector<char>& ruined)
   {
-    if (n_int == 0) { return 0; }
+    if (n_vars == 0) { return 0; }
     const i_t target         = target_ruin_count <= 0 ? 128 : target_ruin_count;
-    const i_t selected_count = std::min(std::max<i_t>(2, target), n_int / 2);
+    const i_t selected_count = std::min(std::max<i_t>(2, target), n_vars / 2);
     if (selected_count <= 0) { return 0; }
 
     const i_t seed = pick_seed_var(lhs);
@@ -470,7 +491,7 @@ class lns_feasibility_cpu_t {
     }
   }
 
-  // Free every integer variable that appears in a violated constraint.
+  // Free every variable that appears in a violated constraint.
   i_t violated_constraint_ruin(const std::vector<f_t>& lhs, std::vector<char>& ruined)
   {
     i_t count = 0;
@@ -478,7 +499,7 @@ class lns_feasibility_cpu_t {
       if (!constraint_violated(c, lhs[c])) { continue; }
       for (i_t p = offsets[c]; p < offsets[c + 1]; ++p) {
         const i_t v = variables[p];
-        if (var_is_int[v] && ruined[v] == 0) {
+        if (ruined[v] == 0) {
           ruined[v] = 1;
           ++count;
         }
@@ -488,10 +509,9 @@ class lns_feasibility_cpu_t {
   }
 
   // Simple constraint-propagation rounding (based on dual_simplex/bounds_strengthening.cpp):
-  // fix the non-ruined integer variables, propagate bounds, then round the ruined integer
-  // variables one at a time (re-propagating after each). Continuous variables are clamped into
-  // the tightened bounds and left for the FJ burst to finish. Returns false when propagation
-  // proves the fixed neighborhood infeasible.
+  // fix the non-ruined variables, propagate bounds, then round the ruined integer variables one at
+  // a time (re-propagating after each). Ruined continuous variables are clamped into the
+  // tightened bounds. Returns false when propagation proves the fixed neighborhood infeasible.
   bool constraint_prop_round(std::vector<f_t>& x, const std::vector<char>& ruined)
   {
     const f_t eps     = tols.absolute_tolerance;
@@ -500,8 +520,12 @@ class lns_feasibility_cpu_t {
     std::vector<f_t> lb = var_lb;
     std::vector<f_t> ub = var_ub;
     for (i_t j = 0; j < n_vars; ++j) {
-      if (var_is_int[j] && ruined[j] == 0) {
+      if (ruined[j] != 0) { continue; }
+      if (var_is_int[j]) {
         const f_t v = std::round(std::min(std::max(x[j], var_lb[j]), var_ub[j]));
+        lb[j] = ub[j] = v;
+      } else {
+        const f_t v = std::min(std::max(x[j], var_lb[j]), var_ub[j]);
         lb[j] = ub[j] = v;
       }
     }
