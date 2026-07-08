@@ -109,7 +109,7 @@ struct fp_batch_config_t {
   int target_min_batch_size = 8;
   int target_max_batch_size = 2048;
   // Extra cap on cloud size for per-iteration latency (projection + rounding wall clock).
-  int latency_max_batch_size   = 64;
+  int latency_max_batch_size   = 1024;
   int fallback_threshold       = 8;
   double fj_seed_time_ratio    = 0.2;  // 20% FJ run to seed the cloud trajectory
   double projection_time_limit = 1.0;
@@ -166,7 +166,8 @@ class feasibility_pump_t {
                      rmm::device_uvector<f_t>& d_cloud,
                      bool& seed_found_feasible);
   // Runs the batch projection for the assembled cloud and writes the per-climber projected primals
-  // back into d_projected. On OOM, halves n_points and retries; throws if batch size 1 still fails.
+  // back into d_projected. On OOM, halves n_points and retries; if even batch size 1 returns no
+  // usable solution it sets n_points = 0 so the caller falls back to a single rounding step.
   void project_cloud(solution_t<i_t, f_t>& solution,
                      i_t& n_points,
                      const rmm::device_uvector<f_t>& d_cloud,

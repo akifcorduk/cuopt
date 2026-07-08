@@ -668,15 +668,18 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       if (is_memory_allocation_failure(sol) || (wrong_size && try_n > 1)) {
         retry_after_oom = true;
       } else if (wrong_size) {
-        cuopt_expects(
-          false,
-          error_type_t::RuntimeError,
-          "Batch projection returned no usable solution (primal %zu, dual %zu; expected "
-          "%zu / %zu)",
+        // try_n == 1 and the batch solve still returned an empty/undersized primal-dual (LP error,
+        // or OOM under concurrent B&B pressure that PDLP did not surface as an allocation failure).
+        // Do not crash: signal the caller (n_points == 0) to fall back to a plain rounding step.
+        CUOPT_LOG_INFO(
+          "Batch projection returned no usable solution at batch size 1 (primal %zu, dual %zu; "
+          "expected %zu / %zu); falling back to single rounding",
           primal.size(),
           dual.size(),
           exp_primal,
           exp_dual);
+        n_points = 0;
+        return;
       } else {
         for (i_t c = 0; c < try_n; ++c) {
           raft::copy(d_projected.data() + (size_t)c * n_vars,
@@ -704,8 +707,12 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
     if (!retry_after_oom) break;
 
     if (try_n == 1) {
-      cuopt_expects(
-        false, error_type_t::OutOfMemoryError, "Batch projection OOM at minimum batch size 1");
+      // Even a single-climber projection cannot allocate. Fall back to a plain rounding step
+      // (n_points == 0) instead of crashing the whole solve.
+      CUOPT_LOG_INFO(
+        "Batch projection OOM at minimum batch size 1; falling back to single rounding");
+      n_points = 0;
+      return;
     }
     CUOPT_LOG_INFO("Batch projection OOM at %d climbers; halving batch size", try_n);
     try_n = std::max((i_t)1, try_n / 2);
@@ -1279,6 +1286,10 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
   rmm::device_uvector<f_t> d_projected((size_t)batch_size * n_vars, stream);
   std::vector<char> flagged((size_t)batch_size, 0);
   std::vector<size_t> climber_hashes((size_t)batch_size, 0);
+  const f_t inf = std::numeric_limits<f_t>::infinity();
+  rmm::device_uvector<f_t> cand_best(n_vars, stream);  // best feasible found this trajectory
+  rmm::device_uvector<f_t> climber0_assign(n_vars,
+                                           stream);  // climber 0 base for reseed perturbation
   i_t n_points         = 0;
   bool first_iteration = true;
   i_t trajectory       = 0;
@@ -1335,6 +1346,18 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
     project_cloud(solution, n_points, d_cloud, d_projected);
     CUOPT_LOG_INFO(
       "Batched FP trajectory %d timing: projection %.3fs", trajectory, elapsed_since(t_proj));
+    if (n_points == 0) {
+      CUOPT_LOG_INFO(
+        "Batched FP trajectory %d: projection produced no usable solution; single-round fallback",
+        trajectory);
+      bool is_feasible = round(solution);
+      if (is_feasible && solution.compute_feasibility()) {
+        CUOPT_LOG_INFO("New feasible solution via rounding fallback (objective %g)",
+                       solution.get_user_objective());
+        return true;
+      }
+      return false;
+    }
     if ((i_t)climber_alphas.size() > n_points) { climber_alphas.resize(n_points); }
     if ((i_t)climber_hash_history.size() > n_points) { climber_hash_history.resize(n_points); }
     n_carried_over_points = std::min(n_carried_over_points, n_points);
@@ -1351,14 +1374,21 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
     CUOPT_LOG_INFO("Batched FP trajectory %d timing: climber0 round %.3fs",
                    trajectory,
                    elapsed_since(t_climber0));
+    // Best feasible found this trajectory across climber 0 and the diversity climbers.
+    f_t best_obj       = inf;
+    bool have_feasible = false;
     if (feasible0) {
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
-      CUOPT_LOG_INFO("New feasible solution at trajectory %d (objective %g)",
-                     trajectory,
-                     solution.get_user_objective());
-      return true;
+      best_obj      = solution.get_objective();
+      have_feasible = true;
+      raft::copy(cand_best.data(), solution.assignment.data(), n_vars, stream);
+      solution.handle_ptr->sync_stream();
     }
+    // The diversity feasibility check below overwrites solution.assignment, but the reseed step
+    // perturbs from climber 0's assignment; stash it so we can restore it afterwards.
+    raft::copy(climber0_assign.data(), solution.assignment.data(), n_vars, stream);
+    solution.handle_ptr->sync_stream();
 
     // ---- Diversity climbers 1..N: GPU nearest-integer rounding + hash dedup ----
     auto t_diversity = timing_clock::now();
@@ -1367,6 +1397,49 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
     CUOPT_LOG_INFO("Batched FP trajectory %d timing: diversity round %.3fs",
                    trajectory,
                    elapsed_since(t_diversity));
+
+    // ---- Device-confirm host-feasible diversity climbers; keep the best objective ----
+    {
+      auto h_cloud = cuopt::host_copy(d_cloud, stream);
+      solution.handle_ptr->sync_stream();
+      i_t n_feas_div = 0;
+      for (i_t c = 1; c < n_points; ++c) {
+        const f_t* seed_c = h_cloud.data() + (size_t)c * n_vars;
+        if (!host_assignment_feasible(seed_c)) continue;
+        raft::copy(solution.assignment.data(), d_cloud.data() + (size_t)c * n_vars, n_vars, stream);
+        solution.handle_ptr->sync_stream();
+        if (solution.compute_feasibility()) {
+          n_feas_div++;
+          f_t obj = solution.get_objective();
+          if (obj < best_obj) {
+            best_obj      = obj;
+            have_feasible = true;
+            raft::copy(cand_best.data(), solution.assignment.data(), n_vars, stream);
+            solution.handle_ptr->sync_stream();
+          }
+        }
+      }
+      if (n_feas_div > 0) {
+        CUOPT_LOG_INFO(
+          "Batched FP trajectory %d: %d diversity climbers feasible", trajectory, n_feas_div);
+      }
+    }
+
+    // Restore climber 0's assignment as the reseed perturbation base.
+    raft::copy(solution.assignment.data(), climber0_assign.data(), n_vars, stream);
+    solution.handle_ptr->sync_stream();
+
+    // ---- Return the best feasible found (climber 0 or a diversity climber) ----
+    if (have_feasible) {
+      raft::copy(solution.assignment.data(), cand_best.data(), n_vars, stream);
+      solution.handle_ptr->sync_stream();
+      bool res = solution.compute_feasibility();
+      cuopt_assert(res, "Feasibility issue");
+      CUOPT_LOG_INFO("New feasible solution at trajectory %d (objective %g)",
+                     trajectory,
+                     solution.get_user_objective());
+      return true;
+    }
 
     i_t n_flagged = 0;
     for (i_t c = 1; c < n_points; ++c) {
