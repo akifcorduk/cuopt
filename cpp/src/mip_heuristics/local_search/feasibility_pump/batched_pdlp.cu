@@ -665,6 +665,32 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       const size_t exp_primal = (size_t)try_n * unified_n_vars_total;
       const size_t exp_dual   = (size_t)try_n * nct;
       const bool wrong_size   = primal.size() != exp_primal || dual.size() != exp_dual;
+      if (wrong_size) {
+        const auto es = sol.get_error_status();
+        auto& term    = sol.get_terminations_status();
+        const std::string tstr =
+          term.empty() ? std::string("none") : sol.get_termination_status_string(0);
+        CUOPT_LOG_INFO(
+          "Batch projection WRONG SIZE at try_n=%d: primal %zu dual %zu (expected %zu/%zu); "
+          "error_type=%d msg='%s' term_status[0]='%s' n_term=%zu | inputs: nvt=%d nct=%d "
+          "obj_size=%zu clb_size=%zu cub_size=%zu primal_init=%zu dual_init=%zu",
+          try_n,
+          primal.size(),
+          dual.size(),
+          exp_primal,
+          exp_dual,
+          (int)es.get_error_type(),
+          es.what(),
+          tstr.c_str(),
+          term.size(),
+          nvt,
+          nct,
+          op.get_objective_coefficients().size(),
+          op.get_constraint_lower_bounds().size(),
+          op.get_constraint_upper_bounds().size(),
+          (size_t)obj_view,
+          dual_warm_available ? (size_t)cstr_view : (size_t)0);
+      }
       if (is_memory_allocation_failure(sol) || (wrong_size && try_n > 1)) {
         retry_after_oom = true;
       } else if (wrong_size) {
@@ -947,11 +973,6 @@ __global__ void batch_climber_int_hash_kernel(const f_t* __restrict__ assignment
   hashes_out[climber] = h;
 }
 
-__device__ __forceinline__ uint64_t fp_lcg_step(uint64_t state)
-{
-  return state * 6364136223846793005ULL + 1ULL;
-}
-
 template <typename i_t, typename f_t>
 __global__ void fill_cloud_rows_from_template_kernel(f_t* __restrict__ cloud,
                                                      const f_t* __restrict__ template_x,
@@ -986,20 +1007,17 @@ __global__ void perturb_cloud_integer_slots_kernel(f_t* __restrict__ cloud,
   } else if (climber == 0) {
     return;
   }
-  uint64_t rng = seed ^ ((uint64_t)climber * 1315423911ULL);
+  constexpr f_t perturb_ratio = 0.1;
   for (i_t k = threadIdx.x; k < n_int; k += blockDim.x) {
     i_t col = integer_cols[k];
-    f_t val = (climber == 0) ? slot0_x[col] : template_x[col];
-    if (climber != 0) {
-      rng = fp_lcg_step(rng);
-      if ((rng >> 32) % 10U == 0U) {
-        f_t int_lb = ceil(var_lower[col] - int_tol);
-        f_t int_ub = floor(var_upper[col] + int_tol);
-        rng        = fp_lcg_step(rng);
-        if (int_lb <= int_ub) {
-          f_t span = int_ub - int_lb + 1.;
-          val      = int_lb + fmod((f_t)(rng >> 32), span);
-        }
+    f_t val = template_x[col];
+    raft::random::PCGenerator rng(seed, (uint64_t)climber * (uint64_t)n_int + (uint64_t)k, 0);
+    if (rng.next_float() < perturb_ratio) {
+      f_t int_lb = ceil(var_lower[col] - int_tol);
+      f_t int_ub = floor(var_upper[col] + int_tol);
+      if (int_lb <= int_ub) {
+        f_t span = int_ub - int_lb + 1.;
+        val      = int_lb + floor(rng.next_float() * span);
       }
     }
     cloud[(size_t)climber * (size_t)n_vars + (size_t)col] = val;
@@ -1342,10 +1360,19 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
     CUOPT_LOG_INFO(
       "Batched FP trajectory %d: cloud %d points (slot 0 = climber 0)", trajectory, n_points);
 
-    auto t_proj = timing_clock::now();
+    auto t_proj               = timing_clock::now();
+    const i_t n_points_before = n_points;
     project_cloud(solution, n_points, d_cloud, d_projected);
     CUOPT_LOG_INFO(
       "Batched FP trajectory %d timing: projection %.3fs", trajectory, elapsed_since(t_proj));
+    if (n_points > 0 && n_points < n_points_before) {
+      CUOPT_LOG_INFO(
+        "Batched FP trajectory %d: batch size reduced from %d to %d (persists for the rest of the "
+        "descent)",
+        trajectory,
+        n_points_before,
+        n_points);
+    }
     if (n_points == 0) {
       CUOPT_LOG_INFO(
         "Batched FP trajectory %d: projection produced no usable solution; single-round fallback",
