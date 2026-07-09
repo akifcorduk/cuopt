@@ -170,8 +170,9 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
                   external_solution_queue.size(),
                   problem_ptr->get_user_obj_from_solver_obj(objective));
   if (objective < best_feasible_objective) {
-    CUOPT_LOG_DEBUG("Found new best solution %g in external queue",
-                    problem_ptr->get_user_obj_from_solver_obj(objective));
+    CUOPT_LOG_INFO("Found new best solution %g in external queue from %s",
+                   problem_ptr->get_user_obj_from_solver_obj(objective),
+                   solution_origin_to_string(origin));
   }
   if (external_solution_queue.size() >= 5) { early_exit_primal_generation = true; }
   solutions_in_external_queue_ = true;
@@ -302,7 +303,7 @@ void population_t<i_t, f_t>::run_solution_callbacks(solution_t<i_t, f_t>& sol)
     if (context.settings.benchmark_info_ptr != nullptr) {
       context.settings.benchmark_info_ptr->last_improvement_of_best_feasible = timer.elapsed_time();
     }
-    CUOPT_LOG_DEBUG("Population: Found new best solution %g", sol.get_user_objective());
+    CUOPT_LOG_INFO("Population: Found new best solution %g", sol.get_user_objective());
     if (problem_ptr->branch_and_bound_callback != nullptr) {
       problem_ptr->branch_and_bound_callback(sol.get_host_assignment());
     }

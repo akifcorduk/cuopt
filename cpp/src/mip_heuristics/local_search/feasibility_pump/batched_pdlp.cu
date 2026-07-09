@@ -335,9 +335,10 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   auto elapsed_since = [](timing_clock::time_point t0) {
     return std::chrono::duration<double>(timing_clock::now() - t0).count();
   };
-  const auto t_project_total          = timing_clock::now();
-  auto t_phase                        = timing_clock::now();
-  static const bool log_climber_stats = std::getenv("CUOPT_FP_LOG_CLIMBERS") != nullptr;
+  const auto t_project_total = timing_clock::now();
+  auto t_phase               = timing_clock::now();
+  // static const bool log_climber_stats = std::getenv("CUOPT_FP_LOG_CLIMBERS") != nullptr;
+  static const bool log_climber_stats = false;
   auto stream                         = solution.handle_ptr->get_stream();
   auto& op                            = *unified_problem;
   const i_t n_vars                    = unified_n_vars;
@@ -710,6 +711,10 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
       lp_settings.tolerance             = solution.problem_ptr->tolerances.absolute_tolerance;
       lp_settings.return_first_feasible = true;
       lp_settings.save_state            = true;
+      // We are verifying a candidate we believe is on the polytope; leaving PDLP's infeasibility
+      // detection on makes it return a spurious PrimalInfeasible certificate for a near-feasible
+      // (but not-yet-converged) point instead of converging to the feasible completion.
+      lp_settings.check_infeasibility = false;
       run_lp_with_vars_fixed(*solution.problem_ptr,
                              solution,
                              solution.problem_ptr->integer_indices,
@@ -717,7 +722,10 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
                              &constraint_prop.bounds_update);
       is_feasible = solution.get_feasible();
       n_integers  = solution.compute_number_of_integers();
-      CUOPT_LOG_INFO("Climber 0 timing: fixed-integer LP verify %.3fs", elapsed_since(t_phase));
+      CUOPT_LOG_INFO("Climber 0 timing: fixed-integer LP verify %.3fs feasible %d integers %d",
+                     elapsed_since(t_phase),
+                     is_feasible,
+                     n_integers);
       if (is_feasible && n_integers == solution.problem_ptr->n_integer_vars) {
         CUOPT_LOG_INFO("Feasible solution found in climber 0 fixed-integer LP verify");
         CUOPT_LOG_INFO("Climber 0 timing: total %.3fs", elapsed_since(t_total));
@@ -1005,7 +1013,10 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
   }
 
   const i_t batch_size = compute_cloud_batch_size(solution);
-  if (batch_size == 0) { return run_single_fp_descent(solution); }
+  if (batch_size == 0) {
+    CUOPT_LOG_INFO("Empty cloud; falling back to single FP");
+    return run_single_fp_descent(solution);
+  }
   const size_t expected_obj_size = (size_t)batch_size * unified_n_vars_total;
   if (cloud_batch_capacity != batch_size ||
       unified_problem->get_objective_coefficients().size() != expected_obj_size) {

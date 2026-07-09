@@ -101,10 +101,10 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
                op_problem.handle_ptr->get_stream());
   }
   if (solver_response.get_termination_status() == pdlp_termination_status_t::Optimal) {
-    CUOPT_LOG_DEBUG("feasible solution found with LP objective %f",
-                    solver_response.get_objective_value());
+    CUOPT_LOG_INFO("feasible solution found with LP objective %f",
+                   solver_response.get_objective_value());
   } else {
-    CUOPT_LOG_DEBUG("LP returned with reason %d", solver_response.get_termination_status());
+    CUOPT_LOG_INFO("LP returned with reason %d", solver_response.get_termination_status());
   }
 
   return solver_response;
@@ -129,7 +129,7 @@ bool run_lp_with_vars_fixed(problem_t<i_t, f_t>& op_problem,
                fixed_problem.handle_ptr->get_stream());
     bool temp_solution_feasible = temp_solution.compute_feasibility();
     if (!temp_solution_feasible) {
-      CUOPT_LOG_DEBUG(
+      CUOPT_LOG_INFO(
         "Infeasible solution detected with fixed vars LP. Sol excess %f fixed sol excess %f",
         solution.get_total_excess(),
         temp_solution.get_total_excess());
@@ -145,7 +145,7 @@ bool run_lp_with_vars_fixed(problem_t<i_t, f_t>& op_problem,
     if (bound_presolve->infeas_constraints_count > 0) {
       solution.unfix_variables(fixed_assignment, variable_map);
       bound_presolve->resize(op_problem);
-      CUOPT_LOG_DEBUG("Infeasible problem detected with LP with fixed vars");
+      CUOPT_LOG_INFO("Infeasible problem detected with LP with fixed vars");
       return true;
     }
   }

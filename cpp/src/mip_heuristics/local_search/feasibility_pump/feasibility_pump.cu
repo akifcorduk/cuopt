@@ -550,6 +550,9 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
         lp_settings.tolerance             = solution.problem_ptr->tolerances.absolute_tolerance;
         lp_settings.return_first_feasible = true;
         lp_settings.save_state            = true;
+        // Verifying a candidate we believe is on the polytope; leaving PDLP's infeasibility
+        // detection on makes it return a spurious PrimalInfeasible for a near-feasible point.
+        lp_settings.check_infeasibility = false;
         run_lp_with_vars_fixed(*solution.problem_ptr,
                                solution,
                                solution.problem_ptr->integer_indices,
@@ -571,14 +574,14 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
       const f_t time_ratio = 0.2;
       is_feasible          = test_fj_feasible(solution, time_ratio * proj_and_round_time);
     }
-    if (timer.check_time_limit()) {
-      CUOPT_LOG_INFO("FP time limit reached!");
-      return false;
-    }
     if (is_feasible) {
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
       return true;
+    }
+    if (timer.check_time_limit()) {
+      CUOPT_LOG_INFO("FP time limit reached!");
+      return false;
     }
     // do the cycle check if alpha diff is small enough
     f_t alpha_at_earlier_iter = config.alpha / config.alpha_decrease_factor;
