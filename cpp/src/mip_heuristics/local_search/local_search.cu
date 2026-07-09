@@ -776,13 +776,8 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
       break;
     }
-    // Batched-PDLP cloud feasibility pump projects a cloud of integer points simultaneously and
-    // collapses to a single point for rounding/cycle-breaking. It internally falls back to the
-    // single-point descent when the memory-aware batch size is too small or precision is not
-    // double. Batched-PDLP cloud feasibility pump projects a cloud of integer points simultaneously
-    // and collapses to a single point for rounding/cycle-breaking. It internally falls back to the
-    // single-point descent when the memory-aware batch size is too small or precision is not
-    // double.
+    // Batched-PDLP runs climber 0 as the FP trajectory and advances extra cloud climbers with
+    // nearest rounding plus FJ/perturbation restarts.
     is_feasible = fp.run_batched_fp_cloud(solution);
     population_ptr->add_external_solutions_to_population();
     CUOPT_LOG_DEBUG("Population size at iteration %d: %d", i, population_ptr->current_size());

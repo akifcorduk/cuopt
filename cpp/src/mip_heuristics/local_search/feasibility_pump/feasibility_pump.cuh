@@ -109,13 +109,9 @@ struct fp_batch_config_t {
   int target_min_batch_size = 8;
   int target_max_batch_size = 2048;
   // Extra cap on cloud size for per-iteration latency (projection + rounding wall clock).
-  int latency_max_batch_size   = 1024;
-  int fallback_threshold       = 8;
-  double fj_seed_time_ratio    = 0.2;  // 20% FJ run to seed the cloud trajectory
-  double projection_time_limit = 1.0;
-  // Cap on the fraction of the cloud filled with reseed (previous-iteration projected) points, so
-  // fresh FJ-trajectory points and perturbed-LP-optimal padding always contribute diversity.
-  double reseed_fraction = 0.8;
+  int latency_max_batch_size = 1024;
+  int fallback_threshold     = 8;
+  double fj_seed_time_ratio  = 0.2;  // 20% FJ run to seed the cloud trajectory
 };
 
 template <typename i_t, typename f_t>
@@ -140,11 +136,6 @@ class feasibility_pump_t {
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
   bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
 
-  // ---- Batched-PDLP feasibility pump (cloud projection) ----
-  // Outer-loop entry point: projects a cloud of integer points simultaneously onto the LP polytope
-  // with batched PDLP, collapses to one point (min L1, tie-break max integer count) for
-  // round/cycle-break, and reseeds the next cloud. Falls back to run_single_fp_descent when the
-  // memory-aware batch size is too small. Returns true if a feasible solution was found.
   bool run_batched_fp_cloud(solution_t<i_t, f_t>& solution);
   // Builds the fixed unified projection problem once (one aux distance var + 2 abs-value
   // constraints per integer variable). Per-climber variation is in the added constraints'
@@ -158,42 +149,28 @@ class feasibility_pump_t {
   // Memory-aware cloud size via compute_optimal_batch_size, clamped into [target_min, target_max];
   // 0 means "fall back to single".
   i_t compute_cloud_batch_size(solution_t<i_t, f_t>& solution);
-  // Assembles up to batch_size integer cloud points into d_cloud (concatenated [batch_size *
-  // n_variables]); returns the number of distinct points actually written.
-  i_t assemble_cloud(solution_t<i_t, f_t>& solution,
-                     i_t batch_size,
-                     bool first_iteration,
-                     rmm::device_uvector<f_t>& d_cloud,
-                     bool& seed_found_feasible);
-  // Runs the batch projection for the assembled cloud and writes the per-climber projected primals
-  // back into d_projected. On OOM, halves n_points and retries; if even batch size 1 returns no
-  // usable solution it sets n_points = 0 so the caller falls back to a single rounding step.
+  bool run_batched_fp_cloud_descent(solution_t<i_t, f_t>& solution,
+                                    i_t batch_size,
+                                    rmm::device_uvector<f_t>& d_batch_assignments,
+                                    std::vector<char>& flagged,
+                                    std::vector<size_t>& climber_hashes);
+  // Runs the batch projection in place: d_batch_assignments is integer-side input on entry and
+  // projected primal output on success. On OOM, halves n_points and retries; if even batch size 1
+  // returns no usable solution it sets n_points = 0 so the caller falls back to a single rounding
+  // step.
   void project_cloud(solution_t<i_t, f_t>& solution,
                      i_t& n_points,
-                     const rmm::device_uvector<f_t>& d_cloud,
-                     rmm::device_uvector<f_t>& d_projected);
-  // Selects the best projected point (min L1 distance to its seed, tie-break max integer count)
-  // among climbers [start_climber, n_points) and copies it into solution.assignment. Returns the
-  // selected climber index. start_climber = 1 skips climber 0 (the dedicated classic-FP
-  // trajectory).
-  i_t select_cloud_point(solution_t<i_t, f_t>& solution,
-                         i_t n_points,
-                         const rmm::device_uvector<f_t>& d_cloud,
-                         const rmm::device_uvector<f_t>& d_projected,
-                         i_t start_climber = 0);
+                     rmm::device_uvector<f_t>& d_batch_assignments,
+                     i_t trajectory);
   // Runs the original single-point FP logic for one round on climber 0's projection (already in
   // solution.assignment): distance-cycle check, full-integer + near-feasible LP-verify, CP round,
   // then the 20% FJ fallback. Uses the shared FP trajectory state (last_rounding, last_projection,
   // last_distances, alpha, cycle_queue). Returns whether climber 0 reached feasibility; sets
   // climber0_cycle when climber 0 cycled and should be restarted.
-  bool run_climber0_step(solution_t<i_t, f_t>& solution,
-                         f_t proj_begin,
-                         bool& climber0_cycle,
-                         i_t fj_traj_capacity = 0);
+  bool run_climber0_step(solution_t<i_t, f_t>& solution, f_t proj_begin, bool& climber0_cycle);
   void advance_diversity_climbers_gpu(solution_t<i_t, f_t>& solution,
                                       i_t n_points,
-                                      const rmm::device_uvector<f_t>& d_projected,
-                                      rmm::device_uvector<f_t>& d_seeds,
+                                      rmm::device_uvector<f_t>& d_batch_assignments,
                                       std::vector<char>& flagged,
                                       std::vector<size_t>& climber_hashes);
   void seed_cloud_from_assignment_gpu(solution_t<i_t, f_t>& solution,
@@ -205,22 +182,6 @@ class feasibility_pump_t {
                                         const std::vector<char>& flagged,
                                         i_t& n_diverse,
                                         i_t& n_fallback);
-  // Fill flagged diversity slots from climber 0's most recent FJ trajectory (same run as the 20%
-  // fallback). Returns how many flagged climbers received a trajectory point.
-  i_t reseed_flagged_from_fj_trajectory(solution_t<i_t, f_t>& solution,
-                                        i_t n_points,
-                                        rmm::device_uvector<f_t>& d_cloud,
-                                        const std::vector<char>& flagged);
-  // Sequentially rounds one projected climber to integers using the probing cache to resolve
-  // conflicts (inspired by constraint_prop's bulk rounding) with NO bound propagation: only the
-  // precomputed probing cache is consulted, and its implied bounds accumulate across variables in
-  // the h_lb/h_ub scratch (giving the sequential behavior). Integer columns of out_assignment
-  // (host, size n_variables) are overwritten; continuous columns are left untouched.
-  void probing_cache_sequential_round(solution_t<i_t, f_t>& solution,
-                                      const f_t* h_projection,
-                                      std::vector<f_t>& h_lb,
-                                      std::vector<f_t>& h_ub,
-                                      f_t* out_assignment);
   // Host-side constraint-activity feasibility filter for an already-integer assignment (uses the
   // cached CSR). A cheap pre-filter; device compute_feasibility confirms the hits.
   bool host_assignment_feasible(const f_t* h_assignment);
@@ -269,15 +230,13 @@ class feasibility_pump_t {
   // expand_unified_projection_batch_buffers).
   rmm::device_uvector<f_t> batch_primal_init;
   rmm::device_uvector<f_t> batch_dual_init;
+  rmm::device_uvector<char> dual_reuse_flags;
   // Host copies needed to rebuild per-iteration objective / per-climber constraint bounds.
   std::vector<i_t> h_integer_indices_cache;  // integer variable column indices
   std::vector<f_t> h_base_constraint_lower;  // original constraint lower bounds
   std::vector<f_t> h_base_constraint_upper;  // original constraint upper bounds
   std::vector<f_t> h_var_lower;              // original variable lower bounds
   std::vector<f_t> h_var_upper;              // original variable upper bounds
-  i_t reseed_count = 0;
-  // L1 distance of the last selected projected cloud point to its seed (logged per trajectory).
-  f_t last_selected_l1 = 0.;
   f_t best_excess;
   rmm::device_uvector<f_t>& lp_optimal_solution;
   std::mt19937 rng;
@@ -290,25 +249,13 @@ class feasibility_pump_t {
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
-  // Promising points carried from the previous iteration (nearest-rounded projected cloud),
-  // concatenated [reseed_count * n_variables]. Declared last so its stream-aware initialization
-  // ordering in the constructor is unambiguous.
-  rmm::device_uvector<f_t> reseed_points;
   // Per-climber alpha for the distance/original-objective blend in batch projection. Slot 0 mirrors
   // config.alpha; reset to default_alpha when a diversity climber is freshly seeded (FJ trajectory
   // or perturbed LP-optimal padding).
   std::vector<f_t> climber_alphas;
-  // Per-climber PDLP dual warm start carried across projections within a single batched FP descent:
-  // the previous projection's dual [warm_start_n_points * unified_n_constr_total], the previous
-  // best (selected) climber index, and how many leading climbers of the current cloud are
-  // carried-over reseed points (so they can reuse their own previous dual; the rest reuse the best
-  // climber's dual). The primal is always seeded from the current point, so it is not stored.
-  // Reset (warm_start_n_points = 0) whenever the unified problem is rebuilt or a new descent
-  // starts.
   rmm::device_uvector<f_t> warm_start_dual;
-  i_t warm_start_n_points   = 0;
-  i_t warm_start_best_c     = 0;
-  i_t n_carried_over_points = 0;
+  std::vector<char> h_dual_reuse_flags;
+  i_t warm_start_n_points = 0;
   // Climber 0's integer ratio from its previous projection (fraction of integer vars that are
   // integral). Drives the batch projection's LP tolerance via get_tolerance_from_ratio, mirroring
   // the original single-point FP: loose early (ratio low), tightening as climber 0 nears integral.

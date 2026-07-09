@@ -60,10 +60,10 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     lp_optimal_solution(lp_optimal_solution_),
     rng(cuopt::seed_generator::get_seed()),
     timer(20.),
-    reseed_points(0, context.problem_ptr->handle_ptr->get_stream()),
-    warm_start_dual(0, context.problem_ptr->handle_ptr->get_stream()),
     batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream()),
-    batch_dual_init(0, context.problem_ptr->handle_ptr->get_stream())
+    batch_dual_init(0, context.problem_ptr->handle_ptr->get_stream()),
+    dual_reuse_flags(0, context.problem_ptr->handle_ptr->get_stream()),
+    warm_start_dual(0, context.problem_ptr->handle_ptr->get_stream())
 {
 }
 
