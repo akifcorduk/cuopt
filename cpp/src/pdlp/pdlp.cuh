@@ -110,7 +110,7 @@ class pdlp_solver_t {
     const timer_t& timer);
   // Snapshot the current iterate of climber `i` (batch-local index) into
   // `batch_solution_to_return_` at its `original_index` slot
-  void snapshot_climber_into_return(size_t i);
+  void snapshot_climber_into_return(size_t i, bool mark_solved = true);
   // flush GPU termination stats into `batch_solution_to_return_` and construct the final solution.
   optimization_problem_solution_t<i_t, f_t> finalize_batch_return();
   optimization_problem_solution_t<i_t, f_t> finalize_batch_return_with_limit_reached(

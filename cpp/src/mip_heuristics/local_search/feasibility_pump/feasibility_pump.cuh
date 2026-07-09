@@ -111,7 +111,7 @@ struct fp_batch_config_t {
   // Extra cap on cloud size for per-iteration latency (projection + rounding wall clock).
   int latency_max_batch_size = 1024;
   int fallback_threshold     = 8;
-  double fj_seed_time_ratio  = 0.2;  // 20% FJ run to seed the cloud trajectory
+  double fj_ratio            = 0.2;  // 20% FJ run
 };
 
 template <typename i_t, typename f_t>
@@ -218,14 +218,13 @@ class feasibility_pump_t {
   // Cached unified projection problem (fixed structure across climbers and outer iterations).
   std::unique_ptr<cuopt::mathematical_optimization::optimization_problem_t<i_t, f_t>>
     unified_problem;
-  i_t unified_n_int          = 0;  // number of integer variables (== number of aux distance vars)
-  i_t unified_n_vars         = 0;  // original n_variables (without aux distance vars)
-  i_t unified_n_vars_total   = 0;  // original + aux distance vars
-  i_t unified_n_constr       = 0;  // original n_constraints (without abs-value constraints)
-  i_t unified_n_constr_total = 0;  // original + 2 * n_int abs-value constraints
-  i_t cloud_batch_capacity   = 0;  // per-climber PDLP buffers expanded to this many climbers
-  // Host scratch for per-climber objectives [cloud_batch_capacity * unified_n_vars_total].
-  std::vector<f_t> h_batch_obj;
+  i_t unified_n_int           = 0;  // number of integer variables (== number of aux distance vars)
+  i_t unified_n_vars          = 0;  // original n_variables (without aux distance vars)
+  i_t unified_n_vars_total    = 0;  // original + aux distance vars
+  i_t unified_n_constr        = 0;  // original n_constraints (without abs-value constraints)
+  i_t unified_n_constr_total  = 0;  // original + 2 * n_int abs-value constraints
+  i_t cloud_batch_capacity    = 0;  // per-climber PDLP buffers expanded to this many climbers
+  i_t cached_cloud_batch_size = -1;
   // Pre-allocated warm-start / projection buffers (sized once in
   // expand_unified_projection_batch_buffers).
   rmm::device_uvector<f_t> batch_primal_init;

@@ -750,7 +750,7 @@ void pdlp_solver_t<i_t, f_t>::print_final_termination_criteria(
 }
 
 template <typename i_t, typename f_t>
-void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i)
+void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i, bool mark_solved)
 {
   const auto term     = current_termination_strategy_.get_termination_status(i);
   const i_t local_idx = climber_strategies_[i].original_index;
@@ -773,7 +773,7 @@ void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i)
   info.number_of_steps_taken           = total_pdlp_iterations_;
   info.total_number_of_attempted_steps = pdhg_solver_.get_total_pdhg_iterations();
   if (term != pdlp_termination_status_t::ConcurrentLimit) { info.solved_by = method_t::PDLP; }
-  if (sb_view_.is_valid()) { sb_view_.mark_solved(local_idx); }
+  if (mark_solved && sb_view_.is_valid()) { sb_view_.mark_solved(local_idx); }
 }
 
 template <typename i_t, typename f_t>
@@ -815,6 +815,7 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
       batch_solution_to_return_.get_terminations_status()[original_index] = fallback_status;
       current_termination_strategy_.set_termination_status(i, fallback_status);
     }
+    snapshot_climber_into_return(i, false);
   }
   current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_, true);
   current_termination_strategy_.convert_gpu_terms_stats_to_host(

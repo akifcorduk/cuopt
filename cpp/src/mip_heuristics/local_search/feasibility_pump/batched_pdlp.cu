@@ -38,6 +38,7 @@
 #include <raft/linalg/binary_op.cuh>
 
 #include <thrust/copy.h>
+#include <thrust/fill.h>
 #include <thrust/for_each.h>
 #include <thrust/gather.h>
 #include <thrust/iterator/counting_iterator.h>
@@ -90,7 +91,7 @@ static void log_host_climber_stats(const char* label,
     for (i_t col : integer_cols) {
       if (std::abs(point[col] - std::round(point[col])) <= int_tol) { ++n_integer; }
     }
-    const f_t ratio = n_int == 0 ? 1. : (f_t)n_integer / n_int;
+    const f_t ratio = (f_t)n_integer / n_int;
     if (distances != nullptr) {
       CUOPT_LOG_INFO("Batched FP trajectory %d %s climber %d: distance %g integer_ratio %g (%d/%d)",
                      trajectory,
@@ -109,131 +110,6 @@ static void log_host_climber_stats(const char* label,
                      n_integer,
                      n_int);
     }
-  }
-}
-
-// Minimum integer-component difference required to accept a new cloud point as diverse. Maps the
-// problem's integer-variable count to [1, 25] on a log10 scale (uniform in orders of magnitude):
-// ~1 for tiny problems (100 vars), ~25 for very large ones (500k vars). Linear fit through
-// (log10(100), 1) and (log10(500000), 25).
-template <typename i_t>
-static i_t compute_min_int_diff(i_t n_int)
-{
-  if (n_int <= 1) return 1;
-  constexpr double slope     = 6.48836;    // 24 / (log10(500000) - log10(100))
-  constexpr double intercept = -11.97672;  // 1 - slope * log10(100)
-  const double d             = slope * std::log10((double)n_int) + intercept;
-  const i_t rounded          = (i_t)std::lround(d);
-  return std::clamp(rounded, i_t(1), std::min(i_t(25), n_int));
-}
-
-// Hash the integer components of a host assignment slice, using the shared combine_hash recurrence
-// (same as the device assignment_hash_map_t). Seeded with the integer count, matching the device
-// hasher's th_hash = assignment.size() convention.
-template <typename i_t, typename f_t>
-static size_t integer_assignment_hash(const std::vector<i_t>& integer_cols, const f_t* x)
-{
-  combine_hash combine;
-  size_t h = integer_cols.size();
-  for (i_t col : integer_cols) {
-    h = combine(h, (size_t)std::llround(x[col]));
-  }
-  return h;
-}
-
-// Tracks accepted integer assignments for cloud-point diversity filtering.
-template <typename i_t, typename f_t>
-struct cloud_point_diversity_t {
-  const std::vector<i_t>& integer_cols;
-  const std::vector<std::deque<size_t>>& climber_hash_history;
-  i_t min_int_diff;
-  std::vector<long long> accepted_int_vals;
-  std::vector<long long> cand;
-
-  cloud_point_diversity_t(const std::vector<i_t>& cols,
-                          const std::vector<std::deque<size_t>>& history,
-                          i_t n_int)
-    : integer_cols(cols),
-      climber_hash_history(history),
-      min_int_diff(compute_min_int_diff(n_int)),
-      cand(n_int)
-  {
-    accepted_int_vals.reserve((size_t)n_int * 64);
-  }
-
-  void extract_int(const f_t* pt)
-  {
-    for (i_t k = 0; k < (i_t)integer_cols.size(); ++k) {
-      cand[k] = std::llround(pt[integer_cols[k]]);
-    }
-  }
-
-  bool hash_in_climber_history(size_t hsh) const
-  {
-    for (const auto& hist : climber_hash_history) {
-      for (size_t prev : hist) {
-        if (prev == hsh) return true;
-      }
-    }
-    return false;
-  }
-
-  bool too_close() const
-  {
-    const i_t n_int = (i_t)integer_cols.size();
-    i_t n_accepted  = (i_t)(accepted_int_vals.size() / std::max(n_int, 1));
-    for (i_t a = 0; a < n_accepted; ++a) {
-      const long long* base = accepted_int_vals.data() + (size_t)a * n_int;
-      i_t diff              = 0;
-      for (i_t k = 0; k < n_int && diff < min_int_diff; ++k) {
-        if (cand[k] != base[k]) ++diff;
-      }
-      if (diff < min_int_diff) return true;
-    }
-    return false;
-  }
-
-  bool passes_diversity(const f_t* pt)
-  {
-    size_t hsh = integer_assignment_hash(integer_cols, pt);
-    if (hash_in_climber_history(hsh)) return false;
-    extract_int(pt);
-    if (too_close()) return false;
-    return true;
-  }
-
-  void accept(const f_t* pt)
-  {
-    extract_int(pt);
-    accepted_int_vals.insert(accepted_int_vals.end(), cand.begin(), cand.end());
-  }
-
-  void seed_from_cloud(const f_t* h_cloud, i_t n_points, i_t n_vars, const std::vector<char>* skip)
-  {
-    for (i_t c = 0; c < n_points; ++c) {
-      if (skip != nullptr && c < (i_t)skip->size() && (*skip)[c]) continue;
-      accept(h_cloud + (size_t)c * n_vars);
-    }
-  }
-};
-
-// Blend distance + original objective for one climber at the given alpha (does not mutate alpha).
-template <typename f_t>
-static void blend_projection_objective(f_t alpha,
-                                       f_t l2_norm_of_original_obj,
-                                       f_t l2_norm_of_distance_obj,
-                                       const std::vector<f_t>& orig_obj_vector,
-                                       const std::vector<f_t>& dist_objective,
-                                       std::vector<f_t>& out)
-{
-  f_t distance_weight = (1. - alpha) / l2_norm_of_distance_obj;
-  f_t orig_obj_weight = alpha / l2_norm_of_original_obj;
-  if (!isfinite(orig_obj_weight)) { orig_obj_weight = 0.; }
-  cuopt_expects(isfinite(orig_obj_weight), error_type_t::RuntimeError, "Weight should be finite!");
-  for (size_t i = 0; i < out.size(); ++i) {
-    f_t orig_obj = i < orig_obj_vector.size() ? orig_obj_vector[i] : 0.;
-    out[i]       = dist_objective[i] * distance_weight + orig_obj_weight * orig_obj;
-    cuopt_expects(isfinite(out[i]), error_type_t::RuntimeError, "Weight should be finite!");
   }
 }
 
@@ -358,7 +234,8 @@ void feasibility_pump_t<i_t, f_t>::build_unified_projection_problem(solution_t<i
   op.set_variable_lower_bounds(vlb.data(), (i_t)vlb.size());
   op.set_variable_upper_bounds(vub.data(), (i_t)vub.size());
   op.set_variable_types(vtypes.data(), (i_t)vtypes.size());
-  cloud_batch_capacity = 0;
+  cloud_batch_capacity    = 0;
+  cached_cloud_batch_size = -1;
   // The per-climber sizes just changed, so any stored warm start is stale.
   warm_start_n_points = 0;
   CUOPT_LOG_INFO(
@@ -373,6 +250,10 @@ template <typename i_t, typename f_t>
 i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>& solution)
 {
   cuopt_assert(unified_problem != nullptr, "Unified problem must be built first");
+  if (cached_cloud_batch_size >= 0) {
+    CUOPT_LOG_INFO("Using cached cloud batch size %d", cached_cloud_batch_size);
+    return cached_cloud_batch_size;
+  }
   const size_t batch_cap = cuopt::mathematical_optimization::compute_optimal_batch_size(
     *unified_problem,
     /*per_climber_objectives=*/true,
@@ -382,6 +263,7 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
     CUOPT_LOG_INFO("Cloud batch size cap %zu below fallback threshold %d; using single FP",
                    batch_cap,
                    batch_config.fallback_threshold);
+    cached_cloud_batch_size = 0;
     return 0;
   }
   const size_t clamped = std::clamp(batch_cap,
@@ -396,7 +278,8 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
     batch_config.target_min_batch_size,
     batch_config.target_max_batch_size,
     batch_config.latency_max_batch_size);
-  return static_cast<i_t>(latency_clamped);
+  cached_cloud_batch_size = (i_t)latency_clamped;
+  return cached_cloud_batch_size;
 }
 
 template <typename i_t, typename f_t>
@@ -414,7 +297,6 @@ void feasibility_pump_t<i_t, f_t>::expand_unified_projection_batch_buffers(
   op.get_objective_coefficients().resize(obj_size, stream);
   op.get_constraint_lower_bounds().resize(cstr_size, stream);
   op.get_constraint_upper_bounds().resize(cstr_size, stream);
-  h_batch_obj.resize(obj_size);
   batch_primal_init.resize(obj_size, stream);
   batch_dual_init.resize(cstr_size, stream);
   dual_reuse_flags.resize(batch_capacity, stream);
@@ -449,11 +331,18 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                                                  i_t trajectory)
 {
   raft::common::nvtx::range fun_scope("project_cloud");
-  auto stream      = solution.handle_ptr->get_stream();
-  auto& op         = *unified_problem;
-  const i_t n_vars = unified_n_vars;
-  const i_t nct    = unified_n_constr_total;
-  const i_t nvt    = unified_n_vars_total;
+  using timing_clock = std::chrono::steady_clock;
+  auto elapsed_since = [](timing_clock::time_point t0) {
+    return std::chrono::duration<double>(timing_clock::now() - t0).count();
+  };
+  const auto t_project_total          = timing_clock::now();
+  auto t_phase                        = timing_clock::now();
+  static const bool log_climber_stats = std::getenv("CUOPT_FP_LOG_CLIMBERS") != nullptr;
+  auto stream                         = solution.handle_ptr->get_stream();
+  auto& op                            = *unified_problem;
+  const i_t n_vars                    = unified_n_vars;
+  const i_t nct                       = unified_n_constr_total;
+  const i_t nvt                       = unified_n_vars_total;
 
   if ((i_t)climber_alphas.size() < n_points) { climber_alphas.resize(n_points, default_alpha); }
 
@@ -473,6 +362,8 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   const f_t rlp_base   = context.settings.heuristic_params.relaxed_lp_time_limit;
   const double lp_tolerance =
     get_tolerance_from_ratio(climber0_int_ratio, context.settings.tolerances.absolute_tolerance);
+  CUOPT_LOG_INFO(
+    "Batched FP trajectory %d projection timing: setup %.3fs", trajectory, elapsed_since(t_phase));
 
   for (i_t c = 0; c < n_points; ++c) {
     climber_alphas[c] *= config.alpha_decrease_factor;
@@ -487,24 +378,40 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       const size_t obj_view  = (size_t)try_n * nvt;
       const size_t cstr_view = (size_t)try_n * nct;
       if (op.get_objective_coefficients().size() != obj_view) {
+        t_phase = timing_clock::now();
         ensure_batch_problem_views(solution, try_n);
+        CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: resize views %.3fs",
+                       trajectory,
+                       elapsed_since(t_phase));
       }
 
-      std::vector<f_t> climber_obj(nvt);
-      for (i_t c = 0; c < try_n; ++c) {
-        climber_obj = dist_base;
-        blend_projection_objective(climber_alphas[c],
-                                   l2_norm_of_original_obj,
-                                   l2_norm_of_distance_obj,
-                                   orig_obj_vector,
-                                   dist_base,
-                                   climber_obj);
-        std::copy(climber_obj.begin(), climber_obj.end(), h_batch_obj.begin() + (size_t)c * nvt);
-      }
-
+      t_phase     = timing_clock::now();
       auto& d_obj = op.get_objective_coefficients();
-      raft::copy(d_obj.data(), h_batch_obj.data(), obj_view, stream);
+      rmm::device_uvector<f_t> d_climber_alphas((size_t)try_n, stream);
+      raft::copy(d_climber_alphas.data(), climber_alphas.data(), try_n, stream);
+      const f_t* orig_obj_ptr = solution.problem_ptr->objective_coefficients.data();
+      const f_t* alpha_ptr    = d_climber_alphas.data();
+      f_t* obj_ptr            = d_obj.data();
+      thrust::for_each(solution.handle_ptr->get_thrust_policy(),
+                       thrust::make_counting_iterator<size_t>(0),
+                       thrust::make_counting_iterator<size_t>(obj_view),
+                       [=] __device__(size_t g) {
+                         const size_t c            = g / (size_t)nvt;
+                         const i_t loc             = (i_t)(g % (size_t)nvt);
+                         const f_t alpha           = alpha_ptr[c];
+                         const f_t distance_weight = (1. - alpha) / l2_norm_of_distance_obj;
+                         f_t orig_obj_weight       = alpha / l2_norm_of_original_obj;
+                         if (!isfinite(orig_obj_weight)) { orig_obj_weight = 0.; }
+                         const f_t dist_obj = loc >= n_vars ? f_t(1.) : f_t(0.);
+                         const f_t orig_obj = loc < n_vars ? orig_obj_ptr[loc] : f_t(0.);
+                         obj_ptr[g] = dist_obj * distance_weight + orig_obj_weight * orig_obj;
+                       });
+      solution.handle_ptr->sync_stream();
+      CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: objective build/upload %.3fs",
+                     trajectory,
+                     elapsed_since(t_phase));
 
+      t_phase                 = timing_clock::now();
       auto& d_clb             = op.get_constraint_lower_bounds();
       auto& d_cub             = op.get_constraint_upper_bounds();
       const f_t* base_clb_ptr = solution.problem_ptr->constraint_lower_bounds.data();
@@ -531,6 +438,10 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                            cub_ptr[g]    = cont_upper;
                          }
                        });
+      solution.handle_ptr->sync_stream();
+      CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: constraint bounds fill %.3fs",
+                     trajectory,
+                     elapsed_since(t_phase));
 
       pdlp_solver_settings_t<i_t, f_t> settings;
       settings.method           = cuopt::mathematical_optimization::method_t::PDLP;
@@ -540,8 +451,10 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       settings.time_limit =
         std::max(0.05, std::min((double)rlp_base, timer.remaining_time() / 10.));
       settings.set_optimality_tolerance(lp_tolerance);
+      settings.per_constraint_residual = true;
 
       {
+        t_phase             = timing_clock::now();
         const f_t* cloud_pp = d_batch_assignments.data();
         const f_t* vlb_ptr  = op.get_variable_lower_bounds().data();
         const f_t* vub_ptr  = op.get_variable_upper_bounds().data();
@@ -561,7 +474,12 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                          });
       }
       settings.set_initial_primal_solution(batch_primal_init.data(), (i_t)obj_view, stream);
+      solution.handle_ptr->sync_stream();
+      CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: primal init %.3fs",
+                     trajectory,
+                     elapsed_since(t_phase));
 
+      t_phase = timing_clock::now();
       const bool dual_warm_available =
         warm_start_n_points > 0 && warm_start_dual.size() >= (size_t)warm_start_n_points * nct;
       const size_t base_dual_size    = solution.lp_state.prev_dual.size();
@@ -600,7 +518,11 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
         CUOPT_LOG_INFO("Batch projection warm start: primal from current points (cold dual)");
       }
 
-      auto sol                = cuopt::mathematical_optimization::run_batch_pdlp(op, settings);
+      t_phase  = timing_clock::now();
+      auto sol = cuopt::mathematical_optimization::run_batch_pdlp(op, settings);
+      CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: run_batch_pdlp %.3fs",
+                     trajectory,
+                     elapsed_since(t_phase));
       auto& primal            = sol.get_primal_solution();
       auto& dual              = sol.get_dual_solution();
       const size_t exp_primal = (size_t)try_n * unified_n_vars_total;
@@ -648,26 +570,33 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
         n_points = 0;
         return;
       } else {
-        auto h_seed = cuopt::host_copy(d_batch_assignments.data(), (size_t)try_n * n_vars, stream);
-        auto h_primal = cuopt::host_copy(primal, stream);
-        solution.handle_ptr->sync_stream();
-        std::vector<f_t> projection_distances(try_n, 0.);
-        for (i_t c = 0; c < try_n; ++c) {
-          const f_t* projected = h_primal.data() + (size_t)c * nvt;
-          const f_t* seed      = h_seed.data() + (size_t)c * n_vars;
-          for (i_t col : h_integer_indices_cache) {
-            const f_t diff = projected[col] - seed[col];
-            projection_distances[c] += std::isfinite(diff) ? std::abs(diff) : (f_t)0.;
+        if (log_climber_stats) {
+          auto h_seed =
+            cuopt::host_copy(d_batch_assignments.data(), (size_t)try_n * n_vars, stream);
+          auto h_primal = cuopt::host_copy(primal, stream);
+          solution.handle_ptr->sync_stream();
+          std::vector<f_t> projection_distances(try_n, 0.);
+          for (i_t c = 0; c < try_n; ++c) {
+            const f_t* projected = h_primal.data() + (size_t)c * nvt;
+            const f_t* seed      = h_seed.data() + (size_t)c * n_vars;
+            for (i_t col : h_integer_indices_cache) {
+              const f_t diff = projected[col] - seed[col];
+              projection_distances[c] += std::isfinite(diff) ? std::abs(diff) : (f_t)0.;
+            }
           }
+          log_host_climber_stats("projected",
+                                 trajectory,
+                                 h_primal,
+                                 try_n,
+                                 nvt,
+                                 h_integer_indices_cache,
+                                 context.settings.tolerances.integrality_tolerance,
+                                 &projection_distances);
+          CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: stats/logging %.3fs",
+                         trajectory,
+                         elapsed_since(t_phase));
         }
-        log_host_climber_stats("projected",
-                               trajectory,
-                               h_primal,
-                               try_n,
-                               nvt,
-                               h_integer_indices_cache,
-                               context.settings.tolerances.integrality_tolerance,
-                               &projection_distances);
+        t_phase = timing_clock::now();
         for (i_t c = 0; c < try_n; ++c) {
           raft::copy(d_batch_assignments.data() + (size_t)c * n_vars,
                      primal.data() + (size_t)c * unified_n_vars_total,
@@ -677,11 +606,17 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
         raft::copy(warm_start_dual.data(), dual.data(), dual.size(), stream);
         warm_start_n_points = try_n;
         solution.handle_ptr->sync_stream();
+        CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: copy-back/warm-dual %.3fs",
+                       trajectory,
+                       elapsed_since(t_phase));
         if (try_n < n_points) {
           CUOPT_LOG_INFO(
             "Batch projection reduced cloud from %d to %d climbers after OOM", n_points, try_n);
         }
         n_points = try_n;
+        CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: total %.3fs",
+                       trajectory,
+                       elapsed_since(t_project_total));
         return;
       }
     } catch (const rmm::out_of_memory&) {
@@ -704,6 +639,9 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
     CUOPT_LOG_INFO("Batch projection OOM at %d climbers; halving batch size", try_n);
     try_n = std::max((i_t)1, try_n / 2);
   }
+  CUOPT_LOG_INFO("Batched FP trajectory %d projection timing: total %.3fs",
+                 trajectory,
+                 elapsed_since(t_project_total));
 }
 
 // One round of the original single-point FP applied to climber 0's projection (already loaded into
@@ -744,6 +682,7 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
       if (is_feasible) {
         bool res = solution.compute_feasibility();
         cuopt_assert(res, "Feasibility issue");
+        CUOPT_LOG_INFO("Feasible solution found in climber 0 cycle rounding");
         CUOPT_LOG_INFO("Climber 0 timing: total %.3fs", elapsed_since(t_total));
         return true;
       }
@@ -757,6 +696,7 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
 
   if (n_integers == solution.problem_ptr->n_integer_vars) {
     if (is_feasible) {
+      CUOPT_LOG_INFO("Feasible solution found in climber 0 projection");
       CUOPT_LOG_INFO("Climber 0 timing: total %.3fs", elapsed_since(t_total));
       return true;
     }
@@ -779,6 +719,7 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
       n_integers  = solution.compute_number_of_integers();
       CUOPT_LOG_INFO("Climber 0 timing: fixed-integer LP verify %.3fs", elapsed_since(t_phase));
       if (is_feasible && n_integers == solution.problem_ptr->n_integer_vars) {
+        CUOPT_LOG_INFO("Feasible solution found in climber 0 fixed-integer LP verify");
         CUOPT_LOG_INFO("Climber 0 timing: total %.3fs", elapsed_since(t_total));
         return true;
       }
@@ -793,7 +734,7 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
   proj_and_round_time = proj_begin - timer.remaining_time();
   if (!is_feasible) {
     t_phase     = timing_clock::now();
-    is_feasible = test_fj_feasible(solution, batch_config.fj_seed_time_ratio * proj_and_round_time);
+    is_feasible = test_fj_feasible(solution, batch_config.fj_ratio * proj_and_round_time);
     CUOPT_LOG_INFO("Climber 0 timing: FJ fallback %.3fs", elapsed_since(t_phase));
   }
   if (timer.check_time_limit()) {
@@ -803,6 +744,7 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
   if (is_feasible) {
     bool res = solution.compute_feasibility();
     cuopt_assert(res, "Feasibility issue");
+    CUOPT_LOG_INFO("Feasible solution found in climber 0 CP/FJ round");
     CUOPT_LOG_INFO("Climber 0 timing: total %.3fs", elapsed_since(t_total));
     return true;
   }
@@ -933,60 +875,50 @@ void feasibility_pump_t<i_t, f_t>::replace_flagged_climbers_diverse(
   auto stream       = solution.handle_ptr->get_stream();
   const i_t n_vars  = unified_n_vars;
   const f_t int_tol = context.settings.tolerances.integrality_tolerance;
-  auto h_assignment = cuopt::host_copy(solution.assignment, stream);
-  auto h_cloud      = cuopt::host_copy(d_cloud, stream);
-  solution.handle_ptr->sync_stream();
-
-  cloud_point_diversity_t<i_t, f_t> div(
-    h_integer_indices_cache, climber_hash_history, unified_n_int);
-  div.seed_from_cloud(h_cloud.data(), n_points, n_vars, &flagged);
-
-  std::uniform_real_distribution<double> unit(0., 1.);
-  constexpr double perturb_ratio = 0.1;
-  constexpr i_t max_attempts     = 64;
-
-  auto perturb_point = [&](std::vector<f_t>& pt) {
-    for (i_t k = 0; k < unified_n_int; ++k) {
-      if (unit(rng) >= perturb_ratio) continue;
-      i_t col = h_integer_indices_cache[k];
-      f_t lb  = h_var_lower[col];
-      f_t ub  = h_var_upper[col];
-      if (lb == -std::numeric_limits<f_t>::infinity()) {
-        pt[col] = std::floor(ub + int_tol);
-      } else if (ub == std::numeric_limits<f_t>::infinity()) {
-        pt[col] = std::ceil(lb - int_tol);
-      } else {
-        std::uniform_int_distribution<i_t> unif((i_t)std::ceil(lb - int_tol),
-                                                (i_t)std::floor(ub + int_tol));
-        pt[col] = unif(rng);
-      }
-    }
-  };
-
+  rmm::device_uvector<char> d_flagged((size_t)n_points, stream);
+  raft::copy(d_flagged.data(), flagged.data(), n_points, stream);
+  const f_t* assignment = solution.assignment.data();
+  f_t* cloud            = d_cloud.data();
+  const char* flags     = d_flagged.data();
+  thrust::for_each(solution.handle_ptr->get_thrust_policy(),
+                   thrust::make_counting_iterator<size_t>(0),
+                   thrust::make_counting_iterator<size_t>((size_t)n_points * n_vars),
+                   [=] __device__(size_t g) {
+                     const i_t climber = (i_t)(g / (size_t)n_vars);
+                     if (climber == 0 || flags[climber] == 0) { return; }
+                     const i_t j = (i_t)(g % (size_t)n_vars);
+                     cloud[g]    = assignment[j];
+                   });
+  const i_t* d_int_cols       = solution.problem_ptr->integer_indices.data();
+  const f_t* d_vlb            = unified_problem->get_variable_lower_bounds().data();
+  const f_t* d_vub            = unified_problem->get_variable_upper_bounds().data();
+  const i_t n_int             = unified_n_int;
+  constexpr f_t perturb_ratio = 0.1;
+  const uint64_t seed         = (uint64_t)rng();
+  thrust::for_each(solution.handle_ptr->get_thrust_policy(),
+                   thrust::make_counting_iterator<size_t>(0),
+                   thrust::make_counting_iterator<size_t>((size_t)n_points * n_int),
+                   [=] __device__(size_t g) {
+                     const i_t climber = (i_t)(g / (size_t)n_int);
+                     if (climber == 0 || flags[climber] == 0) { return; }
+                     const i_t k   = (i_t)(g % (size_t)n_int);
+                     const i_t col = d_int_cols[k];
+                     f_t val       = assignment[col];
+                     raft::random::PCGenerator rng(
+                       seed, (uint64_t)climber * (uint64_t)n_int + (uint64_t)k, 0);
+                     if (rng.next_float() < perturb_ratio) {
+                       f_t int_lb = ceil(d_vlb[col] - int_tol);
+                       f_t int_ub = floor(d_vub[col] + int_tol);
+                       if (int_lb <= int_ub) {
+                         f_t span = int_ub - int_lb + 1.;
+                         val      = int_lb + floor(rng.next_float() * span);
+                       }
+                     }
+                     cloud[(size_t)climber * (size_t)n_vars + (size_t)col] = val;
+                   });
   for (i_t c = 1; c < n_points; ++c) {
-    if (!flagged[c]) continue;
-    std::vector<f_t> pt(h_assignment.begin(), h_assignment.begin() + n_vars);
-    bool placed = false;
-    for (i_t attempt = 0; attempt < max_attempts; ++attempt) {
-      pt = std::vector<f_t>(h_assignment.begin(), h_assignment.begin() + n_vars);
-      perturb_point(pt);
-      if (div.passes_diversity(pt.data())) {
-        div.accept(pt.data());
-        std::copy(pt.begin(), pt.end(), h_cloud.begin() + (size_t)c * n_vars);
-        n_diverse++;
-        placed = true;
-        break;
-      }
-    }
-    if (!placed) {
-      pt = std::vector<f_t>(h_assignment.begin(), h_assignment.begin() + n_vars);
-      perturb_point(pt);
-      div.accept(pt.data());
-      std::copy(pt.begin(), pt.end(), h_cloud.begin() + (size_t)c * n_vars);
-      n_fallback++;
-    }
+    n_diverse += flagged[c];
   }
-  raft::copy(d_cloud.data(), h_cloud.data(), (size_t)n_points * n_vars, stream);
   solution.handle_ptr->sync_stream();
 }
 
@@ -1074,7 +1006,11 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
 
   const i_t batch_size = compute_cloud_batch_size(solution);
   if (batch_size == 0) { return run_single_fp_descent(solution); }
-  expand_unified_projection_batch_buffers(solution, batch_size);
+  const size_t expected_obj_size = (size_t)batch_size * unified_n_vars_total;
+  if (cloud_batch_capacity != batch_size ||
+      unified_problem->get_objective_coefficients().size() != expected_obj_size) {
+    expand_unified_projection_batch_buffers(solution, batch_size);
+  }
 
   auto stream         = solution.handle_ptr->get_stream();
   warm_start_n_points = 0;
@@ -1168,24 +1104,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
         n_points);
     }
     if (n_points == 0) {
-      CUOPT_LOG_INFO(
-        "Batched FP trajectory %d: projection produced no usable solution; single-round fallback",
-        trajectory);
-      auto t_fallback  = timing_clock::now();
-      bool is_feasible = round(solution);
-      CUOPT_LOG_INFO("Batched FP trajectory %d timing: projection-fallback round %.3fs",
-                     trajectory,
-                     elapsed_since(t_fallback));
-      if (is_feasible && solution.compute_feasibility()) {
-        CUOPT_LOG_INFO("New feasible solution via rounding fallback (objective %g)",
-                       solution.get_user_objective());
-        CUOPT_LOG_INFO(
-          "Batched FP trajectory %d timing: total %.3fs", trajectory, elapsed_since(t_iter));
-        return true;
-      }
-      CUOPT_LOG_INFO(
-        "Batched FP trajectory %d timing: total %.3fs", trajectory, elapsed_since(t_iter));
-      return false;
+      cuopt_expects(false, error_type_t::RuntimeError, "Projection produced no usable solution");
     }
     if ((i_t)climber_alphas.size() > n_points) { climber_alphas.resize(n_points); }
     if ((i_t)climber_hash_history.size() > n_points) { climber_hash_history.resize(n_points); }
@@ -1206,11 +1125,13 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
     // Best feasible found this trajectory across climber 0 and the diversity climbers.
     f_t best_obj       = inf;
     bool have_feasible = false;
+    i_t best_climber   = -1;
     if (feasible0) {
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
       best_obj      = solution.get_objective();
       have_feasible = true;
+      best_climber  = 0;
       raft::copy(cand_best.data(), solution.assignment.data(), n_vars, stream);
       solution.handle_ptr->sync_stream();
     }
@@ -1231,12 +1152,48 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
     // ---- Device-confirm host-feasible diversity climbers; keep the best objective ----
     {
       auto t_feas_div = timing_clock::now();
-      auto h_cloud    = cuopt::host_copy(d_batch_assignments, stream);
+      rmm::device_uvector<int> d_diversity_feasible((size_t)n_points, stream);
+      thrust::fill(solution.handle_ptr->get_thrust_policy(),
+                   d_diversity_feasible.begin(),
+                   d_diversity_feasible.end(),
+                   1);
+      if (n_points > 0) {
+        thrust::fill(solution.handle_ptr->get_thrust_policy(),
+                     d_diversity_feasible.begin(),
+                     d_diversity_feasible.begin() + 1,
+                     0);
+      }
+      const f_t* assignments = d_batch_assignments.data();
+      const i_t* offsets     = solution.problem_ptr->offsets.data();
+      const i_t* indices     = solution.problem_ptr->variables.data();
+      const f_t* values      = solution.problem_ptr->coefficients.data();
+      const f_t* lower       = solution.problem_ptr->constraint_lower_bounds.data();
+      const f_t* upper       = solution.problem_ptr->constraint_upper_bounds.data();
+      int* feasible_flags    = d_diversity_feasible.data();
+      const f_t tol          = context.settings.tolerances.absolute_tolerance;
+      const i_t n_constr     = unified_n_constr;
+      const i_t n_vars_l     = n_vars;
+      thrust::for_each(solution.handle_ptr->get_thrust_policy(),
+                       thrust::make_counting_iterator<size_t>(0),
+                       thrust::make_counting_iterator<size_t>((size_t)n_points * n_constr),
+                       [=] __device__(size_t g) {
+                         const i_t c = (i_t)(g / (size_t)n_constr);
+                         if (c == 0) { return; }
+                         const i_t r = (i_t)(g % (size_t)n_constr);
+                         f_t act     = 0.;
+                         for (i_t p = offsets[r]; p < offsets[r + 1]; ++p) {
+                           act +=
+                             values[p] * assignments[(size_t)c * (size_t)n_vars_l + indices[p]];
+                         }
+                         if (act < lower[r] - tol || act > upper[r] + tol) {
+                           atomicExch(feasible_flags + c, 0);
+                         }
+                       });
+      auto h_feasible = cuopt::host_copy(d_diversity_feasible, stream);
       solution.handle_ptr->sync_stream();
       i_t n_feas_div = 0;
       for (i_t c = 1; c < n_points; ++c) {
-        const f_t* seed_c = h_cloud.data() + (size_t)c * n_vars;
-        if (!host_assignment_feasible(seed_c)) continue;
+        if (h_feasible[c] == 0) continue;
         raft::copy(solution.assignment.data(),
                    d_batch_assignments.data() + (size_t)c * n_vars,
                    n_vars,
@@ -1248,6 +1205,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
           if (obj < best_obj) {
             best_obj      = obj;
             have_feasible = true;
+            best_climber  = c;
             raft::copy(cand_best.data(), solution.assignment.data(), n_vars, stream);
             solution.handle_ptr->sync_stream();
           }
@@ -1276,9 +1234,17 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       solution.handle_ptr->sync_stream();
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
-      CUOPT_LOG_INFO("New feasible solution at trajectory %d (objective %g)",
-                     trajectory,
-                     solution.get_user_objective());
+      if (best_climber == 0) {
+        CUOPT_LOG_INFO("New feasible solution found at trajectory %d by climber 0 (objective %g)",
+                       trajectory,
+                       solution.get_user_objective());
+      } else {
+        CUOPT_LOG_INFO(
+          "New feasible solution found at trajectory %d by diversity climber %d (objective %g)",
+          trajectory,
+          best_climber,
+          solution.get_user_objective());
+      }
       CUOPT_LOG_INFO(
         "Batched FP trajectory %d timing: total %.3fs", trajectory, elapsed_since(t_iter));
       return true;
@@ -1346,13 +1312,15 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
                      trajectory);
       auto t_restart = timing_clock::now();
       if (restart_fp(solution)) {
+        CUOPT_LOG_INFO("New feasible solution found at trajectory %d by climber 0 restart",
+                       trajectory);
         CUOPT_LOG_INFO(
           "Batched FP trajectory %d timing: restart %.3fs", trajectory, elapsed_since(t_restart));
         CUOPT_LOG_INFO(
           "Batched FP trajectory %d timing: total %.3fs", trajectory, elapsed_since(t_iter));
         return true;
       }
-      solution.round_nearest();
+      cuopt_assert(solution.test_number_all_integer(), "Restarted climber 0 must be integer");
       climber0_int_ratio = (f_t)solution.n_assigned_integers / solution.problem_ptr->n_integer_vars;
       raft::copy(
         last_rounding.data(), solution.assignment.data(), solution.assignment.size(), stream);
