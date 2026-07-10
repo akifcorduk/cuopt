@@ -115,6 +115,36 @@ struct fp_batch_config_t {
 };
 
 template <typename i_t, typename f_t>
+struct fp_iteration_metrics_t {
+  i_t iteration                       = 0;
+  i_t batch_size                      = 1;
+  i_t projected_integers              = 0;
+  i_t projection_violated_constraints = 0;
+  f_t projection_l1_distance          = 0.;
+  f_t projection_total_violation      = 0.;
+  double projection_time              = 0.;
+  i_t rounded_integers                = 0;
+  i_t rounding_violated_constraints   = 0;
+  f_t rounding_l1_movement            = 0.;
+  f_t rounding_total_violation        = 0.;
+  double rounding_time                = 0.;
+  bool projection_feasible            = false;
+  bool rounding_feasible              = false;
+  bool cycle                          = false;
+  i_t cycle_kind                      = 0;
+  bool perturbed                      = false;
+  bool timed_out                      = false;
+  bool feasible                       = false;
+};
+
+template <typename i_t, typename f_t>
+struct fp_run_metrics_t {
+  std::vector<fp_iteration_metrics_t<i_t, f_t>> iterations;
+  i_t feasible_events = 0;
+  double total_time   = 0.;
+};
+
+template <typename i_t, typename f_t>
 class feasibility_pump_t {
  public:
   feasibility_pump_t() = delete;
@@ -137,9 +167,8 @@ class feasibility_pump_t {
   bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
 
   bool run_batched_fp_cloud(solution_t<i_t, f_t>& solution);
-  // Builds the fixed unified projection problem once (one aux distance var + 2 abs-value
-  // constraints per integer variable). Per-climber variation is in the added constraints'
-  // lower bounds (+/- val_j) and per-climber alpha-blended objectives.
+  // Builds the fixed unified projection problem once. Binary distance is represented directly in
+  // each climber's objective; non-binary integers use one aux distance var and 2 abs-value rows.
   void build_unified_projection_problem(solution_t<i_t, f_t>& solution);
   // Pre-expands per-climber PDLP problem fields and warm-start buffers to batch_capacity (call once
   // after compute_cloud_batch_size).
@@ -167,7 +196,10 @@ class feasibility_pump_t {
   // then the 20% FJ fallback. Uses the shared FP trajectory state (last_rounding, last_projection,
   // last_distances, alpha, cycle_queue). Returns whether climber 0 reached feasibility; sets
   // climber0_cycle when climber 0 cycled and should be restarted.
-  bool run_climber0_step(solution_t<i_t, f_t>& solution, f_t proj_begin, bool& climber0_cycle);
+  bool run_climber0_step(solution_t<i_t, f_t>& solution,
+                         f_t proj_begin,
+                         bool& climber0_cycle,
+                         i_t batch_size);
   void advance_diversity_climbers_gpu(solution_t<i_t, f_t>& solution,
                                       i_t n_points,
                                       rmm::device_uvector<f_t>& d_batch_assignments,
@@ -200,6 +232,12 @@ class feasibility_pump_t {
   bool test_fj_feasible(solution_t<i_t, f_t>& solution,
                         f_t time_limit,
                         i_t trajectory_capacity = 0);
+  void record_projection_metrics(solution_t<i_t, f_t>& solution,
+                                 i_t n_integers,
+                                 i_t batch_size,
+                                 double elapsed);
+  void record_rounding_metrics(solution_t<i_t, f_t>& solution, bool is_feasible, double elapsed);
+  void finish_iteration_metrics(bool cycle, bool timed_out, bool feasible);
 
   mip_solver_context_t<i_t, f_t>& context;
   // keep a reference from upstream local search
@@ -218,11 +256,12 @@ class feasibility_pump_t {
   // Cached unified projection problem (fixed structure across climbers and outer iterations).
   std::unique_ptr<cuopt::mathematical_optimization::optimization_problem_t<i_t, f_t>>
     unified_problem;
-  i_t unified_n_int           = 0;  // number of integer variables (== number of aux distance vars)
+  i_t unified_n_int           = 0;  // number of integer variables
+  i_t unified_n_aux           = 0;  // non-binary integers represented by auxiliary distance vars
   i_t unified_n_vars          = 0;  // original n_variables (without aux distance vars)
   i_t unified_n_vars_total    = 0;  // original + aux distance vars
   i_t unified_n_constr        = 0;  // original n_constraints (without abs-value constraints)
-  i_t unified_n_constr_total  = 0;  // original + 2 * n_int abs-value constraints
+  i_t unified_n_constr_total  = 0;  // original + 2 * n_aux abs-value constraints
   i_t cloud_batch_capacity    = 0;  // per-climber PDLP buffers expanded to this many climbers
   i_t cached_cloud_batch_size = -1;
   // Pre-allocated warm-start / projection buffers (sized once in
@@ -231,14 +270,15 @@ class feasibility_pump_t {
   rmm::device_uvector<f_t> batch_dual_init;
   rmm::device_uvector<char> dual_reuse_flags;
   // Host copies needed to rebuild per-iteration objective / per-climber constraint bounds.
-  std::vector<i_t> h_integer_indices_cache;  // integer variable column indices
-  std::vector<f_t> h_base_constraint_lower;  // original constraint lower bounds
-  std::vector<f_t> h_base_constraint_upper;  // original constraint upper bounds
-  std::vector<f_t> h_var_lower;              // original variable lower bounds
-  std::vector<f_t> h_var_upper;              // original variable upper bounds
+  std::vector<i_t> h_integer_indices_cache;      // integer variable column indices
+  std::vector<i_t> h_aux_integer_indices_cache;  // non-binary integer column indices
+  std::vector<f_t> h_base_constraint_lower;      // original constraint lower bounds
+  std::vector<f_t> h_base_constraint_upper;      // original constraint upper bounds
+  std::vector<f_t> h_var_lower;                  // original variable lower bounds
+  std::vector<f_t> h_var_upper;                  // original variable upper bounds
   f_t best_excess;
   rmm::device_uvector<f_t>& lp_optimal_solution;
-  std::mt19937 rng;
+  std::mt19937 diversity_rng;
   std::deque<f_t> last_distances;
   f_t last_lp_time;
   f_t total_fp_time_until_cycle;
@@ -248,6 +288,7 @@ class feasibility_pump_t {
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
+  fp_run_metrics_t<i_t, f_t>* metrics = nullptr;
   // Per-climber alpha for the distance/original-objective blend in batch projection. Slot 0 mirrors
   // config.alpha; reset to default_alpha when a diversity climber is freshly seeded (FJ trajectory
   // or perturbed LP-optimal padding).

@@ -20,6 +20,7 @@
 #include <pdlp/pdlp.cuh>
 #include <pdlp/solve.cuh>
 
+#include <chrono>
 #include <cmath>
 
 #include <utilities/copy_helpers.hpp>
@@ -58,13 +59,71 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     orig_variable_types(context.problem_ptr->n_variables,
                         context.problem_ptr->handle_ptr->get_stream()),
     lp_optimal_solution(lp_optimal_solution_),
-    rng(cuopt::seed_generator::get_seed()),
+    diversity_rng(cuopt::seed_generator::get_seed()),
     timer(20.),
     batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream()),
     batch_dual_init(0, context.problem_ptr->handle_ptr->get_stream()),
     dual_reuse_flags(0, context.problem_ptr->handle_ptr->get_stream()),
     warm_start_dual(0, context.problem_ptr->handle_ptr->get_stream())
 {
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::record_projection_metrics(solution_t<i_t, f_t>& solution,
+                                                             i_t n_integers,
+                                                             i_t batch_size,
+                                                             double elapsed)
+{
+  if (metrics == nullptr) { return; }
+  auto stream = solution.handle_ptr->get_stream();
+  solution.handle_ptr->sync_stream();
+  auto& entry                  = metrics->iterations.emplace_back();
+  entry.iteration              = (i_t)metrics->iterations.size() - 1;
+  entry.batch_size             = batch_size;
+  entry.projection_time        = elapsed;
+  entry.projected_integers     = n_integers;
+  entry.projection_l1_distance = compute_l1_distance<i_t, f_t>(
+    solution.problem_ptr->integer_indices, last_rounding, last_projection, solution.handle_ptr);
+  entry.projection_feasible        = solution.get_feasible();
+  entry.projection_total_violation = solution.get_total_excess();
+  entry.projection_violated_constraints =
+    solution.problem_ptr->n_constraints - solution.n_feasible_constraints.value(stream);
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::record_rounding_metrics(solution_t<i_t, f_t>& solution,
+                                                           bool is_feasible,
+                                                           double elapsed)
+{
+  if (metrics == nullptr) { return; }
+  cuopt_assert(!metrics->iterations.empty(), "Projection metrics must precede rounding metrics");
+  auto stream = solution.handle_ptr->get_stream();
+  solution.handle_ptr->sync_stream();
+  auto& entry                = metrics->iterations.back();
+  entry.rounding_time        = elapsed;
+  entry.rounded_integers     = solution.compute_number_of_integers();
+  entry.rounding_l1_movement = compute_l1_distance<i_t, f_t>(solution.problem_ptr->integer_indices,
+                                                             last_projection,
+                                                             solution.assignment,
+                                                             solution.handle_ptr);
+  entry.rounding_feasible    = is_feasible;
+  entry.rounding_total_violation = solution.get_total_excess();
+  entry.rounding_violated_constraints =
+    solution.problem_ptr->n_constraints - solution.n_feasible_constraints.value(stream);
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::finish_iteration_metrics(bool cycle,
+                                                            bool timed_out,
+                                                            bool feasible)
+{
+  if (metrics == nullptr) { return; }
+  cuopt_assert(!metrics->iterations.empty(), "Projection metrics must precede iteration outcome");
+  auto& entry     = metrics->iterations.back();
+  entry.cycle     = cycle;
+  entry.timed_out = timed_out;
+  entry.feasible  = feasible;
+  metrics->feasible_events += feasible;
 }
 
 template <typename Iter_T>
@@ -403,6 +462,10 @@ void feasibility_pump_t<i_t, f_t>::reset()
   max_n_of_integers         = 0;
   config.alpha              = default_alpha;
   last_distances.resize(0);
+  thrust::fill(context.problem_ptr->handle_ptr->get_thrust_policy(),
+               last_projection.begin(),
+               last_projection.end(),
+               std::numeric_limits<f_t>::quiet_NaN());
 }
 
 template <typename i_t, typename f_t>
@@ -494,6 +557,7 @@ template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
+  using timing_clock = std::chrono::steady_clock;
   // start by doing nearest rounding
   solution.round_nearest();
   raft::copy(last_rounding.data(),
@@ -510,28 +574,43 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     // pass n_assigned_integers from the previous iteration
     f_t ratio_of_assigned_integers =
       f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
+    if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
+    const auto projection_begin = timing_clock::now();
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
-    i_t n_integers   = solution.compute_number_of_integers();
+    if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
+    const double projection_time =
+      std::chrono::duration<double>(timing_clock::now() - projection_begin).count();
+    i_t n_integers = solution.compute_number_of_integers();
     CUOPT_LOG_INFO("after fp projection n_integers %d total n_integes %d",
                    n_integers,
                    solution.problem_ptr->n_integer_vars);
+    record_projection_metrics(solution, n_integers, 1, projection_time);
     bool is_cycle = true;
     // temp comment for presolve run
     if (config.check_distance_cycle) {
       // use distance cycle if we are running ii or objective FP
       is_cycle = check_distance_cycle(solution);
       if (is_cycle) {
-        is_feasible = round(solution);
+        if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
+        const auto rounding_begin = timing_clock::now();
+        is_feasible               = round(solution);
+        if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
+        record_rounding_metrics(
+          solution,
+          is_feasible,
+          std::chrono::duration<double>(timing_clock::now() - rounding_begin).count());
         cuopt_func_call(solution.test_variable_bounds(true));
         if (is_feasible) {
           bool res = solution.compute_feasibility();
           cuopt_assert(res, "Feasibility issue");
+          finish_iteration_metrics(true, false, true);
           return true;
         }
         cuopt::default_logger().flush();
         f_t remaining_time_end_fp = timer.remaining_time();
         total_fp_time_until_cycle = fp_fj_cycle_time_begin - remaining_time_end_fp;
         CUOPT_LOG_INFO("total_fp_time_until_cycle: %f", total_fp_time_until_cycle);
+        finish_iteration_metrics(true, false, false);
         return false;
       }
     }
@@ -539,6 +618,7 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     if (n_integers == solution.problem_ptr->n_integer_vars) {
       if (is_feasible) {
         CUOPT_LOG_INFO("Feasible solution found after LP with relative tolerance");
+        finish_iteration_metrics(false, false, true);
         return true;
       }
       // if the solution is almost on polytope
@@ -562,12 +642,20 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
         n_integers  = solution.compute_number_of_integers();
         if (is_feasible && n_integers == solution.problem_ptr->n_integer_vars) {
           CUOPT_LOG_INFO("Feasible solution verified with LP!");
+          finish_iteration_metrics(false, false, true);
           return true;
         }
       }
     }
     cuopt_func_call(solution.test_variable_bounds(false));
-    is_feasible = round(solution);
+    if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
+    const auto rounding_begin = timing_clock::now();
+    is_feasible               = round(solution);
+    if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
+    record_rounding_metrics(
+      solution,
+      is_feasible,
+      std::chrono::duration<double>(timing_clock::now() - rounding_begin).count());
     cuopt_func_call(solution.test_variable_bounds(true));
     proj_and_round_time = proj_begin - timer.remaining_time();
     if (!is_feasible) {
@@ -577,10 +665,12 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     if (is_feasible) {
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
+      finish_iteration_metrics(false, false, true);
       return true;
     }
     if (timer.check_time_limit()) {
       CUOPT_LOG_INFO("FP time limit reached!");
+      finish_iteration_metrics(false, true, false);
       return false;
     }
     // do the cycle check if alpha diff is small enough
@@ -598,9 +688,11 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
         remaining_time_end_fp,
         fp_fj_cycle_time_begin,
         total_fp_time_until_cycle);
+      finish_iteration_metrics(true, false, false);
       return false;
     }
     cycle_queue.n_iterations_without_cycle++;
+    finish_iteration_metrics(false, false, false);
   }
   // unreachable
   return false;

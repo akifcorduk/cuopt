@@ -767,9 +767,20 @@ endif ()
 option(BUILD_MIP_BENCHMARKS "Build MIP benchmarks" OFF)
 if (BUILD_MIP_BENCHMARKS AND NOT BUILD_LP_ONLY)
     add_executable(solve_MIP ../benchmarks/linear_programming/cuopt/run_mip.cpp)
+    add_executable(fp_regression
+            src/mip_heuristics/local_search/feasibility_pump/fp_regression.cu
+            src/mip_heuristics/local_search/feasibility_pump/vanilla_fp.cu
+    )
     target_include_directories(solve_MIP
             PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    )
+    target_include_directories(fp_regression
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            "${dejavu_SOURCE_DIR}"
             PUBLIC
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     )
@@ -778,8 +789,16 @@ if (BUILD_MIP_BENCHMARKS AND NOT BUILD_LP_ONLY)
             PROPERTIES
             CXX_SCAN_FOR_MODULES OFF
     )
+    set_target_properties(fp_regression
+            PROPERTIES
+            CXX_SCAN_FOR_MODULES OFF
+    )
 
     target_compile_options(solve_MIP
+            PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CUOPT_CXX_FLAGS}>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:${CUOPT_CUDA_FLAGS}>"
+    )
+    target_compile_options(fp_regression
             PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CUOPT_CXX_FLAGS}>"
             "$<$<COMPILE_LANGUAGE:CUDA>:${CUOPT_CUDA_FLAGS}>"
     )
@@ -789,11 +808,23 @@ if (BUILD_MIP_BENCHMARKS AND NOT BUILD_LP_ONLY)
             OpenMP::OpenMP_CXX
             PRIVATE
     )
+    target_link_libraries(fp_regression
+            PUBLIC
+            cuopt
+            OpenMP::OpenMP_CXX
+            PRIVATE
+            argparse::argparse
+    )
     if (NOT DEFINED INSTALL_TARGET OR "${INSTALL_TARGET}" STREQUAL "")
         target_link_options(solve_MIP PRIVATE -Wl,--enable-new-dtags)
+        target_link_options(fp_regression PRIVATE -Wl,--enable-new-dtags)
     endif ()
 
     target_include_directories(solve_MIP
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_include_directories(fp_regression
             PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
