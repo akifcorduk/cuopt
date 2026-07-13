@@ -727,6 +727,7 @@ pdlp_solver_t<i_t, f_t>::finalize_best_primal_batch_return(
       info.solved_by = method_t::PDLP;
     }
   }
+  RAFT_CUDA_TRY(cudaStreamSynchronize(stream_view_));
 
   return optimization_problem_solution_t<i_t, f_t>{
     best_primal_solution_so_far.get_primal_solution(),
