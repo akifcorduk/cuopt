@@ -390,6 +390,8 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
         std::max(0.05, std::min((double)rlp_base, timer.remaining_time() / 10.));
       settings.set_optimality_tolerance(lp_tolerance);
       settings.per_constraint_residual = true;
+      settings.save_best_primal_so_far = true;
+      settings.detect_infeasibility    = false;
 
       {
         const f_t* cloud_pp            = d_batch_assignments.data();

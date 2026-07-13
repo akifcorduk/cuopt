@@ -2889,7 +2889,7 @@ TEST(pdlp_class, run_batch_pdlp_rejects_invalid_new_bounds)
   }
 }
 
-TEST(pdlp_class, run_batch_pdlp_rejects_save_best_primal_so_far)
+TEST(pdlp_class, run_batch_pdlp_saves_best_primal_so_far)
 {
   const raft::handle_t handle_{};
   auto path = make_path_absolute("linear_programming/afiro_original.mps");
@@ -2907,6 +2907,7 @@ TEST(pdlp_class, run_batch_pdlp_rejects_save_best_primal_so_far)
     settings.presolver                           = presolver_t::None;
     settings.generate_batch_primal_dual_solution = true;
     settings.save_best_primal_so_far             = true;
+    settings.iteration_limit                     = 2;
     const int var_id                             = 0;
     settings.new_bounds.push_back({0,
                                    var_id,
@@ -2918,7 +2919,9 @@ TEST(pdlp_class, run_batch_pdlp_rejects_save_best_primal_so_far)
                                    op_problem.get_variable_upper_bounds()[var_id]});
 
     auto sol = cuopt::mathematical_optimization::run_batch_pdlp(gpu_op, settings);
-    EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+    EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::Success);
+    EXPECT_EQ(sol.get_primal_solution().size(), 2 * op_problem.get_n_variables());
+    EXPECT_EQ(sol.get_terminations_status().size(), 2);
   }
 
   // Fixed-batch path: trigger batch mode via fixed_batch_size with shared (size == n) buffers.
@@ -2933,9 +2936,12 @@ TEST(pdlp_class, run_batch_pdlp_rejects_save_best_primal_so_far)
     settings.fixed_batch_size                    = 2;
     settings.generate_batch_primal_dual_solution = true;
     settings.save_best_primal_so_far             = true;
+    settings.iteration_limit                     = 2;
 
     auto sol = cuopt::mathematical_optimization::run_batch_pdlp(gpu_op, settings);
-    EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+    EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::Success);
+    EXPECT_EQ(sol.get_primal_solution().size(), 2 * op_problem.get_n_variables());
+    EXPECT_EQ(sol.get_terminations_status().size(), 2);
   }
 }
 

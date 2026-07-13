@@ -268,10 +268,6 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
   cuopt_expects(batch_mode_ || !settings_.all_primal_feasible,
                 error_type_t::ValidationError,
                 "all_primal_feasible only applies in batch mode");
-  cuopt_expects(!(settings_.save_best_primal_so_far && batch_mode_),
-                error_type_t::ValidationError,
-                "save_best_primal_so_far is not supported in batch mode. Disable batch mode "
-                "(no fixed_batch_size and no new_bounds) or unset save_best_primal_so_far.");
 
   // Set step_size initial scaling
   thrust::fill(handle_ptr_->get_thrust_policy(),
@@ -349,6 +345,7 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
   best_primal_quality_so_far_.primal_objective = (op_problem_scaled_.maximize)
                                                    ? -std::numeric_limits<f_t>::infinity()
                                                    : std::numeric_limits<f_t>::infinity();
+  best_kkt_score_so_far_batch_.resize(original_batch_size_, std::numeric_limits<f_t>::infinity());
   op_problem.check_problem_representation(true, false);
 
   if (batch_mode_) {
@@ -361,6 +358,17 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
       op_problem.n_constraints * original_batch_size_, stream_view_);
     batch_solution_to_return_.get_reduced_cost().resize(
       op_problem.n_variables * original_batch_size_, stream_view_);
+    if (settings_.save_best_primal_so_far) {
+      best_primal_solution_so_far.get_additional_termination_informations().resize(
+        original_batch_size_);
+      best_primal_solution_so_far.get_terminations_status().resize(original_batch_size_);
+      best_primal_solution_so_far.get_primal_solution().resize(
+        op_problem.n_variables * original_batch_size_, stream_view_);
+      best_primal_solution_so_far.get_dual_solution().resize(
+        op_problem.n_constraints * original_batch_size_, stream_view_);
+      best_primal_solution_so_far.get_reduced_cost().resize(
+        op_problem.n_variables * original_batch_size_, stream_view_);
+    }
   }
   for (size_t i = 0; i < climber_strategies_.size(); ++i) {
     climber_strategies_[i].original_index = static_cast<int>(i);
@@ -453,6 +461,9 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
   // Check for time limit
   if (time_limit_reached(timer)) {
     if (settings_.save_best_primal_so_far) {
+      if (batch_mode_) {
+        return finalize_best_primal_batch_return(pdlp_termination_status_t::TimeLimit);
+      }
 #ifdef PDLP_VERBOSE_MODE
       RAFT_CUDA_TRY(cudaDeviceSynchronize());
       std::cout << "Time Limit reached, returning best primal so far" << std::endl;
@@ -485,6 +496,9 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
   // Check for iteration limit
   if (internal_solver_iterations_ >= settings_.iteration_limit) {
     if (settings_.save_best_primal_so_far) {
+      if (batch_mode_) {
+        return finalize_best_primal_batch_return(pdlp_termination_status_t::IterationLimit);
+      }
 #ifdef PDLP_VERBOSE_MODE
       RAFT_CUDA_TRY(cudaDeviceSynchronize());
       std::cout << "Iteration Limit reached, returning best primal so far" << std::endl;
@@ -680,6 +694,53 @@ void pdlp_solver_t<i_t, f_t>::record_best_primal_so_far(
 }
 
 template <typename i_t, typename f_t>
+void pdlp_solver_t<i_t, f_t>::record_best_primal_so_far_batch()
+{
+  cuopt_assert(batch_mode_, "Batch best-primal recording requires batch mode");
+  const auto& convergence = current_termination_strategy_.get_convergence_information();
+
+  for (size_t i = 0; i < climber_strategies_.size(); ++i) {
+    const size_t original_index = climber_strategies_[i].original_index;
+    const f_t kkt_score = restart_strategy_.compute_kkt_score(convergence.get_l2_primal_residual(),
+                                                              convergence.get_l2_dual_residual(),
+                                                              convergence.get_gap(),
+                                                              primal_weight_,
+                                                              i);
+    if (kkt_score < best_kkt_score_so_far_batch_[original_index]) {
+      best_kkt_score_so_far_batch_[original_index] = kkt_score;
+      snapshot_best_primal_climber(i);
+    }
+  }
+}
+
+template <typename i_t, typename f_t>
+optimization_problem_solution_t<i_t, f_t>
+pdlp_solver_t<i_t, f_t>::finalize_best_primal_batch_return(
+  pdlp_termination_status_t fallback_status)
+{
+  for (size_t i = 0; i < climber_strategies_.size(); ++i) {
+    const auto original_index = climber_strategies_[i].original_index;
+    best_primal_solution_so_far.get_terminations_status()[original_index] = fallback_status;
+    auto& info =
+      best_primal_solution_so_far.get_additional_termination_informations()[original_index];
+    if (fallback_status != pdlp_termination_status_t::ConcurrentLimit) {
+      info.solved_by = method_t::PDLP;
+    }
+  }
+
+  return optimization_problem_solution_t<i_t, f_t>{
+    best_primal_solution_so_far.get_primal_solution(),
+    best_primal_solution_so_far.get_dual_solution(),
+    best_primal_solution_so_far.get_reduced_cost(),
+    get_filled_warmed_start_data(),
+    problem_ptr->objective_name,
+    problem_ptr->var_names,
+    problem_ptr->row_names,
+    std::move(best_primal_solution_so_far.get_additional_termination_informations()),
+    std::move(best_primal_solution_so_far.get_terminations_status())};
+}
+
+template <typename i_t, typename f_t>
 pdlp_warm_start_data_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::get_filled_warmed_start_data()
 {
   if (batch_mode_)
@@ -750,6 +811,60 @@ void pdlp_solver_t<i_t, f_t>::print_final_termination_criteria(
 }
 
 template <typename i_t, typename f_t>
+void pdlp_solver_t<i_t, f_t>::snapshot_best_primal_climber(size_t i)
+{
+  // Temporary experimental batch support; remove this path if save-best experiments are dropped.
+  cuopt_assert(i < climber_strategies_.size(), "Climber index out of bounds");
+  const size_t original_index = climber_strategies_[i].original_index;
+  cuopt_assert(original_index < original_batch_size_, "Original climber index out of bounds");
+
+  auto& primal_iterate    = settings_.hyper_params.use_adaptive_step_size_strategy
+                              ? pdhg_solver_.get_primal_solution()
+                              : pdhg_solver_.get_potential_next_primal_solution();
+  auto& dual_iterate      = settings_.hyper_params.use_adaptive_step_size_strategy
+                              ? pdhg_solver_.get_dual_solution()
+                              : pdhg_solver_.get_potential_next_dual_solution();
+  const auto& convergence = current_termination_strategy_.get_convergence_information();
+
+  raft::copy(
+    best_primal_solution_so_far.get_primal_solution().data() + original_index * primal_size_h_,
+    primal_iterate.data() + i * primal_size_h_,
+    primal_size_h_,
+    stream_view_);
+  raft::copy(best_primal_solution_so_far.get_dual_solution().data() + original_index * dual_size_h_,
+             dual_iterate.data() + i * dual_size_h_,
+             dual_size_h_,
+             stream_view_);
+  raft::copy(
+    best_primal_solution_so_far.get_reduced_cost().data() + original_index * primal_size_h_,
+    convergence.get_reduced_cost().data() + i * primal_size_h_,
+    primal_size_h_,
+    stream_view_);
+
+  auto& info =
+    best_primal_solution_so_far.get_additional_termination_informations()[original_index];
+  info.number_of_steps_taken           = total_pdlp_iterations_;
+  info.total_number_of_attempted_steps = pdhg_solver_.get_total_pdhg_iterations();
+  info.l2_primal_residual =
+    settings_.per_constraint_residual
+      ? convergence.get_relative_linf_primal_residual().element(i, stream_view_)
+      : convergence.get_l2_primal_residual().element(i, stream_view_);
+  info.l2_relative_primal_residual = convergence.get_relative_l2_primal_residual_value(i);
+  info.l2_dual_residual            = settings_.per_constraint_residual
+                                       ? convergence.get_relative_linf_dual_residual().element(i, stream_view_)
+                                       : convergence.get_l2_dual_residual().element(i, stream_view_);
+  info.l2_relative_dual_residual   = convergence.get_relative_l2_dual_residual_value(i);
+  info.primal_objective            = convergence.get_primal_objective().element(i, stream_view_);
+  info.dual_objective              = convergence.get_dual_objective().element(i, stream_view_);
+  info.gap                         = convergence.get_gap().element(i, stream_view_);
+  info.relative_gap                = convergence.get_relative_gap_value(i);
+
+  const auto status = current_termination_strategy_.get_termination_status(i);
+  best_primal_solution_so_far.get_terminations_status()[original_index] = status;
+  if (status != pdlp_termination_status_t::ConcurrentLimit) { info.solved_by = method_t::PDLP; }
+}
+
+template <typename i_t, typename f_t>
 void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i, bool mark_solved)
 {
   const auto term     = current_termination_strategy_.get_termination_status(i);
@@ -774,6 +889,9 @@ void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i, bool mark_s
   info.total_number_of_attempted_steps = pdhg_solver_.get_total_pdhg_iterations();
   if (term != pdlp_termination_status_t::ConcurrentLimit) { info.solved_by = method_t::PDLP; }
   if (mark_solved && sb_view_.is_valid()) { sb_view_.mark_solved(local_idx); }
+  if (settings_.save_best_primal_so_far && current_termination_strategy_.is_done(term)) {
+    snapshot_best_primal_climber(i);
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -1015,6 +1133,8 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
     RAFT_CUDA_TRY(cudaDeviceSynchronize());
   }
 #endif
+
+  if (batch_mode_ && settings_.save_best_primal_so_far) { record_best_primal_so_far_batch(); }
 
   // We exit directly without checking the termination criteria as some problem can have a low
   // initial redidual + there is by definition 0 gap at first

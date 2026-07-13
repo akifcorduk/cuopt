@@ -111,6 +111,7 @@ class pdlp_solver_t {
   // Snapshot the current iterate of climber `i` (batch-local index) into
   // `batch_solution_to_return_` at its `original_index` slot
   void snapshot_climber_into_return(size_t i, bool mark_solved = true);
+  void snapshot_best_primal_climber(size_t i);
   // flush GPU termination stats into `batch_solution_to_return_` and construct the final solution.
   optimization_problem_solution_t<i_t, f_t> finalize_batch_return();
   optimization_problem_solution_t<i_t, f_t> finalize_batch_return_with_limit_reached(
@@ -120,6 +121,9 @@ class pdlp_solver_t {
                                  const pdlp::pdlp_termination_strategy_t<i_t, f_t>& average,
                                  const pdlp_termination_status_t& termination_current,
                                  const pdlp_termination_status_t& termination_average);
+  void record_best_primal_so_far_batch();
+  optimization_problem_solution_t<i_t, f_t> finalize_best_primal_batch_return(
+    pdlp_termination_status_t limit_reached_status);
 
   void take_step([[maybe_unused]] i_t total_pdlp_iterations,
                  [[maybe_unused]] bool is_major_iteration);
@@ -244,6 +248,7 @@ class pdlp_solver_t {
   // Only used if save_best_primal_so_far is toggeled
   optimization_problem_solution_t<i_t, f_t> best_primal_solution_so_far;
   primal_quality_adapter_t best_primal_quality_so_far_;
+  std::vector<f_t> best_kkt_score_so_far_batch_;
   // Flag to indicate if solver is being called from MIP. No logging is done in this case.
   bool inside_mip_{false};
 };

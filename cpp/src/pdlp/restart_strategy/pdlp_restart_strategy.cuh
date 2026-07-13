@@ -124,7 +124,8 @@ class pdlp_restart_strategy_t {
   f_t compute_kkt_score(const rmm::device_uvector<f_t>& l2_primal_residual,
                         const rmm::device_uvector<f_t>& l2_dual_residual,
                         const rmm::device_uvector<f_t>& gap,
-                        const rmm::device_uvector<f_t>& primal_weight);
+                        const rmm::device_uvector<f_t>& primal_weight,
+                        i_t climber_strategy_id = 0);
 
   void increment_iteration_since_last_restart();
 
