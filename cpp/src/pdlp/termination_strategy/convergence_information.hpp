@@ -25,6 +25,8 @@
 #include <rmm/device_scalar.hpp>
 #include <rmm/device_uvector.hpp>
 
+#include <cmath>
+
 namespace cuopt::mathematical_optimization::pdlp {
 template <typename i_t, typename f_t>
 class convergence_information_t {
@@ -106,18 +108,32 @@ class convergence_information_t {
     i_t nb_violated_constraints{std::numeric_limits<i_t>::max()};
     f_t primal_residual{std::numeric_limits<f_t>::infinity()};
     f_t primal_objective;  // Init in pdlp constructor since need to know sense of optimization
+    // Extra quantities needed for the KKT ranking (save_best_kkt_so_far). Default to infinity so an
+    // unset sentinel has an infinite KKT measure and the first recorded iterate always improves.
+    f_t dual_residual{std::numeric_limits<f_t>::infinity()};
+    f_t gap{std::numeric_limits<f_t>::infinity()};
+
+    // KKT measure used when ranking by save_best_kkt_so_far.
+    f_t kkt() const
+    {
+      return std::sqrt(primal_residual * primal_residual + dual_residual * dual_residual +
+                       gap * gap);
+    }
 
     bool operator==(const primal_quality_adapter_t& other) const
     {
       return is_primal_feasible == other.is_primal_feasible &&
              nb_violated_constraints == other.nb_violated_constraints &&
-             primal_residual == other.primal_residual && primal_objective == other.primal_objective;
+             primal_residual == other.primal_residual &&
+             primal_objective == other.primal_objective && dual_residual == other.dual_residual &&
+             gap == other.gap;
     }
 
     bool operator!=(const primal_quality_adapter_t& other) const { return !(*this == other); }
   };
 
-  primal_quality_adapter_t to_primal_quality_adapter(bool is_primal_feasible) const noexcept;
+  primal_quality_adapter_t to_primal_quality_adapter(
+    bool is_primal_feasible, bool use_per_constraint_residual = false) const noexcept;
 
   void compute_primal_residual(cusparse_view_t<i_t, f_t>& cusparse_view,
                                rmm::device_uvector<f_t>& tmp_dual,

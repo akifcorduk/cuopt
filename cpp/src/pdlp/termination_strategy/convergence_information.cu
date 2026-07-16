@@ -1002,13 +1002,25 @@ typename convergence_information_t<i_t, f_t>::view_t convergence_information_t<i
 template <typename i_t, typename f_t>
 typename convergence_information_t<i_t, f_t>::primal_quality_adapter_t
 convergence_information_t<i_t, f_t>::to_primal_quality_adapter(
-  bool is_primal_feasible) const noexcept
+  bool is_primal_feasible, bool use_per_constraint_residual) const noexcept
 {
-  // TODO later batch mode: handle primal quality adapter here
+  // When per-constraint residual is the active convergence criterion, compare on the per-constraint
+  // (relative L-inf) residual rather than the L2 residual, for both primal and dual.
+
+  // This converter should not be used in batch mode as it assumes a single climber.
+  cuopt_assert(!batch_mode_, "Batch mode not supported for to_primal_quality_adapter");
+  const f_t primal_residual = use_per_constraint_residual
+                                ? linf_primal_residual_.element(0, stream_view_)
+                                : l2_primal_residual_.element(0, stream_view_);
+  const f_t dual_residual = use_per_constraint_residual
+                              ? linf_dual_residual_.element(0, stream_view_)
+                              : l2_dual_residual_.element(0, stream_view_);
   return {is_primal_feasible,
           nb_violated_constraints_.value(stream_view_),
-          l2_primal_residual_.element(0, stream_view_),
-          primal_objective_.element(0, stream_view_)};
+          primal_residual,
+          primal_objective_.element(0, stream_view_),
+          dual_residual,
+          gap_.element(0, stream_view_)};
 }
 
 #if MIP_INSTANTIATE_FLOAT || PDLP_INSTANTIATE_FLOAT

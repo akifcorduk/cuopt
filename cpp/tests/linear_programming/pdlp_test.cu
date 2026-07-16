@@ -1004,6 +1004,336 @@ TEST(pdlp_class, best_primal_so_far_time)
               solution1.get_additional_termination_information().l2_primal_residual);
 }
 
+// Shared instance for the batch coverage tests: two climbers sharing A = [[1,0],[0,1],[1,1]] over
+// x,y in [0,100], differing only on constraint bounds. Climber 0 is feasible (converges), climber 1
+// is infeasible (x + y pinned to 30 by c0/c1 but forced to 90 by c2) and never converges.
+static cuopt::mathematical_optimization::io::mps_data_model_t<int, double>
+make_batch_feasible_infeasible_instance(std::vector<double>& per_climber_lb,
+                                        std::vector<double>& per_climber_ub)
+{
+  auto mps_data = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: x + y
+Subject To
+  c0: x = 10
+  c1: y = 20
+  c2: x + y <= 200
+Bounds
+  0 <= x <= 100
+  0 <= y <= 100
+End
+)LP");
+
+  constexpr int batch_size   = 2;
+  const size_t n_constraints = 3;
+  per_climber_lb.assign(batch_size * n_constraints, 0.0);
+  per_climber_ub.assign(batch_size * n_constraints, 0.0);
+  // Climber 0: x == 10, y == 20, x + y <= 200 (feasible)
+  per_climber_lb[0] = 10.0;   per_climber_ub[0] = 10.0;
+  per_climber_lb[1] = 20.0;   per_climber_ub[1] = 20.0;
+  per_climber_lb[2] = 0.0;    per_climber_ub[2] = 200.0;
+  // Climber 1: x == 10, y == 20, x + y == 90 (infeasible)
+  per_climber_lb[3] = 10.0;   per_climber_ub[3] = 10.0;
+  per_climber_lb[4] = 20.0;   per_climber_ub[4] = 20.0;
+  per_climber_lb[5] = 90.0;   per_climber_ub[5] = 90.0;
+  return mps_data;
+}
+
+// Ill-scaled batch instance for exercising per_constraint_residual together with batch mode and the
+// best-primal/best-kkt-so-far machinery. Climbers share A, variable bounds and cost and differ only
+// on the constraint bounds (RHS):
+//   c_big : x + y   (|bound| = 1e5)
+//   c_small: x - y  (|bound| depends on the climber)
+// Climber 0 (x+y==1e5, x-y==0) is feasible; because c_small's bound magnitude is 0, its per-row
+// tolerance is just abs_primal_tolerance, while the L2 criterion is inflated by c_big's 1e5 RHS, so
+// an L2-"optimal" iterate can leave c_small violated. Climber 1 (x+y==1e5, x-y==2e5) is infeasible
+// (|x - y| <= 1e5) and only ever hits the iteration limit, so it is returned through the
+// best-so-far path.
+static cuopt::mathematical_optimization::io::mps_data_model_t<int, double>
+make_batch_illscaled_instance(std::vector<double>& per_climber_lb,
+                              std::vector<double>& per_climber_ub)
+{
+  auto mps_data = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: 100000 x
+Subject To
+  c_big: x + y = 100000
+  c_small: x - y = 0
+Bounds
+  0 <= x <= 100000
+  0 <= y <= 100000
+End
+)LP");
+
+  constexpr int batch_size   = 2;
+  const size_t n_constraints = 2;
+  per_climber_lb.assign(batch_size * n_constraints, 0.0);
+  per_climber_ub.assign(batch_size * n_constraints, 0.0);
+  // Climber 0: x + y == 1e5, x - y == 0 (feasible; ill-scaled so L2 and per-row disagree).
+  per_climber_lb[0] = 100000.0;   per_climber_ub[0] = 100000.0;
+  per_climber_lb[1] = 0.0;        per_climber_ub[1] = 0.0;
+  // Climber 1: x + y == 1e5, x - y == 2e5 (infeasible -> iteration limit -> best-so-far path).
+  per_climber_lb[2] = 100000.0;   per_climber_ub[2] = 100000.0;
+  per_climber_lb[3] = 200000.0;   per_climber_ub[3] = 200000.0;
+  return mps_data;
+}
+
+// -- save_best_primal_so_far vs save_best_kkt_so_far cross-comparison --
+//
+// Both modes track a best iterate over the *same* solver trajectory (recording is passive and does
+// not change the steps taken), so the primal-ranked run returns the trajectory's primal-best iterate
+// while the kkt-ranked run returns its kkt-best iterate. We therefore only need to run the same
+// instance twice under a limit and confirm that each returned solution is optimal under its own
+// metric: primal-run's primal residual <= kkt-run's, and kkt-run's KKT <= primal-run's.
+
+// KKT measure = sqrt(primal_residual^2 + dual_residual^2 + gap^2) from a solution's reported stats.
+static double best_so_far_kkt(const optimization_problem_solution_t<int, double>& sol, int id = 0)
+{
+  const auto info  = sol.get_additional_termination_information(id);
+  const double pr  = info.l2_primal_residual;
+  const double dr  = info.l2_dual_residual;
+  const double gap = info.gap;
+  return std::sqrt(pr * pr + dr * dr + gap * gap);
+}
+
+static double best_so_far_primal_residual(
+  const optimization_problem_solution_t<int, double>& sol, int id = 0)
+{
+  return sol.get_additional_termination_information(id).l2_primal_residual;
+}
+
+// Confirms each run is best under its own metric (see comment block above).
+static void expect_metric_cross_dominance(
+  const optimization_problem_solution_t<int, double>& primal_run,
+  const optimization_problem_solution_t<int, double>& kkt_run,
+  int id        = 0,
+  double tol    = 1e-6)
+{
+  EXPECT_LE(best_so_far_primal_residual(primal_run, id),
+            best_so_far_primal_residual(kkt_run, id) + tol)
+    << "primal-ranked run should return an iterate at least as good on the primal residual";
+  EXPECT_LE(best_so_far_kkt(kkt_run, id), best_so_far_kkt(primal_run, id) + tol)
+    << "kkt-ranked run should return an iterate at least as good on the KKT measure";
+}
+
+// Whether the two runs picked genuinely different iterates for climber `id` (proxy: reported
+// residual/gap tuple differs). Meaningful only when the trajectory has a point where the primal-best
+// and kkt-best disagree.
+static bool best_so_far_iterates_differ(
+  const optimization_problem_solution_t<int, double>& a,
+  const optimization_problem_solution_t<int, double>& b,
+  int id     = 0,
+  double tol = 1e-9)
+{
+  const auto ia = a.get_additional_termination_information(id);
+  const auto ib = b.get_additional_termination_information(id);
+  return std::abs(ia.l2_primal_residual - ib.l2_primal_residual) > tol ||
+         std::abs(ia.l2_dual_residual - ib.l2_dual_residual) > tol ||
+         std::abs(ia.gap - ib.gap) > tol;
+}
+
+// Non-asserting analogue of test_constraint_sanity_per_row: returns the worst per-row slack
+//   max_i ( violation_i - (abs_tolerance + rel_tolerance * |bound_i|) ).
+// A value > 0 means at least one constraint violates its per-row tolerance; <= 0 means every row is
+// within its per-row tolerance. This lets a test assert the sign in both directions.
+static double max_per_row_relative_violation(
+  const cuopt::mathematical_optimization::io::mps_data_model_t<int, double>& op_problem,
+  const rmm::device_uvector<double>& solution,
+  double abs_tolerance,
+  double rel_tolerance)
+{
+  const std::vector<double>& values                  = op_problem.get_constraint_matrix_values();
+  const std::vector<int>& indices                    = op_problem.get_constraint_matrix_indices();
+  const std::vector<int>& offsets                    = op_problem.get_constraint_matrix_offsets();
+  const std::vector<double>& constraint_lower_bounds = op_problem.get_constraint_lower_bounds();
+  const std::vector<double>& constraint_upper_bounds = op_problem.get_constraint_upper_bounds();
+  std::vector<double> residual(constraint_lower_bounds.size(), 0.0);
+  auto h_solution = cuopt::host_copy(solution, solution.stream());
+  for (size_t i = 0; i < offsets.size() - 1; ++i) {
+    for (int j = offsets[i]; j < offsets[i + 1]; ++j) {
+      residual[i] += values[j] * h_solution[indices[j]];
+    }
+  }
+
+  double worst = -std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < residual.size(); ++i) {
+    const double lb  = constraint_lower_bounds[i];
+    const double ub  = constraint_upper_bounds[i];
+    const double val = residual[i];
+    const double viol =
+      val < lb ? (lb - val) : (val > ub ? (val - ub) : 0.0);
+    const double tolerance =
+      abs_tolerance + rel_tolerance * combine_finite_abs_bounds<double>(lb, ub);
+    worst = std::max(worst, viol - tolerance);
+  }
+  return worst;
+}
+
+// Non-batch: run the same instance under an iteration limit once ranking best-so-far by primal
+// quality and once by KKT, then confirm each returned solution is best under its own metric.
+TEST(pdlp_class, best_kkt_so_far_vs_best_primal_non_batch_stable3)
+{
+  const raft::handle_t handle_{};
+
+  // Infeasible instance (c0/c1 pin x+y to 30 while c2 forces it to 90): the solver never becomes
+  // primal feasible, so both rankings operate in the "not feasible" regime for the whole trajectory,
+  // where the min-primal-residual iterate and the min-KKT iterate genuinely diverge.
+  auto op_problem = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: x + y
+Subject To
+  c0: x = 10
+  c1: y = 20
+  c2: x + y = 90
+Bounds
+  0 <= x <= 100
+  0 <= y <= 100
+End
+)LP");
+
+  auto base                        = pdlp_solver_settings_t<int, double>{};
+  base.method                      = cuopt::mathematical_optimization::method_t::PDLP;
+  base.pdlp_solver_mode            = pdlp_solver_mode_t::Stable3;
+  base.presolver                   = presolver_t::None;
+  base.log_to_console              = false;
+  base.iteration_limit             = 500;
+
+  auto primal_settings                 = base;
+  primal_settings.save_best_primal_so_far = true;
+  auto sol_primal = solve_lp(&handle_, op_problem, primal_settings);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  auto kkt_settings                = base;
+  kkt_settings.save_best_kkt_so_far = true;
+  auto sol_kkt = solve_lp(&handle_, op_problem, kkt_settings);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(sol_primal.get_termination_status(), pdlp_termination_status_t::IterationLimit);
+  ASSERT_EQ(sol_kkt.get_termination_status(), pdlp_termination_status_t::IterationLimit);
+
+  // Confirm each run is best under its own metric. On this small instance PDLP improves the primal
+  // residual and the KKT measure roughly monotonically, so both rankings may land on the same
+  // iterate; the batch test below exercises a trajectory where they genuinely diverge.
+  expect_metric_cross_dominance(sol_primal, sol_kkt);
+}
+
+// Batch: reuse the feasible/infeasible instance. Climber 0 converges (both metrics agree on the
+// optimum); climber 1 is infeasible and never converges, so its trajectory is where the primal-best
+// and kkt-best iterates diverge. Run once per ranking and cross-check climber 1.
+TEST(pdlp_class, best_kkt_so_far_vs_best_primal_batch_stable3)
+{
+  const raft::handle_t handle_{};
+
+  std::vector<double> per_climber_lb;
+  std::vector<double> per_climber_ub;
+  auto mps_data = make_batch_feasible_infeasible_instance(per_climber_lb, per_climber_ub);
+
+  auto base             = pdlp_solver_settings_t<int, double>{};
+  base.method           = cuopt::mathematical_optimization::method_t::PDLP;
+  base.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
+  base.presolver        = presolver_t::None;
+  base.log_to_console   = false;
+  // Large enough for climber 0 to converge so the batch runs to climber 1's iteration limit.
+  base.iteration_limit  = 1000;
+
+  constexpr int batch_size = 2;
+
+  auto primal_settings                    = base;
+  primal_settings.save_best_primal_so_far = true;
+  auto sol_primal = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, primal_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  auto kkt_settings                 = base;
+  kkt_settings.save_best_kkt_so_far = true;
+  auto sol_kkt = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, kkt_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(static_cast<int>(sol_primal.get_terminations_status().size()), batch_size);
+  ASSERT_EQ(static_cast<int>(sol_kkt.get_terminations_status().size()), batch_size);
+
+  // Climber 1 (infeasible, limit-reaching): each run must be best under its own metric and the two
+  // rankings should disagree on which iterate to keep.
+  expect_metric_cross_dominance(sol_primal, sol_kkt, /*id=*/1);
+  EXPECT_TRUE(best_so_far_iterates_differ(sol_primal, sol_kkt, /*id=*/1))
+    << "the two rankings should select different iterates for the infeasible climber";
+}
+
+// Same as the batch cross-comparison above but with per_constraint_residual on, so the recording
+// logic ranks on the per-constraint (relative L-inf) primal/dual residuals instead of L2. The stats
+// the solution reports in l2_primal_residual / l2_dual_residual already hold those relative-L-inf
+// values in this mode, so the same cross-dominance / difference helpers apply unchanged.
+TEST(pdlp_class, best_kkt_so_far_vs_best_primal_batch_per_constraint_residual_stable3)
+{
+  const raft::handle_t handle_{};
+
+  std::vector<double> per_climber_lb;
+  std::vector<double> per_climber_ub;
+  auto mps_data = make_batch_feasible_infeasible_instance(per_climber_lb, per_climber_ub);
+
+  auto base                    = pdlp_solver_settings_t<int, double>{};
+  base.method                  = cuopt::mathematical_optimization::method_t::PDLP;
+  base.pdlp_solver_mode        = pdlp_solver_mode_t::Stable3;
+  base.presolver               = presolver_t::None;
+  base.log_to_console          = false;
+  base.per_constraint_residual = true;
+  // Large enough for climber 0 to converge so the batch runs to climber 1's iteration limit.
+  base.iteration_limit = 1000;
+
+  constexpr int batch_size = 2;
+
+  auto primal_settings                    = base;
+  primal_settings.save_best_primal_so_far = true;
+  auto sol_primal = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, primal_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  auto kkt_settings                 = base;
+  kkt_settings.save_best_kkt_so_far = true;
+  auto sol_kkt = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, kkt_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(static_cast<int>(sol_primal.get_terminations_status().size()), batch_size);
+  ASSERT_EQ(static_cast<int>(sol_kkt.get_terminations_status().size()), batch_size);
+
+  // Climber 1 (infeasible, limit-reaching): each run must be best under its own metric and the two
+  // rankings should disagree on which iterate to keep.
+  expect_metric_cross_dominance(sol_primal, sol_kkt, /*id=*/1);
+  EXPECT_TRUE(best_so_far_iterates_differ(sol_primal, sol_kkt, /*id=*/1))
+    << "the two rankings should select different iterates for the infeasible climber";
+}
+
+// -- save_best_primal_so_far and save_best_kkt_so_far are mutually exclusive --
+TEST(pdlp_class, save_best_primal_and_kkt_are_mutually_exclusive)
+{
+  const raft::handle_t handle_{};
+
+  auto op_problem = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: x + y
+Subject To
+  c0: x + y >= 1
+Bounds
+  0 <= x <= 10
+  0 <= y <= 10
+End
+)LP");
+
+  auto settings                    = pdlp_solver_settings_t<int, double>{};
+  settings.method                  = cuopt::mathematical_optimization::method_t::PDLP;
+  settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable3;
+  settings.presolver               = presolver_t::None;
+  settings.log_to_console          = false;
+  settings.save_best_primal_so_far = true;
+  settings.save_best_kkt_so_far    = true;
+
+  auto sol = solve_lp(&handle_, op_problem, settings);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+  EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+}
+
 TEST(pdlp_class, first_primal_feasible)
 {
   GTEST_SKIP() << "Skipping test: first_primal_feasible. Enable when ready to run.";
@@ -1058,6 +1388,155 @@ TEST(pdlp_class, per_constraint_residual_stable3)
                                  sol.get_primal_solution(),
                                  solver_settings.tolerances.absolute_primal_tolerance,
                                  solver_settings.tolerances.relative_primal_tolerance);
+}
+
+// Discriminating test: per_constraint_residual must be what enforces per-row feasibility.
+// The instance is deliberately ill-scaled so the two termination criteria disagree:
+//   c_big : x + y == 1e5   (|bound| = 1e5)
+//   c_small: x - y == 0     (|bound| = 0  => per-row tolerance is just abs_primal_tolerance)
+// The L2 primal criterion allows ||residual||_2 <= abs + rel * ||rhs||_2 ~= rel * 1e5, which is huge
+// relative to c_small's per-row tolerance, so an L2-"optimal" iterate can leave c_small violated by
+// far more than its per-row tolerance. The large objective coefficient keeps the dual/gap thresholds
+// loose too, so termination is gated by the (loose) primal criterion rather than tight convergence.
+// With per_constraint_residual=false the returned solution must FAIL the per-row sanity; with
+// per_constraint_residual=true it must PASS it.
+TEST(pdlp_class, per_constraint_residual_enforces_per_row_vs_l2_stable3)
+{
+  auto make_problem = []() {
+    return cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: 100000 x
+Subject To
+  c_big: x + y = 100000
+  c_small: x - y = 0
+Bounds
+  0 <= x <= 100000
+  0 <= y <= 100000
+End
+)LP");
+  };
+
+  auto base                        = pdlp_solver_settings_t<int, double>{};
+  base.method                      = cuopt::mathematical_optimization::method_t::PDLP;
+  base.pdlp_solver_mode            = pdlp_solver_mode_t::Stable3;
+  base.presolver                   = presolver_t::None;
+  base.log_to_console              = false;
+  base.iteration_limit             = 200000;
+  base.set_optimality_tolerance(1e-4);
+
+  const double abs_tol = base.tolerances.absolute_primal_tolerance;
+  const double rel_tol = base.tolerances.relative_primal_tolerance;
+
+  // L2 criterion: aggregate residual can hide a large per-row violation on c_small.
+  {
+    const raft::handle_t handle_{};
+    auto op_problem                    = make_problem();
+    auto settings                      = base;
+    settings.per_constraint_residual   = false;
+    auto sol = solve_lp(&handle_, op_problem, settings);
+    RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+    ASSERT_EQ(sol.get_termination_status(), pdlp_termination_status_t::Optimal);
+    const double worst =
+      max_per_row_relative_violation(op_problem, sol.get_primal_solution(), abs_tol, rel_tol);
+    EXPECT_GT(worst, abs_tol)
+      << "L2 termination should return an iterate that violates at least one per-row tolerance";
+  }
+
+  // Per-constraint criterion: every row must be within its own per-row tolerance.
+  {
+    const raft::handle_t handle_{};
+    auto op_problem                    = make_problem();
+    auto settings                      = base;
+    settings.per_constraint_residual   = true;
+    auto sol = solve_lp(&handle_, op_problem, settings);
+    RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+    ASSERT_EQ(sol.get_termination_status(), pdlp_termination_status_t::Optimal);
+    const double worst =
+      max_per_row_relative_violation(op_problem, sol.get_primal_solution(), abs_tol, rel_tol);
+    EXPECT_LE(worst, 0.0)
+      << "per-constraint termination must satisfy every row's per-row tolerance";
+    test_constraint_sanity_per_row(op_problem, sol.get_primal_solution(), abs_tol, rel_tol);
+  }
+}
+
+// Same discriminating property as above but exercised together with batch mode AND the
+// best-primal/best-kkt-so-far machinery, since those features can clash: batch keeps a per-climber
+// vector of best qualities and the per-constraint criterion must drive both the *termination* of the
+// optimal climber and the *selection* recorded for the limit-reaching climber. For each ranking
+// (best primal / best kkt) and each residual mode (L2 / per-constraint) we check that the ill-scaled
+// optimal climber (0) obeys the per-row criterion only under per_constraint_residual, while the
+// infeasible climber (1) is still returned through the best-so-far path without clashing.
+TEST(pdlp_class, per_constraint_residual_batch_best_so_far_enforces_per_row_stable3)
+{
+  std::vector<double> per_climber_lb;
+  std::vector<double> per_climber_ub;
+  auto mps_data = make_batch_illscaled_instance(per_climber_lb, per_climber_ub);
+
+  auto base                        = pdlp_solver_settings_t<int, double>{};
+  base.method                      = cuopt::mathematical_optimization::method_t::PDLP;
+  base.pdlp_solver_mode            = pdlp_solver_mode_t::Stable3;
+  base.presolver                   = presolver_t::None;
+  base.log_to_console              = false;
+  // Large enough for the ill-scaled climber 0 to converge so the batch runs to climber 1's limit.
+  base.iteration_limit             = 50000;
+  base.set_optimality_tolerance(1e-4);
+
+  const double abs_tol       = base.tolerances.absolute_primal_tolerance;
+  const double rel_tol       = base.tolerances.relative_primal_tolerance;
+  constexpr int batch_size   = 2;
+  const size_t n_variables   = 2;
+
+  // Climber 0 is optimal in every combo; its returned vector must obey the per-row criterion only
+  // when per_constraint_residual is set (L2 leaves c_small violated by far more than abs_tol).
+  auto check_optimal_climber0 =
+    [&](const optimization_problem_solution_t<int, double>& sol, bool per_constraint) {
+      EXPECT_EQ(sol.get_termination_status(0), pdlp_termination_status_t::Optimal);
+      const auto primal_0 =
+        extract_subvector(sol.get_primal_solution(), 0 * n_variables, n_variables);
+      const double worst = max_per_row_relative_violation(mps_data, primal_0, abs_tol, rel_tol);
+      if (per_constraint) {
+        EXPECT_LE(worst, 0.0)
+          << "per-constraint + batch + best-so-far must still satisfy every per-row tolerance";
+        test_constraint_sanity_per_row(mps_data, primal_0, abs_tol, rel_tol);
+      } else {
+        EXPECT_GT(worst, abs_tol)
+          << "L2 + batch + best-so-far should leave at least one per-row violation";
+      }
+    };
+
+  for (bool per_constraint : {false, true}) {
+    const raft::handle_t handle_{};
+
+    auto primal_settings                     = base;
+    primal_settings.per_constraint_residual  = per_constraint;
+    primal_settings.save_best_primal_so_far  = true;
+    auto sol_primal = solve_lp_batch_fixed<int, double>(
+      &handle_, mps_data, primal_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+    RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+    auto kkt_settings                    = base;
+    kkt_settings.per_constraint_residual = per_constraint;
+    kkt_settings.save_best_kkt_so_far    = true;
+    auto sol_kkt = solve_lp_batch_fixed<int, double>(
+      &handle_, mps_data, kkt_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+    RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+    ASSERT_EQ(static_cast<int>(sol_primal.get_terminations_status().size()), batch_size);
+    ASSERT_EQ(static_cast<int>(sol_kkt.get_terminations_status().size()), batch_size);
+
+    // Optimal climber respects (or not) the per-row criterion depending only on the residual mode,
+    // under both best-so-far rankings.
+    check_optimal_climber0(sol_primal, per_constraint);
+    check_optimal_climber0(sol_kkt, per_constraint);
+
+    // Limit-reaching climber is returned via the best-so-far path under both rankings, and each run
+    // is best under its own metric -> the three features compose without clashing.
+    EXPECT_EQ(sol_primal.get_termination_status(1), pdlp_termination_status_t::IterationLimit);
+    EXPECT_EQ(sol_kkt.get_termination_status(1), pdlp_termination_status_t::IterationLimit);
+    expect_metric_cross_dominance(sol_primal, sol_kkt, /*id=*/1);
+  }
 }
 
 TEST(pdlp_class, batch_per_constraint_residual_stable3)
@@ -1182,6 +1661,285 @@ TEST(pdlp_class, batch_per_constraint_residual_different_rhs_stable3)
                                  primal_1,
                                  solver_settings.tolerances.absolute_primal_tolerance,
                                  solver_settings.tolerances.relative_primal_tolerance);
+}
+
+// -------------------------------------------------------------
+
+// Reproducer for the bug in finalize_batch_return_with_limit_reached: when a climber reaches the
+// time limit without ever converging, the function only rewrites its termination status and stats,
+// but never snapshots its live primal/dual iterate into batch_solution_to_return_. The returned
+// primal vector for that climber therefore stays at its (uninitialized/zero) resize value while the
+// reported primal_objective (computed by fill_gpu_terms_stats with force_all from the live iterate)
+// is the real, non-zero objective. The two become inconsistent.
+//
+// Instance: only constraint bounds differ across the two climbers (the sole per-climber degree of
+// freedom besides variable bounds and cost, and cost cannot create infeasibility). Both climbers
+// share A = [[1,0],[0,1],[1,1]] over x,y in [0,100].
+//   - Climber 0 (converges fast, Optimal): x = 10, y = 20, x + y <= 200  -> feasible, optimum 30.
+//   - Climber 1 (infeasible, never detected in batch mode -> hits TimeLimit): x = 10, y = 20 pin
+//     x + y = 30, while c2 forces x + y = 90. Infeasibility detection is disabled in batch mode, so
+//     PDLP just iterates on a non-zero iterate until the time limit.
+TEST(pdlp_class, batch_time_limit_does_not_snapshot_unconverged_climber_stable3)
+{
+  const raft::handle_t handle_{};
+
+  auto mps_data = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: x + y
+Subject To
+  c0: x = 10
+  c1: y = 20
+  c2: x + y <= 200
+Bounds
+  0 <= x <= 100
+  0 <= y <= 100
+End
+)LP");
+
+  auto solver_settings             = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method           = cuopt::mathematical_optimization::PDLP;
+  solver_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
+  solver_settings.presolver        = presolver_t::None;
+  solver_settings.log_to_console   = false;
+  // Force the batch to end on the time limit: leave the iteration limit unbounded and cap wall time.
+  solver_settings.time_limit = 2.0;
+
+  constexpr int batch_size    = 2;
+  const size_t n_constraints  = 3;
+  const size_t n_variables    = 2;
+
+  // Per-climber constraint bounds, flat [climber0 | climber1], one triple (c0, c1, c2) per climber.
+  std::vector<double> per_climber_lb(batch_size * n_constraints);
+  std::vector<double> per_climber_ub(batch_size * n_constraints);
+  // Climber 0: x == 10, y == 20, x + y <= 200 (feasible -> optimal fast)
+  per_climber_lb[0] = 10.0;   per_climber_ub[0] = 10.0;
+  per_climber_lb[1] = 20.0;   per_climber_ub[1] = 20.0;
+  per_climber_lb[2] = 0.0;    per_climber_ub[2] = 200.0;
+  // Climber 1: x == 10, y == 20, x + y == 90 (infeasible -> never converges -> time limit)
+  per_climber_lb[3] = 10.0;   per_climber_ub[3] = 10.0;
+  per_climber_lb[4] = 20.0;   per_climber_ub[4] = 20.0;
+  per_climber_lb[5] = 90.0;   per_climber_ub[5] = 90.0;
+
+  auto batch_sol = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, solver_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(static_cast<int>(batch_sol.get_terminations_status().size()), batch_size);
+  ASSERT_EQ(batch_sol.get_termination_status(0), pdlp_termination_status_t::Optimal);
+  ASSERT_EQ(batch_sol.get_termination_status(1), pdlp_termination_status_t::TimeLimit);
+
+  // Control: the converged climber was snapshotted, so its returned primal is consistent with its
+  // reported objective.
+  auto primal_0 = extract_subvector(batch_sol.get_primal_solution(), 0 * n_variables, n_variables);
+  test_objective_sanity(
+    mps_data, primal_0, batch_sol.get_additional_termination_information(0).primal_objective, 1e-4);
+
+  // Bug: the time-limited climber reports a non-zero primal_objective computed from its live
+  // iterate, but its returned primal vector was never filled. c . x_returned should equal the
+  // reported objective; under the bug it does not (x_returned is the zero resize value).
+  const double reported_obj_1 =
+    batch_sol.get_additional_termination_information(1).primal_objective;
+  EXPECT_GT(std::abs(reported_obj_1), 1e-3)
+    << "climber 1 should have made progress on a non-zero iterate before the time limit";
+  auto primal_1 = extract_subvector(batch_sol.get_primal_solution(), 1 * n_variables, n_variables);
+  test_objective_sanity(mps_data, primal_1, reported_obj_1, 1e-4);
+}
+
+// -------------------------------------------------------------
+
+// Coverage for "returning the current solution" on limits / first-primal-feasible. Each test
+// recomputes c . x from the RETURNED primal and asserts it matches the reported primal_objective;
+// a stale/zero returned vector (the bug the snapshot fix addresses) makes this inconsistent.
+
+// B1 - non-batch, iteration limit: the single climber cannot converge within a tiny iteration
+// budget, so it must return its current iterate consistently with the reported objective.
+TEST(pdlp_class, iteration_limit_returns_current_solution_stable3)
+{
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/ns1687037/ns1687037.mps");
+  auto op_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(path);
+
+  auto solver_settings             = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method           = cuopt::mathematical_optimization::method_t::PDLP;
+  solver_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
+  solver_settings.presolver        = presolver_t::None;
+  solver_settings.log_to_console   = false;
+  // Far too few iterations to solve ns1687037 -> forces an IterationLimit return.
+  solver_settings.iteration_limit = 100;
+
+  auto sol = solve_lp(&handle_, op_problem, solver_settings);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(sol.get_termination_status(), pdlp_termination_status_t::IterationLimit);
+  const double reported = sol.get_additional_termination_information().primal_objective;
+  const double eps      = 1e-2 + 1e-6 * std::abs(reported);
+  test_objective_sanity(op_problem, sol.get_primal_solution(), reported, eps);
+}
+
+// B2 - non-batch, first primal feasible: the climber stops as soon as it is primal feasible and
+// must return that (current) iterate consistently with the reported objective.
+TEST(pdlp_class, first_primal_feasible_returns_current_solution_stable3)
+{
+  const raft::handle_t handle_{};
+
+  auto path = make_path_absolute("linear_programming/ns1687037/ns1687037.mps");
+  auto op_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(path);
+
+  auto solver_settings                  = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method                = cuopt::mathematical_optimization::method_t::PDLP;
+  solver_settings.pdlp_solver_mode      = pdlp_solver_mode_t::Stable3;
+  solver_settings.presolver             = presolver_t::None;
+  solver_settings.log_to_console        = false;
+  solver_settings.first_primal_feasible = true;
+  solver_settings.iteration_limit       = 1000;
+  constexpr double kOptimalityTolerance = 1e-2;
+  solver_settings.set_optimality_tolerance(kOptimalityTolerance);
+
+  auto sol = solve_lp(&handle_, op_problem, solver_settings);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(sol.get_termination_status(), pdlp_termination_status_t::PrimalFeasible);
+  const double reported = sol.get_additional_termination_information().primal_objective;
+  const double eps      = 1e-2 + 1e-6 * std::abs(reported);
+  test_objective_sanity(op_problem, sol.get_primal_solution(), reported, eps);
+}
+
+// B3 - batch, iteration limit: climber 0 converges and is removed; climber 1 only ever hits the
+// iteration limit and must still return its current iterate consistently with its objective.
+TEST(pdlp_class, batch_iteration_limit_returns_current_solution_stable3)
+{
+  const raft::handle_t handle_{};
+
+  std::vector<double> per_climber_lb;
+  std::vector<double> per_climber_ub;
+  auto mps_data = make_batch_feasible_infeasible_instance(per_climber_lb, per_climber_ub);
+
+  auto solver_settings             = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method           = cuopt::mathematical_optimization::method_t::PDLP;
+  solver_settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
+  solver_settings.presolver        = presolver_t::None;
+  solver_settings.log_to_console   = false;
+  // Large enough for climber 0 to converge, so the batch ends on climber 1's iteration limit.
+  solver_settings.iteration_limit = 1000;
+
+  constexpr int batch_size = 2;
+  const size_t n_variables = 2;
+
+  auto batch_sol = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, solver_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(static_cast<int>(batch_sol.get_terminations_status().size()), batch_size);
+  ASSERT_EQ(batch_sol.get_termination_status(0), pdlp_termination_status_t::Optimal);
+  ASSERT_EQ(batch_sol.get_termination_status(1), pdlp_termination_status_t::IterationLimit);
+
+  // Control: converged climber.
+  auto primal_0 = extract_subvector(batch_sol.get_primal_solution(), 0 * n_variables, n_variables);
+  test_objective_sanity(
+    mps_data, primal_0, batch_sol.get_additional_termination_information(0).primal_objective, 1e-4);
+
+  // Limit-reaching climber must return its live iterate consistently with its reported objective.
+  const double reported_obj_1 =
+    batch_sol.get_additional_termination_information(1).primal_objective;
+  EXPECT_GT(std::abs(reported_obj_1), 1e-3)
+    << "climber 1 should have made progress on a non-zero iterate before the iteration limit";
+  auto primal_1 = extract_subvector(batch_sol.get_primal_solution(), 1 * n_variables, n_variables);
+  test_objective_sanity(mps_data, primal_1, reported_obj_1, 1e-4);
+}
+
+// B4 - batch, first primal feasible: climber 0 reaches primal feasibility and stops the whole batch;
+// climber 1 (never feasible) must still return its snapshotted current iterate consistently with its
+// reported objective (exercises the all-climber snapshot in check_batch_termination).
+TEST(pdlp_class, batch_first_primal_feasible_returns_current_solution_stable3)
+{
+  const raft::handle_t handle_{};
+
+  std::vector<double> per_climber_lb;
+  std::vector<double> per_climber_ub;
+  auto mps_data = make_batch_feasible_infeasible_instance(per_climber_lb, per_climber_ub);
+
+  auto solver_settings                  = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method                = cuopt::mathematical_optimization::method_t::PDLP;
+  solver_settings.pdlp_solver_mode      = pdlp_solver_mode_t::Stable3;
+  solver_settings.presolver             = presolver_t::None;
+  solver_settings.log_to_console        = false;
+  solver_settings.first_primal_feasible = true;
+  solver_settings.iteration_limit       = 1000;
+  solver_settings.set_optimality_tolerance(1e-2);
+
+  constexpr int batch_size = 2;
+  const size_t n_variables = 2;
+
+  auto batch_sol = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, solver_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(static_cast<int>(batch_sol.get_terminations_status().size()), batch_size);
+  const auto status_0 = batch_sol.get_termination_status(0);
+  EXPECT_TRUE(status_0 == pdlp_termination_status_t::PrimalFeasible ||
+              status_0 == pdlp_termination_status_t::Optimal)
+    << "climber 0 should stop the batch on primal feasibility";
+
+  auto primal_0 = extract_subvector(batch_sol.get_primal_solution(), 0 * n_variables, n_variables);
+  test_objective_sanity(
+    mps_data, primal_0, batch_sol.get_additional_termination_information(0).primal_objective, 1e-4);
+
+  // The non-primal-feasible climber must return its live iterate (not a stale/zero vector),
+  // consistent with its reported objective.
+  const double reported_obj_1 =
+    batch_sol.get_additional_termination_information(1).primal_objective;
+  EXPECT_GT(std::abs(reported_obj_1), 1e-3)
+    << "climber 1 should have made progress on a non-zero iterate before the batch stopped";
+  auto primal_1 = extract_subvector(batch_sol.get_primal_solution(), 1 * n_variables, n_variables);
+  test_objective_sanity(mps_data, primal_1, reported_obj_1, 1e-4);
+}
+
+// B4' - same regime as B4 but with per_constraint_residual on (the primal quality / convergence
+// criterion is the per-row relative L-inf residual instead of the L2 residual). Climbers differ only
+// on constraint lower/upper bounds; first primal feasible must still return every climber's current
+// iterate consistently with its reported objective.
+TEST(pdlp_class, batch_first_primal_feasible_per_constraint_residual_returns_current_solution_stable3)
+{
+  const raft::handle_t handle_{};
+
+  std::vector<double> per_climber_lb;
+  std::vector<double> per_climber_ub;
+  auto mps_data = make_batch_feasible_infeasible_instance(per_climber_lb, per_climber_ub);
+
+  auto solver_settings                    = pdlp_solver_settings_t<int, double>{};
+  solver_settings.method                  = cuopt::mathematical_optimization::method_t::PDLP;
+  solver_settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable3;
+  solver_settings.presolver               = presolver_t::None;
+  solver_settings.log_to_console          = false;
+  solver_settings.first_primal_feasible   = true;
+  solver_settings.per_constraint_residual = true;
+  solver_settings.iteration_limit         = 1000;
+  solver_settings.set_optimality_tolerance(1e-2);
+
+  constexpr int batch_size = 2;
+  const size_t n_variables = 2;
+
+  auto batch_sol = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, solver_settings, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+  ASSERT_EQ(static_cast<int>(batch_sol.get_terminations_status().size()), batch_size);
+  const auto status_0 = batch_sol.get_termination_status(0);
+  EXPECT_TRUE(status_0 == pdlp_termination_status_t::PrimalFeasible ||
+              status_0 == pdlp_termination_status_t::Optimal)
+    << "climber 0 should stop the batch on primal feasibility";
+
+  auto primal_0 = extract_subvector(batch_sol.get_primal_solution(), 0 * n_variables, n_variables);
+  test_objective_sanity(
+    mps_data, primal_0, batch_sol.get_additional_termination_information(0).primal_objective, 1e-4);
+
+  const double reported_obj_1 =
+    batch_sol.get_additional_termination_information(1).primal_objective;
+  EXPECT_GT(std::abs(reported_obj_1), 1e-3)
+    << "climber 1 should have made progress on a non-zero iterate before the batch stopped";
+  auto primal_1 = extract_subvector(batch_sol.get_primal_solution(), 1 * n_variables, n_variables);
+  test_objective_sanity(mps_data, primal_1, reported_obj_1, 1e-4);
 }
 
 // -------------------------------------------------------------
@@ -2888,12 +3646,15 @@ TEST(pdlp_class, run_batch_pdlp_rejects_invalid_new_bounds)
   }
 }
 
-TEST(pdlp_class, run_batch_pdlp_rejects_save_best_primal_so_far)
+TEST(pdlp_class, run_batch_pdlp_supports_save_best_primal_so_far)
 {
   const raft::handle_t handle_{};
   auto path = make_path_absolute("linear_programming/afiro_original.mps");
   cuopt::mathematical_optimization::io::mps_data_model_t<int, double> op_problem =
     cuopt::mathematical_optimization::io::read_mps<int, double>(path, true);
+
+  // save_best_primal_so_far is now supported in batch mode (per-climber best-primal buffer), so
+  // enabling it must no longer be rejected on either batch entry path.
 
   // Splitting path: trigger batch mode via a non-empty new_bounds list (size > 1).
   {
@@ -2917,7 +3678,8 @@ TEST(pdlp_class, run_batch_pdlp_rejects_save_best_primal_so_far)
                                    op_problem.get_variable_upper_bounds()[var_id]});
 
     auto sol = cuopt::mathematical_optimization::run_batch_pdlp(gpu_op, settings);
-    EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+    EXPECT_NE(sol.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+    EXPECT_EQ(static_cast<int>(sol.get_terminations_status().size()), 2);
   }
 
   // Fixed-batch path: trigger batch mode via fixed_batch_size with shared (size == n) buffers.
@@ -2934,7 +3696,8 @@ TEST(pdlp_class, run_batch_pdlp_rejects_save_best_primal_so_far)
     settings.save_best_primal_so_far             = true;
 
     auto sol = cuopt::mathematical_optimization::run_batch_pdlp(gpu_op, settings);
-    EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+    EXPECT_NE(sol.get_error_status().get_error_type(), cuopt::error_type_t::ValidationError);
+    EXPECT_EQ(static_cast<int>(sol.get_terminations_status().size()), 2);
   }
 }
 

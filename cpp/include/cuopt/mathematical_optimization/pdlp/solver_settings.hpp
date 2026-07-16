@@ -286,6 +286,16 @@ class pdlp_solver_settings_t {
   f_t barrier_step_scale{0.9};
   bool save_best_primal_so_far{false};
   /**
+   * @brief Keep the best iterate seen so far ranked by the KKT measure instead of primal quality.
+   *
+   * Reuses the same machinery as `save_best_primal_so_far` (per-iterate tracking, returned when a
+   * time/iteration limit is reached) but selects "best" as the iterate with the smallest KKT
+   * measure defined as `sqrt(primal_residual^2 + dual_residual^2 + gap^2)`. The primal/dual
+   * residuals follow the active `per_constraint_residual` selection. Mutually exclusive with
+   * `save_best_primal_so_far`.
+   */
+  bool save_best_kkt_so_far{false};
+  /**
    * @brief Stop the solver as soon as a primal feasible iterate is encountered.
    *
    * In non-batch mode the solver returns the first primal feasible iterate (without waiting for

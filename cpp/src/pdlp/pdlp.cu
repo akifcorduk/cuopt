@@ -265,13 +265,12 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
   cuopt_expects(!(settings_.first_primal_feasible && settings_.all_primal_feasible),
                 error_type_t::ValidationError,
                 "first_primal_feasible and all_primal_feasible are mutually exclusive");
+  cuopt_expects(!(settings_.save_best_primal_so_far && settings_.save_best_kkt_so_far),
+                error_type_t::ValidationError,
+                "save_best_primal_so_far and save_best_kkt_so_far are mutually exclusive");
   cuopt_expects(batch_mode_ || !settings_.all_primal_feasible,
                 error_type_t::ValidationError,
                 "all_primal_feasible only applies in batch mode");
-  cuopt_expects(!(settings_.save_best_primal_so_far && batch_mode_),
-                error_type_t::ValidationError,
-                "save_best_primal_so_far is not supported in batch mode. Disable batch mode "
-                "(no fixed_batch_size and no new_bounds) or unset save_best_primal_so_far.");
 
   // Set step_size initial scaling
   thrust::fill(handle_ptr_->get_thrust_policy(),
@@ -346,9 +345,12 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
       settings_.get_pdlp_warm_start_data().iterations_since_last_restart_;
   }
   // Checks performed below are assert only
-  best_primal_quality_so_far_.primal_objective = (op_problem_scaled_.maximize)
-                                                   ? -std::numeric_limits<f_t>::infinity()
-                                                   : std::numeric_limits<f_t>::infinity();
+  best_primal_quality_so_far_.assign(climber_strategies_.size(), primal_quality_adapter_t{});
+  for (auto& quality : best_primal_quality_so_far_) {
+    quality.primal_objective = (op_problem_scaled_.maximize)
+                                 ? -std::numeric_limits<f_t>::infinity()
+                                 : std::numeric_limits<f_t>::infinity();
+  }
   op_problem.check_problem_representation(true, false);
 
   if (batch_mode_) {
@@ -361,6 +363,19 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
       op_problem.n_constraints * original_batch_size_, stream_view_);
     batch_solution_to_return_.get_reduced_cost().resize(
       op_problem.n_variables * original_batch_size_, stream_view_);
+
+    // Running best-primal-so-far buffer, one block per climber (indexed by original_index).
+    if (save_best_iterate()) {
+      best_primal_solution_so_far.get_additional_termination_informations().resize(
+        original_batch_size_);
+      best_primal_solution_so_far.get_terminations_status().resize(original_batch_size_);
+      best_primal_solution_so_far.get_primal_solution().resize(
+        op_problem.n_variables * original_batch_size_, stream_view_);
+      best_primal_solution_so_far.get_dual_solution().resize(
+        op_problem.n_constraints * original_batch_size_, stream_view_);
+      best_primal_solution_so_far.get_reduced_cost().resize(
+        op_problem.n_variables * original_batch_size_, stream_view_);
+    }
   }
   for (size_t i = 0; i < climber_strategies_.size(); ++i) {
     climber_strategies_[i].original_index = static_cast<int>(i);
@@ -426,16 +441,19 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
 {
   // Check for time limit
   if (time_limit_reached(timer)) {
-    if (settings_.save_best_primal_so_far) {
+    // Batch mode merges the per-climber best-so-far into the batch return inside
+    // finalize_batch_return_with_limit_reached (guarded by save_best_iterate there), so route
+    // through it rather than returning the raw batch buffer.
+    if (batch_mode_) {
+      return finalize_batch_return_with_limit_reached(pdlp_termination_status_t::TimeLimit);
+    }
+
+    if (save_best_iterate()) {
 #ifdef PDLP_VERBOSE_MODE
       RAFT_CUDA_TRY(cudaDeviceSynchronize());
       std::cout << "Time Limit reached, returning best primal so far" << std::endl;
 #endif
       return std::move(best_primal_solution_so_far);
-    }
-
-    if (batch_mode_) {
-      return finalize_batch_return_with_limit_reached(pdlp_termination_status_t::TimeLimit);
     }
 
 #ifdef PDLP_VERBOSE_MODE
@@ -458,7 +476,11 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
 
   // Check for iteration limit
   if (internal_solver_iterations_ >= settings_.iteration_limit) {
-    if (settings_.save_best_primal_so_far) {
+    if (batch_mode_) {
+      return finalize_batch_return_with_limit_reached(pdlp_termination_status_t::IterationLimit);
+    }
+
+    if (save_best_iterate()) {
 #ifdef PDLP_VERBOSE_MODE
       RAFT_CUDA_TRY(cudaDeviceSynchronize());
       std::cout << "Iteration Limit reached, returning best primal so far" << std::endl;
@@ -470,10 +492,6 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
     RAFT_CUDA_TRY(cudaDeviceSynchronize());
     std::cout << "Iteration Limit reached, returning current solution" << std::endl;
 #endif
-
-    if (batch_mode_) {
-      return finalize_batch_return_with_limit_reached(pdlp_termination_status_t::IterationLimit);
-    }
 
     return current_termination_strategy_.fill_return_problem_solution(
       internal_solver_iterations_,
@@ -531,7 +549,8 @@ static bool is_current_objective_better(f_t current_primal_objective,
 template <typename i_t, typename f_t>
 const pdlp_solver_t<i_t, f_t>::primal_quality_adapter_t& pdlp_solver_t<i_t, f_t>::get_best_quality(
   const pdlp_solver_t<i_t, f_t>::primal_quality_adapter_t& current,
-  const pdlp_solver_t<i_t, f_t>::primal_quality_adapter_t& other)
+  const pdlp_solver_t<i_t, f_t>::primal_quality_adapter_t& other,
+  bool use_kkt)
 {
 #ifdef PDLP_DEBUG_MODE
   RAFT_CUDA_TRY(cudaDeviceSynchronize());
@@ -545,6 +564,9 @@ const pdlp_solver_t<i_t, f_t>::primal_quality_adapter_t& pdlp_solver_t<i_t, f_t>
   std::cout << "  other.primal_residual = " << other.primal_residual << std::endl;
   std::cout << "  other.primal_objective = " << other.primal_objective << std::endl;
 #endif
+
+  // KKT ranking (save_best_kkt_so_far): smallest sqrt(pr^2 + dr^2 + gap^2) wins, ties -> current.
+  if (use_kkt) { return (current.kkt() <= other.kkt()) ? current : other; }
 
   // Primal feasiblity is best
 
@@ -575,6 +597,31 @@ void pdlp_solver_t<i_t, f_t>::set_inside_mip(bool inside_mip)
 }
 
 template <typename i_t, typename f_t>
+std::optional<typename pdlp_solver_t<i_t, f_t>::best_primal_source_t>
+pdlp_solver_t<i_t, f_t>::update_best_primal_quality(
+  size_t index,
+  const primal_quality_adapter_t& current_quality,
+  const std::optional<primal_quality_adapter_t>& average_quality,
+  bool use_kkt)
+{
+  // Best between current and average. In batch mode there is no averaged iterate, so `average` is
+  // empty and the candidate is always current. `use_kkt` switches the ranking to the KKT measure.
+  const auto& best_candidate =
+    average_quality ? get_best_quality(current_quality, *average_quality, use_kkt) : current_quality;
+
+  // Best between that candidate and the running best-so-far for this climber.
+  const auto& best_overall =
+    get_best_quality(best_candidate, best_primal_quality_so_far_[index], use_kkt);
+
+  // Stored best is still best -> nothing new to record.
+  if (best_overall == best_primal_quality_so_far_[index]) { return std::nullopt; }
+
+  best_primal_quality_so_far_[index] = best_overall;
+  return (best_overall == current_quality) ? best_primal_source_t::current
+                                           : best_primal_source_t::average;
+}
+
+template <typename i_t, typename f_t>
 void pdlp_solver_t<i_t, f_t>::record_best_primal_so_far(
   const pdlp::pdlp_termination_strategy_t<i_t, f_t>& current,
   const pdlp::pdlp_termination_strategy_t<i_t, f_t>& average,
@@ -593,64 +640,69 @@ void pdlp_solver_t<i_t, f_t>::record_best_primal_so_far(
   cuopt_assert(termination_average != pdlp_termination_status_t::Optimal,
                "Solution can't be pdlp_termination_status_t::Optimal at this point");
 
-  // First find best between current and average
+  // Best between current and average, then between that candidate and the stored best (index 0 as
+  // there is a single climber in non-batch mode).
 
-  const auto& current_quality = current.get_convergence_information().to_primal_quality_adapter(
-    termination_current == pdlp_termination_status_t::PrimalFeasible);
-  const auto& average_quality = average.get_convergence_information().to_primal_quality_adapter(
-    termination_average == pdlp_termination_status_t::PrimalFeasible);
-  const auto& best_candidate = get_best_quality(current_quality, average_quality);
+  const auto current_quality = current.get_convergence_information().to_primal_quality_adapter(
+    termination_current == pdlp_termination_status_t::PrimalFeasible,
+    settings_.per_constraint_residual);
+  const auto average_quality = average.get_convergence_information().to_primal_quality_adapter(
+    termination_average == pdlp_termination_status_t::PrimalFeasible,
+    settings_.per_constraint_residual);
 
-  // Then best between last and best_candidate
-
-  const auto& best_overall = get_best_quality(best_candidate, best_primal_quality_so_far_);
-
-  // Best overall is different (better) than last found
-  if (best_overall != best_primal_quality_so_far_) {
-#ifdef PDLP_DEBUG_MODE
-    RAFT_CUDA_TRY(cudaDeviceSynchronize());
-    std::cout << "New best primal found" << std::endl;
-#endif
-    best_primal_quality_so_far_ = best_overall;
-
-    // Record the new solution
-
-    rmm::device_uvector<f_t>* primal_to_set;
-    rmm::device_uvector<f_t>* dual_to_set;
-    pdlp::pdlp_termination_strategy_t<i_t, f_t>* termination_strategy_to_use;
-    std::string_view debug_string;
-
-    if (best_overall == current_quality) {
-      primal_to_set               = &pdhg_solver_.get_primal_solution();
-      dual_to_set                 = &pdhg_solver_.get_dual_solution();
-      termination_strategy_to_use = &current_termination_strategy_;
-      debug_string                = "  current is better";
-    } else {
-      primal_to_set               = &unscaled_primal_avg_solution_;
-      dual_to_set                 = &unscaled_dual_avg_solution_;
-      termination_strategy_to_use = &average_termination_strategy_;
-      debug_string                = "  average is better";
-    }
-
-#ifdef PDLP_DEBUG_MODE
-    RAFT_CUDA_TRY(cudaDeviceSynchronize());
-    std::cout << debug_string << std::endl;
-#endif
-
-    best_primal_solution_so_far = termination_strategy_to_use->fill_return_problem_solution(
-      internal_solver_iterations_,
-      pdhg_solver_,
-      *primal_to_set,
-      *dual_to_set,
-      std::vector<pdlp_termination_status_t>(climber_strategies_.size(),
-                                             pdlp_termination_status_t::TimeLimit),
-      true);
-  } else {
+  const auto source =
+    update_best_primal_quality(0, current_quality, average_quality, settings_.save_best_kkt_so_far);
+  if (!source) {
 #ifdef PDLP_DEBUG_MODE
     RAFT_CUDA_TRY(cudaDeviceSynchronize());
     std::cout << "Last best primal is still best" << std::endl;
 #endif
+    return;
   }
+
+#ifdef PDLP_DEBUG_MODE
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+  std::cout << "New best primal found" << std::endl;
+#endif
+
+  // Record the new solution
+
+  rmm::device_uvector<f_t>* primal_to_set;
+  rmm::device_uvector<f_t>* dual_to_set;
+  pdlp::pdlp_termination_strategy_t<i_t, f_t>* termination_strategy_to_use;
+  std::string_view debug_string;
+
+  if (*source == best_primal_source_t::current) {
+    primal_to_set               = &pdhg_solver_.get_primal_solution();
+    dual_to_set                 = &pdhg_solver_.get_dual_solution();
+    termination_strategy_to_use = &current_termination_strategy_;
+    debug_string                = "  current is better";
+  } else {
+    primal_to_set               = &unscaled_primal_avg_solution_;
+    dual_to_set                 = &unscaled_dual_avg_solution_;
+    termination_strategy_to_use = &average_termination_strategy_;
+    debug_string                = "  average is better";
+  }
+
+#ifdef PDLP_DEBUG_MODE
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+  std::cout << debug_string << std::endl;
+#endif
+
+  best_primal_solution_so_far = termination_strategy_to_use->fill_return_problem_solution(
+    internal_solver_iterations_,
+    pdhg_solver_,
+    *primal_to_set,
+    *dual_to_set,
+    std::vector<pdlp_termination_status_t>(climber_strategies_.size(),
+                                           pdlp_termination_status_t::TimeLimit),
+    true);
+}
+
+template <typename i_t, typename f_t>
+bool pdlp_solver_t<i_t, f_t>::save_best_iterate() const
+{
+  return settings_.save_best_primal_so_far || settings_.save_best_kkt_so_far;
 }
 
 template <typename i_t, typename f_t>
@@ -723,13 +775,20 @@ void pdlp_solver_t<i_t, f_t>::print_final_termination_criteria(
   }
 }
 
+// When called in the context of regular termination, the status is already stored in the current termination strategy
+// When called in the context of limit reached (time or iteration), the status is set to the fallback status
 template <typename i_t, typename f_t>
-void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i)
+void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i, std::optional<pdlp_termination_status_t> status_to_set)
 {
+  const bool accept_pf = settings_.first_primal_feasible || settings_.all_primal_feasible;
   const auto term     = current_termination_strategy_.get_termination_status(i);
   const i_t local_idx = climber_strategies_[i].original_index;
 
-  batch_solution_to_return_.get_terminations_status()[local_idx] = term;
+  if (status_to_set.has_value()) {
+    batch_solution_to_return_.get_terminations_status()[local_idx] = status_to_set.value();
+  } else {
+    batch_solution_to_return_.get_terminations_status()[local_idx] = term;
+  }
   raft::copy(batch_solution_to_return_.get_primal_solution().data() + local_idx * primal_size_h_,
              pdhg_solver_.get_potential_next_primal_solution().data() + i * primal_size_h_,
              primal_size_h_,
@@ -747,13 +806,73 @@ void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i)
   info.number_of_steps_taken           = total_pdlp_iterations_;
   info.total_number_of_attempted_steps = pdhg_solver_.get_total_pdhg_iterations();
   if (term != pdlp_termination_status_t::ConcurrentLimit) { info.solved_by = method_t::PDLP; }
-  if (sb_view_.is_valid()) { sb_view_.mark_solved(local_idx); }
+  // We use is_done to make since this function may be called in the context of time or iteration limit
+  if (sb_view_.is_valid() && current_termination_strategy_.is_done(term, accept_pf)) { sb_view_.mark_solved(local_idx); }
+}
+
+template <typename i_t, typename f_t>
+void pdlp_solver_t<i_t, f_t>::record_best_primal_so_far_batch()
+{
+  raft::common::nvtx::range fun_scope("record_best_primal_so_far_batch");
+
+  // Refresh per-climber stats (objective, residuals, ...) from the current iterate. force_all makes
+  // the kernel write every active climber (not only the just-terminated ones) at its original_index.
+  // We don't do conversion to host per climber in a for loop as it would be too slow.
+  current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_, true);
+  std::vector<typename optimization_problem_solution_t<i_t, f_t>::additional_termination_information_t>
+    current_stats(original_batch_size_);
+  current_termination_strategy_.convert_gpu_terms_stats_to_host(current_stats);
+
+  for (size_t i = 0; i < climber_strategies_.size(); ++i) {
+    const i_t original_index = climber_strategies_[i].original_index;
+    const auto term          = current_termination_strategy_.get_termination_status(i);
+
+    primal_quality_adapter_t current_quality{};
+    current_quality.is_primal_feasible = (term == pdlp_termination_status_t::PrimalFeasible ||
+                                          term == pdlp_termination_status_t::Optimal);
+    // fill_gpu_terms_stats stores the per-constraint (relative L-inf) residual in the
+    // l2_primal_residual / l2_dual_residual fields when settings_.per_constraint_residual is on, and
+    // the L2 residual otherwise, so these comparison quantities already match the active criterion.
+    current_quality.primal_residual  = current_stats[original_index].l2_primal_residual;
+    current_quality.primal_objective = current_stats[original_index].primal_objective;
+    // Dual residual and gap are only used by the KKT ranking (save_best_kkt_so_far).
+    current_quality.dual_residual = current_stats[original_index].l2_dual_residual;
+    current_quality.gap           = current_stats[original_index].gap;
+    // nb_violated_constraints_ is a single scalar (not per-climber) and is not used by
+    // get_best_quality, so we leave the adapter default here.
+
+    // Batch mode has no averaged iterate, so the candidate is always `current`.
+    if (update_best_primal_quality(
+          original_index, current_quality, std::nullopt, settings_.save_best_kkt_so_far)) {
+      raft::copy(
+        best_primal_solution_so_far.get_primal_solution().data() + original_index * primal_size_h_,
+        pdhg_solver_.get_potential_next_primal_solution().data() + i * primal_size_h_,
+        primal_size_h_,
+        stream_view_);
+      raft::copy(
+        best_primal_solution_so_far.get_dual_solution().data() + original_index * dual_size_h_,
+        pdhg_solver_.get_potential_next_dual_solution().data() + i * dual_size_h_,
+        dual_size_h_,
+        stream_view_);
+      raft::copy(
+        best_primal_solution_so_far.get_reduced_cost().data() + original_index * primal_size_h_,
+        current_termination_strategy_.get_convergence_information().get_reduced_cost().data() +
+          i * primal_size_h_,
+        primal_size_h_,
+        stream_view_);
+      best_primal_solution_so_far.get_additional_termination_informations()[original_index] =
+        current_stats[original_index];
+    }
+  }
 }
 
 template <typename i_t, typename f_t>
 optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::finalize_batch_return()
 {
-  current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_);
+  // force_all so that climbers snapshotted while not done (e.g. the non-primal-feasible climbers in
+  // the first_primal_feasible path) report stats consistent with their returned iterate instead of
+  // keeping stale/default values.
+  current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_, true);
   RAFT_CUDA_TRY(cudaStreamSynchronize(stream_view_));
   current_termination_strategy_.convert_gpu_terms_stats_to_host(
     batch_solution_to_return_.get_additional_termination_informations());
@@ -785,20 +904,57 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
   for (size_t i = 0; i < climber_strategies_.size(); ++i) {
     if (!current_termination_strategy_.is_done(
           current_termination_strategy_.get_termination_status(i), accept_pf)) {
-      const auto original_index = climber_strategies_[i].original_index;
-      batch_solution_to_return_.get_terminations_status()[original_index] = fallback_status;
-      current_termination_strategy_.set_termination_status(i, fallback_status);
+      snapshot_climber_into_return(i, fallback_status);
     }
   }
   current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_, true);
   current_termination_strategy_.convert_gpu_terms_stats_to_host(
     batch_solution_to_return_.get_additional_termination_informations());
-  if (fallback_status != pdlp_termination_status_t::ConcurrentLimit) {
+
+  // If requested, prefer the best primal recorded so far over the last iterate for every climber
+  // that only ever hit the limit (the snapshot above filled the current iterate; here we overwrite
+  // it, keeping the fallback status set by snapshot_climber_into_return). Converged climbers were
+  // already removed/snapshotted with their optimal/primal-feasible solution and are left untouched.
+  if (save_best_iterate()) {
     for (size_t i = 0; i < climber_strategies_.size(); ++i) {
-      const auto original_index = static_cast<size_t>(climber_strategies_[i].original_index);
-      batch_solution_to_return_.get_additional_termination_informations()[original_index]
-        .solved_by = method_t::PDLP;
+      if (current_termination_strategy_.is_done(
+            current_termination_strategy_.get_termination_status(i), accept_pf)) {
+        continue;
+      }
+      const i_t original_index = climber_strategies_[i].original_index;
+      const auto& best_quality = best_primal_quality_so_far_[original_index];
+      const bool has_recorded_best =
+        best_quality.is_primal_feasible || std::isfinite(best_quality.primal_residual);
+      if (!has_recorded_best) { continue; }
+      raft::copy(
+        batch_solution_to_return_.get_primal_solution().data() + original_index * primal_size_h_,
+        best_primal_solution_so_far.get_primal_solution().data() + original_index * primal_size_h_,
+        primal_size_h_,
+        stream_view_);
+      raft::copy(
+        batch_solution_to_return_.get_dual_solution().data() + original_index * dual_size_h_,
+        best_primal_solution_so_far.get_dual_solution().data() + original_index * dual_size_h_,
+        dual_size_h_,
+        stream_view_);
+      raft::copy(
+        batch_solution_to_return_.get_reduced_cost().data() + original_index * primal_size_h_,
+        best_primal_solution_so_far.get_reduced_cost().data() + original_index * primal_size_h_,
+        primal_size_h_,
+        stream_view_);
+      // Keep stats consistent with the returned (best) iterate rather than the last one.
+      auto& info = batch_solution_to_return_.get_additional_termination_informations()[original_index];
+      const auto& best_info =
+        best_primal_solution_so_far.get_additional_termination_informations()[original_index];
+      info.primal_objective            = best_info.primal_objective;
+      info.dual_objective              = best_info.dual_objective;
+      info.gap                         = best_info.gap;
+      info.relative_gap                = best_info.relative_gap;
+      info.l2_primal_residual          = best_info.l2_primal_residual;
+      info.l2_relative_primal_residual = best_info.l2_relative_primal_residual;
+      info.l2_dual_residual            = best_info.l2_dual_residual;
+      info.l2_relative_dual_residual   = best_info.l2_relative_dual_residual;
     }
+    RAFT_CUDA_TRY(cudaStreamSynchronize(stream_view_));
   }
   return optimization_problem_solution_t<i_t, f_t>{
     batch_solution_to_return_.get_primal_solution(),
@@ -931,6 +1087,10 @@ pdlp_solver_t<i_t, f_t>::check_batch_termination(const timer_t& timer)
       resize_and_swap_all_context_loop(to_remove);
     }
   }
+
+  // Keep, per still-active climber, the best iterate seen so far so that a climber that only ever
+  // hits a limit returns its best primal instead of its last (possibly worse) iterate.
+  if (save_best_iterate()) { record_best_primal_so_far_batch(); }
 
   return check_limits(timer);
 }
@@ -1251,7 +1411,7 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
 
   // If not infeasible and not pdlp_termination_status_t::Optimal and no error, record best so far
   // is toggle
-  if (settings_.save_best_primal_so_far)
+  if (save_best_iterate())
     record_best_primal_so_far(current_termination_strategy_,
                               average_termination_strategy_,
                               termination_current,
