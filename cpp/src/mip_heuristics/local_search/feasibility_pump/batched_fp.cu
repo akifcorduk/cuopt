@@ -24,7 +24,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstring>
+#include <cstdlib>
+#include <iostream>
 #include <unordered_map>
 
 #include <utilities/copy_helpers.hpp>
@@ -201,8 +202,6 @@ void feasibility_pump_t<i_t, f_t>::build_unified_projection_problem(solution_t<i
   op.set_variable_types(vtypes.data(), (i_t)vtypes.size());
   cloud_batch_capacity    = 0;
   cached_cloud_batch_size = -1;
-  // The per-climber sizes just changed, so any stored warm start is stale.
-  warm_start_n_points = 0;
 }
 
 template <typename i_t, typename f_t>
@@ -244,11 +243,6 @@ void feasibility_pump_t<i_t, f_t>::expand_unified_projection_batch_buffers(
   op.get_constraint_lower_bounds().resize(cstr_size, stream);
   op.get_constraint_upper_bounds().resize(cstr_size, stream);
   batch_primal_init.resize(obj_size, stream);
-  batch_dual_init.resize(cstr_size, stream);
-  dual_reuse_flags.resize(batch_capacity, stream);
-  warm_start_dual.resize(cstr_size, stream);
-  h_dual_reuse_flags.assign(batch_capacity, 0);
-  warm_start_n_points = 0;
   solution.handle_ptr->sync_stream();
 }
 
@@ -264,8 +258,6 @@ void feasibility_pump_t<i_t, f_t>::ensure_batch_problem_views(solution_t<i_t, f_
   op.get_constraint_lower_bounds().resize(cstr_size, stream);
   op.get_constraint_upper_bounds().resize(cstr_size, stream);
   batch_primal_init.resize(obj_size, stream);
-  batch_dual_init.resize(cstr_size, stream);
-  dual_reuse_flags.resize(try_n, stream);
   solution.handle_ptr->sync_stream();
 }
 
@@ -296,6 +288,7 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
 
   const i_t n_constr   = unified_n_constr;
   const f_t cont_upper = (f_t)default_cont_upper;
+  const f_t int_tol    = context.settings.tolerances.integrality_tolerance;
   const f_t rlp_base   = context.settings.heuristic_params.relaxed_lp_time_limit;
   const double lp_tolerance =
     get_tolerance_from_ratio(climber0_int_ratio, context.settings.tolerances.absolute_tolerance);
@@ -331,6 +324,10 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       raft::copy(d_climber_alphas.data(), climber_alphas.data(), try_n, stream);
       const f_t* orig_obj_ptr = solution.problem_ptr->objective_coefficients.data();
       const i_t* binary_ptr   = solution.problem_ptr->is_binary_variable.data();
+      const var_t* var_types  = solution.problem_ptr->variable_types.data();
+      const i_t* aux_idx_ptr  = solution.problem_ptr->nonbinary_indices.data();
+      const f_t* vlb_ptr      = op.get_variable_lower_bounds().data();
+      const f_t* vub_ptr      = op.get_variable_upper_bounds().data();
       const f_t* cloud_ptr    = d_batch_assignments.data();
       const f_t* alpha_ptr    = d_climber_alphas.data();
       f_t* obj_ptr            = d_obj.data();
@@ -344,10 +341,20 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                          const f_t distance_weight = (1. - alpha) / l2_norm_of_distance_obj;
                          f_t orig_obj_weight       = alpha / l2_norm_of_original_obj;
                          if (!isfinite(orig_obj_weight)) { orig_obj_weight = 0.; }
-                         f_t dist_obj = loc >= n_vars ? f_t(1.) : f_t(0.);
-                         if (loc < n_vars && binary_ptr[loc]) {
-                           const f_t target = cloud_ptr[c * (size_t)n_vars + (size_t)loc];
-                           dist_obj         = target < 0.5 ? f_t(1.) : f_t(-1.);
+                         f_t dist_obj = 0.;
+                         if (loc < n_vars && var_types[loc] == var_t::INTEGER) {
+                           const f_t target    = cloud_ptr[c * (size_t)n_vars + (size_t)loc];
+                           const bool at_lower = abs(target - vlb_ptr[loc]) <= int_tol;
+                           const bool at_upper = abs(target - vub_ptr[loc]) <= int_tol;
+                           if (binary_ptr[loc] || at_lower || at_upper) {
+                             dist_obj = at_upper ? f_t(-1.) : f_t(1.);
+                           }
+                         } else if (loc >= n_vars) {
+                           const i_t col       = aux_idx_ptr[loc - n_vars];
+                           const f_t target    = cloud_ptr[c * (size_t)n_vars + (size_t)col];
+                           const bool at_lower = abs(target - vlb_ptr[col]) <= int_tol;
+                           const bool at_upper = abs(target - vub_ptr[col]) <= int_tol;
+                           dist_obj            = at_lower || at_upper ? f_t(0.) : f_t(1.);
                          }
                          const f_t orig_obj = loc < n_vars ? orig_obj_ptr[loc] : f_t(0.);
                          obj_ptr[g] = dist_obj * distance_weight + orig_obj_weight * orig_obj;
@@ -358,7 +365,6 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       auto& d_cub             = op.get_constraint_upper_bounds();
       const f_t* base_clb_ptr = solution.problem_ptr->constraint_lower_bounds.data();
       const f_t* base_cub_ptr = solution.problem_ptr->constraint_upper_bounds.data();
-      const i_t* aux_idx_ptr  = solution.problem_ptr->nonbinary_indices.data();
       f_t* clb_ptr            = d_clb.data();
       f_t* cub_ptr            = d_cub.data();
       thrust::for_each(solution.handle_ptr->get_thrust_policy(),
@@ -371,12 +377,15 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                            clb_ptr[g] = base_clb_ptr[r];
                            cub_ptr[g] = base_cub_ptr[r];
                          } else {
-                           const i_t rr  = r - n_constr;
-                           const i_t k   = rr / 2;
-                           const i_t col = aux_idx_ptr[k];
-                           const f_t val = cloud_ptr[c * (size_t)n_vars + (size_t)col];
-                           clb_ptr[g]    = (rr & 1) ? val : -val;
-                           cub_ptr[g]    = cont_upper;
+                           const i_t rr        = r - n_constr;
+                           const i_t k         = rr / 2;
+                           const i_t col       = aux_idx_ptr[k];
+                           const f_t val       = cloud_ptr[c * (size_t)n_vars + (size_t)col];
+                           const bool at_lower = abs(val - vlb_ptr[col]) <= int_tol;
+                           const bool at_upper = abs(val - vub_ptr[col]) <= int_tol;
+                           clb_ptr[g] =
+                             at_lower || at_upper ? -cont_upper : ((rr & 1) ? val : -val);
+                           cub_ptr[g] = cont_upper;
                          }
                        });
       solution.handle_ptr->sync_stream();
@@ -386,11 +395,13 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       settings.presolver        = presolver_t::None;
       settings.fixed_batch_size = try_n;
       settings.generate_batch_primal_dual_solution = true;
-      settings.time_limit =
+      const double base_time_limit =
         std::max(0.05, std::min((double)rlp_base, timer.remaining_time() / 10.));
+      settings.time_limit =
+        std::min(timer.remaining_time(), std::sqrt((double)try_n) * base_time_limit);
       settings.set_optimality_tolerance(lp_tolerance);
       settings.per_constraint_residual = true;
-      settings.save_best_primal_so_far = true;
+      settings.save_best_primal_so_far = false;
       settings.detect_infeasibility    = false;
 
       {
@@ -420,38 +431,6 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       }
       settings.set_initial_primal_solution(batch_primal_init.data(), (i_t)obj_view, stream);
       solution.handle_ptr->sync_stream();
-
-      const bool dual_warm_available =
-        warm_start_n_points > 0 && warm_start_dual.size() >= (size_t)warm_start_n_points * nct;
-      const size_t base_dual_size    = solution.lp_state.prev_dual.size();
-      const bool base_dual_available = base_dual_size > 0;
-      if (dual_warm_available || base_dual_available) {
-        if ((i_t)h_dual_reuse_flags.size() < try_n) { h_dual_reuse_flags.resize(try_n, 0); }
-        raft::copy(dual_reuse_flags.data(), h_dual_reuse_flags.data(), try_n, stream);
-        const i_t nct_l            = nct;
-        const i_t n_constr_l       = n_constr;
-        const i_t warm_n           = warm_start_n_points;
-        const size_t base_dual_sz  = base_dual_size;
-        const f_t* wdual           = warm_start_dual.data();
-        const f_t* base_dual       = solution.lp_state.prev_dual.data();
-        const char* reuse_previous = dual_reuse_flags.data();
-        f_t* dinit                 = batch_dual_init.data();
-        thrust::for_each(solution.handle_ptr->get_thrust_policy(),
-                         thrust::make_counting_iterator<size_t>(0),
-                         thrust::make_counting_iterator<size_t>(cstr_view),
-                         [=] __device__(size_t g) {
-                           const size_t c = g / (size_t)nct_l;
-                           const i_t r    = (i_t)(g % (size_t)nct_l);
-                           f_t v          = 0.;
-                           if (reuse_previous[c] && c < (size_t)warm_n) {
-                             v = wdual[c * (size_t)nct_l + (size_t)r];
-                           } else if (r < n_constr_l && (size_t)r < base_dual_sz) {
-                             v = base_dual[r];
-                           }
-                           dinit[g] = isfinite(v) ? v : f_t(0);
-                         });
-        settings.set_initial_dual_solution(batch_dual_init.data(), (i_t)cstr_view, stream);
-      }
 
       auto sol   = cuopt::mathematical_optimization::run_batch_pdlp(op, settings);
       auto& term = sol.get_terminations_status();
@@ -484,7 +463,7 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
           op.get_constraint_lower_bounds().size(),
           op.get_constraint_upper_bounds().size(),
           (size_t)obj_view,
-          dual_warm_available ? (size_t)cstr_view : (size_t)0);
+          (size_t)0);
       }
       if (is_memory_allocation_failure(sol) || (wrong_size && try_n > 1)) {
         retry_after_oom = true;
@@ -502,14 +481,31 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
         n_points = 0;
         return;
       } else {
+        const auto term_infos = sol.get_additional_termination_informations();
+        cuopt_assert(term_infos.size() == (size_t)try_n,
+                     "Batch termination information size mismatch");
+        double mean_iterations = 0.;
+        i_t max_iterations     = 0;
+        for (const auto& info : term_infos) {
+          mean_iterations += info.number_of_steps_taken;
+          max_iterations = std::max(max_iterations, info.number_of_steps_taken);
+        }
+        mean_iterations /= try_n;
+        const auto& climber0_info = term_infos[0];
+        set_projection_solver_metrics(climber0_info.number_of_steps_taken,
+                                      climber0_info.total_number_of_attempted_steps,
+                                      (i_t)term[0],
+                                      climber0_info.l2_primal_residual,
+                                      climber0_info.l2_dual_residual,
+                                      climber0_info.gap,
+                                      mean_iterations,
+                                      max_iterations);
         for (i_t c = 0; c < try_n; ++c) {
           raft::copy(d_batch_assignments.data() + (size_t)c * n_vars,
                      primal.data() + (size_t)c * unified_n_vars_total,
                      n_vars,
                      stream);
         }
-        raft::copy(warm_start_dual.data(), dual.data(), dual.size(), stream);
-        warm_start_n_points = try_n;
         solution.handle_ptr->sync_stream();
         if (try_n < n_points) {
           CUOPT_LOG_WARN(
@@ -597,7 +593,8 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
 
   if (n_integers == solution.problem_ptr->n_integer_vars) {
     if (is_feasible) {
-      CUOPT_LOG_INFO("Feasible solution found after LP with relative tolerance");
+      CUOPT_LOG_INFO(
+        "[FP_FEASIBLE][climber=0] Feasible solution found after LP with relative tolerance");
       finish_iteration_metrics(false, false, true);
       return true;
     }
@@ -622,7 +619,7 @@ bool feasibility_pump_t<i_t, f_t>::run_climber0_step(solution_t<i_t, f_t>& solut
       is_feasible = solution.get_feasible();
       n_integers  = solution.compute_number_of_integers();
       if (is_feasible && n_integers == solution.problem_ptr->n_integer_vars) {
-        CUOPT_LOG_INFO("Feasible solution verified with LP!");
+        CUOPT_LOG_INFO("[FP_FEASIBLE][climber=0] Feasible solution verified with LP");
         finish_iteration_metrics(false, false, true);
         return true;
       }
@@ -742,40 +739,42 @@ void feasibility_pump_t<i_t, f_t>::seed_cloud_from_assignment_gpu(solution_t<i_t
                    d_cloud.end(),
                    [=] __device__(size_t g) { return assignment[g % (size_t)n_vars]; });
   raft::copy(d_cloud.data(), last_rounding.data(), n_vars, stream);
-  const i_t* d_int_cols       = solution.problem_ptr->integer_indices.data();
-  const f_t* d_vlb            = unified_problem->get_variable_lower_bounds().data();
-  const f_t* d_vub            = unified_problem->get_variable_upper_bounds().data();
-  f_t* cloud                  = d_cloud.data();
-  constexpr f_t perturb_ratio = 0.1;
-  const uint64_t seed         = (uint64_t)diversity_rng();
-  thrust::for_each(solution.handle_ptr->get_thrust_policy(),
-                   thrust::make_counting_iterator<size_t>(0),
-                   thrust::make_counting_iterator<size_t>((size_t)(n_points - 1) * n_int),
-                   [=] __device__(size_t g) {
-                     const i_t climber = (i_t)(g / (size_t)n_int) + 1;
-                     const i_t k       = (i_t)(g % (size_t)n_int);
-                     const i_t col     = d_int_cols[k];
-                     f_t val           = assignment[col];
-                     raft::random::PCGenerator rng(
-                       seed, (uint64_t)climber * (uint64_t)n_int + (uint64_t)k, 0);
-                     if (rng.next_float() < perturb_ratio) {
-                       f_t int_lb = ceil(d_vlb[col] - int_tol);
-                       f_t int_ub = floor(d_vub[col] + int_tol);
-                       if (int_lb <= int_ub) {
-                         cuopt_assert(isfinite(int_lb) || isfinite(int_ub),
-                                      "Free integer variable cannot be perturbed");
-                         if (!isfinite(int_lb)) {
-                           val = int_ub;
-                         } else if (!isfinite(int_ub)) {
-                           val = int_lb;
-                         } else {
-                           f_t span = int_ub - int_lb + 1.;
-                           val      = int_lb + floor(rng.next_float() * span);
-                         }
-                       }
-                     }
-                     cloud[(size_t)climber * (size_t)n_vars + (size_t)col] = val;
-                   });
+  const i_t* d_int_cols = solution.problem_ptr->integer_indices.data();
+  const f_t* d_vlb      = unified_problem->get_variable_lower_bounds().data();
+  const f_t* d_vub      = unified_problem->get_variable_upper_bounds().data();
+  f_t* cloud            = d_cloud.data();
+  const uint64_t seed   = (uint64_t)diversity_rng();
+  thrust::for_each(
+    solution.handle_ptr->get_thrust_policy(),
+    thrust::make_counting_iterator<size_t>(0),
+    thrust::make_counting_iterator<size_t>((size_t)(n_points - 1) * n_int),
+    [=] __device__(size_t g) {
+      const i_t climber              = (i_t)(g / (size_t)n_int) + 1;
+      const i_t k                    = (i_t)(g % (size_t)n_int);
+      const i_t col                  = d_int_cols[k];
+      f_t val                        = assignment[col];
+      const i_t exponent             = std::min(climber - 1, (i_t)4);
+      const f_t target_perturbations = (f_t)(8 << exponent);
+      const f_t perturb_ratio        = std::min(f_t(0.1), target_perturbations / (f_t)n_int);
+      raft::random::PCGenerator rng(seed, (uint64_t)climber * (uint64_t)n_int + (uint64_t)k, 0);
+      if (rng.next_float() < perturb_ratio) {
+        f_t int_lb = ceil(d_vlb[col] - int_tol);
+        f_t int_ub = floor(d_vub[col] + int_tol);
+        if (int_lb <= int_ub) {
+          cuopt_assert(isfinite(int_lb) || isfinite(int_ub),
+                       "Free integer variable cannot be perturbed");
+          if (!isfinite(int_lb)) {
+            val = int_ub;
+          } else if (!isfinite(int_ub)) {
+            val = int_lb;
+          } else {
+            f_t span = int_ub - int_lb + 1.;
+            val      = int_lb + floor(rng.next_float() * span);
+          }
+        }
+      }
+      cloud[(size_t)climber * (size_t)n_vars + (size_t)col] = val;
+    });
   solution.handle_ptr->sync_stream();
 }
 
@@ -808,41 +807,43 @@ void feasibility_pump_t<i_t, f_t>::replace_flagged_climbers_diverse(
                      const i_t j = (i_t)(g % (size_t)n_vars);
                      cloud[g]    = assignment[j];
                    });
-  const i_t* d_int_cols       = solution.problem_ptr->integer_indices.data();
-  const f_t* d_vlb            = unified_problem->get_variable_lower_bounds().data();
-  const f_t* d_vub            = unified_problem->get_variable_upper_bounds().data();
-  const i_t n_int             = unified_n_int;
-  constexpr f_t perturb_ratio = 0.1;
-  const uint64_t seed         = (uint64_t)diversity_rng();
-  thrust::for_each(solution.handle_ptr->get_thrust_policy(),
-                   thrust::make_counting_iterator<size_t>(0),
-                   thrust::make_counting_iterator<size_t>((size_t)n_points * n_int),
-                   [=] __device__(size_t g) {
-                     const i_t climber = (i_t)(g / (size_t)n_int);
-                     if (climber == 0 || flags[climber] == 0) { return; }
-                     const i_t k   = (i_t)(g % (size_t)n_int);
-                     const i_t col = d_int_cols[k];
-                     f_t val       = assignment[col];
-                     raft::random::PCGenerator rng(
-                       seed, (uint64_t)climber * (uint64_t)n_int + (uint64_t)k, 0);
-                     if (rng.next_float() < perturb_ratio) {
-                       f_t int_lb = ceil(d_vlb[col] - int_tol);
-                       f_t int_ub = floor(d_vub[col] + int_tol);
-                       if (int_lb <= int_ub) {
-                         cuopt_assert(isfinite(int_lb) || isfinite(int_ub),
-                                      "Free integer variable cannot be perturbed");
-                         if (!isfinite(int_lb)) {
-                           val = int_ub;
-                         } else if (!isfinite(int_ub)) {
-                           val = int_lb;
-                         } else {
-                           f_t span = int_ub - int_lb + 1.;
-                           val      = int_lb + floor(rng.next_float() * span);
-                         }
-                       }
-                     }
-                     cloud[(size_t)climber * (size_t)n_vars + (size_t)col] = val;
-                   });
+  const i_t* d_int_cols = solution.problem_ptr->integer_indices.data();
+  const f_t* d_vlb      = unified_problem->get_variable_lower_bounds().data();
+  const f_t* d_vub      = unified_problem->get_variable_upper_bounds().data();
+  const i_t n_int       = unified_n_int;
+  const uint64_t seed   = (uint64_t)diversity_rng();
+  thrust::for_each(
+    solution.handle_ptr->get_thrust_policy(),
+    thrust::make_counting_iterator<size_t>(0),
+    thrust::make_counting_iterator<size_t>((size_t)n_points * n_int),
+    [=] __device__(size_t g) {
+      const i_t climber = (i_t)(g / (size_t)n_int);
+      if (climber == 0 || flags[climber] == 0) { return; }
+      const i_t k                    = (i_t)(g % (size_t)n_int);
+      const i_t col                  = d_int_cols[k];
+      f_t val                        = assignment[col];
+      const i_t exponent             = std::min(climber - 1, (i_t)4);
+      const f_t target_perturbations = (f_t)(8 << exponent);
+      const f_t perturb_ratio        = std::min(f_t(0.1), target_perturbations / (f_t)n_int);
+      raft::random::PCGenerator rng(seed, (uint64_t)climber * (uint64_t)n_int + (uint64_t)k, 0);
+      if (rng.next_float() < perturb_ratio) {
+        f_t int_lb = ceil(d_vlb[col] - int_tol);
+        f_t int_ub = floor(d_vub[col] + int_tol);
+        if (int_lb <= int_ub) {
+          cuopt_assert(isfinite(int_lb) || isfinite(int_ub),
+                       "Free integer variable cannot be perturbed");
+          if (!isfinite(int_lb)) {
+            val = int_ub;
+          } else if (!isfinite(int_ub)) {
+            val = int_lb;
+          } else {
+            f_t span = int_ub - int_lb + 1.;
+            val      = int_lb + floor(rng.next_float() * span);
+          }
+        }
+      }
+      cloud[(size_t)climber * (size_t)n_vars + (size_t)col] = val;
+    });
   for (i_t c = 1; c < n_points; ++c) {
     n_diverse += flagged[c];
   }
@@ -939,8 +940,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
     expand_unified_projection_batch_buffers(solution, batch_size);
   }
 
-  auto stream         = solution.handle_ptr->get_stream();
-  warm_start_n_points = 0;
+  auto stream = solution.handle_ptr->get_stream();
   solution.round_nearest();
   climber0_int_ratio = (f_t)solution.n_assigned_integers / solution.problem_ptr->n_integer_vars;
   raft::copy(last_rounding.data(), solution.assignment.data(), solution.assignment.size(), stream);
@@ -948,7 +948,6 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
   rmm::device_uvector<f_t> d_batch_assignments(0, stream);
   std::vector<char> flagged((size_t)batch_size, 0);
   std::vector<size_t> climber_hashes((size_t)batch_size, 0);
-  h_dual_reuse_flags.assign((size_t)batch_size, 0);
 
   return run_batched_fp_cloud_descent(
     solution, batch_size, d_batch_assignments, flagged, climber_hashes);
@@ -969,6 +968,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
   const f_t inf                      = std::numeric_limits<f_t>::infinity();
   rmm::device_uvector<f_t> cand_best(n_vars, stream);
   rmm::device_uvector<f_t> climber0_assign(n_vars, stream);
+  rmm::device_uvector<f_t> diversity_candidate(n_vars, stream);
   i_t n_points         = 0;
   bool first_iteration = true;
   i_t trajectory       = 0;
@@ -987,6 +987,9 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       seed_cloud_from_assignment_gpu(solution, n_points, d_batch_assignments);
       climber_alphas.assign(n_points, default_alpha);
       climber_alphas[0] = config.alpha;
+      for (i_t c = 1; c < n_points; ++c) {
+        climber_alphas[c] = default_alpha * (f_t)(c - 1) / (f_t)std::max((i_t)1, n_points - 2);
+      }
       climber_hash_history.assign(n_points, {});
       first_iteration = false;
     } else {
@@ -1009,7 +1012,6 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
     }
     if ((i_t)climber_alphas.size() > n_points) { climber_alphas.resize(n_points); }
     if ((i_t)climber_hash_history.size() > n_points) { climber_hash_history.resize(n_points); }
-    h_dual_reuse_flags.assign(n_points, 1);
 
     // ---- Climber 0 (slot 0): full classic FP with internal restarts (the only CP round) ----
     raft::copy(solution.assignment.data(), d_batch_assignments.data(), n_vars, stream);
@@ -1020,13 +1022,16 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
     bool climber0_cycle = false;
     bool feasible0      = run_climber0_step(solution, proj_begin, climber0_cycle, n_points);
     // Best feasible found this trajectory across climber 0 and the diversity climbers.
-    f_t best_obj       = inf;
-    bool have_feasible = false;
+    f_t best_obj              = inf;
+    bool have_feasible        = false;
+    i_t best_feasible_climber = -1;
     if (feasible0) {
+      std::cout << "[FP_FEASIBLE][climber=0] Feasible candidate found" << std::endl;
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
-      best_obj      = solution.get_objective();
-      have_feasible = true;
+      best_obj              = solution.get_objective();
+      have_feasible         = true;
+      best_feasible_climber = 0;
       raft::copy(cand_best.data(), solution.assignment.data(), n_vars, stream);
       solution.handle_ptr->sync_stream();
     }
@@ -1035,67 +1040,79 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
     raft::copy(d_batch_assignments.data(), solution.assignment.data(), n_vars, stream);
     raft::copy(climber0_assign.data(), solution.assignment.data(), n_vars, stream);
     solution.handle_ptr->sync_stream();
+    f_t best_infeasible_excess   = solution.get_total_excess();
+    i_t best_infeasible_integers = solution.compute_number_of_integers();
+    bool use_diversity_candidate = false;
 
     // ---- Diversity climbers 1..N: GPU nearest-integer rounding + hash dedup ----
     advance_diversity_climbers_gpu(
       solution, n_points, d_batch_assignments, flagged, climber_hashes);
 
-    // ---- Device-confirm host-feasible diversity climbers; keep the best objective ----
-    {
-      rmm::device_uvector<int> d_diversity_feasible((size_t)n_points, stream);
-      thrust::fill(solution.handle_ptr->get_thrust_policy(),
-                   d_diversity_feasible.begin(),
-                   d_diversity_feasible.end(),
-                   1);
-      if (n_points > 0) {
-        thrust::fill(solution.handle_ptr->get_thrust_policy(),
-                     d_diversity_feasible.begin(),
-                     d_diversity_feasible.begin() + 1,
-                     0);
-      }
-      const f_t* assignments = d_batch_assignments.data();
-      const i_t* offsets     = solution.problem_ptr->offsets.data();
-      const i_t* indices     = solution.problem_ptr->variables.data();
-      const f_t* values      = solution.problem_ptr->coefficients.data();
-      const f_t* lower       = solution.problem_ptr->constraint_lower_bounds.data();
-      const f_t* upper       = solution.problem_ptr->constraint_upper_bounds.data();
-      int* feasible_flags    = d_diversity_feasible.data();
-      const f_t tol          = context.settings.tolerances.absolute_tolerance;
-      const i_t n_constr     = unified_n_constr;
-      const i_t n_vars_l     = n_vars;
-      thrust::for_each(solution.handle_ptr->get_thrust_policy(),
-                       thrust::make_counting_iterator<size_t>(0),
-                       thrust::make_counting_iterator<size_t>((size_t)n_points * n_constr),
-                       [=] __device__(size_t g) {
-                         const i_t c = (i_t)(g / (size_t)n_constr);
-                         if (c == 0) { return; }
-                         const i_t r = (i_t)(g % (size_t)n_constr);
-                         f_t act     = 0.;
-                         for (i_t p = offsets[r]; p < offsets[r + 1]; ++p) {
-                           act +=
-                             values[p] * assignments[(size_t)c * (size_t)n_vars_l + indices[p]];
-                         }
-                         if (act < lower[r] - tol || act > upper[r] + tol) {
-                           atomicExch(feasible_flags + c, 0);
-                         }
-                       });
-      auto h_feasible = cuopt::host_copy(d_diversity_feasible, stream);
+    // ---- CP-round diversity climbers and keep the best feasible objective ----
+    for (i_t c = 1; c < n_points; ++c) {
+      raft::copy(solution.assignment.data(),
+                 d_batch_assignments.data() + (size_t)c * n_vars,
+                 n_vars,
+                 stream);
       solution.handle_ptr->sync_stream();
-      for (i_t c = 1; c < n_points; ++c) {
-        if (h_feasible[c] == 0) continue;
-        raft::copy(solution.assignment.data(),
-                   d_batch_assignments.data() + (size_t)c * n_vars,
+      bool diversity_feasible = solution.compute_feasibility();
+      if (!diversity_feasible) {
+        const bool old_backtracking            = constraint_prop.enable_backtracking;
+        const bool old_repair                  = constraint_prop.enable_repair;
+        const i_t old_divisor                  = constraint_prop.bulk_rounding_divisor;
+        const i_t old_pre_round_target         = constraint_prop.pre_round_target_unset;
+        constraint_prop.enable_backtracking    = false;
+        constraint_prop.enable_repair          = false;
+        constraint_prop.bulk_rounding_divisor  = 10;
+        constraint_prop.pre_round_target_unset = std::numeric_limits<i_t>::max();
+        round(solution, false);
+        constraint_prop.enable_backtracking    = old_backtracking;
+        constraint_prop.enable_repair          = old_repair;
+        constraint_prop.bulk_rounding_divisor  = old_divisor;
+        constraint_prop.pre_round_target_unset = old_pre_round_target;
+        diversity_feasible                     = solution.compute_feasibility();
+        raft::copy(d_batch_assignments.data() + (size_t)c * n_vars,
+                   solution.assignment.data(),
                    n_vars,
                    stream);
         solution.handle_ptr->sync_stream();
-        if (solution.compute_feasibility()) {
-          f_t obj = solution.get_objective();
-          if (obj < best_obj) {
-            best_obj      = obj;
-            have_feasible = true;
-            raft::copy(cand_best.data(), solution.assignment.data(), n_vars, stream);
-            solution.handle_ptr->sync_stream();
+      }
+      if (diversity_feasible) {
+        std::cout << "[FP_FEASIBLE][climber=" << c << "] Diversity candidate found feasible"
+                  << std::endl;
+        if (metrics != nullptr) {
+          metrics->iterations.back().diversity_feasible_candidates++;
+          if (c == 1) { metrics->iterations.back().climber1_feasible_candidates++; }
+        }
+        f_t obj = solution.get_objective();
+        if (obj < best_obj) {
+          std::cout << "[FP_FEASIBLE][climber=" << c << "] New best feasible objective " << obj
+                    << std::endl;
+          best_obj              = obj;
+          have_feasible         = true;
+          best_feasible_climber = c;
+          if (metrics != nullptr) {
+            metrics->iterations.back().diversity_best_updates++;
+            if (c == 1) { metrics->iterations.back().climber1_best_updates++; }
           }
+          raft::copy(cand_best.data(), solution.assignment.data(), n_vars, stream);
+          solution.handle_ptr->sync_stream();
+        }
+      } else {
+        const f_t excess   = solution.get_total_excess();
+        const i_t integers = solution.compute_number_of_integers();
+        if (!solution.problem_ptr->cutting_plane_added &&
+            (excess < best_infeasible_excess ||
+             (excess == best_infeasible_excess && integers > best_infeasible_integers))) {
+          best_infeasible_excess   = excess;
+          best_infeasible_integers = integers;
+          use_diversity_candidate  = true;
+          if (metrics != nullptr) {
+            metrics->iterations.back().diversity_best_updates++;
+            if (c == 1) { metrics->iterations.back().climber1_best_updates++; }
+          }
+          raft::copy(diversity_candidate.data(), solution.assignment.data(), n_vars, stream);
+          solution.handle_ptr->sync_stream();
         }
       }
     }
@@ -1103,9 +1120,20 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
     raft::copy(solution.assignment.data(), climber0_assign.data(), n_vars, stream);
     solution.handle_ptr->sync_stream();
     solution.compute_feasibility();
+    if (!have_feasible && use_diversity_candidate) {
+      raft::copy(solution.assignment.data(), diversity_candidate.data(), n_vars, stream);
+      raft::copy(d_batch_assignments.data(), diversity_candidate.data(), n_vars, stream);
+      raft::copy(last_rounding.data(), diversity_candidate.data(), n_vars, stream);
+      solution.handle_ptr->sync_stream();
+      solution.compute_feasibility();
+      climber0_int_ratio = (f_t)best_infeasible_integers / solution.problem_ptr->n_integer_vars;
+      cycle_queue.update_recent_solutions(solution);
+    }
 
     // ---- Return the best feasible found (climber 0 or a diversity climber) ----
     if (have_feasible) {
+      std::cout << "[FP_FEASIBLE][selected_climber=" << best_feasible_climber
+                << "] Returning feasible objective " << best_obj << std::endl;
       raft::copy(solution.assignment.data(), cand_best.data(), n_vars, stream);
       solution.handle_ptr->sync_stream();
       bool res = solution.compute_feasibility();
@@ -1129,8 +1157,8 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       replace_flagged_climbers_diverse(
         solution, n_points, d_batch_assignments, flagged, n_diverse_perturb, n_fallback_perturb);
       for (i_t c = 1; c < n_points; ++c) {
-        if (flagged[c]) { h_dual_reuse_flags[c] = 0; }
         if (!flagged[c]) continue;
+        climber_alphas[c] = default_alpha * (f_t)(c - 1) / (f_t)std::max((i_t)1, n_points - 2);
         climber_hash_history[c].clear();
       }
     }
@@ -1146,17 +1174,10 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       }
     }
 
-    if (climber0_cycle) {
-      if (restart_fp(solution)) { return true; }
-      cuopt_assert(solution.test_number_all_integer(), "Restarted climber 0 must be integer");
-      solution.round_nearest();
-      climber0_int_ratio = (f_t)solution.n_assigned_integers / solution.problem_ptr->n_integer_vars;
-      raft::copy(
-        last_rounding.data(), solution.assignment.data(), solution.assignment.size(), stream);
-      h_dual_reuse_flags[0] = 0;
-    }
+    if (climber0_cycle) { return false; }
     if (profile_one_iter && trajectory == 0) { return false; }
     trajectory++;
+    if (trajectory >= batch_config.max_trajectories_before_restart) { return false; }
   }
   return false;
 }

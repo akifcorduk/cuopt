@@ -181,9 +181,14 @@ void write_csv(std::ostream& out, const std::vector<run_result_t>& results)
   out << "run,seed,path,diversity_climber,diversity_seed,rounding_mode,projection_backend,"
          "iteration,batch_size,projected_integers,projected_ratio,"
          "projection_violated_constraints,projection_l1_distance,projection_total_violation,"
-         "projection_time,rounded_integers,rounding_violated_constraints,rounding_l1_movement,"
+         "projection_time,pdlp_iterations,pdhg_iterations,projection_termination_status,"
+         "pdlp_primal_residual,pdlp_dual_residual,pdlp_gap,batch_mean_pdlp_iterations,"
+         "batch_max_pdlp_iterations,rounded_integers,rounding_violated_constraints,"
+         "rounding_l1_movement,"
          "rounding_total_violation,rounding_time,projection_feasible,rounding_feasible,cycle,"
-         "cycle_kind,perturbed,timed_out,feasible,feasible_events,total_run_time\n";
+         "cycle_kind,perturbed,timed_out,feasible,diversity_feasible_candidates,"
+         "diversity_best_updates,climber1_feasible_candidates,climber1_best_updates,"
+         "feasible_events,total_run_time\n";
   out << std::setprecision(17);
   for (const auto& result : results) {
     for (const auto& metric : result.metrics.iterations) {
@@ -194,11 +199,17 @@ void write_csv(std::ostream& out, const std::vector<run_result_t>& results)
           << ',' << metric.projected_integers << ',' << projected_ratio << ','
           << metric.projection_violated_constraints << ',' << metric.projection_l1_distance << ','
           << metric.projection_total_violation << ',' << metric.projection_time << ','
+          << metric.pdlp_iterations << ',' << metric.pdhg_iterations << ','
+          << metric.projection_termination_status << ',' << metric.pdlp_primal_residual << ','
+          << metric.pdlp_dual_residual << ',' << metric.pdlp_gap << ','
+          << metric.batch_mean_pdlp_iterations << ',' << metric.batch_max_pdlp_iterations << ','
           << metric.rounded_integers << ',' << metric.rounding_violated_constraints << ','
           << metric.rounding_l1_movement << ',' << metric.rounding_total_violation << ','
           << metric.rounding_time << ',' << metric.projection_feasible << ','
           << metric.rounding_feasible << ',' << metric.cycle << ',' << metric.cycle_kind << ','
           << metric.perturbed << ',' << metric.timed_out << ',' << metric.feasible << ','
+          << metric.diversity_feasible_candidates << ',' << metric.diversity_best_updates << ','
+          << metric.climber1_feasible_candidates << ',' << metric.climber1_best_updates << ','
           << result.metrics.feasible_events << ',' << result.total_run_time << '\n';
     }
   }
@@ -217,14 +228,25 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   std::vector<double> rounding_total_violation;
   std::vector<double> projection_time;
   std::vector<double> normalized_projection_time;
+  std::vector<double> pdlp_iterations;
+  std::vector<double> pdhg_iterations;
+  std::vector<double> pdlp_primal_residual;
+  std::vector<double> pdlp_dual_residual;
+  std::vector<double> pdlp_gap;
+  std::vector<double> batch_mean_pdlp_iterations;
+  std::vector<double> batch_max_pdlp_iterations;
   std::vector<double> rounding_time;
   std::vector<double> total_time;
-  int feasible_runs   = 0;
-  int feasible_events = 0;
-  int distance_cycles = 0;
-  int integer_cycles  = 0;
-  int perturbations   = 0;
-  size_t count        = 0;
+  int feasible_runs                 = 0;
+  int feasible_events               = 0;
+  int distance_cycles               = 0;
+  int integer_cycles                = 0;
+  int perturbations                 = 0;
+  int diversity_feasible_candidates = 0;
+  int diversity_best_updates        = 0;
+  int climber1_feasible_candidates  = 0;
+  int climber1_best_updates         = 0;
+  size_t count                      = 0;
 
   for (const auto& result : results) {
     if (result.path != path) { continue; }
@@ -244,17 +266,32 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
       rounding_total_violation.push_back(metric.rounding_total_violation);
       projection_time.push_back(metric.projection_time);
       normalized_projection_time.push_back(metric.projection_time / metric.batch_size);
+      pdlp_iterations.push_back(metric.pdlp_iterations);
+      pdhg_iterations.push_back(metric.pdhg_iterations);
+      pdlp_primal_residual.push_back(metric.pdlp_primal_residual);
+      pdlp_dual_residual.push_back(metric.pdlp_dual_residual);
+      pdlp_gap.push_back(metric.pdlp_gap);
+      batch_mean_pdlp_iterations.push_back(metric.batch_mean_pdlp_iterations);
+      batch_max_pdlp_iterations.push_back(metric.batch_max_pdlp_iterations);
       rounding_time.push_back(metric.rounding_time);
       distance_cycles += metric.cycle_kind == 1;
       integer_cycles += metric.cycle_kind == 2;
       perturbations += metric.perturbed;
+      diversity_feasible_candidates += metric.diversity_feasible_candidates;
+      diversity_best_updates += metric.diversity_best_updates;
+      climber1_feasible_candidates += metric.climber1_feasible_candidates;
+      climber1_best_updates += metric.climber1_best_updates;
     }
   }
 
   std::cerr << path << ": count=" << count << " feasible_runs=" << feasible_runs << '/'
             << total_time.size() << " feasible_events=" << feasible_events
             << " distance_cycles=" << distance_cycles << " integer_cycles=" << integer_cycles
-            << " perturbations=" << perturbations << '\n';
+            << " perturbations=" << perturbations
+            << " diversity_feasible_candidates=" << diversity_feasible_candidates
+            << " diversity_best_updates=" << diversity_best_updates
+            << " climber1_feasible_candidates=" << climber1_feasible_candidates
+            << " climber1_best_updates=" << climber1_best_updates << '\n';
   print_distribution("projected_integers", projected_integers);
   print_distribution("projected_ratio", projected_ratio);
   print_distribution("projection_l1", projection_l1);
@@ -265,8 +302,15 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   print_distribution("rounding_violated_constraints", rounding_violated);
   print_distribution("rounding_total_violation", rounding_total_violation);
   print_distribution("projection_time", projection_time);
+  print_distribution("pdlp_iterations", pdlp_iterations);
+  print_distribution("pdhg_iterations", pdhg_iterations);
+  print_distribution("pdlp_primal_residual", pdlp_primal_residual);
+  print_distribution("pdlp_dual_residual", pdlp_dual_residual);
+  print_distribution("pdlp_gap", pdlp_gap);
   if (path == "batched") {
     print_distribution("projection_time_per_climber", normalized_projection_time);
+    print_distribution("batch_mean_pdlp_iterations", batch_mean_pdlp_iterations);
+    print_distribution("batch_max_pdlp_iterations", batch_max_pdlp_iterations);
   }
   print_distribution("rounding_time", rounding_time);
   print_distribution("total_time", total_time);

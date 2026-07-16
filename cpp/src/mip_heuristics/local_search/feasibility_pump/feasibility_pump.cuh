@@ -107,11 +107,12 @@ struct fp_config_t {
 // clamped into [min, max]; if it falls below fallback_threshold we fall back to single-point FP.
 struct fp_batch_config_t {
   int target_min_batch_size = 8;
-  int target_max_batch_size = 2048;
+  int target_max_batch_size = 8;
   // Extra cap on cloud size for per-iteration latency (projection + rounding wall clock).
-  int latency_max_batch_size = 1024;
-  int fallback_threshold     = 8;
-  double fj_ratio            = 0.2;  // 20% FJ run
+  int latency_max_batch_size          = 8;
+  int fallback_threshold              = 8;
+  int max_trajectories_before_restart = 8;
+  double fj_ratio                     = 0.2;  // 20% FJ run
 };
 
 template <typename i_t, typename f_t>
@@ -123,6 +124,14 @@ struct fp_iteration_metrics_t {
   f_t projection_l1_distance          = 0.;
   f_t projection_total_violation      = 0.;
   double projection_time              = 0.;
+  i_t pdlp_iterations                 = -1;
+  i_t pdhg_iterations                 = -1;
+  i_t projection_termination_status   = -1;
+  f_t pdlp_primal_residual            = std::numeric_limits<f_t>::quiet_NaN();
+  f_t pdlp_dual_residual              = std::numeric_limits<f_t>::quiet_NaN();
+  f_t pdlp_gap                        = std::numeric_limits<f_t>::quiet_NaN();
+  double batch_mean_pdlp_iterations   = -1.;
+  i_t batch_max_pdlp_iterations       = -1;
   i_t rounded_integers                = 0;
   i_t rounding_violated_constraints   = 0;
   f_t rounding_l1_movement            = 0.;
@@ -135,6 +144,10 @@ struct fp_iteration_metrics_t {
   bool perturbed                      = false;
   bool timed_out                      = false;
   bool feasible                       = false;
+  i_t diversity_feasible_candidates   = 0;
+  i_t diversity_best_updates          = 0;
+  i_t climber1_feasible_candidates    = 0;
+  i_t climber1_best_updates           = 0;
 };
 
 template <typename i_t, typename f_t>
@@ -236,6 +249,14 @@ class feasibility_pump_t {
                                  i_t n_integers,
                                  i_t batch_size,
                                  double elapsed);
+  void set_projection_solver_metrics(i_t pdlp_iterations,
+                                     i_t pdhg_iterations,
+                                     i_t termination_status,
+                                     f_t primal_residual,
+                                     f_t dual_residual,
+                                     f_t gap,
+                                     double batch_mean_pdlp_iterations,
+                                     i_t batch_max_pdlp_iterations);
   void record_rounding_metrics(solution_t<i_t, f_t>& solution, bool is_feasible, double elapsed);
   void finish_iteration_metrics(bool cycle, bool timed_out, bool feasible);
 
@@ -267,8 +288,6 @@ class feasibility_pump_t {
   // Pre-allocated warm-start / projection buffers (sized once in
   // expand_unified_projection_batch_buffers).
   rmm::device_uvector<f_t> batch_primal_init;
-  rmm::device_uvector<f_t> batch_dual_init;
-  rmm::device_uvector<char> dual_reuse_flags;
   // Host copies needed to rebuild per-iteration objective / per-climber constraint bounds.
   std::vector<i_t> h_integer_indices_cache;      // integer variable column indices
   std::vector<i_t> h_aux_integer_indices_cache;  // non-binary integer column indices
@@ -288,14 +307,19 @@ class feasibility_pump_t {
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
-  fp_run_metrics_t<i_t, f_t>* metrics = nullptr;
+  fp_run_metrics_t<i_t, f_t>* metrics    = nullptr;
+  i_t last_pdlp_iterations               = -1;
+  i_t last_pdhg_iterations               = -1;
+  i_t last_projection_status             = -1;
+  f_t last_pdlp_primal_residual          = std::numeric_limits<f_t>::quiet_NaN();
+  f_t last_pdlp_dual_residual            = std::numeric_limits<f_t>::quiet_NaN();
+  f_t last_pdlp_gap                      = std::numeric_limits<f_t>::quiet_NaN();
+  double last_batch_mean_pdlp_iterations = -1.;
+  i_t last_batch_max_pdlp_iterations     = -1;
   // Per-climber alpha for the distance/original-objective blend in batch projection. Slot 0 mirrors
   // config.alpha; reset to default_alpha when a diversity climber is freshly seeded (FJ trajectory
   // or perturbed LP-optimal padding).
   std::vector<f_t> climber_alphas;
-  rmm::device_uvector<f_t> warm_start_dual;
-  std::vector<char> h_dual_reuse_flags;
-  i_t warm_start_n_points = 0;
   // Climber 0's integer ratio from its previous projection (fraction of integer vars that are
   // integral). Drives the batch projection's LP tolerance via get_tolerance_from_ratio, mirroring
   // the original single-point FP: loose early (ratio low), tightening as climber 0 nears integral.

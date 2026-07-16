@@ -152,8 +152,12 @@ struct constraint_prop_t {
   timer_t max_timer{0.};
   bool use_probing_cache = true;
   static repair_stats_t repair_stats;
-  bool single_rounding_only = false;
-  bool round_all_vars       = true;
+  bool single_rounding_only  = false;
+  bool round_all_vars        = true;
+  bool enable_backtracking   = true;
+  bool enable_repair         = true;
+  i_t bulk_rounding_divisor  = 0;
+  i_t pre_round_target_unset = 50;
   // this is second timer that can continue but without recovery mode
   f_t max_time_for_bounds_prop = 5.;
 };

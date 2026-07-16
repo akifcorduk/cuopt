@@ -61,11 +61,28 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     lp_optimal_solution(lp_optimal_solution_),
     diversity_rng(cuopt::seed_generator::get_seed()),
     timer(20.),
-    batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream()),
-    batch_dual_init(0, context.problem_ptr->handle_ptr->get_stream()),
-    dual_reuse_flags(0, context.problem_ptr->handle_ptr->get_stream()),
-    warm_start_dual(0, context.problem_ptr->handle_ptr->get_stream())
+    batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream())
 {
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::set_projection_solver_metrics(i_t pdlp_iterations,
+                                                                 i_t pdhg_iterations,
+                                                                 i_t termination_status,
+                                                                 f_t primal_residual,
+                                                                 f_t dual_residual,
+                                                                 f_t gap,
+                                                                 double batch_mean_pdlp_iterations,
+                                                                 i_t batch_max_pdlp_iterations)
+{
+  last_pdlp_iterations            = pdlp_iterations;
+  last_pdhg_iterations            = pdhg_iterations;
+  last_projection_status          = termination_status;
+  last_pdlp_primal_residual       = primal_residual;
+  last_pdlp_dual_residual         = dual_residual;
+  last_pdlp_gap                   = gap;
+  last_batch_mean_pdlp_iterations = batch_mean_pdlp_iterations;
+  last_batch_max_pdlp_iterations  = batch_max_pdlp_iterations;
 }
 
 template <typename i_t, typename f_t>
@@ -88,6 +105,14 @@ void feasibility_pump_t<i_t, f_t>::record_projection_metrics(solution_t<i_t, f_t
   entry.projection_total_violation = solution.get_total_excess();
   entry.projection_violated_constraints =
     solution.problem_ptr->n_constraints - solution.n_feasible_constraints.value(stream);
+  entry.pdlp_iterations               = last_pdlp_iterations;
+  entry.pdhg_iterations               = last_pdhg_iterations;
+  entry.projection_termination_status = last_projection_status;
+  entry.pdlp_primal_residual          = last_pdlp_primal_residual;
+  entry.pdlp_dual_residual            = last_pdlp_dual_residual;
+  entry.pdlp_gap                      = last_pdlp_gap;
+  entry.batch_mean_pdlp_iterations    = last_batch_mean_pdlp_iterations;
+  entry.batch_max_pdlp_iterations     = last_batch_max_pdlp_iterations;
 }
 
 template <typename i_t, typename f_t>
@@ -290,6 +315,15 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
   auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
+  const auto term_info            = solver_response.get_additional_termination_information();
+  set_projection_solver_metrics(term_info.number_of_steps_taken,
+                                term_info.total_number_of_attempted_steps,
+                                (i_t)solver_response.get_termination_status(),
+                                term_info.l2_primal_residual,
+                                term_info.l2_dual_residual,
+                                term_info.gap,
+                                term_info.number_of_steps_taken,
+                                term_info.number_of_steps_taken);
   cuopt_func_call(solution.test_variable_bounds(false));
   last_lp_time = old_remaining - timer.remaining_time();
   lp_time += last_lp_time;
@@ -338,7 +372,8 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution, bool up
                solution.handle_ptr->get_stream());
   }
   if (result) {
-    CUOPT_LOG_INFO("New feasible solution with objective %g", solution.get_user_objective());
+    CUOPT_LOG_INFO("[FP_FEASIBLE] New feasible solution with objective %g",
+                   solution.get_user_objective());
   }
   return result;
 }
@@ -400,7 +435,7 @@ bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& soluti
                solution.handle_ptr->get_stream());
     cuopt_func_call(solution.test_variable_bounds(true));
   } else {
-    CUOPT_LOG_INFO("20%% FJ run found feasible!");
+    CUOPT_LOG_INFO("[FP_FEASIBLE] 20%% FJ run found feasible!");
   }
   return is_feasible;
 }
@@ -430,7 +465,7 @@ bool feasibility_pump_t<i_t, f_t>::handle_cycle(solution_t<i_t, f_t>& solution)
   cycle_queue.update_recent_solutions(solution);
   if (is_feasible) {
     solution.test_feasibility();
-    CUOPT_LOG_INFO("Feasible found cycle breaking long FJ");
+    CUOPT_LOG_INFO("[FP_FEASIBLE] Feasible found cycle breaking long FJ");
   }
   return is_feasible;
 }
@@ -617,7 +652,7 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     // if it is feasible check if all are still integer
     if (n_integers == solution.problem_ptr->n_integer_vars) {
       if (is_feasible) {
-        CUOPT_LOG_INFO("Feasible solution found after LP with relative tolerance");
+        CUOPT_LOG_INFO("[FP_FEASIBLE] Feasible solution found after LP with relative tolerance");
         finish_iteration_metrics(false, false, true);
         return true;
       }
@@ -641,7 +676,7 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
         is_feasible = solution.get_feasible();
         n_integers  = solution.compute_number_of_integers();
         if (is_feasible && n_integers == solution.problem_ptr->n_integer_vars) {
-          CUOPT_LOG_INFO("Feasible solution verified with LP!");
+          CUOPT_LOG_INFO("[FP_FEASIBLE] Feasible solution verified with LP!");
           finish_iteration_metrics(false, false, true);
           return true;
         }

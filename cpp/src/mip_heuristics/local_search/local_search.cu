@@ -579,7 +579,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
         }
         CUOPT_LOG_DEBUG(
           "Running binary problem from it %d large_restart_it %d", binary_it_counter, i);
-        is_feasible = fp.run_single_fp_descent(solution);
+        is_feasible = fp.run_batched_fp_cloud(solution);
         if (is_feasible) { break; }
         if (timer.check_time_limit()) {
           fp.revert_relaxation(solution);
@@ -606,7 +606,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
       for (i_t integer_it_counter = 0; integer_it_counter < 500; ++integer_it_counter) {
         CUOPT_LOG_DEBUG(
           "Running integer problem from it %d large_restart_it %d", integer_it_counter, i);
-        is_feasible = fp.run_single_fp_descent(solution);
+        is_feasible = fp.run_batched_fp_cloud(solution);
         if (is_feasible) { return true; }
         if (timer.check_time_limit()) {
           CUOPT_LOG_DEBUG("FP time limit reached during integer stage!");
@@ -753,7 +753,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     problem_with_objective_cut = std::move(problem_t<i_t, f_t>(*old_problem_ptr));
   }
   if (is_feasible) {
-    CUOPT_LOG_DEBUG("FP initial solution is feasible, adding cutting plane at obj");
+    CUOPT_LOG_DEBUG("[FP_FEASIBLE] Initial solution is feasible; adding objective cut");
     f_t objective_cut =
       best_objective - std::max(std::abs(0.001 * best_objective), OBJECTIVE_EPSILON);
     problem_with_objective_cut.add_cutting_plane_at_objective(objective_cut);
@@ -786,7 +786,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       break;
     }
     if (is_feasible) {
-      CUOPT_LOG_DEBUG("Found feasible in FP with obj %f. Continue with FJ!",
+      CUOPT_LOG_DEBUG("[FP_FEASIBLE] Found feasible in FP with obj %f. Continue with FJ!",
                       solution.get_objective());
       reset_alpha_and_save_solution(solution,
                                     old_problem_ptr,
@@ -810,8 +810,9 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
         break;
       }
       if (is_feasible) {
-        CUOPT_LOG_DEBUG("Found feasible during restart with obj %f. Continue with FJ!",
-                        solution.get_objective());
+        CUOPT_LOG_DEBUG(
+          "[FP_FEASIBLE] Found feasible during restart with obj %f. Continue with FJ!",
+          solution.get_objective());
         reset_alpha_and_save_solution(solution,
                                       old_problem_ptr,
                                       population_ptr,
@@ -890,8 +891,7 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   fp.cycle_queue.reset(solution);
   fp.reset();
   fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
-  // is_feasible = run_staged_fp(solution, timer, population_ptr);
-  is_feasible = run_fp(solution, timer, population_ptr);
+  is_feasible = run_staged_fp(solution, timer, population_ptr);
   CUOPT_LOG_DEBUG("Solution generated with FP: is_feasible %d", is_feasible);
   return is_feasible;
 }

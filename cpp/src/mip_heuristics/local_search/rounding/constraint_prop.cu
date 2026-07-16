@@ -876,8 +876,8 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   } else {
     find_unset_integer_vars(sol, unset_integer_vars);
     sort_by_frac(sol, make_span(unset_integer_vars));
-    // round first unset_integer_vars.size() - 50, leave last 50 to be rounded by the algo
-    i_t n_to_round = std::max(unset_integer_vars.size() - 50, 0lu);
+    i_t n_to_round =
+      std::max(unset_integer_vars.size() - (size_t)pre_round_target_unset, (size_t)0);
     if (n_to_round > 0) {
       thrust::for_each(
         sol.handle_ptr->get_thrust_policy(),
@@ -909,6 +909,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   // if the problem is ii, run the bounds prop in the beginning
   if (problem_ii) {
     bool bounds_repaired =
+      enable_repair &&
       bounds_repair.repair_problem(*sol.problem_ptr, *orig_sol.problem_ptr, timer, sol.handle_ptr);
     if (bounds_repaired) {
       CUOPT_LOG_DEBUG("Initial ii is repaired by bounds repair!");
@@ -929,7 +930,13 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   set_host_bounds(sol);
   size_t set_count               = 0;
   bool timeout_happened          = false;
-  i_t n_failed_repair_iterations = 0;
+  i_t n_failed_repair_iterations = enable_repair ? 0 : std::numeric_limits<i_t>::max();
+  const i_t bulk_rounding_size =
+    bulk_rounding_divisor > 0
+      ? std::max(
+          (i_t)1,
+          (i_t)((unset_integer_vars.size() + bulk_rounding_divisor - 1) / bulk_rounding_divisor))
+      : 0;
   while (set_count < unset_integer_vars.size()) {
     CUOPT_LOG_TRACE("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
     update_host_assignment(sol);
@@ -947,7 +954,9 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       n_failed_repair_iterations = std::numeric_limits<i_t>::max();
     }
     const i_t n_curr_unset = unset_integer_vars.size() - set_count;
-    if (single_rounding_only) {
+    if (bulk_rounding_size > 0) {
+      bounds_prop_interval = bulk_rounding_size;
+    } else if (single_rounding_only) {
       bounds_prop_interval = 1;
     } else if (!recovery_mode || rounding_ii) {
       if (n_curr_unset > 36) {
@@ -956,7 +965,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
         bounds_prop_interval = 1;
       }
     }
-    i_t n_vars_to_set = recovery_mode ? 1 : bounds_prop_interval;
+    i_t n_vars_to_set = std::min(n_curr_unset, recovery_mode ? 1 : bounds_prop_interval);
     // if we are not at the last stage or if we are in recovery mode, don't sort
     if (n_vars_to_set != 1) {
       sort_by_implied_slack_consumption(
@@ -971,8 +980,8 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
       generate_bulk_rounding_vector(sol, orig_sol, host_vars_to_set, probing_config);
     probe(
       sol, orig_sol.problem_ptr, var_probe_vals, &set_count, unset_integer_vars, probing_config);
-    if (!(n_failed_repair_iterations >= max_n_failed_repair_iterations) && rounding_ii &&
-        !timeout_happened) {
+    if (enable_repair && !(n_failed_repair_iterations >= max_n_failed_repair_iterations) &&
+        rounding_ii && !timeout_happened) {
       timer_t repair_timer{std::min(timer.remaining_time() / 5, timer.elapsed_time() / 3)};
       save_bounds(sol);
       // update bounds and run repair procedure
@@ -1215,8 +1224,12 @@ bool constraint_prop_t<i_t, f_t>::probe(
     rounding_ii = true;
     return false;
   }
-  if (!recovery_mode && !rounding_ii && (first_bounds_update_ii && second_bounds_update_ii) &&
-      bounds_prop_interval != 1) {
+  if (!enable_backtracking && first_bounds_update_ii && second_bounds_update_ii) {
+    rounding_ii   = true;
+    recovery_mode = false;
+  }
+  if (enable_backtracking && !recovery_mode && !rounding_ii &&
+      (first_bounds_update_ii && second_bounds_update_ii) && bounds_prop_interval != 1) {
     CUOPT_LOG_DEBUG(
       "Activating recovery mode in bounds prop: bounds_prop_interval %d n_ii cstr %d %d",
       bounds_prop_interval,

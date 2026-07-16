@@ -429,6 +429,7 @@ __global__ void fill_gpu_terms_stats_kernel(
     additional_termination_information,
   typename convergence_information_t<i_t, f_t>::view_t convergence_information_view,
   i_t number_of_steps_taken,
+  i_t total_number_of_attempted_steps,
   bool accept_primal_feasible,
   bool per_constraint_residual,
   bool force_all)
@@ -445,7 +446,7 @@ __global__ void fill_gpu_terms_stats_kernel(
     additional_termination_information.number_of_steps_taken[original_index] =
       number_of_steps_taken;
     additional_termination_information.total_number_of_attempted_steps[original_index] =
-      number_of_steps_taken;
+      total_number_of_attempted_steps;
     // When `per_constraint_residual` is on the primary primal/dual residual stat exposed to
     // the user is the per-row `relative_l_inf_*_residual` (the quantity the kernel actually
     // checks against the tolerances), mirroring the non-batch `fill_return_problem_solution`
@@ -474,8 +475,8 @@ __global__ void fill_gpu_terms_stats_kernel(
 }
 
 template <typename i_t, typename f_t>
-void pdlp_termination_strategy_t<i_t, f_t>::fill_gpu_terms_stats(i_t number_of_iterations,
-                                                                 bool force_all)
+void pdlp_termination_strategy_t<i_t, f_t>::fill_gpu_terms_stats(
+  i_t number_of_iterations, i_t total_number_of_attempted_steps, bool force_all)
 {
   typename convergence_information_t<i_t, f_t>::view_t convergence_information_view =
     convergence_information_.view();
@@ -495,6 +496,7 @@ void pdlp_termination_strategy_t<i_t, f_t>::fill_gpu_terms_stats(i_t number_of_i
     gpu_batch_additional_termination_information_.view(),
     convergence_information_view,
     number_of_iterations,
+    total_number_of_attempted_steps,
     accept_primal_feasible,
     settings_.per_constraint_residual,
     force_all);

@@ -898,7 +898,8 @@ void pdlp_solver_t<i_t, f_t>::snapshot_climber_into_return(size_t i, bool mark_s
 template <typename i_t, typename f_t>
 optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::finalize_batch_return()
 {
-  current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_);
+  current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_,
+                                                     pdhg_solver_.get_total_pdhg_iterations());
   RAFT_CUDA_TRY(cudaStreamSynchronize(stream_view_));
   current_termination_strategy_.convert_gpu_terms_stats_to_host(
     batch_solution_to_return_.get_additional_termination_informations());
@@ -936,7 +937,8 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
     }
     snapshot_climber_into_return(i, false);
   }
-  current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_, true);
+  current_termination_strategy_.fill_gpu_terms_stats(
+    total_pdlp_iterations_, pdhg_solver_.get_total_pdhg_iterations(), true);
   current_termination_strategy_.convert_gpu_terms_stats_to_host(
     batch_solution_to_return_.get_additional_termination_informations());
   if (fallback_status != pdlp_termination_status_t::ConcurrentLimit) {
@@ -1070,7 +1072,8 @@ pdlp_solver_t<i_t, f_t>::check_batch_termination(const timer_t& timer)
       }
     }
     if (to_remove.size() > 0) {
-      current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_);
+      current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_,
+                                                         pdhg_solver_.get_total_pdhg_iterations());
 #ifdef BATCH_VERBOSE_MODE
       std::cout << "Removing " << to_remove.size() << " climbers from the batch" << std::endl;
 #endif
