@@ -546,6 +546,25 @@ f_t solution_t<i_t, f_t>::get_total_excess()
   return total_excess;
 }
 
+template <typename i_t, typename f_t>
+f_t solution_t<i_t, f_t>::get_adjusted_total_excess()
+{
+  return thrust::transform_reduce(handle_ptr->get_thrust_policy(),
+                                  thrust::make_counting_iterator(0),
+                                  thrust::make_counting_iterator(0) + problem_ptr->n_constraints,
+                                  cuda::proclaim_return_type<f_t>([v = view()] __device__(i_t idx) {
+                                    const f_t tolerance = get_cstr_tolerance<i_t, f_t>(
+                                      v.problem.constraint_lower_bounds[idx],
+                                      v.problem.constraint_upper_bounds[idx],
+                                      v.problem.tolerances.absolute_tolerance,
+                                      v.problem.tolerances.relative_tolerance);
+                                    return max((f_t)0., v.lower_excess[idx] - tolerance) +
+                                           max((f_t)0., v.upper_excess[idx] - tolerance);
+                                  }),
+                                  0.,
+                                  thrust::plus<f_t>());
+}
+
 // TODO compute these on unscaled problem
 template <typename i_t, typename f_t>
 f_t solution_t<i_t, f_t>::compute_max_constraint_violation()

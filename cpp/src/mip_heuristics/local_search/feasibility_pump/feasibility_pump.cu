@@ -22,6 +22,8 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 
 #include <utilities/copy_helpers.hpp>
 #include <utilities/timer.hpp>
@@ -63,6 +65,50 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     timer(20.),
     batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream())
 {
+  constexpr int n_quality_configs = 10;
+  int max_config                  = n_quality_configs;
+  const char* max_config_env      = std::getenv("CUOPT_MAX_CONFIG");
+  if (max_config_env != nullptr) { max_config = std::stoi(max_config_env); }
+  cuopt_assert(max_config > 0 && max_config <= n_quality_configs,
+               "CUOPT_MAX_CONFIG must be in [1, 10]");
+
+  const char* config = std::getenv("CUOPT_CONFIG_ID");
+  if (config == nullptr) { return; }
+  batch_config.quality_config_id = std::stoi(config);
+  cuopt_assert(batch_config.quality_config_id >= 0 && batch_config.quality_config_id < max_config,
+               "CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
+  switch (batch_config.quality_config_id) {
+    case 1:
+      batch_config.max_work_without_feasible   = std::numeric_limits<int>::max();
+      batch_config.skip_restart_for_large_pure = false;
+      batch_config.objective_cut_mode          = 0;
+      break;
+    case 2: batch_config.skip_restart_for_large_pure = false; break;
+    case 3:
+      batch_config.max_work_without_feasible   = 32;
+      batch_config.skip_restart_for_large_pure = false;
+      break;
+    case 4:
+      batch_config.max_work_without_feasible   = std::numeric_limits<int>::max();
+      batch_config.restart_batch_exhausted     = false;
+      batch_config.skip_restart_for_large_pure = false;
+      break;
+    case 5:
+      batch_config.max_trajectories_before_restart = 2;
+      batch_config.max_work_without_feasible       = std::numeric_limits<int>::max();
+      batch_config.skip_restart_for_large_pure     = false;
+      break;
+    case 6:
+      batch_config.max_trajectories_before_restart = 16;
+      batch_config.max_work_without_feasible       = std::numeric_limits<int>::max();
+      batch_config.skip_restart_for_large_pure     = false;
+      break;
+    case 7: batch_config.reset_stage_state = true; break;
+    case 8: batch_config.use_trajectory_stagnation = true; break;
+    case 9: batch_config.objective_cut_mode = 2; break;
+    default: break;
+  }
+  CUOPT_LOG_INFO("Using batched FP quality configuration %d", batch_config.quality_config_id);
 }
 
 template <typename i_t, typename f_t>
@@ -96,13 +142,15 @@ void feasibility_pump_t<i_t, f_t>::record_projection_metrics(solution_t<i_t, f_t
   solution.handle_ptr->sync_stream();
   auto& entry                  = metrics->iterations.emplace_back();
   entry.iteration              = (i_t)metrics->iterations.size() - 1;
+  entry.outer_iteration        = current_outer_iteration;
   entry.batch_size             = batch_size;
   entry.projection_time        = elapsed;
   entry.projected_integers     = n_integers;
   entry.projection_l1_distance = compute_l1_distance<i_t, f_t>(
     solution.problem_ptr->integer_indices, last_rounding, last_projection, solution.handle_ptr);
-  entry.projection_feasible        = solution.get_feasible();
-  entry.projection_total_violation = solution.get_total_excess();
+  entry.projection_feasible           = solution.get_feasible();
+  entry.projection_total_violation    = solution.get_total_excess();
+  entry.projection_adjusted_violation = solution.get_adjusted_total_excess();
   entry.projection_violated_constraints =
     solution.problem_ptr->n_constraints - solution.n_feasible_constraints.value(stream);
   entry.pdlp_iterations               = last_pdlp_iterations;
@@ -132,7 +180,8 @@ void feasibility_pump_t<i_t, f_t>::record_rounding_metrics(solution_t<i_t, f_t>&
                                                              solution.assignment,
                                                              solution.handle_ptr);
   entry.rounding_feasible    = is_feasible;
-  entry.rounding_total_violation = solution.get_total_excess();
+  entry.rounding_total_violation    = solution.get_total_excess();
+  entry.rounding_adjusted_violation = solution.get_adjusted_total_excess();
   entry.rounding_violated_constraints =
     solution.problem_ptr->n_constraints - solution.n_feasible_constraints.value(stream);
 }
@@ -585,6 +634,17 @@ void feasibility_pump_t<i_t, f_t>::revert_relaxation(solution_t<i_t, f_t>& solut
   std::swap(orig_variable_types, solution.problem_ptr->variable_types);
   solution.problem_ptr->compute_n_integer_vars();
   solution.problem_ptr->compute_binary_var_table();
+  unified_problem.reset();
+  cached_cloud_batch_size = -1;
+  cloud_batch_capacity    = 0;
+  climber_alphas.clear();
+  climber_hash_history.clear();
+  if (batch_config.reset_stage_state) {
+    reset();
+    cycle_queue.reset(solution);
+  } else {
+    last_distances.resize(0);
+  }
   solution.compute_feasibility();
 }
 

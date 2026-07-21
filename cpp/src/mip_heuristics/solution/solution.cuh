@@ -91,6 +91,7 @@ class solution_t {
   // use this function for logging purposes
   f_t get_user_objective();
   f_t get_total_excess();
+  f_t get_adjusted_total_excess();
   // brings all vars within bounds
   void clamp_within_bounds();
   cuopt::mathematical_optimization::mip_solution_t<i_t, f_t> get_solution(

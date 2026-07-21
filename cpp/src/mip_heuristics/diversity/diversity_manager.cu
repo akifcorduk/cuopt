@@ -666,7 +666,8 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     return population.best_feasible();
   }
 
-  run_fp_alone();
+  population.add_external_solutions_to_population();
+  if (population.best_feasible().get_feasible()) { run_fp_alone(); }
   population.add_external_solutions_to_population();
   return population.best_feasible();
 };

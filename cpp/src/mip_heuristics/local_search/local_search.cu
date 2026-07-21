@@ -579,16 +579,20 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
         }
         CUOPT_LOG_DEBUG(
           "Running binary problem from it %d large_restart_it %d", binary_it_counter, i);
-        is_feasible = fp.run_batched_fp_cloud(solution);
+        const auto result = fp.run_batched_fp_cloud(solution);
+        is_feasible       = result.feasible;
         if (is_feasible) { break; }
-        if (timer.check_time_limit()) {
+        if (result.exit == fp_batched_exit_t::time_limit || timer.check_time_limit()) {
           fp.revert_relaxation(solution);
           solution.round_nearest();
           CUOPT_LOG_DEBUG("Time limit reached during binary stage!");
           return false;
         }
-        is_feasible = fp.restart_fp(solution);
-        if (is_feasible) { break; }
+        if (result.exit == fp_batched_exit_t::climber_cycle ||
+            result.exit == fp_batched_exit_t::batch_exhausted) {
+          is_feasible = fp.restart_fp(solution);
+          if (is_feasible) { break; }
+        }
         // give the integer FP some chance
         if (binary_timer.check_time_limit()) {
           CUOPT_LOG_DEBUG("Binary FP time limit reached during binary stage!");
@@ -606,15 +610,19 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
       for (i_t integer_it_counter = 0; integer_it_counter < 500; ++integer_it_counter) {
         CUOPT_LOG_DEBUG(
           "Running integer problem from it %d large_restart_it %d", integer_it_counter, i);
-        is_feasible = fp.run_batched_fp_cloud(solution);
+        const auto result = fp.run_batched_fp_cloud(solution);
+        is_feasible       = result.feasible;
         if (is_feasible) { return true; }
-        if (timer.check_time_limit()) {
+        if (result.exit == fp_batched_exit_t::time_limit || timer.check_time_limit()) {
           CUOPT_LOG_DEBUG("FP time limit reached during integer stage!");
           solution.round_nearest();
           return false;
         }
-        is_feasible = fp.restart_fp(solution);
-        if (is_feasible) { return true; }
+        if (result.exit == fp_batched_exit_t::climber_cycle ||
+            result.exit == fp_batched_exit_t::batch_exhausted) {
+          is_feasible = fp.restart_fp(solution);
+          if (is_feasible) { return true; }
+        }
       }
     }
   }
@@ -630,7 +638,24 @@ void local_search_t<i_t, f_t>::resize_vectors(problem_t<i_t, f_t>& problem,
 }
 
 template <typename i_t, typename f_t>
-void local_search_t<i_t, f_t>::save_solution_and_add_cutting_plane(
+f_t local_search_t<i_t, f_t>::get_objective_cut_rhs(problem_t<i_t, f_t>& problem,
+                                                    f_t objective) const
+{
+  const auto& objective_step    = problem.get_objective_step();
+  const bool use_objective_step = fp.batch_config.objective_cut_mode == 2 ||
+                                  (fp.batch_config.objective_cut_mode == 1 &&
+                                   std::abs(objective) <= problem.tolerances.absolute_tolerance);
+  if (objective_step.has_step() && use_objective_step) {
+    const f_t k = std::floor((objective - objective_step.bias) / objective_step.step_size +
+                             problem.tolerances.integrality_tolerance);
+    return (k - 1.) * objective_step.step_size + objective_step.bias +
+           problem.tolerances.absolute_tolerance;
+  }
+  return objective - std::max(std::abs(0.001 * objective), OBJECTIVE_EPSILON);
+}
+
+template <typename i_t, typename f_t>
+bool local_search_t<i_t, f_t>::save_solution_and_add_cutting_plane(
   solution_t<i_t, f_t>& solution, rmm::device_uvector<f_t>& best_solution, f_t& best_objective)
 {
   raft::common::nvtx::range fun_scope("save_solution_and_add_cutting_plane");
@@ -639,11 +664,13 @@ void local_search_t<i_t, f_t>::save_solution_and_add_cutting_plane(
                solution.assignment.data(),
                solution.assignment.size(),
                solution.handle_ptr->get_stream());
-    best_objective = solution.get_objective();
-    f_t objective_cut =
-      best_objective - std::max(std::abs(0.001 * best_objective), OBJECTIVE_EPSILON);
+    best_objective          = solution.get_objective();
+    const f_t objective_cut = get_objective_cut_rhs(problem_with_objective_cut, best_objective);
+    cuopt_assert(objective_cut < best_objective, "Objective cut must require strict improvement");
     problem_with_objective_cut.add_cutting_plane_at_objective(objective_cut);
+    return true;
   }
+  return false;
 }
 
 template <typename i_t, typename f_t>
@@ -667,12 +694,10 @@ void local_search_t<i_t, f_t>::resize_to_old_problem(problem_t<i_t, f_t>* old_pr
 }
 
 template <typename i_t, typename f_t>
-void local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
+bool local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
   solution_t<i_t, f_t>& solution,
   problem_t<i_t, f_t>* old_problem_ptr,
   population_t<i_t, f_t>* population_ptr,
-  i_t i,
-  i_t last_improved_iteration,
   rmm::device_uvector<f_t>& best_solution,
   f_t& best_objective)
 {
@@ -694,22 +719,22 @@ void local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
                solution.handle_ptr->get_stream());
   }
   population_ptr->update_weights();
-  save_solution_and_add_cutting_plane(
+  const bool improved = save_solution_and_add_cutting_plane(
     population_ptr->best_feasible(), best_solution, best_objective);
   raft::copy(solution.assignment.data(),
              best_solution.data(),
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
   population_ptr->print();
+  return improved;
 }
 
 template <typename i_t, typename f_t>
-void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
+bool local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   solution_t<i_t, f_t>& solution,
   problem_t<i_t, f_t>* old_problem_ptr,
   population_t<i_t, f_t>* population_ptr,
-  i_t i,
-  i_t last_improved_iteration,
+  i_t stagnation_work,
   rmm::device_uvector<f_t>& best_solution,
   f_t& best_objective)
 {
@@ -718,8 +743,7 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   const i_t iterations_for_stagnation          = hp.stagnation_trigger;
   const i_t max_iterations_without_improvement = hp.max_iterations_without_improvement;
   population_ptr->add_external_solutions_to_population();
-  if (population_ptr->current_size() > 1 &&
-      i - last_improved_iteration > iterations_for_stagnation) {
+  if (population_ptr->current_size() > 1 && stagnation_work > iterations_for_stagnation) {
     fp.config.alpha = default_alpha;
     population_ptr->diversity_step(max_iterations_without_improvement);
     population_ptr->print();
@@ -730,7 +754,9 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
                best_solution.data(),
                solution.assignment.size(),
                solution.handle_ptr->get_stream());
+    return true;
   }
+  return false;
 }
 
 template <typename i_t, typename f_t>
@@ -742,6 +768,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
   cuopt_assert(population_ptr != nullptr, "Population pointer must not be null");
   const i_t n_fp_iterations          = 1000000;
   bool is_feasible                   = solution.compute_feasibility();
+  bool any_feasible                  = is_feasible;
   cutting_plane_added_for_active_run = is_feasible;
   double best_objective =
     is_feasible ? solution.get_objective() : std::numeric_limits<double>::max();
@@ -754,8 +781,8 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
   }
   if (is_feasible) {
     CUOPT_LOG_DEBUG("[FP_FEASIBLE] Initial solution is feasible; adding objective cut");
-    f_t objective_cut =
-      best_objective - std::max(std::abs(0.001 * best_objective), OBJECTIVE_EPSILON);
+    const f_t objective_cut = get_objective_cut_rhs(problem_with_objective_cut, best_objective);
+    cuopt_assert(objective_cut < best_objective, "Objective cut must require strict improvement");
     problem_with_objective_cut.add_cutting_plane_at_objective(objective_cut);
     // Do the copy here for proper handling of the added constraints weight
     fj.copy_weights(
@@ -764,21 +791,34 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     solution.resize_to_problem();
     resize_to_new_problem();
   }
-  i_t last_improved_iteration = 0;
+  i_t stagnation_work               = 0;
+  i_t trajectories_without_feasible = 0;
   for (i_t i = 0; i < n_fp_iterations && !timer.check_time_limit(); ++i) {
     if (timer.check_time_limit()) {
       is_feasible = false;
       break;
     }
-    CUOPT_LOG_DEBUG("fp_loop it %d last_improved_iteration %d", i, last_improved_iteration);
+    CUOPT_LOG_DEBUG("fp_loop it %d stagnation_work %d", i, stagnation_work);
     population_ptr->add_external_solutions_to_population();
+    any_feasible = any_feasible || population_ptr->best_feasible().get_feasible();
     if (context.preempt_heuristic_solver_.load()) {
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
       break;
     }
-    // Batched-PDLP runs climber 0 as the FP trajectory and advances extra cloud climbers with
-    // nearest rounding plus FJ/perturbation restarts.
-    is_feasible = fp.run_batched_fp_cloud(solution);
+    const f_t outer_begin      = timer.remaining_time();
+    fp.current_outer_iteration = i;
+    const auto result          = fp.run_batched_fp_cloud(solution);
+    is_feasible                = result.feasible;
+    stagnation_work += fp.batch_config.use_trajectory_stagnation ? result.trajectories : 1;
+    trajectories_without_feasible += result.trajectories;
+    fp_outer_iteration_metrics_t<i_t, f_t>* outer_metric = nullptr;
+    if (fp.metrics != nullptr) {
+      outer_metric                  = &fp.metrics->outer_iterations.emplace_back();
+      outer_metric->iteration       = i;
+      outer_metric->trajectories    = result.trajectories;
+      outer_metric->exit_reason     = (i_t)result.exit;
+      outer_metric->feasible_return = is_feasible;
+    }
     population_ptr->add_external_solutions_to_population();
     CUOPT_LOG_DEBUG("Population size at iteration %d: %d", i, population_ptr->current_size());
     if (context.preempt_heuristic_solver_.load()) {
@@ -788,22 +828,30 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     if (is_feasible) {
       CUOPT_LOG_DEBUG("[FP_FEASIBLE] Found feasible in FP with obj %f. Continue with FJ!",
                       solution.get_objective());
-      reset_alpha_and_save_solution(solution,
-                                    old_problem_ptr,
-                                    population_ptr,
-                                    i,
-                                    last_improved_iteration,
-                                    best_solution,
-                                    best_objective);
-      last_improved_iteration = i;
-    }
-    // if not feasible, it means it is a cycle
-    else {
-      if (timer.check_time_limit()) {
+      const bool improved = reset_alpha_and_save_solution(
+        solution, old_problem_ptr, population_ptr, best_solution, best_objective);
+      stagnation_work               = 0;
+      trajectories_without_feasible = 0;
+      if (outer_metric != nullptr) { outer_metric->objective_improved = improved; }
+    } else {
+      if (result.exit == fp_batched_exit_t::time_limit || timer.check_time_limit()) {
         is_feasible = false;
+        if (outer_metric != nullptr) {
+          outer_metric->elapsed        = outer_begin - timer.remaining_time();
+          outer_metric->best_objective = best_objective;
+        }
         break;
       }
-      is_feasible = fp.restart_fp(solution);
+      const bool large_pure_integer =
+        solution.problem_ptr->n_integer_vars == solution.problem_ptr->n_variables &&
+        solution.problem_ptr->n_variables >= fp.batch_config.work_limit_min_variables;
+      if (result.exit == fp_batched_exit_t::climber_cycle ||
+          (result.exit == fp_batched_exit_t::batch_exhausted &&
+           fp.batch_config.restart_batch_exhausted &&
+           !(large_pure_integer && fp.batch_config.skip_restart_for_large_pure))) {
+        is_feasible = fp.restart_fp(solution);
+        if (outer_metric != nullptr) { outer_metric->restarted = true; }
+      }
       population_ptr->add_external_solutions_to_population();
       if (context.preempt_heuristic_solver_.load()) {
         CUOPT_LOG_DEBUG("Preempting heuristic solver!");
@@ -813,23 +861,41 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
         CUOPT_LOG_DEBUG(
           "[FP_FEASIBLE] Found feasible during restart with obj %f. Continue with FJ!",
           solution.get_objective());
-        reset_alpha_and_save_solution(solution,
-                                      old_problem_ptr,
-                                      population_ptr,
-                                      i,
-                                      last_improved_iteration,
-                                      best_solution,
-                                      best_objective);
-        last_improved_iteration = i;
+        const bool improved = reset_alpha_and_save_solution(
+          solution, old_problem_ptr, population_ptr, best_solution, best_objective);
+        stagnation_work               = 0;
+        trajectories_without_feasible = 0;
+        if (outer_metric != nullptr) { outer_metric->objective_improved = improved; }
       } else {
-        reset_alpha_and_run_recombiners(solution,
-                                        old_problem_ptr,
-                                        population_ptr,
-                                        i,
-                                        last_improved_iteration,
-                                        best_solution,
-                                        best_objective);
+        const f_t objective_before = best_objective;
+        const bool recombiner_run  = reset_alpha_and_run_recombiners(solution,
+                                                                    old_problem_ptr,
+                                                                    population_ptr,
+                                                                    stagnation_work,
+                                                                    best_solution,
+                                                                    best_objective);
+        if (best_objective < objective_before) { stagnation_work = 0; }
+        if (outer_metric != nullptr) {
+          outer_metric->recombiner_run     = recombiner_run;
+          outer_metric->objective_improved = best_objective < objective_before;
+        }
       }
+    }
+    if (outer_metric != nullptr) {
+      outer_metric->elapsed        = outer_begin - timer.remaining_time();
+      outer_metric->best_objective = best_objective;
+      if (std::isfinite(best_objective)) {
+        outer_metric->objective_cut_rhs =
+          get_objective_cut_rhs(problem_with_objective_cut, best_objective);
+      }
+    }
+    any_feasible = any_feasible || is_feasible || population_ptr->best_feasible().get_feasible();
+    const bool limit_no_feasible_work =
+      solution.problem_ptr->n_integer_vars == solution.problem_ptr->n_variables &&
+      solution.problem_ptr->n_variables >= fp.batch_config.work_limit_min_variables;
+    if (limit_no_feasible_work && !any_feasible &&
+        trajectories_without_feasible >= fp.batch_config.max_work_without_feasible) {
+      break;
     }
   }
   raft::copy(solution.assignment.data(),

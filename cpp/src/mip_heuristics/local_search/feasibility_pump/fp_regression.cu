@@ -86,7 +86,8 @@ run_result_t run_fp(const std::string& mps_path,
                     fp_variant_t variant,
                     int batch_size,
                     int diversity_climber,
-                    int diversity_seed)
+                    int diversity_seed,
+                    bool outer_loop)
 {
   using clock_t = std::chrono::steady_clock;
 
@@ -98,6 +99,8 @@ run_result_t run_fp(const std::string& mps_path,
   problem_checking_t<int, double>::check_problem_representation(op_problem);
   mip::problem_t<int, double> problem(op_problem);
   problem.preprocess_problem();
+  problem.recompute_objective_integrality();
+  problem.compute_objective_step();
   cuopt_assert(problem.n_integer_vars > 0, "FP regression requires integer variables");
 
   mip_solver_settings_t<int, double> settings;
@@ -149,10 +152,24 @@ run_result_t run_fp(const std::string& mps_path,
   }
   auto wall_begin = clock_t::now();
   bool feasible   = false;
-  if (variant == fp_variant_t::single) {
+  if (outer_loop) {
+    if (variant != fp_variant_t::batched) {
+      throw std::runtime_error("Outer-loop regression only supports batched FP");
+    }
+    dm.timer            = timer_t(time_limit);
+    dm.population.timer = dm.timer;
+    mip::recombiner_t<int, double>::init_enabled_recombiners(
+      problem, settings.heuristic_params.enabled_recombiners);
+    dm.mab_recombiner.resize_mab_arm_stats(
+      mip::recombiner_t<int, double>::enabled_recombiners.size());
+    dm.population.initialize_population();
+    dm.population.allocate_solutions();
+    dm.ls.run_fp(solution, timer_t(time_limit), &dm.population);
+    feasible = solution.compute_feasibility();
+  } else if (variant == fp_variant_t::single) {
     feasible = dm.ls.fp.run_single_fp_descent(solution);
   } else if (variant == fp_variant_t::batched) {
-    feasible = dm.ls.fp.run_batched_fp_cloud(solution);
+    feasible = dm.ls.fp.run_batched_fp_cloud(solution).feasible;
   } else {
     feasible = mip::run_vanilla_fp_descent(
       dm.ls.fp, solution, mip::vanilla_fp_config_t{diversity_climber, diversity_seed});
@@ -181,35 +198,57 @@ void write_csv(std::ostream& out, const std::vector<run_result_t>& results)
   out << "run,seed,path,diversity_climber,diversity_seed,rounding_mode,projection_backend,"
          "iteration,batch_size,projected_integers,projected_ratio,"
          "projection_violated_constraints,projection_l1_distance,projection_total_violation,"
+         "projection_adjusted_violation,"
          "projection_time,pdlp_iterations,pdhg_iterations,projection_termination_status,"
          "pdlp_primal_residual,pdlp_dual_residual,pdlp_gap,batch_mean_pdlp_iterations,"
          "batch_max_pdlp_iterations,rounded_integers,rounding_violated_constraints,"
          "rounding_l1_movement,"
-         "rounding_total_violation,rounding_time,projection_feasible,rounding_feasible,cycle,"
+         "rounding_total_violation,rounding_adjusted_violation,rounding_time,"
+         "projection_feasible,rounding_feasible,cycle,"
          "cycle_kind,perturbed,timed_out,feasible,diversity_feasible_candidates,"
          "diversity_best_updates,climber1_feasible_candidates,climber1_best_updates,"
-         "feasible_events,total_run_time\n";
+         "outer_iteration,outer_trajectories,outer_exit_reason,outer_feasible_return,"
+         "outer_objective_improved,outer_restarted,outer_recombiner_run,outer_best_objective,"
+         "outer_objective_cut_rhs,outer_elapsed,feasible_events,total_run_time\n";
   out << std::setprecision(17);
   for (const auto& result : results) {
     for (const auto& metric : result.metrics.iterations) {
       double projected_ratio = (double)metric.projected_integers / result.n_integer_vars;
+      const mip::fp_outer_iteration_metrics_t<int, double>* outer = nullptr;
+      if (metric.outer_iteration >= 0) {
+        cuopt_assert(metric.outer_iteration < (int)result.metrics.outer_iterations.size(),
+                     "Outer FP metric index out of bounds");
+        outer = &result.metrics.outer_iterations[metric.outer_iteration];
+      }
       out << result.run << ',' << result.seed << ',' << result.path << ','
           << result.diversity_climber << ',' << result.diversity_seed << ',' << result.rounding_mode
           << ',' << result.projection_backend << ',' << metric.iteration << ',' << metric.batch_size
           << ',' << metric.projected_integers << ',' << projected_ratio << ','
           << metric.projection_violated_constraints << ',' << metric.projection_l1_distance << ','
-          << metric.projection_total_violation << ',' << metric.projection_time << ','
-          << metric.pdlp_iterations << ',' << metric.pdhg_iterations << ','
-          << metric.projection_termination_status << ',' << metric.pdlp_primal_residual << ','
-          << metric.pdlp_dual_residual << ',' << metric.pdlp_gap << ','
-          << metric.batch_mean_pdlp_iterations << ',' << metric.batch_max_pdlp_iterations << ','
-          << metric.rounded_integers << ',' << metric.rounding_violated_constraints << ','
-          << metric.rounding_l1_movement << ',' << metric.rounding_total_violation << ','
+          << metric.projection_total_violation << ',' << metric.projection_adjusted_violation << ','
+          << metric.projection_time << ',' << metric.pdlp_iterations << ','
+          << metric.pdhg_iterations << ',' << metric.projection_termination_status << ','
+          << metric.pdlp_primal_residual << ',' << metric.pdlp_dual_residual << ','
+          << metric.pdlp_gap << ',' << metric.batch_mean_pdlp_iterations << ','
+          << metric.batch_max_pdlp_iterations << ',' << metric.rounded_integers << ','
+          << metric.rounding_violated_constraints << ',' << metric.rounding_l1_movement << ','
+          << metric.rounding_total_violation << ',' << metric.rounding_adjusted_violation << ','
           << metric.rounding_time << ',' << metric.projection_feasible << ','
           << metric.rounding_feasible << ',' << metric.cycle << ',' << metric.cycle_kind << ','
           << metric.perturbed << ',' << metric.timed_out << ',' << metric.feasible << ','
           << metric.diversity_feasible_candidates << ',' << metric.diversity_best_updates << ','
           << metric.climber1_feasible_candidates << ',' << metric.climber1_best_updates << ','
+          << metric.outer_iteration << ',' << (outer == nullptr ? -1 : outer->trajectories) << ','
+          << (outer == nullptr ? -1 : outer->exit_reason) << ','
+          << (outer != nullptr && outer->feasible_return) << ','
+          << (outer != nullptr && outer->objective_improved) << ','
+          << (outer != nullptr && outer->restarted) << ','
+          << (outer != nullptr && outer->recombiner_run) << ','
+          << (outer == nullptr ? std::numeric_limits<double>::quiet_NaN() : outer->best_objective)
+          << ','
+          << (outer == nullptr ? std::numeric_limits<double>::quiet_NaN()
+                               : outer->objective_cut_rhs)
+          << ',' << (outer == nullptr ? 0. : outer->elapsed) << ','
           << result.metrics.feasible_events << ',' << result.total_run_time << '\n';
     }
   }
@@ -222,10 +261,12 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   std::vector<double> projection_l1;
   std::vector<double> projection_violated;
   std::vector<double> projection_total_violation;
+  std::vector<double> projection_adjusted_violation;
   std::vector<double> rounded_integers;
   std::vector<double> rounding_l1;
   std::vector<double> rounding_violated;
   std::vector<double> rounding_total_violation;
+  std::vector<double> rounding_adjusted_violation;
   std::vector<double> projection_time;
   std::vector<double> normalized_projection_time;
   std::vector<double> pdlp_iterations;
@@ -260,10 +301,12 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
       projection_l1.push_back(metric.projection_l1_distance);
       projection_violated.push_back(metric.projection_violated_constraints);
       projection_total_violation.push_back(metric.projection_total_violation);
+      projection_adjusted_violation.push_back(metric.projection_adjusted_violation);
       rounded_integers.push_back(metric.rounded_integers);
       rounding_l1.push_back(metric.rounding_l1_movement);
       rounding_violated.push_back(metric.rounding_violated_constraints);
       rounding_total_violation.push_back(metric.rounding_total_violation);
+      rounding_adjusted_violation.push_back(metric.rounding_adjusted_violation);
       projection_time.push_back(metric.projection_time);
       normalized_projection_time.push_back(metric.projection_time / metric.batch_size);
       pdlp_iterations.push_back(metric.pdlp_iterations);
@@ -297,10 +340,12 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   print_distribution("projection_l1", projection_l1);
   print_distribution("projection_violated_constraints", projection_violated);
   print_distribution("projection_total_violation", projection_total_violation);
+  print_distribution("projection_adjusted_violation", projection_adjusted_violation);
   print_distribution("rounded_integers", rounded_integers);
   print_distribution("rounding_l1", rounding_l1);
   print_distribution("rounding_violated_constraints", rounding_violated);
   print_distribution("rounding_total_violation", rounding_total_violation);
+  print_distribution("rounding_adjusted_violation", rounding_adjusted_violation);
   print_distribution("projection_time", projection_time);
   print_distribution("pdlp_iterations", pdlp_iterations);
   print_distribution("pdhg_iterations", pdhg_iterations);
@@ -351,6 +396,7 @@ int main(int argc, char** argv)
   program.add_argument("--diversity-climber").scan<'i', int>().default_value(1);
   program.add_argument("--diversity-seed").scan<'i', int>().default_value(-1);
   program.add_argument("--summary-only").default_value(false).implicit_value(true);
+  program.add_argument("--outer-loop").default_value(false).implicit_value(true);
   program.add_argument("--output");
 
   try {
@@ -365,6 +411,7 @@ int main(int argc, char** argv)
     const int diversity_climber = program.get<int>("--diversity-climber");
     const int diversity_seed    = program.get<int>("--diversity-seed");
     const bool summary_only     = program.get<bool>("--summary-only");
+    const bool outer_loop       = program.get<bool>("--outer-loop");
     const auto output           = program.present<std::string>("--output");
     if (runs <= 0) { throw std::runtime_error("--runs must be positive"); }
     if (limit <= 0.) { throw std::runtime_error("--time-limit must be positive"); }
@@ -376,8 +423,15 @@ int main(int argc, char** argv)
       int seed         = base_seed + run;
       int vanilla_seed = diversity_seed >= 0 ? diversity_seed : seed;
       for (auto variant : variants) {
-        results.push_back(cuopt::mathematical_optimization::run_fp(
-          mps_path, run, seed, limit, variant, batch_size, diversity_climber, vanilla_seed));
+        results.push_back(cuopt::mathematical_optimization::run_fp(mps_path,
+                                                                   run,
+                                                                   seed,
+                                                                   limit,
+                                                                   variant,
+                                                                   batch_size,
+                                                                   diversity_climber,
+                                                                   vanilla_seed,
+                                                                   outer_loop));
       }
     }
 

@@ -919,21 +919,34 @@ bool feasibility_pump_t<i_t, f_t>::host_assignment_feasible(const f_t* x)
 }
 
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& solution)
+fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(
+  solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_batched_fp_cloud");
   // Batched-PDLP cloud is the default path; set CUOPT_FP_SINGLE to force the classic single-point
   // FP (the outer loop drives restarts either way).
   static const bool use_single_fp = std::getenv("CUOPT_FP_SINGLE") != nullptr;
-  if (use_single_fp) { return run_single_fp_descent(solution); }
-
-  if (unified_problem == nullptr || unified_n_vars != solution.problem_ptr->n_variables ||
-      unified_n_constr != solution.problem_ptr->n_constraints) {
-    build_unified_projection_problem(solution);
+  if (use_single_fp) {
+    const bool feasible = run_single_fp_descent(solution);
+    return {feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
   }
 
+  if (unified_problem == nullptr || unified_n_vars != solution.problem_ptr->n_variables ||
+      unified_n_constr != solution.problem_ptr->n_constraints ||
+      unified_n_int != solution.problem_ptr->n_integer_vars ||
+      unified_n_aux != (i_t)solution.problem_ptr->nonbinary_indices.size()) {
+    build_unified_projection_problem(solution);
+  }
+  cuopt_assert(unified_n_int == solution.problem_ptr->n_integer_vars,
+               "Unified projection integer structure mismatch");
+  cuopt_assert(unified_n_aux == (i_t)solution.problem_ptr->nonbinary_indices.size(),
+               "Unified projection auxiliary structure mismatch");
+
   const i_t batch_size = compute_cloud_batch_size(solution);
-  if (batch_size == 0) { return run_single_fp_descent(solution); }
+  if (batch_size == 0) {
+    const bool feasible = run_single_fp_descent(solution);
+    return {feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
+  }
   const size_t expected_obj_size = (size_t)batch_size * unified_n_vars_total;
   if (cloud_batch_capacity != batch_size ||
       unified_problem->get_objective_coefficients().size() != expected_obj_size) {
@@ -954,7 +967,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(solution_t<i_t, f_t>& so
 }
 
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
+fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
   solution_t<i_t, f_t>& solution,
   i_t batch_size,
   rmm::device_uvector<f_t>& d_batch_assignments,
@@ -976,8 +989,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
   while (true) {
     if (context.diversity_manager_ptr->check_b_b_preemption() || timer.check_time_limit()) {
       CUOPT_LOG_INFO("FP time limit reached!");
-      round(solution);
-      return false;
+      return {false, fp_batched_exit_t::time_limit, trajectory};
     }
     const cuda_profiler_scope_t profiler_scope(profile_one_iter && trajectory == 0);
 
@@ -1007,6 +1019,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
     lp_time += last_lp_time;
     n_calls++;
     CUOPT_LOG_INFO("lp_time %f average lp_time %f", last_lp_time, lp_time / n_calls);
+    if (timer.check_time_limit()) { return {false, fp_batched_exit_t::time_limit, trajectory + 1}; }
     if (n_points == 0) {
       cuopt_expects(false, error_type_t::RuntimeError, "Projection produced no usable solution");
     }
@@ -1050,6 +1063,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
 
     // ---- CP-round diversity climbers and keep the best feasible objective ----
     for (i_t c = 1; c < n_points; ++c) {
+      if (timer.check_time_limit()) { break; }
       raft::copy(solution.assignment.data(),
                  d_batch_assignments.data() + (size_t)c * n_vars,
                  n_vars,
@@ -1138,7 +1152,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       solution.handle_ptr->sync_stream();
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
-      return true;
+      return {true, fp_batched_exit_t::feasible, trajectory + 1};
     }
 
     i_t n_flagged = 0;
@@ -1148,7 +1162,7 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
 
     if (timer.check_time_limit()) {
       CUOPT_LOG_INFO("FP time limit reached!");
-      return false;
+      return {false, fp_batched_exit_t::time_limit, trajectory + 1};
     }
 
     if (n_flagged > 0) {
@@ -1174,51 +1188,55 @@ bool feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       }
     }
 
-    if (climber0_cycle) { return false; }
-    if (profile_one_iter && trajectory == 0) { return false; }
+    if (climber0_cycle) { return {false, fp_batched_exit_t::climber_cycle, trajectory + 1}; }
+    if (profile_one_iter && trajectory == 0) {
+      return {false, fp_batched_exit_t::batch_exhausted, trajectory + 1};
+    }
     trajectory++;
-    if (trajectory >= batch_config.max_trajectories_before_restart) { return false; }
+    if (trajectory >= batch_config.max_trajectories_before_restart) {
+      return {false, fp_batched_exit_t::batch_exhausted, trajectory};
+    }
   }
-  return false;
 }
 
 // Explicit instantiation of the batched-PDLP members. The non-batched members are instantiated by
 // the `template class feasibility_pump_t<...>` in feasibility_pump.cu; these definitions live in a
 // separate translation unit, so the specific members are instantiated here instead.
-#define INSTANTIATE_BATCHED(F_TYPE)                                                       \
-  template void feasibility_pump_t<int, F_TYPE>::build_unified_projection_problem(        \
-    solution_t<int, F_TYPE>&);                                                            \
-  template void feasibility_pump_t<int, F_TYPE>::expand_unified_projection_batch_buffers( \
-    solution_t<int, F_TYPE>&, int);                                                       \
-  template int feasibility_pump_t<int, F_TYPE>::compute_cloud_batch_size(                 \
-    solution_t<int, F_TYPE>&);                                                            \
-  template void feasibility_pump_t<int, F_TYPE>::seed_cloud_from_assignment_gpu(          \
-    solution_t<int, F_TYPE>&, int, rmm::device_uvector<F_TYPE>&);                         \
-  template void feasibility_pump_t<int, F_TYPE>::replace_flagged_climbers_diverse(        \
-    solution_t<int, F_TYPE>&,                                                             \
-    int,                                                                                  \
-    rmm::device_uvector<F_TYPE>&,                                                         \
-    const std::vector<char>&,                                                             \
-    int&,                                                                                 \
-    int&);                                                                                \
-  template void feasibility_pump_t<int, F_TYPE>::advance_diversity_climbers_gpu(          \
-    solution_t<int, F_TYPE>&,                                                             \
-    int,                                                                                  \
-    rmm::device_uvector<F_TYPE>&,                                                         \
-    std::vector<char>&,                                                                   \
-    std::vector<size_t>&);                                                                \
-  template void feasibility_pump_t<int, F_TYPE>::project_cloud(                           \
-    solution_t<int, F_TYPE>&, int&, rmm::device_uvector<F_TYPE>&, int);                   \
-  template bool feasibility_pump_t<int, F_TYPE>::run_batched_fp_cloud_descent(            \
-    solution_t<int, F_TYPE>&,                                                             \
-    int,                                                                                  \
-    rmm::device_uvector<F_TYPE>&,                                                         \
-    std::vector<char>&,                                                                   \
-    std::vector<size_t>&);                                                                \
-  template bool feasibility_pump_t<int, F_TYPE>::run_climber0_step(                       \
-    solution_t<int, F_TYPE>&, F_TYPE, bool&, int);                                        \
-  template bool feasibility_pump_t<int, F_TYPE>::host_assignment_feasible(const F_TYPE*); \
-  template bool feasibility_pump_t<int, F_TYPE>::run_batched_fp_cloud(solution_t<int, F_TYPE>&);
+#define INSTANTIATE_BATCHED(F_TYPE)                                                           \
+  template void feasibility_pump_t<int, F_TYPE>::build_unified_projection_problem(            \
+    solution_t<int, F_TYPE>&);                                                                \
+  template void feasibility_pump_t<int, F_TYPE>::expand_unified_projection_batch_buffers(     \
+    solution_t<int, F_TYPE>&, int);                                                           \
+  template int feasibility_pump_t<int, F_TYPE>::compute_cloud_batch_size(                     \
+    solution_t<int, F_TYPE>&);                                                                \
+  template void feasibility_pump_t<int, F_TYPE>::seed_cloud_from_assignment_gpu(              \
+    solution_t<int, F_TYPE>&, int, rmm::device_uvector<F_TYPE>&);                             \
+  template void feasibility_pump_t<int, F_TYPE>::replace_flagged_climbers_diverse(            \
+    solution_t<int, F_TYPE>&,                                                                 \
+    int,                                                                                      \
+    rmm::device_uvector<F_TYPE>&,                                                             \
+    const std::vector<char>&,                                                                 \
+    int&,                                                                                     \
+    int&);                                                                                    \
+  template void feasibility_pump_t<int, F_TYPE>::advance_diversity_climbers_gpu(              \
+    solution_t<int, F_TYPE>&,                                                                 \
+    int,                                                                                      \
+    rmm::device_uvector<F_TYPE>&,                                                             \
+    std::vector<char>&,                                                                       \
+    std::vector<size_t>&);                                                                    \
+  template void feasibility_pump_t<int, F_TYPE>::project_cloud(                               \
+    solution_t<int, F_TYPE>&, int&, rmm::device_uvector<F_TYPE>&, int);                       \
+  template fp_batched_result_t feasibility_pump_t<int, F_TYPE>::run_batched_fp_cloud_descent( \
+    solution_t<int, F_TYPE>&,                                                                 \
+    int,                                                                                      \
+    rmm::device_uvector<F_TYPE>&,                                                             \
+    std::vector<char>&,                                                                       \
+    std::vector<size_t>&);                                                                    \
+  template bool feasibility_pump_t<int, F_TYPE>::run_climber0_step(                           \
+    solution_t<int, F_TYPE>&, F_TYPE, bool&, int);                                            \
+  template bool feasibility_pump_t<int, F_TYPE>::host_assignment_feasible(const F_TYPE*);     \
+  template fp_batched_result_t feasibility_pump_t<int, F_TYPE>::run_batched_fp_cloud(         \
+    solution_t<int, F_TYPE>&);
 
 #if MIP_INSTANTIATE_FLOAT
 INSTANTIATE_BATCHED(float)

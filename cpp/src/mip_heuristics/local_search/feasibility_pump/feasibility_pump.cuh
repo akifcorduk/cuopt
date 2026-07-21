@@ -103,6 +103,14 @@ struct fp_config_t {
   double cycle_distance_reduction_ration = 0.1;
 };
 
+enum class fp_batched_exit_t : int { feasible, climber_cycle, batch_exhausted, time_limit };
+
+struct fp_batched_result_t {
+  bool feasible;
+  fp_batched_exit_t exit;
+  int trajectories;
+};
+
 // Target range for the batched-PDLP feasibility-pump cloud size. compute_optimal_batch_size is
 // clamped into [min, max]; if it falls below fallback_threshold we fall back to single-point FP.
 struct fp_batch_config_t {
@@ -112,17 +120,27 @@ struct fp_batch_config_t {
   int latency_max_batch_size          = 8;
   int fallback_threshold              = 8;
   int max_trajectories_before_restart = 8;
+  int max_work_without_feasible       = 8;
+  int work_limit_min_variables        = 50000;
+  bool restart_batch_exhausted        = true;
+  bool skip_restart_for_large_pure    = true;
+  bool use_trajectory_stagnation      = false;
+  bool reset_stage_state              = false;
+  int objective_cut_mode              = 1;
+  int quality_config_id               = 0;
   double fj_ratio                     = 0.2;  // 20% FJ run
 };
 
 template <typename i_t, typename f_t>
 struct fp_iteration_metrics_t {
   i_t iteration                       = 0;
+  i_t outer_iteration                 = -1;
   i_t batch_size                      = 1;
   i_t projected_integers              = 0;
   i_t projection_violated_constraints = 0;
   f_t projection_l1_distance          = 0.;
   f_t projection_total_violation      = 0.;
+  f_t projection_adjusted_violation   = 0.;
   double projection_time              = 0.;
   i_t pdlp_iterations                 = -1;
   i_t pdhg_iterations                 = -1;
@@ -136,6 +154,7 @@ struct fp_iteration_metrics_t {
   i_t rounding_violated_constraints   = 0;
   f_t rounding_l1_movement            = 0.;
   f_t rounding_total_violation        = 0.;
+  f_t rounding_adjusted_violation     = 0.;
   double rounding_time                = 0.;
   bool projection_feasible            = false;
   bool rounding_feasible              = false;
@@ -151,8 +170,23 @@ struct fp_iteration_metrics_t {
 };
 
 template <typename i_t, typename f_t>
+struct fp_outer_iteration_metrics_t {
+  i_t iteration           = 0;
+  i_t trajectories        = 0;
+  i_t exit_reason         = -1;
+  bool feasible_return    = false;
+  bool objective_improved = false;
+  bool restarted          = false;
+  bool recombiner_run     = false;
+  f_t best_objective      = std::numeric_limits<f_t>::infinity();
+  f_t objective_cut_rhs   = std::numeric_limits<f_t>::infinity();
+  double elapsed          = 0.;
+};
+
+template <typename i_t, typename f_t>
 struct fp_run_metrics_t {
   std::vector<fp_iteration_metrics_t<i_t, f_t>> iterations;
+  std::vector<fp_outer_iteration_metrics_t<i_t, f_t>> outer_iterations;
   i_t feasible_events = 0;
   double total_time   = 0.;
 };
@@ -179,7 +213,7 @@ class feasibility_pump_t {
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
   bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
 
-  bool run_batched_fp_cloud(solution_t<i_t, f_t>& solution);
+  fp_batched_result_t run_batched_fp_cloud(solution_t<i_t, f_t>& solution);
   // Builds the fixed unified projection problem once. Binary distance is represented directly in
   // each climber's objective; non-binary integers use one aux distance var and 2 abs-value rows.
   void build_unified_projection_problem(solution_t<i_t, f_t>& solution);
@@ -191,11 +225,11 @@ class feasibility_pump_t {
   // Memory-aware cloud size via compute_optimal_batch_size, clamped into [target_min, target_max];
   // 0 means "fall back to single".
   i_t compute_cloud_batch_size(solution_t<i_t, f_t>& solution);
-  bool run_batched_fp_cloud_descent(solution_t<i_t, f_t>& solution,
-                                    i_t batch_size,
-                                    rmm::device_uvector<f_t>& d_batch_assignments,
-                                    std::vector<char>& flagged,
-                                    std::vector<size_t>& climber_hashes);
+  fp_batched_result_t run_batched_fp_cloud_descent(solution_t<i_t, f_t>& solution,
+                                                   i_t batch_size,
+                                                   rmm::device_uvector<f_t>& d_batch_assignments,
+                                                   std::vector<char>& flagged,
+                                                   std::vector<size_t>& climber_hashes);
   // Runs the batch projection in place: d_batch_assignments is integer-side input on entry and
   // projected primal output on success. On OOM, halves n_points and retries; if even batch size 1
   // returns no usable solution it sets n_points = 0 so the caller falls back to a single rounding
@@ -308,6 +342,7 @@ class feasibility_pump_t {
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
   fp_run_metrics_t<i_t, f_t>* metrics    = nullptr;
+  i_t current_outer_iteration            = -1;
   i_t last_pdlp_iterations               = -1;
   i_t last_pdhg_iterations               = -1;
   i_t last_projection_status             = -1;

@@ -85,23 +85,21 @@ class local_search_t {
   // Start CPUFJ thread for deterministic mode with B&B integration
   void start_cpufj_deterministic(mip::branch_and_bound_t<i_t, f_t>& bb);
   void stop_cpufj_deterministic();
-  void save_solution_and_add_cutting_plane(solution_t<i_t, f_t>& solution,
+  bool save_solution_and_add_cutting_plane(solution_t<i_t, f_t>& solution,
                                            rmm::device_uvector<f_t>& best_solution,
                                            f_t& best_objective);
+  f_t get_objective_cut_rhs(problem_t<i_t, f_t>& problem, f_t objective) const;
   void resize_to_new_problem();
   void resize_to_old_problem(problem_t<i_t, f_t>* old_problem_ptr);
-  void reset_alpha_and_run_recombiners(solution_t<i_t, f_t>& solution,
+  bool reset_alpha_and_run_recombiners(solution_t<i_t, f_t>& solution,
                                        problem_t<i_t, f_t>* old_problem_ptr,
                                        population_t<i_t, f_t>* population_ptr,
-                                       i_t i,
-                                       i_t last_unimproved_iteration,
+                                       i_t stagnation_work,
                                        rmm::device_uvector<f_t>& best_solution,
                                        f_t& best_objective);
-  void reset_alpha_and_save_solution(solution_t<i_t, f_t>& solution,
+  bool reset_alpha_and_save_solution(solution_t<i_t, f_t>& solution,
                                      problem_t<i_t, f_t>* old_problem_ptr,
                                      population_t<i_t, f_t>* population_ptr,
-                                     i_t i,
-                                     i_t last_unimproved_iteration,
                                      rmm::device_uvector<f_t>& best_solution,
                                      f_t& best_objective);
 
