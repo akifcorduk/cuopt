@@ -32,6 +32,9 @@
 namespace cuopt::linear_programming::detail {
 
 template <typename i_t, typename f_t>
+class cpu_lns_thread_t;
+
+template <typename i_t, typename f_t>
 class diversity_manager_t {
  public:
   diversity_manager_t(mip_solver_context_t<i_t, f_t>& context);
@@ -39,7 +42,9 @@ class diversity_manager_t {
   solution_t<i_t, f_t> run_solver();
   solution_t<i_t, f_t> run_solver_with_lns();
   void generate_solution(f_t time_limit, bool random_start = true);
-  bool run_lns_feasibility_phase(solution_t<i_t, f_t>& solution, f_t time_limit);
+  bool run_lns_feasibility_phase(solution_t<i_t, f_t>& solution,
+                                 f_t time_limit,
+                                 f_t solve_elapsed_at_start);
   void run_fj_alone(solution_t<i_t, f_t>& solution);
   void run_fp_alone();
   // main loop of diversity improvements
@@ -74,6 +79,8 @@ class diversity_manager_t {
   void set_simplex_solution(const std::vector<f_t>& solution,
                             const std::vector<f_t>& dual_solution,
                             f_t objective);
+  void offer_lns_incumbent(const std::vector<f_t>& solution, f_t objective);
+  void offer_lns_lp_reference(const std::vector<f_t>& solution);
   mip_solver_context_t<i_t, f_t>& context;
   dual_simplex::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr;
   problem_t<i_t, f_t>* problem_ptr;
@@ -105,6 +112,8 @@ class diversity_manager_t {
   std::atomic<int> global_concurrent_halt{0};
 
   rins_t<i_t, f_t> rins;
+  // Non-owning; set while the background CPU LNS OpenMP task is alive in run_solver().
+  cpu_lns_thread_t<i_t, f_t>* cpu_lns_ptr{nullptr};
 
   bool run_only_ls_recombiner{false};
   bool run_only_bp_recombiner{false};

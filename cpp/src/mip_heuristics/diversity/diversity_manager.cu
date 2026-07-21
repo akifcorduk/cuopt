@@ -7,6 +7,7 @@
 
 #include "cuda_profiler_api.h"
 #include "diversity_manager.cuh"
+#include "lns/cpu_lns_thread.cuh"
 #include "lns/lns_feasibility_cpu.cuh"
 
 #include <mip_heuristics/mip_constants.hpp>
@@ -20,7 +21,9 @@
 
 #include <utilities/scope_guard.hpp>
 
+#include <cstdlib>
 #include <memory>
+#include <string>
 
 constexpr bool fj_only_run = false;
 
@@ -180,11 +183,12 @@ void diversity_manager_t<i_t, f_t>::generate_solution(f_t time_limit, bool rando
 
 template <typename i_t, typename f_t>
 bool diversity_manager_t<i_t, f_t>::run_lns_feasibility_phase(solution_t<i_t, f_t>& solution,
-                                                              f_t time_limit)
+                                                              f_t time_limit,
+                                                              f_t solve_elapsed_at_start)
 {
   raft::common::nvtx::range fun_scope("run_lns_feasibility_phase");
   lns_feasibility_cpu_t<i_t, f_t> lns_feasibility(context);
-  return lns_feasibility.run(solution, time_limit);
+  return lns_feasibility.run(solution, time_limit, solve_elapsed_at_start);
 }
 
 template <typename i_t, typename f_t>
@@ -393,6 +397,35 @@ struct ls_cpufj_raii_guard_t {
   local_search_t<i_t, f_t>& ls;
 };
 
+template <typename i_t, typename f_t>
+struct cpu_lns_raii_guard_t {
+  cpu_lns_raii_guard_t(diversity_manager_t<i_t, f_t>& dm, cpu_lns_thread_t<i_t, f_t>& cpu_lns)
+    : dm(dm), cpu_lns(cpu_lns)
+  {
+    dm.cpu_lns_ptr = &cpu_lns;
+  }
+  ~cpu_lns_raii_guard_t()
+  {
+    cpu_lns.stop();
+    dm.cpu_lns_ptr = nullptr;
+  }
+  diversity_manager_t<i_t, f_t>& dm;
+  cpu_lns_thread_t<i_t, f_t>& cpu_lns;
+};
+
+template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::offer_lns_incumbent(const std::vector<f_t>& solution,
+                                                        f_t objective)
+{
+  if (cpu_lns_ptr != nullptr) { cpu_lns_ptr->offer_incumbent(solution, objective); }
+}
+
+template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::offer_lns_lp_reference(const std::vector<f_t>& solution)
+{
+  if (cpu_lns_ptr != nullptr) { cpu_lns_ptr->offer_lp_reference(solution); }
+}
+
 // returns the best feasible solution
 template <typename i_t, typename f_t>
 solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver_with_lns()
@@ -428,9 +461,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver_with_lns()
   lp_seed_settings.save_state            = false;
   lp_seed_settings.return_first_feasible = true;
   get_relaxed_lp_solution(*problem_ptr, lns_sol, lp_seed_settings);
-  // round_nearest clamps to variable bounds, so the rounded seed is always within bounds.
-  lns_sol.round_nearest();
-  run_lns_feasibility_phase(lns_sol, timer.remaining_time());
+  const char* cpu_lns_ablation = std::getenv("CUOPT_CPU_LNS_ABLATION");
+  if (cpu_lns_ablation != nullptr && std::string(cpu_lns_ablation) == "legacy_rounding") {
+    lns_sol.round_nearest();
+  }
+  run_lns_feasibility_phase(lns_sol, timer.remaining_time(), timer.elapsed_time());
   return lns_sol;
 };
 
@@ -510,6 +545,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
   ls.start_cpufj_scratch_threads(population);
+
+  // Background CPU LNS: runs in parallel with heuristics/B&B and feeds feasible finds.
+  cpu_lns_thread_t<i_t, f_t> cpu_lns(context);
+  cpu_lns_raii_guard_t<i_t, f_t> cpu_lns_raii_guard(*this, cpu_lns);
+  cpu_lns.start(population, timer.remaining_time(), timer.elapsed_time());
 
   if (check_b_b_preemption()) { return population.best_feasible(); }
   lp_state_t<i_t, f_t>& lp_state = problem_ptr->lp_state;
@@ -659,6 +699,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     lp_rounded_sol.copy_new_assignment(lp_optimal_solution);
     lp_rounded_sol.round_nearest();
     lp_rounded_sol.compute_feasibility();
+    // Share the fractional LP with background LNS for ruin/repair guidance.
+    offer_lns_lp_reference(cuopt::host_copy(lp_optimal_solution, problem_ptr->handle_ptr->get_stream()));
+    if (lp_rounded_sol.get_feasible()) {
+      offer_lns_incumbent(lp_rounded_sol.get_host_assignment(), lp_rounded_sol.get_objective());
+    }
     population.add_solution(std::move(lp_rounded_sol));
     ls.start_cpufj_lptopt_scratch_threads(population);
   }

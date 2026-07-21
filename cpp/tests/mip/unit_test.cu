@@ -207,6 +207,40 @@ INSTANTIATE_TEST_SUITE_P(
                                   false,
                                   cuopt::linear_programming::mip_termination_status_t::Optimal)));
 
+TEST(MILPTest, HeuristicsOnlySingleThreadReturnsValidFeasibleSolution)
+{
+  raft::handle_t handle;
+  auto problem = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: x + 2 y + 3 z
+Subject To
+  partition: x + y + z = 1
+  linking: x - y <= 0
+Bounds
+  0 <= x <= 1
+  0 <= y <= 1
+  0 <= z <= 1
+Binaries
+  x
+  y
+  z
+End
+)LP");
+
+  mip_solver_settings_t<int, double> settings{};
+  settings.time_limit      = 1.0;
+  settings.heuristics_only = true;
+  settings.num_cpu_threads = 1;
+  settings.presolver       = presolver_t::None;
+
+  auto result = solve_mip(&handle, problem, settings);
+  EXPECT_TRUE(result.get_termination_status() == mip_termination_status_t::FeasibleFound ||
+              result.get_termination_status() == mip_termination_status_t::Optimal);
+  EXPECT_LE(result.get_max_constraint_violation(), settings.tolerances.absolute_tolerance);
+  EXPECT_LE(result.get_max_int_violation(), settings.tolerances.integrality_tolerance);
+  EXPECT_LE(result.get_max_variable_bound_violation(), settings.tolerances.absolute_tolerance);
+}
+
 // ---------------------------------------------------------------------------
 // Scaling integrality preservation test
 // ---------------------------------------------------------------------------

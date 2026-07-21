@@ -67,6 +67,7 @@ struct branch_and_bound_solution_helper_t {
   {
     dm->population.add_external_solution(solution, objective, solution_origin_t::BRANCH_AND_BOUND);
     dm->rins.new_best_incumbent_callback(solution);
+    dm->offer_lns_incumbent(solution, objective);
   }
 
   void set_simplex_solution(std::vector<f_t>& solution,
