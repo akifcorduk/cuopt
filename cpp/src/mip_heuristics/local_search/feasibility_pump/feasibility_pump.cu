@@ -108,7 +108,8 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     case 9: batch_config.objective_cut_mode = 2; break;
     default: break;
   }
-  CUOPT_LOG_INFO("Using batched FP quality configuration %d", batch_config.quality_config_id);
+  CUOPT_LOG_INFO(
+    "Using batched FP quality configuration %d of %d", batch_config.quality_config_id, max_config);
 }
 
 template <typename i_t, typename f_t>
