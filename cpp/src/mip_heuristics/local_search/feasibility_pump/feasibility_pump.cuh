@@ -22,6 +22,9 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
+template <typename i_t, typename f_t>
+class population_t;
+
 constexpr double default_alpha                  = 0.99;
 constexpr double distance_to_check_for_feasible = 0.01;
 
@@ -114,9 +117,8 @@ struct fp_batched_result_t {
 // Target range for the batched-PDLP feasibility-pump cloud size. compute_optimal_batch_size is
 // clamped into [min, max]; if it falls below fallback_threshold we fall back to single-point FP.
 struct fp_batch_config_t {
-  int target_min_batch_size = 8;
-  int target_max_batch_size = 8;
-  // Extra cap on cloud size for per-iteration latency (projection + rounding wall clock).
+  int target_min_batch_size           = 8;
+  int target_max_batch_size           = 8;
   int latency_max_batch_size          = 8;
   int fallback_threshold              = 8;
   int max_trajectories_before_restart = 8;
@@ -128,6 +130,11 @@ struct fp_batch_config_t {
   bool reset_stage_state              = false;
   int objective_cut_mode              = 1;
   int quality_config_id               = 0;
+  int diversity_frequency             = 1;
+  int structural_selector             = 0;
+  bool adaptive_cloud                 = false;
+  bool feedback_cloud                 = false;
+  bool legacy_diversity               = false;
   double fj_ratio                     = 0.2;  // 20% FJ run
 };
 
@@ -141,6 +148,7 @@ struct fp_iteration_metrics_t {
   f_t projection_l1_distance          = 0.;
   f_t projection_total_violation      = 0.;
   f_t projection_adjusted_violation   = 0.;
+  f_t projection_objective            = 0.;
   double projection_time              = 0.;
   i_t pdlp_iterations                 = -1;
   i_t pdhg_iterations                 = -1;
@@ -165,6 +173,10 @@ struct fp_iteration_metrics_t {
   bool feasible                       = false;
   i_t diversity_feasible_candidates   = 0;
   i_t diversity_best_updates          = 0;
+  i_t diversity_published             = 0;
+  i_t effective_cloud_size            = 1;
+  i_t diversity_frequency             = 1;
+  double diversity_postprocess_time   = 0.;
   i_t climber1_feasible_candidates    = 0;
   i_t climber1_best_updates           = 0;
 };
@@ -319,9 +331,15 @@ class feasibility_pump_t {
   i_t unified_n_constr_total  = 0;  // original + 2 * n_aux abs-value constraints
   i_t cloud_batch_capacity    = 0;  // per-climber PDLP buffers expanded to this many climbers
   i_t cached_cloud_batch_size = -1;
+  i_t structural_cloud_cap    = 1;
+  i_t feedback_cloud_cap      = 1;
+  i_t cloud_invocation        = 0;
+  f_t previous_climber0_adjusted_violation = std::numeric_limits<f_t>::infinity();
+  i_t previous_climber0_pdhg_work          = -1;
   // Pre-allocated warm-start / projection buffers (sized once in
   // expand_unified_projection_batch_buffers).
   rmm::device_uvector<f_t> batch_primal_init;
+  rmm::device_uvector<i_t> d_aux_integer_indices_cache;
   // Host copies needed to rebuild per-iteration objective / per-climber constraint bounds.
   std::vector<i_t> h_integer_indices_cache;      // integer variable column indices
   std::vector<i_t> h_aux_integer_indices_cache;  // non-binary integer column indices
@@ -358,7 +376,8 @@ class feasibility_pump_t {
   // Climber 0's integer ratio from its previous projection (fraction of integer vars that are
   // integral). Drives the batch projection's LP tolerance via get_tolerance_from_ratio, mirroring
   // the original single-point FP: loose early (ratio low), tightening as climber 0 nears integral.
-  f_t climber0_int_ratio = 0.;
+  f_t climber0_int_ratio                 = 0.;
+  population_t<i_t, f_t>* population_ptr = nullptr;
 
   // ---- Per-climber persistent diversity trajectories (cloud slots 1..N) ----
   // Ring buffer of recent integer-rounding hashes per climber for integer-assignment cycle

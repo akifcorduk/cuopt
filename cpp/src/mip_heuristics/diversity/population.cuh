@@ -104,6 +104,13 @@ class population_t {
    *  \return { -1 = not inserted , others = inserted index}
    */
   std::pair<i_t, bool> add_solution(solution_t<i_t, f_t>&& sol);
+  std::pair<i_t, bool> add_precomputed_solution(const f_t* assignment,
+                                                const f_t* lower_excess,
+                                                const f_t* upper_excess,
+                                                f_t objective,
+                                                f_t total_excess,
+                                                i_t n_integers,
+                                                i_t n_feasible_constraints);
   void add_external_solution(const std::vector<f_t>& solution,
                              f_t objective,
                              solution_origin_t origin);

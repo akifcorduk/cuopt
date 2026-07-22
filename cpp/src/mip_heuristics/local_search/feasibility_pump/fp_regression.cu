@@ -198,7 +198,7 @@ void write_csv(std::ostream& out, const std::vector<run_result_t>& results)
   out << "run,seed,path,diversity_climber,diversity_seed,rounding_mode,projection_backend,"
          "iteration,batch_size,projected_integers,projected_ratio,"
          "projection_violated_constraints,projection_l1_distance,projection_total_violation,"
-         "projection_adjusted_violation,"
+         "projection_adjusted_violation,projection_objective,"
          "projection_time,pdlp_iterations,pdhg_iterations,projection_termination_status,"
          "pdlp_primal_residual,pdlp_dual_residual,pdlp_gap,batch_mean_pdlp_iterations,"
          "batch_max_pdlp_iterations,rounded_integers,rounding_violated_constraints,"
@@ -206,7 +206,8 @@ void write_csv(std::ostream& out, const std::vector<run_result_t>& results)
          "rounding_total_violation,rounding_adjusted_violation,rounding_time,"
          "projection_feasible,rounding_feasible,cycle,"
          "cycle_kind,perturbed,timed_out,feasible,diversity_feasible_candidates,"
-         "diversity_best_updates,climber1_feasible_candidates,climber1_best_updates,"
+         "diversity_best_updates,diversity_published,effective_cloud_size,diversity_frequency,"
+         "diversity_postprocess_time,climber1_feasible_candidates,climber1_best_updates,"
          "outer_iteration,outer_trajectories,outer_exit_reason,outer_feasible_return,"
          "outer_objective_improved,outer_restarted,outer_recombiner_run,outer_best_objective,"
          "outer_objective_cut_rhs,outer_elapsed,feasible_events,total_run_time\n";
@@ -226,19 +227,22 @@ void write_csv(std::ostream& out, const std::vector<run_result_t>& results)
           << ',' << metric.projected_integers << ',' << projected_ratio << ','
           << metric.projection_violated_constraints << ',' << metric.projection_l1_distance << ','
           << metric.projection_total_violation << ',' << metric.projection_adjusted_violation << ','
-          << metric.projection_time << ',' << metric.pdlp_iterations << ','
-          << metric.pdhg_iterations << ',' << metric.projection_termination_status << ','
-          << metric.pdlp_primal_residual << ',' << metric.pdlp_dual_residual << ','
-          << metric.pdlp_gap << ',' << metric.batch_mean_pdlp_iterations << ','
-          << metric.batch_max_pdlp_iterations << ',' << metric.rounded_integers << ','
-          << metric.rounding_violated_constraints << ',' << metric.rounding_l1_movement << ','
-          << metric.rounding_total_violation << ',' << metric.rounding_adjusted_violation << ','
-          << metric.rounding_time << ',' << metric.projection_feasible << ','
-          << metric.rounding_feasible << ',' << metric.cycle << ',' << metric.cycle_kind << ','
-          << metric.perturbed << ',' << metric.timed_out << ',' << metric.feasible << ','
-          << metric.diversity_feasible_candidates << ',' << metric.diversity_best_updates << ','
-          << metric.climber1_feasible_candidates << ',' << metric.climber1_best_updates << ','
-          << metric.outer_iteration << ',' << (outer == nullptr ? -1 : outer->trajectories) << ','
+          << metric.projection_objective << ',' << metric.projection_time << ','
+          << metric.pdlp_iterations << ',' << metric.pdhg_iterations << ','
+          << metric.projection_termination_status << ',' << metric.pdlp_primal_residual << ','
+          << metric.pdlp_dual_residual << ',' << metric.pdlp_gap << ','
+          << metric.batch_mean_pdlp_iterations << ',' << metric.batch_max_pdlp_iterations << ','
+          << metric.rounded_integers << ',' << metric.rounding_violated_constraints << ','
+          << metric.rounding_l1_movement << ',' << metric.rounding_total_violation << ','
+          << metric.rounding_adjusted_violation << ',' << metric.rounding_time << ','
+          << metric.projection_feasible << ',' << metric.rounding_feasible << ',' << metric.cycle
+          << ',' << metric.cycle_kind << ',' << metric.perturbed << ',' << metric.timed_out << ','
+          << metric.feasible << ',' << metric.diversity_feasible_candidates << ','
+          << metric.diversity_best_updates << ',' << metric.diversity_published << ','
+          << metric.effective_cloud_size << ',' << metric.diversity_frequency << ','
+          << metric.diversity_postprocess_time << ',' << metric.climber1_feasible_candidates << ','
+          << metric.climber1_best_updates << ',' << metric.outer_iteration << ','
+          << (outer == nullptr ? -1 : outer->trajectories) << ','
           << (outer == nullptr ? -1 : outer->exit_reason) << ','
           << (outer != nullptr && outer->feasible_return) << ','
           << (outer != nullptr && outer->objective_improved) << ','
@@ -262,6 +266,7 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   std::vector<double> projection_violated;
   std::vector<double> projection_total_violation;
   std::vector<double> projection_adjusted_violation;
+  std::vector<double> projection_objective;
   std::vector<double> rounded_integers;
   std::vector<double> rounding_l1;
   std::vector<double> rounding_violated;
@@ -277,6 +282,8 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   std::vector<double> batch_mean_pdlp_iterations;
   std::vector<double> batch_max_pdlp_iterations;
   std::vector<double> rounding_time;
+  std::vector<double> diversity_postprocess_time;
+  std::vector<double> effective_cloud_size;
   std::vector<double> total_time;
   int feasible_runs                 = 0;
   int feasible_events               = 0;
@@ -302,6 +309,7 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
       projection_violated.push_back(metric.projection_violated_constraints);
       projection_total_violation.push_back(metric.projection_total_violation);
       projection_adjusted_violation.push_back(metric.projection_adjusted_violation);
+      projection_objective.push_back(metric.projection_objective);
       rounded_integers.push_back(metric.rounded_integers);
       rounding_l1.push_back(metric.rounding_l1_movement);
       rounding_violated.push_back(metric.rounding_violated_constraints);
@@ -317,6 +325,8 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
       batch_mean_pdlp_iterations.push_back(metric.batch_mean_pdlp_iterations);
       batch_max_pdlp_iterations.push_back(metric.batch_max_pdlp_iterations);
       rounding_time.push_back(metric.rounding_time);
+      diversity_postprocess_time.push_back(metric.diversity_postprocess_time);
+      effective_cloud_size.push_back(metric.effective_cloud_size);
       distance_cycles += metric.cycle_kind == 1;
       integer_cycles += metric.cycle_kind == 2;
       perturbations += metric.perturbed;
@@ -341,6 +351,7 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   print_distribution("projection_violated_constraints", projection_violated);
   print_distribution("projection_total_violation", projection_total_violation);
   print_distribution("projection_adjusted_violation", projection_adjusted_violation);
+  print_distribution("projection_objective", projection_objective);
   print_distribution("rounded_integers", rounded_integers);
   print_distribution("rounding_l1", rounding_l1);
   print_distribution("rounding_violated_constraints", rounding_violated);
@@ -358,6 +369,8 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
     print_distribution("batch_max_pdlp_iterations", batch_max_pdlp_iterations);
   }
   print_distribution("rounding_time", rounding_time);
+  print_distribution("diversity_postprocess_time", diversity_postprocess_time);
+  print_distribution("effective_cloud_size", effective_cloud_size);
   print_distribution("total_time", total_time);
 }
 

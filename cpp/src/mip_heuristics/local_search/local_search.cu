@@ -766,6 +766,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
 {
   raft::common::nvtx::range fun_scope("run_fp");
   cuopt_assert(population_ptr != nullptr, "Population pointer must not be null");
+  fp.population_ptr                  = population_ptr;
   const i_t n_fp_iterations          = 1000000;
   bool is_feasible                   = solution.compute_feasibility();
   bool any_feasible                  = is_feasible;

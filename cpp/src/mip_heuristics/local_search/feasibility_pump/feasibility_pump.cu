@@ -63,49 +63,71 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     lp_optimal_solution(lp_optimal_solution_),
     diversity_rng(cuopt::seed_generator::get_seed()),
     timer(20.),
-    batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream())
+    batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream()),
+    d_aux_integer_indices_cache(0, context.problem_ptr->handle_ptr->get_stream())
 {
-  constexpr int n_quality_configs = 10;
-  int max_config                  = n_quality_configs;
-  const char* max_config_env      = std::getenv("CUOPT_MAX_CONFIG");
+  constexpr int n_quality_configs          = 8;
+  batch_config.max_work_without_feasible   = std::numeric_limits<int>::max();
+  batch_config.restart_batch_exhausted     = false;
+  batch_config.skip_restart_for_large_pure = false;
+  int max_config                           = n_quality_configs;
+  const char* max_config_env               = std::getenv("CUOPT_MAX_CONFIG");
   if (max_config_env != nullptr) { max_config = std::stoi(max_config_env); }
   cuopt_assert(max_config > 0 && max_config <= n_quality_configs,
-               "CUOPT_MAX_CONFIG must be in [1, 10]");
+               "CUOPT_MAX_CONFIG must be in [1, 8]");
 
-  const char* config = std::getenv("CUOPT_CONFIG_ID");
-  if (config == nullptr) { return; }
-  batch_config.quality_config_id = std::stoi(config);
+  const char* config             = std::getenv("CUOPT_CONFIG_ID");
+  batch_config.quality_config_id = config == nullptr ? 0 : std::stoi(config);
   cuopt_assert(batch_config.quality_config_id >= 0 && batch_config.quality_config_id < max_config,
                "CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
   switch (batch_config.quality_config_id) {
     case 1:
-      batch_config.max_work_without_feasible   = std::numeric_limits<int>::max();
-      batch_config.skip_restart_for_large_pure = false;
-      batch_config.objective_cut_mode          = 0;
+      batch_config.target_min_batch_size  = 1;
+      batch_config.target_max_batch_size  = 1;
+      batch_config.latency_max_batch_size = 1;
+      batch_config.fallback_threshold     = 1;
       break;
-    case 2: batch_config.skip_restart_for_large_pure = false; break;
+    case 2:
+      batch_config.adaptive_cloud         = true;
+      batch_config.target_min_batch_size  = 1;
+      batch_config.target_max_batch_size  = 64;
+      batch_config.latency_max_batch_size = 64;
+      batch_config.fallback_threshold     = 1;
+      break;
     case 3:
-      batch_config.max_work_without_feasible   = 32;
-      batch_config.skip_restart_for_large_pure = false;
+      batch_config.adaptive_cloud         = true;
+      batch_config.target_min_batch_size  = 1;
+      batch_config.target_max_batch_size  = 64;
+      batch_config.latency_max_batch_size = 64;
+      batch_config.fallback_threshold     = 1;
+      batch_config.diversity_frequency    = 4;
       break;
-    case 4:
-      batch_config.max_work_without_feasible   = std::numeric_limits<int>::max();
-      batch_config.restart_batch_exhausted     = false;
-      batch_config.skip_restart_for_large_pure = false;
-      break;
+    case 4: batch_config.legacy_diversity = true; break;
     case 5:
-      batch_config.max_trajectories_before_restart = 2;
-      batch_config.max_work_without_feasible       = std::numeric_limits<int>::max();
-      batch_config.skip_restart_for_large_pure     = false;
+      batch_config.adaptive_cloud         = true;
+      batch_config.structural_selector    = 1;
+      batch_config.target_min_batch_size  = 1;
+      batch_config.target_max_batch_size  = 32;
+      batch_config.latency_max_batch_size = 32;
+      batch_config.fallback_threshold     = 1;
       break;
     case 6:
-      batch_config.max_trajectories_before_restart = 16;
-      batch_config.max_work_without_feasible       = std::numeric_limits<int>::max();
-      batch_config.skip_restart_for_large_pure     = false;
+      batch_config.adaptive_cloud         = true;
+      batch_config.structural_selector    = 2;
+      batch_config.target_min_batch_size  = 1;
+      batch_config.target_max_batch_size  = 64;
+      batch_config.latency_max_batch_size = 64;
+      batch_config.fallback_threshold     = 1;
       break;
-    case 7: batch_config.reset_stage_state = true; break;
-    case 8: batch_config.use_trajectory_stagnation = true; break;
-    case 9: batch_config.objective_cut_mode = 2; break;
+    case 7:
+      batch_config.adaptive_cloud         = true;
+      batch_config.structural_selector    = 1;
+      batch_config.feedback_cloud         = true;
+      batch_config.target_min_batch_size  = 1;
+      batch_config.target_max_batch_size  = 64;
+      batch_config.latency_max_batch_size = 64;
+      batch_config.fallback_threshold     = 1;
+      break;
     default: break;
   }
   CUOPT_LOG_INFO(
@@ -152,6 +174,7 @@ void feasibility_pump_t<i_t, f_t>::record_projection_metrics(solution_t<i_t, f_t
   entry.projection_feasible           = solution.get_feasible();
   entry.projection_total_violation    = solution.get_total_excess();
   entry.projection_adjusted_violation = solution.get_adjusted_total_excess();
+  entry.projection_objective          = solution.get_objective();
   entry.projection_violated_constraints =
     solution.problem_ptr->n_constraints - solution.n_feasible_constraints.value(stream);
   entry.pdlp_iterations               = last_pdlp_iterations;

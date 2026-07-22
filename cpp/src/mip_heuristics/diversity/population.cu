@@ -426,6 +426,38 @@ void population_t<i_t, f_t>::adjust_weights_according_to_best_feasible()
 }
 
 template <typename i_t, typename f_t>
+std::pair<i_t, bool> population_t<i_t, f_t>::add_precomputed_solution(const f_t* assignment,
+                                                                      const f_t* lower_excess,
+                                                                      const f_t* upper_excess,
+                                                                      f_t objective,
+                                                                      f_t total_excess,
+                                                                      i_t n_integers,
+                                                                      i_t n_feasible_constraints)
+{
+  cuopt_assert(assignment != nullptr, "Precomputed assignment must not be null");
+  cuopt_assert(lower_excess != nullptr, "Precomputed lower excess must not be null");
+  cuopt_assert(upper_excess != nullptr, "Precomputed upper excess must not be null");
+  cuopt_assert(n_integers >= 0 && n_integers <= problem_ptr->n_integer_vars,
+               "Precomputed integer count out of bounds");
+  cuopt_assert(n_feasible_constraints >= 0 && n_feasible_constraints <= problem_ptr->n_constraints,
+               "Precomputed feasible constraint count out of bounds");
+  auto stream = problem_ptr->handle_ptr->get_stream();
+  solution_t<i_t, f_t> sol(*problem_ptr);
+  raft::copy(sol.assignment.data(), assignment, problem_ptr->n_variables, stream);
+  raft::copy(sol.lower_excess.data(), lower_excess, problem_ptr->n_constraints, stream);
+  raft::copy(sol.upper_excess.data(), upper_excess, problem_ptr->n_constraints, stream);
+  sol.h_obj                = objective;
+  sol.h_user_obj           = problem_ptr->get_user_obj_from_solver_obj(objective);
+  sol.h_infeasibility_cost = total_excess;
+  sol.n_assigned_integers  = n_integers;
+  sol.is_feasible          = n_integers == problem_ptr->n_integer_vars &&
+                    n_feasible_constraints == problem_ptr->n_constraints;
+  sol.n_feasible_constraints.set_value_async(n_feasible_constraints, stream);
+  sol.obj_val.set_value_async(objective, stream);
+  return add_solution(std::move(sol));
+}
+
+template <typename i_t, typename f_t>
 std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&& sol)
 {
   std::lock_guard<std::recursive_mutex> lock(write_mutex);
