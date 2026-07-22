@@ -121,7 +121,7 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
       break;
     case 7:
       batch_config.adaptive_cloud         = true;
-      batch_config.structural_selector    = 1;
+      batch_config.structural_selector    = 2;
       batch_config.feedback_cloud         = true;
       batch_config.target_min_batch_size  = 1;
       batch_config.target_max_batch_size  = 64;

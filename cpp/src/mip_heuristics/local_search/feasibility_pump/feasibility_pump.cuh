@@ -17,6 +17,8 @@
 
 #include <thrust/count.h>
 
+#include <algorithm>
+#include <cmath>
 #include <deque>
 #include <memory>
 
@@ -137,6 +139,48 @@ struct fp_batch_config_t {
   bool legacy_diversity               = false;
   double fj_ratio                     = 0.2;  // 20% FJ run
 };
+
+struct fp_structure_metrics_t {
+  double unified_growth;
+  double nonbinary_integer_share;
+};
+
+inline fp_structure_metrics_t compute_fp_structure_metrics(int n_variables,
+                                                           int n_constraints,
+                                                           int n_integer_variables,
+                                                           int n_nonbinary_integer_auxiliaries)
+{
+  cuopt_assert(n_variables >= 0 && n_constraints >= 0 && n_integer_variables >= 0,
+               "FP structure counts must be nonnegative");
+  cuopt_assert(
+    n_nonbinary_integer_auxiliaries >= 0 && n_nonbinary_integer_auxiliaries <= n_integer_variables,
+    "FP auxiliary count must describe non-binary integers");
+  const int base_size = n_variables + n_constraints;
+  return {
+    (double)(base_size + 3 * n_nonbinary_integer_auxiliaries) / (double)std::max(1, base_size),
+    (double)n_nonbinary_integer_auxiliaries / (double)std::max(1, n_integer_variables)};
+}
+
+inline bool fp_prefers_classic_single(const fp_structure_metrics_t& metrics)
+{
+  return metrics.unified_growth > 1.75 || metrics.nonbinary_integer_share > 0.40;
+}
+
+inline bool fp_feedback_regressed(double adjusted_violation,
+                                  double previous_adjusted_violation,
+                                  int pdhg_work,
+                                  int previous_pdhg_work)
+{
+  return (std::isfinite(previous_adjusted_violation) &&
+          adjusted_violation > previous_adjusted_violation * 1.25) ||
+         (previous_pdhg_work > 0 && pdhg_work > previous_pdhg_work + previous_pdhg_work / 2);
+}
+
+inline int reduce_fp_cloud_after_regression(int cloud_cap)
+{
+  cuopt_assert(cloud_cap >= 1, "FP cloud cap must be positive");
+  return std::max(1, cloud_cap / 2);
+}
 
 template <typename i_t, typename f_t>
 struct fp_iteration_metrics_t {

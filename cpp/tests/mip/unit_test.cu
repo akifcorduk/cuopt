@@ -10,6 +10,7 @@
 
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 #include <cuopt/mathematical_optimization/solve.hpp>
+#include <mip_heuristics/local_search/feasibility_pump/feasibility_pump.cuh>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
 #include <pdlp/utilities/problem_checking.cuh>
 #include <utilities/common_utils.hpp>
@@ -336,6 +337,39 @@ TEST(ScalingIntegrity, NoObjectiveScalingPreservesIntegerCoefficients)
   }
   EXPECT_EQ(violations, 0) << violations
                            << " integer coefficients lost integrality after scaling (no-obj mode)";
+}
+
+TEST(FpSwitchPolicy, StructuralMetricsCountOnlyNonbinaryIntegerAuxiliaries)
+{
+  const auto continuous_heavy = mip::compute_fp_structure_metrics(1000, 100, 10, 0);
+  EXPECT_DOUBLE_EQ(continuous_heavy.unified_growth, 1.);
+  EXPECT_DOUBLE_EQ(continuous_heavy.nonbinary_integer_share, 0.);
+  EXPECT_FALSE(mip::fp_prefers_classic_single(continuous_heavy));
+
+  const auto nonbinary_integer_heavy = mip::compute_fp_structure_metrics(1000, 100, 10, 5);
+  EXPECT_DOUBLE_EQ(nonbinary_integer_heavy.nonbinary_integer_share, 0.5);
+  EXPECT_TRUE(mip::fp_prefers_classic_single(nonbinary_integer_heavy));
+}
+
+TEST(FpSwitchPolicy, StructuralThresholdsAreStrict)
+{
+  EXPECT_FALSE(mip::fp_prefers_classic_single({1.75, 0.40}));
+  EXPECT_TRUE(mip::fp_prefers_classic_single({1.750001, 0.40}));
+  EXPECT_TRUE(mip::fp_prefers_classic_single({1.75, 0.400001}));
+}
+
+TEST(FpSwitchPolicy, FeedbackThresholdsAreStrict)
+{
+  EXPECT_FALSE(mip::fp_feedback_regressed(125., 100., 150, 100));
+  EXPECT_TRUE(mip::fp_feedback_regressed(125.001, 100., 150, 100));
+  EXPECT_TRUE(mip::fp_feedback_regressed(125., 100., 151, 100));
+}
+
+TEST(FpSwitchPolicy, FeedbackKeepsUnifiedBatchOne)
+{
+  EXPECT_EQ(mip::reduce_fp_cloud_after_regression(9), 4);
+  EXPECT_EQ(mip::reduce_fp_cloud_after_regression(2), 1);
+  EXPECT_EQ(mip::reduce_fp_cloud_after_regression(1), 1);
 }
 
 }  // namespace cuopt::mathematical_optimization::test

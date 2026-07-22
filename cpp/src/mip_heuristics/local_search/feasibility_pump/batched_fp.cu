@@ -208,8 +208,10 @@ void feasibility_pump_t<i_t, f_t>::build_unified_projection_problem(solution_t<i
   op.set_variable_lower_bounds(vlb.data(), (i_t)vlb.size());
   op.set_variable_upper_bounds(vub.data(), (i_t)vub.size());
   op.set_variable_types(vtypes.data(), (i_t)vtypes.size());
-  cloud_batch_capacity    = 0;
-  cached_cloud_batch_size = -1;
+  cloud_batch_capacity                 = 0;
+  cached_cloud_batch_size              = -1;
+  previous_climber0_adjusted_violation = std::numeric_limits<f_t>::infinity();
+  previous_climber0_pdhg_work          = -1;
 }
 
 template <typename i_t, typename f_t>
@@ -226,9 +228,10 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
     cached_cloud_batch_size = 0;
     return 0;
   }
-  const f_t growth = (f_t)(unified_n_vars_total + unified_n_constr_total) /
-                     (f_t)std::max((i_t)1, unified_n_vars + unified_n_constr);
-  const f_t nonbinary_share = (f_t)unified_n_aux / (f_t)std::max((i_t)1, unified_n_int);
+  const auto structure =
+    compute_fp_structure_metrics(unified_n_vars, unified_n_constr, unified_n_int, unified_n_aux);
+  const f_t growth          = (f_t)structure.unified_growth;
+  const f_t nonbinary_share = (f_t)structure.nonbinary_integer_share;
   const f_t integer_density = (f_t)unified_n_int / (f_t)std::max((i_t)1, unified_n_vars);
   const i_t n_binary        = solution.problem_ptr->get_n_binary_variables();
   const f_t binary_share    = (f_t)n_binary / (f_t)std::max((i_t)1, unified_n_int);
@@ -242,7 +245,7 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
     structural_fallback  = growth > 1.5 || nonbinary_share > 0.25;
     structural_cloud_cap = std::min(structural_cloud_cap, (i_t)32);
   } else if (batch_config.structural_selector == 2) {
-    structural_fallback = growth > 1.75 || nonbinary_share > 0.4;
+    structural_fallback = fp_prefers_classic_single(structure);
     structural_cloud_cap =
       binary_share >= 0.9 && growth <= 1.1 ? 64 : (nonbinary_share > 0.2 ? 8 : 16);
   }
@@ -251,7 +254,7 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
     cached_cloud_batch_size = 0;
     CUOPT_LOG_INFO(
       "Batched FP structure vars=%d rows=%d growth=%g integer_density=%g binary_share=%g "
-      "nonbinary_share=%g memory_cap=%zu selected=single reason=unified_growth",
+      "nonbinary_share=%g memory_cap=%zu strategy=classic_single",
       unified_n_vars_total,
       unified_n_constr_total,
       growth,
@@ -268,9 +271,10 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
   const size_t latency_clamped = std::min(clamped, (size_t)batch_config.latency_max_batch_size);
   cached_cloud_batch_size      = (i_t)latency_clamped;
   feedback_cloud_cap           = cached_cloud_batch_size;
+  const char* strategy = cached_cloud_batch_size == 1 ? "unified_batch_one" : "adaptive_diversity";
   CUOPT_LOG_INFO(
     "Batched FP structure vars=%d rows=%d growth=%g integer_density=%g binary_share=%g "
-    "nonbinary_share=%g memory_cap=%zu structural_cap=%d selected=%d frequency=%d",
+    "nonbinary_share=%g memory_cap=%zu structural_cap=%d selected=%d frequency=%d strategy=%s",
     unified_n_vars_total,
     unified_n_constr_total,
     growth,
@@ -280,7 +284,8 @@ i_t feasibility_pump_t<i_t, f_t>::compute_cloud_batch_size(solution_t<i_t, f_t>&
     batch_cap,
     structural_cloud_cap,
     cached_cloud_batch_size,
-    batch_config.diversity_frequency);
+    batch_config.diversity_frequency,
+    strategy);
   return cached_cloud_batch_size;
 }
 
@@ -1426,12 +1431,17 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       const bool work_regressed =
         previous_climber0_pdhg_work > 0 &&
         last_pdhg_iterations > previous_climber0_pdhg_work + previous_climber0_pdhg_work / 2;
-      if ((violation_regressed || work_regressed) && feedback_cloud_cap > 1) {
-        feedback_cloud_cap = std::max((i_t)1, feedback_cloud_cap / 2);
+      const bool feedback_regressed = fp_feedback_regressed(adjusted,
+                                                            previous_climber0_adjusted_violation,
+                                                            last_pdhg_iterations,
+                                                            previous_climber0_pdhg_work);
+      if (feedback_regressed && feedback_cloud_cap > 1) {
+        feedback_cloud_cap = reduce_fp_cloud_after_regression(feedback_cloud_cap);
         n_points           = std::min(n_points, feedback_cloud_cap);
-        CUOPT_LOG_INFO("Batched FP feedback shrank cloud to %d reason=%s",
+        CUOPT_LOG_INFO("Batched FP feedback shrank cloud to %d reason=%s strategy=%s",
                        feedback_cloud_cap,
-                       violation_regressed ? "violation" : "pdhg_work");
+                       violation_regressed ? "violation" : "pdhg_work",
+                       feedback_cloud_cap == 1 ? "unified_batch_one" : "adaptive_diversity");
       }
       previous_climber0_adjusted_violation = adjusted;
       previous_climber0_pdhg_work          = last_pdhg_iterations;
