@@ -41,6 +41,85 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
+int resolve_fp_quality_config_id(const char* config)
+{
+  return config == nullptr ? default_fp_quality_config : std::stoi(config);
+}
+
+fp_batch_config_t make_fp_batch_config(int quality_config_id)
+{
+  cuopt_assert(quality_config_id >= 0 && quality_config_id < n_fp_quality_configs,
+               "FP quality config ID out of bounds");
+  fp_batch_config_t config;
+  config.max_work_without_feasible   = std::numeric_limits<int>::max();
+  config.restart_batch_exhausted     = false;
+  config.skip_restart_for_large_pure = false;
+  config.quality_config_id           = quality_config_id;
+  switch (quality_config_id) {
+    case 1:
+      config.target_min_batch_size  = 1;
+      config.target_max_batch_size  = 1;
+      config.latency_max_batch_size = 1;
+      config.fallback_threshold     = 1;
+      break;
+    case 2:
+      config.adaptive_cloud         = true;
+      config.target_min_batch_size  = 1;
+      config.target_max_batch_size  = 64;
+      config.latency_max_batch_size = 64;
+      config.fallback_threshold     = 1;
+      break;
+    case 3:
+      config.adaptive_cloud         = true;
+      config.target_min_batch_size  = 1;
+      config.target_max_batch_size  = 64;
+      config.latency_max_batch_size = 64;
+      config.fallback_threshold     = 1;
+      config.diversity_frequency    = 4;
+      break;
+    case 4: config.legacy_diversity = true; break;
+    case 5:
+      config.adaptive_cloud         = true;
+      config.structural_selector    = 1;
+      config.target_min_batch_size  = 1;
+      config.target_max_batch_size  = 32;
+      config.latency_max_batch_size = 32;
+      config.fallback_threshold     = 1;
+      break;
+    case 6:
+      config.adaptive_cloud         = true;
+      config.structural_selector    = 2;
+      config.target_min_batch_size  = 1;
+      config.target_max_batch_size  = 64;
+      config.latency_max_batch_size = 64;
+      config.fallback_threshold     = 1;
+      break;
+    case 7:
+      config.adaptive_cloud         = true;
+      config.structural_selector    = 2;
+      config.feedback_cloud         = true;
+      config.target_min_batch_size  = 1;
+      config.target_max_batch_size  = 64;
+      config.latency_max_batch_size = 64;
+      config.fallback_threshold     = 1;
+      break;
+    case 8:
+      config.adaptive_cloud                 = true;
+      config.structural_selector            = 2;
+      config.feedback_cloud                 = true;
+      config.target_min_batch_size          = 1;
+      config.target_max_batch_size          = 64;
+      config.latency_max_batch_size         = 64;
+      config.fallback_threshold             = 1;
+      config.phase_restart_trajectory_limit = 2;
+      config.restart_batch_before_feasible  = true;
+      config.phase_restart_large_pure_only  = true;
+      break;
+    default: break;
+  }
+  return config;
+}
+
 template <typename i_t, typename f_t>
 feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
   mip_solver_context_t<i_t, f_t>& context_,
@@ -66,72 +145,21 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream()),
     d_aux_integer_indices_cache(0, context.problem_ptr->handle_ptr->get_stream())
 {
-  constexpr int n_quality_configs          = 8;
-  batch_config.max_work_without_feasible   = std::numeric_limits<int>::max();
-  batch_config.restart_batch_exhausted     = false;
-  batch_config.skip_restart_for_large_pure = false;
-  int max_config                           = n_quality_configs;
-  const char* max_config_env               = std::getenv("CUOPT_MAX_CONFIG");
+  int max_config             = n_fp_quality_configs;
+  const char* max_config_env = std::getenv("CUOPT_MAX_CONFIG");
   if (max_config_env != nullptr) { max_config = std::stoi(max_config_env); }
-  cuopt_assert(max_config > 0 && max_config <= n_quality_configs,
-               "CUOPT_MAX_CONFIG must be in [1, 8]");
+  cuopt_assert(max_config > 0 && max_config <= n_fp_quality_configs,
+               "CUOPT_MAX_CONFIG must be in [1, 9]");
 
-  const char* config             = std::getenv("CUOPT_CONFIG_ID");
-  batch_config.quality_config_id = config == nullptr ? 0 : std::stoi(config);
-  cuopt_assert(batch_config.quality_config_id >= 0 && batch_config.quality_config_id < max_config,
+  const char* config  = std::getenv("CUOPT_CONFIG_ID");
+  const int config_id = resolve_fp_quality_config_id(config);
+  cuopt_assert(config_id >= 0 && config_id < n_fp_quality_configs,
+               "CUOPT_CONFIG_ID must be in [0, 9)");
+  cuopt_assert(config == nullptr || config_id < max_config,
                "CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
-  switch (batch_config.quality_config_id) {
-    case 1:
-      batch_config.target_min_batch_size  = 1;
-      batch_config.target_max_batch_size  = 1;
-      batch_config.latency_max_batch_size = 1;
-      batch_config.fallback_threshold     = 1;
-      break;
-    case 2:
-      batch_config.adaptive_cloud         = true;
-      batch_config.target_min_batch_size  = 1;
-      batch_config.target_max_batch_size  = 64;
-      batch_config.latency_max_batch_size = 64;
-      batch_config.fallback_threshold     = 1;
-      break;
-    case 3:
-      batch_config.adaptive_cloud         = true;
-      batch_config.target_min_batch_size  = 1;
-      batch_config.target_max_batch_size  = 64;
-      batch_config.latency_max_batch_size = 64;
-      batch_config.fallback_threshold     = 1;
-      batch_config.diversity_frequency    = 4;
-      break;
-    case 4: batch_config.legacy_diversity = true; break;
-    case 5:
-      batch_config.adaptive_cloud         = true;
-      batch_config.structural_selector    = 1;
-      batch_config.target_min_batch_size  = 1;
-      batch_config.target_max_batch_size  = 32;
-      batch_config.latency_max_batch_size = 32;
-      batch_config.fallback_threshold     = 1;
-      break;
-    case 6:
-      batch_config.adaptive_cloud         = true;
-      batch_config.structural_selector    = 2;
-      batch_config.target_min_batch_size  = 1;
-      batch_config.target_max_batch_size  = 64;
-      batch_config.latency_max_batch_size = 64;
-      batch_config.fallback_threshold     = 1;
-      break;
-    case 7:
-      batch_config.adaptive_cloud         = true;
-      batch_config.structural_selector    = 2;
-      batch_config.feedback_cloud         = true;
-      batch_config.target_min_batch_size  = 1;
-      batch_config.target_max_batch_size  = 64;
-      batch_config.latency_max_batch_size = 64;
-      batch_config.fallback_threshold     = 1;
-      break;
-    default: break;
-  }
+  batch_config = make_fp_batch_config(config_id);
   CUOPT_LOG_INFO(
-    "Using batched FP quality configuration %d of %d", batch_config.quality_config_id, max_config);
+    "Using batched FP quality configuration %d of %d", config_id, n_fp_quality_configs);
 }
 
 template <typename i_t, typename f_t>

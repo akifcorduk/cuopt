@@ -1112,6 +1112,12 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
   auto stream                        = solution.handle_ptr->get_stream();
   const i_t n_vars                   = unified_n_vars;
   const f_t inf                      = std::numeric_limits<f_t>::infinity();
+  const bool large_pure_integer =
+    unified_n_int == n_vars && n_vars >= batch_config.work_limit_min_variables;
+  const i_t trajectory_limit = fp_trajectory_limit(batch_config.max_trajectories_before_restart,
+                                                   batch_config.phase_restart_trajectory_limit,
+                                                   batch_config.phase_restart_large_pure_only,
+                                                   large_pure_integer);
   rmm::device_uvector<f_t> cand_best(n_vars, stream);
   rmm::device_uvector<f_t> climber0_assign(n_vars, stream);
   rmm::device_uvector<f_t> diversity_candidate(n_vars, stream);
@@ -1452,7 +1458,7 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       return {false, fp_batched_exit_t::batch_exhausted, trajectory + 1};
     }
     trajectory++;
-    if (trajectory >= batch_config.max_trajectories_before_restart) {
+    if (trajectory >= trajectory_limit) {
       return {false, fp_batched_exit_t::batch_exhausted, trajectory};
     }
   }

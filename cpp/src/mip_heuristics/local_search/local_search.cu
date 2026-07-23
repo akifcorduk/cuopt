@@ -848,8 +848,12 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
         solution.problem_ptr->n_variables >= fp.batch_config.work_limit_min_variables;
       if (result.exit == fp_batched_exit_t::climber_cycle ||
           (result.exit == fp_batched_exit_t::batch_exhausted &&
-           fp.batch_config.restart_batch_exhausted &&
-           !(large_pure_integer && fp.batch_config.skip_restart_for_large_pure))) {
+           fp_should_restart_batch(fp.batch_config.restart_batch_exhausted,
+                                   fp.batch_config.restart_batch_before_feasible,
+                                   fp.batch_config.phase_restart_large_pure_only,
+                                   any_feasible,
+                                   large_pure_integer,
+                                   fp.batch_config.skip_restart_for_large_pure))) {
         is_feasible = fp.restart_fp(solution);
         if (outer_metric != nullptr) { outer_metric->restarted = true; }
       }

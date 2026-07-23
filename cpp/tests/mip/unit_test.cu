@@ -372,4 +372,33 @@ TEST(FpSwitchPolicy, FeedbackKeepsUnifiedBatchOne)
   EXPECT_EQ(mip::reduce_fp_cloud_after_regression(1), 1);
 }
 
+TEST(FpSwitchPolicy, PhaseAwareBatchRestart)
+{
+  EXPECT_TRUE(mip::fp_should_restart_batch(false, true, false, false, true, true));
+  EXPECT_FALSE(mip::fp_should_restart_batch(false, true, false, true, false, false));
+  EXPECT_FALSE(mip::fp_should_restart_batch(true, false, false, false, true, true));
+  EXPECT_TRUE(mip::fp_should_restart_batch(true, false, false, true, false, true));
+  EXPECT_FALSE(mip::fp_should_restart_batch(false, true, true, false, false, false));
+  EXPECT_TRUE(mip::fp_should_restart_batch(false, true, true, false, true, true));
+  EXPECT_EQ(mip::fp_trajectory_limit(8, 2, true, false), 8);
+  EXPECT_EQ(mip::fp_trajectory_limit(8, 2, true, true), 2);
+}
+
+TEST(FpSwitchPolicy, UnsetConfigMatchesConfigEight)
+{
+  EXPECT_EQ(mip::resolve_fp_quality_config_id(nullptr), 8);
+  EXPECT_EQ(mip::make_fp_batch_config(mip::resolve_fp_quality_config_id(nullptr)),
+            mip::make_fp_batch_config(8));
+}
+
+TEST(FpSwitchPolicy, ExplicitConfigIdsKeepTheirMappings)
+{
+  for (int config_id = 0; config_id < mip::n_fp_quality_configs; ++config_id) {
+    const auto text = std::to_string(config_id);
+    EXPECT_EQ(mip::resolve_fp_quality_config_id(text.c_str()), config_id);
+    EXPECT_EQ(mip::make_fp_batch_config(config_id).quality_config_id, config_id);
+  }
+  EXPECT_NE(mip::make_fp_batch_config(0), mip::make_fp_batch_config(8));
+}
+
 }  // namespace cuopt::mathematical_optimization::test

@@ -124,9 +124,12 @@ struct fp_batch_config_t {
   int latency_max_batch_size          = 8;
   int fallback_threshold              = 8;
   int max_trajectories_before_restart = 8;
+  int phase_restart_trajectory_limit  = 8;
   int max_work_without_feasible       = 8;
   int work_limit_min_variables        = 50000;
   bool restart_batch_exhausted        = true;
+  bool restart_batch_before_feasible  = false;
+  bool phase_restart_large_pure_only  = false;
   bool skip_restart_for_large_pure    = true;
   bool use_trajectory_stagnation      = false;
   bool reset_stage_state              = false;
@@ -138,7 +141,15 @@ struct fp_batch_config_t {
   bool feedback_cloud                 = false;
   bool legacy_diversity               = false;
   double fj_ratio                     = 0.2;  // 20% FJ run
+
+  bool operator==(const fp_batch_config_t&) const = default;
 };
+
+constexpr int n_fp_quality_configs      = 9;
+constexpr int default_fp_quality_config = 8;
+
+int resolve_fp_quality_config_id(const char* config);
+fp_batch_config_t make_fp_batch_config(int quality_config_id);
 
 struct fp_structure_metrics_t {
   double unified_growth;
@@ -180,6 +191,27 @@ inline int reduce_fp_cloud_after_regression(int cloud_cap)
 {
   cuopt_assert(cloud_cap >= 1, "FP cloud cap must be positive");
   return std::max(1, cloud_cap / 2);
+}
+
+inline bool fp_should_restart_batch(bool restart_batch_exhausted,
+                                    bool restart_batch_before_feasible,
+                                    bool phase_restart_large_pure_only,
+                                    bool any_feasible,
+                                    bool large_pure_integer,
+                                    bool skip_restart_for_large_pure)
+{
+  return (restart_batch_exhausted && !(large_pure_integer && skip_restart_for_large_pure)) ||
+         (restart_batch_before_feasible && !any_feasible &&
+          (!phase_restart_large_pure_only || large_pure_integer));
+}
+
+inline int fp_trajectory_limit(int regular_limit,
+                               int phase_limit,
+                               bool phase_restart_large_pure_only,
+                               bool large_pure_integer)
+{
+  cuopt_assert(regular_limit > 0 && phase_limit > 0, "FP trajectory limits must be positive");
+  return phase_restart_large_pure_only && large_pure_integer ? phase_limit : regular_limit;
 }
 
 template <typename i_t, typename f_t>
