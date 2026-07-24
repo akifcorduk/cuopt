@@ -415,29 +415,24 @@ __global__ void kernel_compute_kkt_score(const f_t* l2_primal_residual,
                                          const f_t* l2_dual_residual,
                                          const f_t* gap,
                                          const f_t* primal_weight,
-                                         f_t* kkt_score,
-                                         size_t climber_strategy_id)
+                                         f_t* kkt_score)
 {
-  const f_t weight_squared =
-    primal_weight[climber_strategy_id] * primal_weight[climber_strategy_id];
-  *kkt_score = raft::sqrt(weight_squared * l2_primal_residual[climber_strategy_id] *
-                            l2_primal_residual[climber_strategy_id] +
-                          l2_dual_residual[climber_strategy_id] *
-                            l2_dual_residual[climber_strategy_id] / weight_squared +
-                          gap[climber_strategy_id] * gap[climber_strategy_id]);
+  const f_t weight_squared = *primal_weight * *primal_weight;
+  *kkt_score               = raft::sqrt(weight_squared * *l2_primal_residual * *l2_primal_residual +
+                          *l2_dual_residual * *l2_dual_residual / weight_squared + *gap * *gap);
 #ifdef PDLP_DEBUG_MODE
   printf(
     "kernel_compute_kkt_score=%lf weight=%lf (^2 %lf), l2_primal_residual=%lf (^2 %lf), "
     "l2_dual_residual=%lf (^2 %lf), fap=%lf (^2 %lf)\n",
     *kkt_score,
-    primal_weight[climber_strategy_id],
+    *primal_weight,
     weight_squared,
-    l2_primal_residual[climber_strategy_id],
-    (l2_primal_residual[climber_strategy_id] * l2_primal_residual[climber_strategy_id]),
-    l2_dual_residual[climber_strategy_id],
-    (l2_dual_residual[climber_strategy_id] * l2_dual_residual[climber_strategy_id]),
-    gap[climber_strategy_id],
-    (gap[climber_strategy_id] * gap[climber_strategy_id]));
+    *l2_primal_residual,
+    (*l2_primal_residual * *l2_primal_residual),
+    *l2_dual_residual,
+    (*l2_dual_residual * *l2_dual_residual),
+    *gap,
+    (*gap * *gap));
 #endif
 }
 
@@ -446,21 +441,13 @@ f_t pdlp_restart_strategy_t<i_t, f_t>::compute_kkt_score(
   const rmm::device_uvector<f_t>& l2_primal_residual,
   const rmm::device_uvector<f_t>& l2_dual_residual,
   const rmm::device_uvector<f_t>& gap,
-  const rmm::device_uvector<f_t>& primal_weight,
-  i_t climber_strategy_id)
+  const rmm::device_uvector<f_t>& primal_weight)
 {
-  cuopt_assert(climber_strategy_id >= 0 && (size_t)climber_strategy_id < l2_primal_residual.size(),
-               "Climber strategy index out of bounds");
-  cuopt_assert(l2_primal_residual.size() == l2_dual_residual.size() &&
-                 l2_primal_residual.size() == gap.size() &&
-                 l2_primal_residual.size() == primal_weight.size(),
-               "KKT score input sizes must match");
   kernel_compute_kkt_score<f_t><<<1, 1, 0, stream_view_>>>(l2_primal_residual.data(),
                                                            l2_dual_residual.data(),
                                                            gap.data(),
                                                            primal_weight.data(),
-                                                           tmp_kkt_score_.data(),
-                                                           climber_strategy_id);
+                                                           tmp_kkt_score_.data());
   return tmp_kkt_score_.value(stream_view_);
 }
 

@@ -91,7 +91,8 @@ class pdlp_solver_t {
     typename convergence_information_t<i_t, f_t>::primal_quality_adapter_t;
 
   const primal_quality_adapter_t& get_best_quality(const primal_quality_adapter_t& current,
-                                                   const primal_quality_adapter_t& other);
+                                                   const primal_quality_adapter_t& other,
+                                                   bool use_kkt = false);
 
   void set_inside_mip(bool inside_mip);
 
@@ -110,20 +111,36 @@ class pdlp_solver_t {
     const timer_t& timer);
   // Snapshot the current iterate of climber `i` (batch-local index) into
   // `batch_solution_to_return_` at its `original_index` slot
-  void snapshot_climber_into_return(size_t i, bool mark_solved = true);
-  void snapshot_best_primal_climber(size_t i);
+  void snapshot_climber_into_return(
+    size_t i, std::optional<pdlp_termination_status_t> status_to_set = std::nullopt);
   // flush GPU termination stats into `batch_solution_to_return_` and construct the final solution.
   optimization_problem_solution_t<i_t, f_t> finalize_batch_return();
   optimization_problem_solution_t<i_t, f_t> finalize_batch_return_with_limit_reached(
     pdlp_termination_status_t limit_reached_status);
   std::optional<optimization_problem_solution_t<i_t, f_t>> check_limits(const timer_t& timer);
+  // Whether a best iterate should be tracked and returned on a limit, ranked either by primal
+  // quality (save_best_primal_so_far) or by the KKT measure (save_best_kkt_so_far).
+  bool save_best_iterate() const;
   void record_best_primal_so_far(const pdlp::pdlp_termination_strategy_t<i_t, f_t>& current,
                                  const pdlp::pdlp_termination_strategy_t<i_t, f_t>& average,
                                  const pdlp_termination_status_t& termination_current,
                                  const pdlp_termination_status_t& termination_average);
+  // Batch counterpart of record_best_primal_so_far: keeps, per active climber, the best iterate
+  // seen so far in best_primal_solution_so_far (indexed by original_index).
   void record_best_primal_so_far_batch();
-  optimization_problem_solution_t<i_t, f_t> finalize_best_primal_batch_return(
-    pdlp_termination_status_t limit_reached_status);
+  // Which iterate produced the best-primal-so-far quality for a climber. Batch mode has no
+  // averaged iterate, so it always resolves to `current`.
+  enum class best_primal_source_t { current, average };
+  // Shared best-primal-so-far bookkeeping for a single climber slot, used by both the non-batch and
+  // batch recorders. Picks the best between `current_quality` and `average_quality` (when present),
+  // then between that candidate and the stored best for `index`. In batch mode there is no averaged
+  // iterate, so `average_quality` is empty and the candidate is always `current`. Returns the
+  // winning source when the stored best is improved (updating it in place), or nullopt otherwise.
+  std::optional<best_primal_source_t> update_best_primal_quality(
+    size_t index,
+    const primal_quality_adapter_t& current_quality,
+    const std::optional<primal_quality_adapter_t>& average_quality,
+    bool use_kkt);
 
   void take_step([[maybe_unused]] i_t total_pdlp_iterations,
                  [[maybe_unused]] bool is_major_iteration);
@@ -247,8 +264,10 @@ class pdlp_solver_t {
 
   // Only used if save_best_primal_so_far is toggeled
   optimization_problem_solution_t<i_t, f_t> best_primal_solution_so_far;
-  primal_quality_adapter_t best_primal_quality_so_far_;
-  std::vector<f_t> best_kkt_score_so_far_batch_;
+  // Running best-primal-so-far quality, one entry per climber: size 1 in non-batch mode and
+  // climber-count (== original_batch_size_) in batch mode. Indexed by original_index.
+  // best_primal_solution_so_far holds the matching iterate blocks.
+  std::vector<primal_quality_adapter_t> best_primal_quality_so_far_;
   // Flag to indicate if solver is being called from MIP. No logging is done in this case.
   bool inside_mip_{false};
 };
