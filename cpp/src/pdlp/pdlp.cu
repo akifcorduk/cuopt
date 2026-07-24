@@ -590,8 +590,20 @@ const pdlp_solver_t<i_t, f_t>::primal_quality_adapter_t& pdlp_solver_t<i_t, f_t>
   std::cout << "  other.primal_objective = " << other.primal_objective << std::endl;
 #endif
 
-  // KKT ranking (save_best_kkt_so_far): smallest sqrt(pr^2 + dr^2 + gap^2) wins, ties -> current.
-  if (use_kkt) { return (current.kkt() <= other.kkt()) ? current : other; }
+  // KKT ranking (save_best_kkt_so_far). The KKT measure trades primal residual against the duality
+  // gap one-for-one, which is the wrong trade for a consumer that needs a point on the polytope:
+  // an iterate that is primal feasible but still has an open gap loses to a badly infeasible one
+  // whose primal and dual objectives happen to cross. Rank primal feasibility first and let the
+  // KKT measure only separate iterates inside the same feasibility class.
+  if (use_kkt) {
+    if (current.is_primal_feasible != other.is_primal_feasible) {
+      return current.is_primal_feasible ? current : other;
+    }
+    if (!current.is_primal_feasible && current.primal_residual != other.primal_residual) {
+      return (current.primal_residual < other.primal_residual) ? current : other;
+    }
+    return (current.kkt() <= other.kkt()) ? current : other;
+  }
 
   // Primal feasiblity is best
 
@@ -953,6 +965,7 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
   // it, keeping the fallback status set by snapshot_climber_into_return). Converged climbers were
   // already removed/snapshotted with their optimal/primal-feasible solution and are left untouched.
   if (save_best_iterate()) {
+    size_t selected_kkt_checkpoints = 0;
     for (size_t i = 0; i < climber_strategies_.size(); ++i) {
       if (current_termination_strategy_.is_done(
             current_termination_strategy_.get_termination_status(i), accept_pf)) {
@@ -963,6 +976,18 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
       const bool has_recorded_best =
         best_quality.is_primal_feasible || std::isfinite(best_quality.primal_residual);
       if (!has_recorded_best) { continue; }
+      const auto& current_info =
+        batch_solution_to_return_.get_additional_termination_informations()[original_index];
+      // Backstop for the ranking above: the checkpoint may never be returned when it is further
+      // off the polytope than the last iterate. Both are the residual selected by
+      // per_constraint_residual, so they are directly comparable. The tolerance floor still admits
+      // a checkpoint that is feasible but not quite as deep inside the polytope as the last
+      // iterate, which is where the better gap/objective actually buys something.
+      if (settings_.save_best_kkt_so_far &&
+          best_quality.primal_residual > std::max(current_info.l2_primal_residual,
+                                                  settings_.tolerances.absolute_primal_tolerance)) {
+        continue;
+      }
       raft::copy(
         batch_solution_to_return_.get_primal_solution().data() + original_index * primal_size_h_,
         best_primal_solution_so_far.get_primal_solution().data() + original_index * primal_size_h_,
@@ -991,8 +1016,14 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
       info.l2_relative_primal_residual = best_info.l2_relative_primal_residual;
       info.l2_dual_residual            = best_info.l2_dual_residual;
       info.l2_relative_dual_residual   = best_info.l2_relative_dual_residual;
+      selected_kkt_checkpoints += settings_.save_best_kkt_so_far;
     }
     RAFT_CUDA_TRY(cudaStreamSynchronize(stream_view_));
+    if (settings_.save_best_kkt_so_far) {
+      CUOPT_LOG_INFO("Batched PDLP guarded best-KKT checkpoint selected %zu of %zu active climbers",
+                     selected_kkt_checkpoints,
+                     climber_strategies_.size());
+    }
   }
   return optimization_problem_solution_t<i_t, f_t>{
     batch_solution_to_return_.get_primal_solution(),

@@ -1091,11 +1091,12 @@ End
 
 // -- save_best_primal_so_far vs save_best_kkt_so_far cross-comparison --
 //
-// Both modes track a best iterate over the *same* solver trajectory (recording is passive and does
-// not change the steps taken), so the primal-ranked run returns the trajectory's primal-best
-// iterate while the kkt-ranked run returns its kkt-best iterate. We therefore only need to run the
-// same instance twice under a limit and confirm that each returned solution is optimal under its
-// own metric: primal-run's primal residual <= kkt-run's, and kkt-run's KKT <= primal-run's.
+// Both modes track a best iterate over the same solver trajectory. The KKT ranking is
+// feasibility-first: a primal feasible iterate always beats an infeasible one, infeasible iterates
+// are separated by primal residual, and the KKT measure only breaks ties between feasible ones. So
+// on a trajectory that never becomes primal feasible both rankings must land on the same iterate.
+// Batch KKT additionally refuses a checkpoint whose primal residual is worse than the final
+// iterate's (above the primal tolerance floor).
 
 // KKT measure = sqrt(primal_residual^2 + dual_residual^2 + gap^2) from a solution's reported stats.
 static double best_so_far_kkt(const optimization_problem_solution_t<int, double>& sol, int id = 0)
@@ -1113,33 +1114,21 @@ static double best_so_far_primal_residual(const optimization_problem_solution_t<
   return sol.get_additional_termination_information(id).l2_primal_residual;
 }
 
-// Confirms each run is best under its own metric (see comment block above).
-static void expect_metric_cross_dominance(
+// Confirms the feasibility-first fallback (see comment block above) on a climber that never becomes
+// primal feasible: the KKT ranking must match the primal ranking on the primal residual, which is
+// what stops a KKT checkpoint from ever being handed back further off the polytope. Residuals here
+// span many orders of magnitude, so the comparison is relative rather than a fixed epsilon.
+static void expect_kkt_matches_primal_residual(
   const optimization_problem_solution_t<int, double>& primal_run,
   const optimization_problem_solution_t<int, double>& kkt_run,
-  int id     = 0,
-  double tol = 1e-6)
+  int id         = 0,
+  double rel_tol = 1e-6)
 {
-  EXPECT_LE(best_so_far_primal_residual(primal_run, id),
-            best_so_far_primal_residual(kkt_run, id) + tol)
-    << "primal-ranked run should return an iterate at least as good on the primal residual";
-  EXPECT_LE(best_so_far_kkt(kkt_run, id), best_so_far_kkt(primal_run, id) + tol)
-    << "kkt-ranked run should return an iterate at least as good on the KKT measure";
-}
-
-// Whether the two runs picked genuinely different iterates for climber `id` (proxy: reported
-// residual/gap tuple differs). Meaningful only when the trajectory has a point where the
-// primal-best and kkt-best disagree.
-static bool best_so_far_iterates_differ(const optimization_problem_solution_t<int, double>& a,
-                                        const optimization_problem_solution_t<int, double>& b,
-                                        int id     = 0,
-                                        double tol = 1e-9)
-{
-  const auto ia = a.get_additional_termination_information(id);
-  const auto ib = b.get_additional_termination_information(id);
-  return std::abs(ia.l2_primal_residual - ib.l2_primal_residual) > tol ||
-         std::abs(ia.l2_dual_residual - ib.l2_dual_residual) > tol ||
-         std::abs(ia.gap - ib.gap) > tol;
+  const double primal_reference = best_so_far_primal_residual(primal_run, id);
+  EXPECT_NEAR(best_so_far_primal_residual(kkt_run, id),
+              primal_reference,
+              rel_tol * std::max(1.0, std::abs(primal_reference)))
+    << "kkt ranking must fall back to the primal residual when no iterate is primal feasible";
 }
 
 // Non-asserting analogue of test_constraint_sanity_per_row: returns the worst per-row slack
@@ -1220,10 +1209,9 @@ End
   ASSERT_EQ(sol_primal.get_termination_status(), pdlp_termination_status_t::IterationLimit);
   ASSERT_EQ(sol_kkt.get_termination_status(), pdlp_termination_status_t::IterationLimit);
 
-  // Confirm each run is best under its own metric. On this small instance PDLP improves the primal
-  // residual and the KKT measure roughly monotonically, so both rankings may land on the same
-  // iterate; the batch test below exercises a trajectory where they genuinely diverge.
-  expect_metric_cross_dominance(sol_primal, sol_kkt);
+  // The instance is infeasible, so no iterate is ever primal feasible and the KKT ranking falls
+  // back to the primal residual.
+  expect_kkt_matches_primal_residual(sol_primal, sol_kkt);
 }
 
 // Batch: reuse the feasible/infeasible instance. Climber 0 converges (both metrics agree on the
@@ -1247,6 +1235,10 @@ TEST(pdlp_class, best_kkt_so_far_vs_best_primal_batch_stable3)
 
   constexpr int batch_size = 2;
 
+  auto sol_final = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, base, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
   auto primal_settings                    = base;
   primal_settings.save_best_primal_so_far = true;
   auto sol_primal                         = solve_lp_batch_fixed<int, double>(
@@ -1262,11 +1254,14 @@ TEST(pdlp_class, best_kkt_so_far_vs_best_primal_batch_stable3)
   ASSERT_EQ(static_cast<int>(sol_primal.get_terminations_status().size()), batch_size);
   ASSERT_EQ(static_cast<int>(sol_kkt.get_terminations_status().size()), batch_size);
 
-  // Climber 1 (infeasible, limit-reaching): each run must be best under its own metric and the two
-  // rankings should disagree on which iterate to keep.
-  expect_metric_cross_dominance(sol_primal, sol_kkt, /*id=*/1);
-  EXPECT_TRUE(best_so_far_iterates_differ(sol_primal, sol_kkt, /*id=*/1))
-    << "the two rankings should select different iterates for the infeasible climber";
+  // Climber 1 (infeasible, limit-reaching): both rankings fall back to the primal residual, and the
+  // returned checkpoint must never be further off the polytope than the final iterate.
+  expect_kkt_matches_primal_residual(sol_primal, sol_kkt, /*id=*/1);
+  const auto final_info = sol_final.get_additional_termination_information(1);
+  const auto kkt_info   = sol_kkt.get_additional_termination_information(1);
+  EXPECT_LE(
+    kkt_info.l2_primal_residual,
+    std::max(final_info.l2_primal_residual, base.tolerances.absolute_primal_tolerance) + 1e-6);
 }
 
 // Same as the batch cross-comparison above but with per_constraint_residual on, so the recording
@@ -1292,6 +1287,10 @@ TEST(pdlp_class, best_kkt_so_far_vs_best_primal_batch_per_constraint_residual_st
 
   constexpr int batch_size = 2;
 
+  auto sol_final = solve_lp_batch_fixed<int, double>(
+    &handle_, mps_data, base, batch_size, {}, per_climber_lb, per_climber_ub);
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
   auto primal_settings                    = base;
   primal_settings.save_best_primal_so_far = true;
   auto sol_primal                         = solve_lp_batch_fixed<int, double>(
@@ -1307,11 +1306,14 @@ TEST(pdlp_class, best_kkt_so_far_vs_best_primal_batch_per_constraint_residual_st
   ASSERT_EQ(static_cast<int>(sol_primal.get_terminations_status().size()), batch_size);
   ASSERT_EQ(static_cast<int>(sol_kkt.get_terminations_status().size()), batch_size);
 
-  // Climber 1 (infeasible, limit-reaching): each run must be best under its own metric and the two
-  // rankings should disagree on which iterate to keep.
-  expect_metric_cross_dominance(sol_primal, sol_kkt, /*id=*/1);
-  EXPECT_TRUE(best_so_far_iterates_differ(sol_primal, sol_kkt, /*id=*/1))
-    << "the two rankings should select different iterates for the infeasible climber";
+  // Climber 1 (infeasible, limit-reaching): both rankings fall back to the primal residual, and the
+  // returned checkpoint must never be further off the polytope than the final iterate.
+  expect_kkt_matches_primal_residual(sol_primal, sol_kkt, /*id=*/1);
+  const auto final_info = sol_final.get_additional_termination_information(1);
+  const auto kkt_info   = sol_kkt.get_additional_termination_information(1);
+  EXPECT_LE(
+    kkt_info.l2_primal_residual,
+    std::max(final_info.l2_primal_residual, base.tolerances.absolute_primal_tolerance) + 1e-6);
 }
 
 // -- save_best_primal_so_far and save_best_kkt_so_far are mutually exclusive --
@@ -1540,11 +1542,11 @@ TEST(pdlp_class, per_constraint_residual_batch_best_so_far_enforces_per_row_stab
     check_optimal_climber0(sol_primal, per_constraint);
     check_optimal_climber0(sol_kkt, per_constraint);
 
-    // Limit-reaching climber is returned via the best-so-far path under both rankings, and each run
-    // is best under its own metric -> the three features compose without clashing.
+    // Limit-reaching climber is returned via the best-so-far path under both rankings, and the
+    // feasibility-first fallback makes them agree -> the three features compose without clashing.
     EXPECT_EQ(sol_primal.get_termination_status(1), pdlp_termination_status_t::IterationLimit);
     EXPECT_EQ(sol_kkt.get_termination_status(1), pdlp_termination_status_t::IterationLimit);
-    expect_metric_cross_dominance(sol_primal, sol_kkt, /*id=*/1);
+    expect_kkt_matches_primal_residual(sol_primal, sol_kkt, /*id=*/1);
   }
 }
 

@@ -497,15 +497,6 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
 
       auto sol   = cuopt::mathematical_optimization::run_batch_pdlp(op, settings);
       auto& term = sol.get_terminations_status();
-      if (settings.save_best_kkt_so_far) {
-        const auto selected = std::count_if(term.begin(), term.end(), [](const auto status) {
-          return status == pdlp_termination_status_t::TimeLimit ||
-                 status == pdlp_termination_status_t::IterationLimit ||
-                 status == pdlp_termination_status_t::ConcurrentLimit;
-        });
-        CUOPT_LOG_INFO(
-          "Batched FP best-KKT checkpoint selected %zu of %zu climbers", selected, term.size());
-      }
       climber0_projection_status<i_t, f_t> = term.empty() ? 0 : (int)term[0];
       auto& primal                         = sol.get_primal_solution();
       auto& dual                           = sol.get_dual_solution();
