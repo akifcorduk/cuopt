@@ -158,8 +158,7 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
   cuopt_assert(config == nullptr || config_id < max_config,
                "CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
   batch_config = make_fp_batch_config(config_id);
-  CUOPT_LOG_INFO(
-    "Using batched FP quality configuration %d of %d", config_id, n_fp_quality_configs);
+  CUOPT_LOG_INFO("Using batched FP quality configuration %d of %d", config_id, max_config);
 }
 
 template <typename i_t, typename f_t>
