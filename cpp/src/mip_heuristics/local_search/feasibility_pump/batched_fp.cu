@@ -1334,11 +1334,13 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       solution.handle_ptr->sync_stream();
 
       std::vector<i_t> infeasible_candidates;
+      i_t n_diversity_feasible = 0;
       for (i_t d = 0; d < n_diversity; ++d) {
         const i_t c              = d + 1;
         const bool fully_integer = h_integer_counts[d] == solution.problem_ptr->n_integer_vars;
         const bool feasible      = fully_integer && h_feasible_counts[d] == n_constraints;
         if (feasible) {
+          n_diversity_feasible++;
           if (metrics != nullptr) {
             metrics->iterations.back().diversity_feasible_candidates++;
             if (c == 1) { metrics->iterations.back().climber1_feasible_candidates++; }
@@ -1361,6 +1363,14 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud_descent(
       std::sort(infeasible_candidates.begin(), infeasible_candidates.end(), [&](i_t lhs, i_t rhs) {
         return h_adjusted_excess[lhs] < h_adjusted_excess[rhs];
       });
+      CUOPT_LOG_INFO(
+        "Batched FP diversity round: climbers=%d feasible=%d repairable=%d best_adjusted=%.6e "
+        "climber0_adjusted=%.6e",
+        n_diversity,
+        n_diversity_feasible,
+        (i_t)infeasible_candidates.size(),
+        infeasible_candidates.empty() ? -1. : (double)h_adjusted_excess[infeasible_candidates[0]],
+        (double)solution.get_adjusted_total_excess());
       const f_t publication_limit = std::max((f_t)1e-3, solution.get_adjusted_total_excess());
       const i_t top_k             = std::min((i_t)2, (i_t)infeasible_candidates.size());
       if (population_ptr != nullptr && !solution.problem_ptr->cutting_plane_added) {
