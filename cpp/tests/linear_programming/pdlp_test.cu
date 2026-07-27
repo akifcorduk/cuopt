@@ -1098,16 +1098,6 @@ End
 // Batch KKT additionally refuses a checkpoint whose primal residual is worse than the final
 // iterate's (above the primal tolerance floor).
 
-// KKT measure = sqrt(primal_residual^2 + dual_residual^2 + gap^2) from a solution's reported stats.
-static double best_so_far_kkt(const optimization_problem_solution_t<int, double>& sol, int id = 0)
-{
-  const auto info  = sol.get_additional_termination_information(id);
-  const double pr  = info.l2_primal_residual;
-  const double dr  = info.l2_dual_residual;
-  const double gap = info.gap;
-  return std::sqrt(pr * pr + dr * dr + gap * gap);
-}
-
 static double best_so_far_primal_residual(const optimization_problem_solution_t<int, double>& sol,
                                           int id = 0)
 {
