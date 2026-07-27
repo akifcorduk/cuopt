@@ -115,6 +115,9 @@
 #define CUOPT_MIP_HYPER_HEURISTIC_RELAXED_LP_TIME_LIMIT "mip_hyper_heuristic_relaxed_lp_time_limit"
 #define CUOPT_MIP_HYPER_HEURISTIC_RELATED_VARS_TIME_LIMIT \
   "mip_hyper_heuristic_related_vars_time_limit"
+#define CUOPT_MIP_HYPER_HEURISTIC_FP_AUX_CPUFJ "mip_hyper_heuristic_fp_aux_cpufj"
+#define CUOPT_MIP_HYPER_HEURISTIC_FP_AUX_CPUFJ_OBJECTIVE_WEIGHT \
+  "mip_hyper_heuristic_fp_aux_cpufj_objective_weight"
 
 /* @brief Diving heuristic toggles: -1 automatic, 0 disabled, 1 enabled */
 #define CUOPT_MIP_HYPER_DIVING_LINE_SEARCH   "mip_hyper_diving_line_search"

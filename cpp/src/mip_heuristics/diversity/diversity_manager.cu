@@ -80,33 +80,6 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
     mab_ls(mab_ls_config_t<i_t, f_t>::n_of_arms, cuopt::seed_generator::get_seed(), ls_alpha, "ls"),
     ls_hash_map(*context.problem_ptr)
 {
-  int max_config             = -1;
-  int env_config_id          = -1;
-  const char* env_max_config = std::getenv("CUOPT_MAX_CONFIG");
-  if (env_max_config != nullptr) {
-    try {
-      max_config = std::stoi(env_max_config);
-      CUOPT_LOG_INFO("Using maximum configuration value from environment: %d", max_config);
-    } catch (const std::exception& e) {
-      CUOPT_LOG_WARN("Failed to parse CUOPT_MAX_CONFIG environment variable: %s", e.what());
-    }
-  }
-
-  const char* env_config_id_raw = std::getenv("CUOPT_CONFIG_ID");
-  if (env_config_id_raw == nullptr) { return; }
-
-  try {
-    env_config_id = std::stoi(env_config_id_raw);
-  } catch (const std::exception& e) {
-    CUOPT_LOG_WARN("Failed to parse CUOPT_CONFIG_ID environment variable: %s", e.what());
-    return;
-  }
-
-  if (max_config > 0 && env_config_id >= max_config) {
-    CUOPT_LOG_WARN(
-      "CUOPT_CONFIG_ID=%d is outside [0, %d). Ignoring cut override.", env_config_id, max_config);
-    return;
-  }
 }
 
 template <typename i_t, typename f_t>

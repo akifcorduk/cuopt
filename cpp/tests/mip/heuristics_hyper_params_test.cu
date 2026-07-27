@@ -74,6 +74,8 @@ TEST_F(HeuristicsHyperParamsTest, CustomValuesRoundTrip)
     f << "mip_hyper_heuristic_cycle_detection_length = 50\n";
     f << "mip_hyper_heuristic_relaxed_lp_time_limit = 2\n";
     f << "mip_hyper_heuristic_related_vars_time_limit = 60\n";
+    f << "mip_hyper_heuristic_fp_aux_cpufj = 0\n";
+    f << "mip_hyper_heuristic_fp_aux_cpufj_objective_weight = 2.5\n";
   }
 
   settings_t settings;
@@ -97,6 +99,8 @@ TEST_F(HeuristicsHyperParamsTest, CustomValuesRoundTrip)
   EXPECT_EQ(hp.cycle_detection_length, 50);
   EXPECT_DOUBLE_EQ(hp.relaxed_lp_time_limit, 2.0);
   EXPECT_DOUBLE_EQ(hp.related_vars_time_limit, 60.0);
+  EXPECT_EQ(hp.fp_aux_cpufj, 0);
+  EXPECT_DOUBLE_EQ(hp.fp_aux_cpufj_objective_weight, 2.5);
 }
 
 TEST_F(HeuristicsHyperParamsTest, PartialConfigKeepsDefaults)

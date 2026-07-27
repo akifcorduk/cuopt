@@ -114,6 +114,7 @@ solver_settings_t<i_t, f_t>::solver_settings_t() : pdlp_settings(), mip_settings
     {CUOPT_MIP_HYPER_HEURISTIC_INITIAL_INFEASIBILITY_WEIGHT, &mip_settings.heuristic_params.initial_infeasibility_weight, f_t(1e-9), std::numeric_limits<f_t>::infinity(), f_t(1000.0), "constraint violation penalty seed"},
     {CUOPT_MIP_HYPER_HEURISTIC_RELAXED_LP_TIME_LIMIT, &mip_settings.heuristic_params.relaxed_lp_time_limit, f_t(1e-9), std::numeric_limits<f_t>::infinity(), f_t(1.0), "base relaxed LP time cap in heuristics"},
     {CUOPT_MIP_HYPER_HEURISTIC_RELATED_VARS_TIME_LIMIT, &mip_settings.heuristic_params.related_vars_time_limit, f_t(1e-9), std::numeric_limits<f_t>::infinity(), f_t(30.0), "time for related-variable structure build"},
+    {CUOPT_MIP_HYPER_HEURISTIC_FP_AUX_CPUFJ_OBJECTIVE_WEIGHT, &mip_settings.heuristic_params.fp_aux_cpufj_objective_weight, f_t(0.0), std::numeric_limits<f_t>::infinity(), f_t(1.0), "FJ weight on the FP L1 distance objective"},
     {CUOPT_MIP_SEMICONTINUOUS_BIG_M, &mip_settings.semi_continuous_big_m, f_t(1.0), std::numeric_limits<f_t>::infinity(), f_t(1e10), "big-M value for semi-continuous variables with no finite upper bound"},
     // Diving heuristic hyper-parameters (hidden from default --help: name contains "hyper_")
     {CUOPT_MIP_HYPER_DIVING_ITERATION_LIMIT_FACTOR, &mip_settings.diving_params.iteration_limit_factor, f_t(0.0), f_t(1.0), f_t(0.05), "fraction of best-first iterations allowed per dive"},
@@ -171,6 +172,7 @@ solver_settings_t<i_t, f_t>::solver_settings_t() : pdlp_settings(), mip_settings
     {CUOPT_MIP_HYPER_HEURISTIC_N_OF_MINIMUMS_FOR_EXIT, &mip_settings.heuristic_params.n_of_minimums_for_exit, 1, std::numeric_limits<i_t>::max(), 7000, "FJ baseline local-minima exit threshold"},
     {CUOPT_MIP_HYPER_HEURISTIC_ENABLED_RECOMBINERS, &mip_settings.heuristic_params.enabled_recombiners, 0, 15, 15, "bitmask: 1=BP 2=FP 4=LS 8=SubMIP"},
     {CUOPT_MIP_HYPER_HEURISTIC_CYCLE_DETECTION_LENGTH, &mip_settings.heuristic_params.cycle_detection_length, 1, std::numeric_limits<i_t>::max(), 30, "FP assignment cycle ring buffer length"},
+    {CUOPT_MIP_HYPER_HEURISTIC_FP_AUX_CPUFJ, &mip_settings.heuristic_params.fp_aux_cpufj, 0, 1, 1, "run a CPU FJ climber on the FP L1 projection auxiliary problem: 0 disabled, 1 enabled"},
     // Diving heuristic hyper-parameters (hidden from default --help: name contains "hyper_")
     {CUOPT_MIP_HYPER_DIVING_LINE_SEARCH, &mip_settings.diving_params.line_search_diving, -1, 1, -1, "line-search diving toggle: -1 automatic, 0 disabled, 1 enabled"},
     {CUOPT_MIP_HYPER_DIVING_PSEUDOCOST, &mip_settings.diving_params.pseudocost_diving, -1, 1, -1, "pseudocost diving toggle: -1 automatic, 0 disabled, 1 enabled"},

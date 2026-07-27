@@ -30,6 +30,7 @@
 #include <raft/core/cusparse_macros.hpp>
 
 #include <cmath>
+#include <cstdlib>
 #include <future>
 #include <memory>
 #include <thread>
@@ -49,13 +50,73 @@ static void init_handler(const raft::handle_t* handle_ptr)
     handle_ptr->get_cusparse_handle(), CUSPARSE_POINTER_MODE_DEVICE, handle_ptr->get_stream()));
 }
 
+namespace {
+
+// Configurations swept with CUOPT_CONFIG_ID in [0, CUOPT_MAX_CONFIG):
+//   0 - FP L1 projection auxiliary CPU FJ disabled (baseline)
+//   1 - enabled, L1 distance objective weight 1
+//   2 - enabled, L1 distance objective weight 20
+constexpr int n_experiment_configs = 3;
+
+static int read_env_int(const char* name, int fallback)
+{
+  const char* raw = std::getenv(name);
+  if (raw == nullptr) { return fallback; }
+  try {
+    return std::stoi(raw);
+  } catch (const std::exception& e) {
+    CUOPT_LOG_WARN("Failed to parse %s environment variable: %s", name, e.what());
+    return fallback;
+  }
+}
+
+template <typename i_t, typename f_t>
+static mip_solver_settings_t<i_t, f_t> apply_experiment_config(
+  const mip_solver_settings_t<i_t, f_t>& settings)
+{
+  auto configured     = settings;
+  const int config_id = read_env_int("CUOPT_CONFIG_ID", -1);
+  if (config_id < 0) { return configured; }
+  const int max_config = read_env_int("CUOPT_MAX_CONFIG", n_experiment_configs);
+  if (config_id >= max_config) {
+    CUOPT_LOG_WARN("CUOPT_CONFIG_ID=%d is outside [0, %d). Keeping default configuration.",
+                   config_id,
+                   max_config);
+    return configured;
+  }
+
+  auto& params = configured.heuristic_params;
+  switch (config_id) {
+    case 0: params.fp_aux_cpufj = 0; break;
+    case 1:
+      params.fp_aux_cpufj                  = 1;
+      params.fp_aux_cpufj_objective_weight = f_t(1.);
+      break;
+    case 2:
+      params.fp_aux_cpufj                  = 1;
+      params.fp_aux_cpufj_objective_weight = f_t(20.);
+      break;
+    default: break;
+  }
+  CUOPT_LOG_INFO("Config %d/%d: fp_aux_cpufj %d, L1 distance weight %g",
+                 config_id,
+                 max_config,
+                 params.fp_aux_cpufj,
+                 (double)params.fp_aux_cpufj_objective_weight);
+  return configured;
+}
+
+}  // namespace
+
 template <typename i_t, typename f_t>
 mip_solver_t<i_t, f_t>::mip_solver_t(const problem_t<i_t, f_t>& op_problem,
                                      const mip_solver_settings_t<i_t, f_t>& solver_settings,
                                      timer_t timer)
   : op_problem_(op_problem),
     solver_settings_(solver_settings),
-    context(op_problem.handle_ptr, const_cast<problem_t<i_t, f_t>*>(&op_problem), solver_settings),
+    context(op_problem.handle_ptr,
+            const_cast<problem_t<i_t, f_t>*>(&op_problem),
+            apply_experiment_config(solver_settings)),
     timer_(timer)
 {
   init_handler(op_problem.handle_ptr);

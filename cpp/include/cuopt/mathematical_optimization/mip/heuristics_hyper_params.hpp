@@ -36,6 +36,8 @@ struct mip_heuristics_hyper_params_t {
   i_t cycle_detection_length             = 30;      // FP assignment cycle ring buffer
   f_t relaxed_lp_time_limit              = 1.0;     // base relaxed LP time cap in heuristics
   f_t related_vars_time_limit            = 30.0;    // time for related-variable structure build
+  i_t fp_aux_cpufj                       = 1;       // CPU FJ on the FP L1 projection aux problem
+  f_t fp_aux_cpufj_objective_weight      = 1.0;     // FJ weight on the FP L1 distance objective
 };
 
 }  // namespace cuopt::mathematical_optimization

@@ -29,6 +29,11 @@
 #include <thrust/gather.h>
 #include <thrust/tabulate.h>
 
+#include <omp.h>
+
+#include <algorithm>
+#include <cmath>
+
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
@@ -114,6 +119,93 @@ double get_tolerance_from_ratio(double ratio_integer, double absolute_tol)
   } else {
     return absolute_tol;
   }
+}
+
+template <typename i_t, typename f_t>
+bool feasibility_pump_t<i_t, f_t>::aux_cpu_fj_enabled() const
+{
+  return context.settings.heuristic_params.fp_aux_cpufj != 0 && !general_integers_relaxed &&
+         context.settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
+         omp_get_num_threads() > CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT;
+}
+
+// The auxiliary problem of the L1 projection carries the FP geometry: the original polytope plus
+// the distance variables and the distance objective towards the current rounding. Running a CPU FJ
+// climber on it searches the integer points of that geometry while PDLP computes the fractional
+// projection on the GPU.
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::create_aux_cpu_fj(problem_t<i_t, f_t>& aux_problem,
+                                                     solution_t<i_t, f_t>& aux_solution,
+                                                     i_t n_base_constraints,
+                                                     f_t time_limit)
+{
+  std::vector<f_t> left_weights(aux_problem.n_constraints, 1.);
+  std::vector<f_t> right_weights(aux_problem.n_constraints, 1.);
+  // The base constraints keep their index from one projection to the next, only the trailing
+  // distance constraints change, so the weights the previous climber learned on them are reusable.
+  // Decaying them by a square root keeps the difficulty ranking while pulling the magnitudes back
+  // towards 1, so an old projection cannot dominate the current one.
+  if ((i_t)aux_cpu_fj_left_weights.size() == n_base_constraints) {
+    auto decay = [](f_t weight) { return std::sqrt(weight); };
+    std::transform(
+      aux_cpu_fj_left_weights.begin(), aux_cpu_fj_left_weights.end(), left_weights.begin(), decay);
+    std::transform(aux_cpu_fj_right_weights.begin(),
+                   aux_cpu_fj_right_weights.end(),
+                   right_weights.begin(),
+                   decay);
+  }
+  fj_settings_t aux_settings;
+  aux_settings.time_limit      = time_limit;
+  aux_settings.update_weights  = true;
+  aux_settings.feasibility_run = false;
+  aux_cpu_fj =
+    fj.create_cpu_climber(aux_solution,
+                          left_weights,
+                          right_weights,
+                          (f_t)context.settings.heuristic_params.fp_aux_cpufj_objective_weight,
+                          context.preempt_heuristic_solver_,
+                          aux_settings);
+  aux_cpu_fj->log_prefix = "******* FP aux CPUFJ: ";
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::collect_aux_cpu_fj(i_t n_original_variables,
+                                                      i_t n_base_constraints)
+{
+  aux_cpu_fj_found = aux_cpu_fj->feasible_found;
+  if (aux_cpu_fj_found) {
+    cuopt_assert((i_t)aux_cpu_fj->h_best_assignment.size() >= n_original_variables,
+                 "Aux assignment must cover the original variables");
+    // drop the distance variables of the auxiliary problem
+    aux_cpu_fj_assignment.assign(aux_cpu_fj->h_best_assignment.begin(),
+                                 aux_cpu_fj->h_best_assignment.begin() + n_original_variables);
+  }
+  cuopt_assert((i_t)aux_cpu_fj->h_cstr_left_weights.size() >= n_base_constraints,
+               "Aux weights must cover the base constraints");
+  aux_cpu_fj_left_weights.assign(aux_cpu_fj->h_cstr_left_weights.begin(),
+                                 aux_cpu_fj->h_cstr_left_weights.begin() + n_base_constraints);
+  aux_cpu_fj_right_weights.assign(aux_cpu_fj->h_cstr_right_weights.begin(),
+                                  aux_cpu_fj->h_cstr_right_weights.begin() + n_base_constraints);
+  CUOPT_LOG_DEBUG(
+    "FP aux CPUFJ ran %d iterations, feasible %d", aux_cpu_fj->iterations, (int)aux_cpu_fj_found);
+  aux_cpu_fj.reset();
+}
+
+template <typename i_t, typename f_t>
+bool feasibility_pump_t<i_t, f_t>::take_aux_cpu_fj_solution(solution_t<i_t, f_t>& solution)
+{
+  aux_cpu_fj_found = false;
+  rmm::device_uvector<f_t> projection(solution.assignment, solution.handle_ptr->get_stream());
+  solution.copy_new_assignment(aux_cpu_fj_assignment);
+  if (solution.compute_feasibility()) {
+    CUOPT_LOG_DEBUG("FP aux CPUFJ found a feasible solution with objective %g",
+                    solution.get_user_objective());
+    return true;
+  }
+  CUOPT_LOG_DEBUG("FP aux CPUFJ solution is not feasible on the original problem, discarding");
+  solution.copy_new_assignment(projection);
+  solution.compute_feasibility();
+  return false;
 }
 
 // projects the current integer solution to the polytope.
@@ -219,7 +311,27 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
-  auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
+
+  aux_cpu_fj_found = false;
+  // the climber holds host copies, but the auxiliary problem and the seed solution must stay alive
+  // while it is being initialized
+  std::unique_ptr<solution_t<i_t, f_t>> aux_solution;
+  const bool run_aux_fj = aux_cpu_fj_enabled();
+  if (run_aux_fj) {
+    aux_solution = std::make_unique<solution_t<i_t, f_t>>(temp_p);
+    aux_solution->copy_new_assignment(h_assignment);
+    create_aux_cpu_fj(temp_p, *aux_solution, solution.problem_ptr->n_constraints, time_limit);
+    auto* aux_ptr = aux_cpu_fj.get();
+#pragma omp task firstprivate(aux_ptr, time_limit) priority(CUOPT_DEFAULT_TASK_PRIORITY) \
+  depend(out : *aux_ptr) default(none)
+    cpufj_solve(aux_ptr, time_limit);
+  }
+  auto solver_response = get_relaxed_lp_solution(temp_p, solution, lp_settings);
+  if (run_aux_fj) {
+    aux_cpu_fj->halted = true;
+#pragma omp taskwait depend(in : *aux_cpu_fj)  // wait for the auxiliary CPU FJ task to finish
+    collect_aux_cpu_fj(solution.problem_ptr->n_variables, solution.problem_ptr->n_constraints);
+  }
   cuopt_func_call(solution.test_variable_bounds(false));
   last_lp_time = old_remaining - timer.remaining_time();
   lp_time += last_lp_time;
@@ -381,6 +493,9 @@ void feasibility_pump_t<i_t, f_t>::reset()
   max_n_of_integers         = 0;
   config.alpha              = default_alpha;
   last_distances.resize(0);
+  aux_cpu_fj_found = false;
+  aux_cpu_fj_left_weights.clear();
+  aux_cpu_fj_right_weights.clear();
 }
 
 template <typename i_t, typename f_t>
@@ -451,6 +566,7 @@ void feasibility_pump_t<i_t, f_t>::relax_general_integers(solution_t<i_t, f_t>& 
   RAFT_CHECK_CUDA(solution.handle_ptr->get_stream());
   solution.problem_ptr->compute_n_integer_vars();
   solution.problem_ptr->compute_binary_var_table();
+  general_integers_relaxed = true;
   CUOPT_LOG_DEBUG("Integers are relaxed n_int vars %d n_binary vars %d n_vars %d",
                   solution.problem_ptr->n_integer_vars,
                   solution.problem_ptr->n_binary_vars,
@@ -465,6 +581,7 @@ void feasibility_pump_t<i_t, f_t>::revert_relaxation(solution_t<i_t, f_t>& solut
   std::swap(orig_variable_types, solution.problem_ptr->variable_types);
   solution.problem_ptr->compute_n_integer_vars();
   solution.problem_ptr->compute_binary_var_table();
+  general_integers_relaxed = false;
   solution.compute_feasibility();
 }
 
@@ -489,7 +606,9 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     f_t ratio_of_assigned_integers =
       f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
-    i_t n_integers   = solution.compute_number_of_integers();
+    // the outer loop saves the solution to the population and restarts FP with an objective cut
+    if (aux_cpu_fj_found && take_aux_cpu_fj_solution(solution)) { return true; }
+    i_t n_integers = solution.compute_number_of_integers();
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
                     n_integers,
                     solution.problem_ptr->n_integer_vars);

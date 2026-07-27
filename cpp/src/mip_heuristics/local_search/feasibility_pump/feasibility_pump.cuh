@@ -8,6 +8,7 @@
 #pragma once
 
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
+#include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
 #include <mip_heuristics/local_search/line_segment_search/line_segment_search.cuh>
 #include <mip_heuristics/local_search/rounding/constraint_prop.cuh>
 #include <mip_heuristics/solution/solution.cuh>
@@ -134,6 +135,14 @@ class feasibility_pump_t {
   void revert_relaxation(solution_t<i_t, f_t>& solution);
   bool test_fj_feasible(solution_t<i_t, f_t>& solution, f_t time_limit);
 
+  bool aux_cpu_fj_enabled() const;
+  void create_aux_cpu_fj(problem_t<i_t, f_t>& aux_problem,
+                         solution_t<i_t, f_t>& aux_solution,
+                         i_t n_base_constraints,
+                         f_t time_limit);
+  void collect_aux_cpu_fj(i_t n_original_variables, i_t n_base_constraints);
+  bool take_aux_cpu_fj_solution(solution_t<i_t, f_t>& solution);
+
   mip_solver_context_t<i_t, f_t>& context;
   // keep a reference from upstream local search
   fj_t<i_t, f_t>& fj;
@@ -157,6 +166,16 @@ class feasibility_pump_t {
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
+  // CPU FJ running on the L1 projection auxiliary problem, concurrently with the projection LP
+  std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> aux_cpu_fj;
+  std::vector<f_t> aux_cpu_fj_assignment;
+  // constraint weights learned by the previous projection, over the base constraints only
+  std::vector<f_t> aux_cpu_fj_left_weights;
+  std::vector<f_t> aux_cpu_fj_right_weights;
+  bool aux_cpu_fj_found = false;
+  // the auxiliary problem inherits the relaxed variable types, so its solutions are not valid
+  // solutions of the original MIP while the binary-only stage is active
+  bool general_integers_relaxed = false;
 };
 
 }  // namespace cuopt::mathematical_optimization::mip
