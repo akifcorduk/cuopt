@@ -121,6 +121,11 @@ class pdlp_solver_t {
   // Whether a best iterate should be tracked and returned on a limit, ranked either by primal
   // quality (save_best_primal_so_far) or by the KKT measure (save_best_kkt_so_far).
   bool save_best_iterate() const;
+  // Whether `index` has an iterate stored in best_primal_solution_so_far. Nothing is recorded until
+  // a candidate beats the sentinel, and check_termination's `internal_solver_iterations_ <= 1`
+  // early exit reaches check_limits before the first record can happen, so a limit hit in the first
+  // two iterations finds this false and must return the current iterate instead.
+  bool has_recorded_best_primal(size_t index) const;
   void record_best_primal_so_far(const pdlp::pdlp_termination_strategy_t<i_t, f_t>& current,
                                  const pdlp::pdlp_termination_strategy_t<i_t, f_t>& average,
                                  const pdlp_termination_status_t& termination_current,

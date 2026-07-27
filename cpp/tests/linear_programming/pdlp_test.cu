@@ -1316,6 +1316,51 @@ TEST(pdlp_class, best_kkt_so_far_vs_best_primal_batch_per_constraint_residual_st
     std::max(final_info.l2_primal_residual, base.tolerances.absolute_primal_tolerance) + 1e-6);
 }
 
+// A limit hit before the solver ever records a best iterate must still return the current iterate:
+// best_primal_solution_so_far is empty until the first record, and returning it produced a solution
+// with zero-sized primal/dual vectors (batched FP then saw an unusable projection and aborted).
+TEST(pdlp_class, best_iterate_limit_before_first_record_returns_sized_solution)
+{
+  const raft::handle_t handle_{};
+
+  auto op_problem = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: x + y
+Subject To
+  c0: x + y >= 1
+  c1: x - y <= 4
+Bounds
+  0 <= x <= 10
+  0 <= y <= 10
+End
+)LP");
+
+  auto base             = pdlp_solver_settings_t<int, double>{};
+  base.method           = cuopt::mathematical_optimization::method_t::PDLP;
+  base.pdlp_solver_mode = pdlp_solver_mode_t::Stable3;
+  base.presolver        = presolver_t::None;
+  base.log_to_console   = false;
+  // No iteration is allowed, so the limit fires before record_best_primal_so_far ever runs.
+  base.iteration_limit = 0;
+
+  for (const bool use_kkt : {false, true}) {
+    auto settings = base;
+    if (use_kkt) {
+      settings.save_best_kkt_so_far = true;
+    } else {
+      settings.save_best_primal_so_far = true;
+    }
+    auto sol = solve_lp(&handle_, op_problem, settings);
+    RAFT_CUDA_TRY(cudaDeviceSynchronize());
+
+    EXPECT_EQ(sol.get_error_status().get_error_type(), cuopt::error_type_t::Success);
+    EXPECT_EQ(sol.get_primal_solution().size(), 2u);
+    EXPECT_EQ(sol.get_dual_solution().size(), 2u);
+    EXPECT_EQ(sol.get_additional_termination_informations().size(),
+              sol.get_terminations_status().size());
+  }
+}
+
 // -- save_best_primal_so_far and save_best_kkt_so_far are mutually exclusive --
 TEST(pdlp_class, save_best_primal_and_kkt_are_mutually_exclusive)
 {

@@ -473,7 +473,7 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
       return finalize_batch_return_with_limit_reached(pdlp_termination_status_t::TimeLimit);
     }
 
-    if (save_best_iterate()) {
+    if (save_best_iterate() && has_recorded_best_primal(0)) {
 #ifdef PDLP_VERBOSE_MODE
       RAFT_CUDA_TRY(cudaDeviceSynchronize());
       std::cout << "Time Limit reached, returning best primal so far" << std::endl;
@@ -505,7 +505,7 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
       return finalize_batch_return_with_limit_reached(pdlp_termination_status_t::IterationLimit);
     }
 
-    if (save_best_iterate()) {
+    if (save_best_iterate() && has_recorded_best_primal(0)) {
 #ifdef PDLP_VERBOSE_MODE
       RAFT_CUDA_TRY(cudaDeviceSynchronize());
       std::cout << "Iteration Limit reached, returning best primal so far" << std::endl;
@@ -744,6 +744,19 @@ bool pdlp_solver_t<i_t, f_t>::save_best_iterate() const
 }
 
 template <typename i_t, typename f_t>
+bool pdlp_solver_t<i_t, f_t>::has_recorded_best_primal(size_t index) const
+{
+  const auto& quality = best_primal_quality_so_far_[index];
+  const bool recorded = quality.is_primal_feasible || std::isfinite(quality.primal_residual);
+  const bool sized    = best_primal_solution_so_far.get_primal_solution().size() != 0;
+  // Non-batch mode sizes the buffer only in record_best_primal_so_far, so the quality sentinel and
+  // the buffer state must agree. Batch mode pre-sizes it in the constructor, hence the exemption.
+  cuopt_assert(batch_mode_ || recorded == sized,
+               "best-primal quality sentinel disagrees with the recorded iterate");
+  return recorded;
+}
+
+template <typename i_t, typename f_t>
 pdlp_warm_start_data_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::get_filled_warmed_start_data()
 {
   if (batch_mode_)
@@ -972,10 +985,8 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
         continue;
       }
       const i_t original_index = climber_strategies_[i].original_index;
+      if (!has_recorded_best_primal(original_index)) { continue; }
       const auto& best_quality = best_primal_quality_so_far_[original_index];
-      const bool has_recorded_best =
-        best_quality.is_primal_feasible || std::isfinite(best_quality.primal_residual);
-      if (!has_recorded_best) { continue; }
       const auto& current_info =
         batch_solution_to_return_.get_additional_termination_informations()[original_index];
       // Backstop for the ranking above: the checkpoint may never be returned when it is further
