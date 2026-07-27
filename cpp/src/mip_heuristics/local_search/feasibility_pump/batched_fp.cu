@@ -48,10 +48,6 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
-// Defined in feasibility_pump.cu: maps the fraction of integral integer-vars to an LP tolerance
-// (looser when far from integral, tighter as it converges).
-double get_tolerance_from_ratio(double ratio_integer, double absolute_tol);
-
 class cuda_profiler_scope_t {
  public:
   explicit cuda_profiler_scope_t(bool enable)
@@ -349,12 +345,11 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
                   l2_norm_of_original_obj,
                   l2_norm_of_distance_obj);
 
-  const i_t n_constr   = unified_n_constr;
-  const f_t cont_upper = (f_t)default_cont_upper;
-  const f_t int_tol    = context.settings.tolerances.integrality_tolerance;
-  const f_t rlp_base   = context.settings.heuristic_params.relaxed_lp_time_limit;
-  const double lp_tolerance =
-    get_tolerance_from_ratio(climber0_int_ratio, context.settings.tolerances.absolute_tolerance);
+  const i_t n_constr        = unified_n_constr;
+  const f_t cont_upper      = (f_t)default_cont_upper;
+  const f_t int_tol         = context.settings.tolerances.integrality_tolerance;
+  const f_t rlp_base        = context.settings.heuristic_params.relaxed_lp_time_limit;
+  const double lp_tolerance = context.settings.tolerances.absolute_tolerance;
 
   CUOPT_LOG_TRACE(
     "changing alpha from %f to %f", config.alpha, config.alpha * config.alpha_decrease_factor);

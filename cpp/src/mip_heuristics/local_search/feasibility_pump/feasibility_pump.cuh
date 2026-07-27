@@ -450,8 +450,8 @@ class feasibility_pump_t {
   // or perturbed LP-optimal padding).
   std::vector<f_t> climber_alphas;
   // Climber 0's integer ratio from its previous projection (fraction of integer vars that are
-  // integral). Drives the batch projection's LP tolerance via get_tolerance_from_ratio, mirroring
-  // the original single-point FP: loose early (ratio low), tightening as climber 0 nears integral.
+  // integral). Still recorded but no longer read: the batch projection runs every climber at the
+  // full absolute tolerance instead of loosening it early via get_tolerance_from_ratio.
   f_t climber0_int_ratio                 = 0.;
   population_t<i_t, f_t>* population_ptr = nullptr;
 
