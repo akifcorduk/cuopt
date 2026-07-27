@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <utilities/copy_helpers.hpp>
 #include <utilities/timer.hpp>
@@ -925,18 +926,8 @@ void feasibility_pump_t<i_t, f_t>::replace_flagged_climbers_diverse(
   const f_t int_tol = context.settings.tolerances.integrality_tolerance;
   rmm::device_uvector<char> d_flagged((size_t)n_points, stream);
   raft::copy(d_flagged.data(), flagged.data(), n_points, stream);
-  const f_t* assignment = solution.assignment.data();
   f_t* cloud            = d_cloud.data();
   const char* flags     = d_flagged.data();
-  thrust::for_each(solution.handle_ptr->get_thrust_policy(),
-                   thrust::make_counting_iterator<size_t>(0),
-                   thrust::make_counting_iterator<size_t>((size_t)n_points * n_vars),
-                   [=] __device__(size_t g) {
-                     const i_t climber = (i_t)(g / (size_t)n_vars);
-                     if (climber == 0 || flags[climber] == 0) { return; }
-                     const i_t j = (i_t)(g % (size_t)n_vars);
-                     cloud[g]    = assignment[j];
-                   });
   const i_t* d_int_cols = solution.problem_ptr->integer_indices.data();
   const f_t* d_vlb      = unified_problem->get_variable_lower_bounds().data();
   const f_t* d_vub      = unified_problem->get_variable_upper_bounds().data();
@@ -951,7 +942,8 @@ void feasibility_pump_t<i_t, f_t>::replace_flagged_climbers_diverse(
       if (climber == 0 || flags[climber] == 0) { return; }
       const i_t k                    = (i_t)(g % (size_t)n_int);
       const i_t col                  = d_int_cols[k];
-      f_t val                        = assignment[col];
+      const size_t pos               = (size_t)climber * (size_t)n_vars + (size_t)col;
+      f_t val                        = cloud[pos];
       const i_t exponent             = std::min(climber - 1, (i_t)4);
       const f_t target_perturbations = (f_t)(8 << exponent);
       const f_t perturb_ratio        = std::min(f_t(0.1), target_perturbations / (f_t)n_int);
@@ -972,7 +964,7 @@ void feasibility_pump_t<i_t, f_t>::replace_flagged_climbers_diverse(
           }
         }
       }
-      cloud[(size_t)climber * (size_t)n_vars + (size_t)col] = val;
+      cloud[pos] = val;
     });
   for (i_t c = 1; c < n_points; ++c) {
     n_diverse += flagged[c];
@@ -1016,19 +1008,42 @@ void feasibility_pump_t<i_t, f_t>::advance_diversity_climbers_gpu(
   solution.handle_ptr->sync_stream();
   climber_hashes.assign(h_hashes.begin(), h_hashes.end());
   flagged.assign((size_t)n_points, 0);
-  std::unordered_map<size_t, i_t> seen_hash;
-  seen_hash.reserve((size_t)n_points * 2);
+
+  // An integer rounding is only treated as a cycle once a climber has seen it this many times,
+  // counting its own ring buffer plus the siblings holding it this round. Repeats below the
+  // threshold are left alone so the same integer point can be revisited with different
+  // continuous parts.
+  constexpr i_t cycle_hash_repeat_threshold = 3;
+
+  std::unordered_map<size_t, i_t> round_count;
+  round_count.reserve((size_t)n_points * 2);
   for (i_t c = 1; c < n_points; ++c) {
-    size_t hsh = h_hashes[c];
-    bool cyc   = false;
+    round_count[h_hashes[c]]++;
+  }
+
+  std::vector<char> crosses((size_t)n_points, 0);
+  for (i_t c = 1; c < n_points; ++c) {
+    const size_t hsh = h_hashes[c];
+    i_t own          = 0;
     for (size_t prev : climber_hash_history[c]) {
-      if (prev == hsh) {
-        cyc = true;
-        break;
-      }
+      own += (prev == hsh);
     }
-    bool dup   = !seen_hash.insert({hsh, c}).second;
-    flagged[c] = (cyc || dup) ? 1 : 0;
+    crosses[c] = (own + round_count[hsh]) >= cycle_hash_repeat_threshold;
+  }
+
+  // A point that some climber holds below the threshold survives on its own; otherwise the lowest
+  // index keeps it and only the redundant copies restart. A lone climber over the threshold is
+  // cycling and always restarts.
+  std::unordered_set<size_t> survived;
+  survived.reserve((size_t)n_points * 2);
+  for (i_t c = 1; c < n_points; ++c) {
+    if (!crosses[c]) { survived.insert(h_hashes[c]); }
+  }
+  for (i_t c = 1; c < n_points; ++c) {
+    if (!crosses[c]) { continue; }
+    const size_t hsh = h_hashes[c];
+    if (round_count[hsh] > 1 && survived.insert(hsh).second) { continue; }
+    flagged[c] = 1;
   }
 }
 
