@@ -153,7 +153,8 @@ run_result_t run_fp(const std::string& mps_path,
     }
     cuopt_assert(!infeasible, "FP regression problem must not be infeasible after probing");
     std::cerr << "probing_cache_entries="
-              << dm.ls.constraint_prop.bounds_update.probing_cache.probing_cache.size() << '\n';
+              << dm.ls.constraint_prop.bounds_update.probing_cache.probing_cache.size()
+              << " probing_infeasible=" << infeasible << '\n';
   }
   problem.compute_integer_fixed_problem();
   cuopt_func_call(
