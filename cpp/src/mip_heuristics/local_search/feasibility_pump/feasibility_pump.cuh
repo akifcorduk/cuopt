@@ -10,6 +10,7 @@
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
 #include <mip_heuristics/local_search/line_segment_search/line_segment_search.cuh>
 #include <mip_heuristics/local_search/rounding/constraint_prop.cuh>
+#include <mip_heuristics/relaxed_lp/lp_state.cuh>
 #include <mip_heuristics/solution/solution.cuh>
 #include <utilities/timer.hpp>
 
@@ -141,11 +142,29 @@ struct fp_batch_config_t {
   bool feedback_cloud                 = false;
   bool legacy_diversity               = false;
   double fj_ratio                     = 0.2;  // 20% FJ run
+  // Probe-based batched FP (run_probe_fp_descent) instead of the diversity cloud.
+  bool probe_projection = false;
+  // 0 = row repair first then most-ambiguous for the remaining slots, 1 = row repair only,
+  // 2 = most ambiguous only.
+  int probe_generator = 0;
+  // Broadcast the committed member's dual to every member on the next projection.
+  bool probe_dual_warm_start = true;
+  // Choose the width per projection from the previous projection's slack instead of always running
+  // at the cap. The width is only ever 1 or the cap; measured depth loss is a step at 1 -> 2
+  // members and is nearly flat above it, so intermediate widths pay the whole step for almost no
+  // probes.
+  bool probe_adaptive_width = true;
+  // A projection has slack when every member converged using at most this fraction of its budget.
+  // Converging at all is most of the signal; the fraction only rejects projections that converged
+  // barely inside the budget and would be pushed over it by the batch-mode step.
+  double probe_width_slack_ratio = 0.9;
+  // Projections to spend back at width 1 after the cap failed to keep its slack.
+  int probe_width_backoff_projections = 4;
 
   bool operator==(const fp_batch_config_t&) const = default;
 };
 
-constexpr int n_fp_quality_configs      = 9;
+constexpr int n_fp_quality_configs      = 10;
 constexpr int default_fp_quality_config = 8;
 
 int resolve_fp_quality_config_id(const char* config);
@@ -226,35 +245,54 @@ struct fp_iteration_metrics_t {
   f_t projection_adjusted_violation   = 0.;
   f_t projection_objective            = 0.;
   double projection_time              = 0.;
-  i_t pdlp_iterations                 = -1;
-  i_t pdhg_iterations                 = -1;
-  i_t projection_termination_status   = -1;
-  f_t pdlp_primal_residual            = std::numeric_limits<f_t>::quiet_NaN();
-  f_t pdlp_dual_residual              = std::numeric_limits<f_t>::quiet_NaN();
-  f_t pdlp_gap                        = std::numeric_limits<f_t>::quiet_NaN();
-  double batch_mean_pdlp_iterations   = -1.;
-  i_t batch_max_pdlp_iterations       = -1;
-  i_t rounded_integers                = 0;
-  i_t rounding_violated_constraints   = 0;
-  f_t rounding_l1_movement            = 0.;
-  f_t rounding_total_violation        = 0.;
-  f_t rounding_adjusted_violation     = 0.;
-  double rounding_time                = 0.;
-  bool projection_feasible            = false;
-  bool rounding_feasible              = false;
-  bool cycle                          = false;
-  i_t cycle_kind                      = 0;
-  bool perturbed                      = false;
-  bool timed_out                      = false;
-  bool feasible                       = false;
-  i_t diversity_feasible_candidates   = 0;
-  i_t diversity_best_updates          = 0;
-  i_t diversity_published             = 0;
-  i_t effective_cloud_size            = 1;
-  i_t diversity_frequency             = 1;
-  double diversity_postprocess_time   = 0.;
-  i_t climber1_feasible_candidates    = 0;
-  i_t climber1_best_updates           = 0;
+  // The LP solve alone, so projection_time minus this is the projection's own setup and scoring
+  // cost.
+  double projection_solve_time      = 0.;
+  i_t pdlp_iterations               = -1;
+  i_t pdhg_iterations               = -1;
+  i_t projection_termination_status = -1;
+  f_t pdlp_primal_residual          = std::numeric_limits<f_t>::quiet_NaN();
+  f_t pdlp_dual_residual            = std::numeric_limits<f_t>::quiet_NaN();
+  f_t pdlp_gap                      = std::numeric_limits<f_t>::quiet_NaN();
+  double batch_mean_pdlp_iterations = -1.;
+  i_t batch_max_pdlp_iterations     = -1;
+  i_t rounded_integers              = 0;
+  i_t rounding_violated_constraints = 0;
+  f_t rounding_l1_movement          = 0.;
+  f_t rounding_total_violation      = 0.;
+  f_t rounding_adjusted_violation   = 0.;
+  double rounding_time              = 0.;
+  // The 20% FJ fallback and the full-precision all-integers verification LP. iteration_time is the
+  // whole loop body, so iteration_time minus the four measured phases is unaccounted overhead.
+  double fj_time                    = 0.;
+  double verify_lp_time             = 0.;
+  double iteration_time             = 0.;
+  bool projection_feasible          = false;
+  bool rounding_feasible            = false;
+  bool cycle                        = false;
+  i_t cycle_kind                    = 0;
+  bool perturbed                    = false;
+  bool timed_out                    = false;
+  bool feasible                     = false;
+  i_t diversity_feasible_candidates = 0;
+  i_t diversity_best_updates        = 0;
+  i_t diversity_published           = 0;
+  i_t effective_cloud_size          = 1;
+  i_t diversity_frequency           = 1;
+  double diversity_postprocess_time = 0.;
+  i_t climber1_feasible_candidates  = 0;
+  i_t climber1_best_updates         = 0;
+  // Dual warm-start accounting, filled by both the single and the probe path so the two are
+  // directly comparable. A non-zero nonfinite count is a solver defect, not an expected state.
+  bool dual_warm_start_used       = false;
+  i_t dual_warm_start_nonfinite   = 0;
+  i_t dual_warm_start_zeroed_tail = 0;
+  // Probe projection accounting; -1 / NaN on paths that do not probe.
+  i_t probes_emitted             = -1;
+  i_t probe_winner               = -1;
+  f_t probe_win_margin           = std::numeric_limits<f_t>::quiet_NaN();
+  i_t probe_winner_fixings       = -1;
+  i_t probing_cache_implications = -1;
 };
 
 template <typename i_t, typename f_t>
@@ -302,6 +340,23 @@ class feasibility_pump_t {
   bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
 
   fp_batched_result_t run_batched_fp_cloud(solution_t<i_t, f_t>& solution);
+
+  // ---- Probe-based batched FP ----
+  // Mirrors run_single_fp_descent's outer loop exactly; only the projection differs. Width is spent
+  // on hard per-member variable fixings that collapse into one committed step.
+  bool run_probe_fp_descent(solution_t<i_t, f_t>& solution);
+  // One probe projection: member 0 is the plain FP step, members 1..K each carry one hard fixing
+  // (plus its implied-bound closure) via new_bounds. Ranks the members and commits exactly one into
+  // solution.assignment. Returns whether the committed projection is feasible.
+  bool probe_project_onto_polytope(solution_t<i_t, f_t>& solution);
+  // Selects up to max_probes candidate fixings from the current rounding and expands each into its
+  // implied-bound closure. Returns the number of probes emitted (== number of members beyond 0).
+  i_t build_probe_new_bounds(solution_t<i_t, f_t>& solution,
+                             i_t max_probes,
+                             std::vector<std::tuple<i_t, i_t, f_t, f_t>>& new_bounds);
+  // Broadcasts the trajectory dual to the batch after zeroing the uninitialised tail and any
+  // non-finite entry; counts both for the metrics.
+  void prepare_probe_dual_warm_start(solution_t<i_t, f_t>& solution);
   // Builds the fixed unified projection problem once. Binary distance is represented directly in
   // each climber's objective; non-binary integers use one aux distance var and 2 abs-value rows.
   void build_unified_projection_problem(solution_t<i_t, f_t>& solution);
@@ -445,6 +500,12 @@ class feasibility_pump_t {
   f_t last_pdlp_gap                      = std::numeric_limits<f_t>::quiet_NaN();
   double last_batch_mean_pdlp_iterations = -1.;
   i_t last_batch_max_pdlp_iterations     = -1;
+  lp_warm_start_stats_t last_warm_start_stats{};
+  i_t last_probes_emitted             = -1;
+  i_t last_probe_winner               = -1;
+  f_t last_probe_win_margin           = std::numeric_limits<f_t>::quiet_NaN();
+  i_t last_probe_winner_fixings       = -1;
+  i_t last_probing_cache_implications = -1;
   // Per-climber alpha for the distance/original-objective blend in batch projection. Slot 0 mirrors
   // config.alpha; reset to default_alpha when a diversity climber is freshly seeded (FJ trajectory
   // or perturbed LP-optimal padding).
@@ -464,6 +525,28 @@ class feasibility_pump_t {
   std::vector<i_t> h_csr_offsets;
   std::vector<i_t> h_csr_indices;
   std::vector<f_t> h_csr_values;
+
+  // ---- Probe projection state ----
+  // Dual of the committed member, carried across projections and broadcast to every member on the
+  // next one. Zero-filled on construction so the first projection starts genuinely cold.
+  rmm::device_uvector<f_t> probe_prev_dual;
+  // Size of probe_prev_dual as of the previous projection, captured before any resize so the grown
+  // tail can be zeroed. rmm::device_uvector::resize leaves it uninitialised.
+  i_t probe_prev_dual_size = 0;
+  bool probe_dual_seeded   = false;
+  rmm::device_uvector<f_t> probe_batch_assignments;
+  std::vector<char> h_probe_is_integer;
+  // Adaptive width state. The first projection runs at width 1, which is both the cheapest probe of
+  // whether the budget has slack and the setting that cannot lose depth.
+  bool probe_width_had_slack     = false;
+  i_t probe_width_backoff        = 0;
+  bool probe_all_members_optimal = false;
+  double probe_projection_budget = 0.;
+  // Per-iteration phase timings, stamped into the metrics entry by record_projection_metrics and
+  // finish_iteration_metrics so the single and probe paths report the same breakdown.
+  double last_projection_solve_time = 0.;
+  double last_fj_time               = 0.;
+  double last_verify_lp_time        = 0.;
 };
 
 }  // namespace cuopt::mathematical_optimization::mip

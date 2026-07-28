@@ -115,6 +115,15 @@ fp_batch_config_t make_fp_batch_config(int quality_config_id)
       config.restart_batch_before_feasible  = true;
       config.phase_restart_large_pure_only  = true;
       break;
+    case 9:
+      config.probe_projection       = true;
+      config.adaptive_cloud         = true;
+      config.structural_selector    = 2;
+      config.target_min_batch_size  = 1;
+      config.target_max_batch_size  = 64;
+      config.latency_max_batch_size = 64;
+      config.fallback_threshold     = 1;
+      break;
     default: break;
   }
   return config;
@@ -143,18 +152,20 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     diversity_rng(cuopt::seed_generator::get_seed()),
     timer(20.),
     batch_primal_init(0, context.problem_ptr->handle_ptr->get_stream()),
-    d_aux_integer_indices_cache(0, context.problem_ptr->handle_ptr->get_stream())
+    d_aux_integer_indices_cache(0, context.problem_ptr->handle_ptr->get_stream()),
+    probe_prev_dual(0, context.problem_ptr->handle_ptr->get_stream()),
+    probe_batch_assignments(0, context.problem_ptr->handle_ptr->get_stream())
 {
   int max_config             = n_fp_quality_configs;
   const char* max_config_env = std::getenv("CUOPT_MAX_CONFIG");
   if (max_config_env != nullptr) { max_config = std::stoi(max_config_env); }
   cuopt_assert(max_config > 0 && max_config <= n_fp_quality_configs,
-               "CUOPT_MAX_CONFIG must be in [1, 9]");
+               "CUOPT_MAX_CONFIG must be in [1, n_fp_quality_configs]");
 
   const char* config  = std::getenv("CUOPT_CONFIG_ID");
   const int config_id = resolve_fp_quality_config_id(config);
   cuopt_assert(config_id >= 0 && config_id < n_fp_quality_configs,
-               "CUOPT_CONFIG_ID must be in [0, 9)");
+               "CUOPT_CONFIG_ID must be in [0, n_fp_quality_configs)");
   cuopt_assert(config == nullptr || config_id < max_config,
                "CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
   batch_config = make_fp_batch_config(config_id);
@@ -195,6 +206,9 @@ void feasibility_pump_t<i_t, f_t>::record_projection_metrics(solution_t<i_t, f_t
   entry.outer_iteration        = current_outer_iteration;
   entry.batch_size             = batch_size;
   entry.projection_time        = elapsed;
+  entry.projection_solve_time  = last_projection_solve_time;
+  last_fj_time                 = 0.;
+  last_verify_lp_time          = 0.;
   entry.projected_integers     = n_integers;
   entry.projection_l1_distance = compute_l1_distance<i_t, f_t>(
     solution.problem_ptr->integer_indices, last_rounding, last_projection, solution.handle_ptr);
@@ -212,6 +226,14 @@ void feasibility_pump_t<i_t, f_t>::record_projection_metrics(solution_t<i_t, f_t
   entry.pdlp_gap                      = last_pdlp_gap;
   entry.batch_mean_pdlp_iterations    = last_batch_mean_pdlp_iterations;
   entry.batch_max_pdlp_iterations     = last_batch_max_pdlp_iterations;
+  entry.dual_warm_start_used          = last_warm_start_stats.dual_used;
+  entry.dual_warm_start_nonfinite     = last_warm_start_stats.nonfinite;
+  entry.dual_warm_start_zeroed_tail   = last_warm_start_stats.zeroed_tail;
+  entry.probes_emitted                = last_probes_emitted;
+  entry.probe_winner                  = last_probe_winner;
+  entry.probe_win_margin              = last_probe_win_margin;
+  entry.probe_winner_fixings          = last_probe_winner_fixings;
+  entry.probing_cache_implications    = last_probing_cache_implications;
 }
 
 template <typename i_t, typename f_t>
@@ -244,10 +266,14 @@ void feasibility_pump_t<i_t, f_t>::finish_iteration_metrics(bool cycle,
 {
   if (metrics == nullptr) { return; }
   cuopt_assert(!metrics->iterations.empty(), "Projection metrics must precede iteration outcome");
-  auto& entry     = metrics->iterations.back();
-  entry.cycle     = cycle;
-  entry.timed_out = timed_out;
-  entry.feasible  = feasible;
+  auto& entry          = metrics->iterations.back();
+  entry.cycle          = cycle;
+  entry.timed_out      = timed_out;
+  entry.feasible       = feasible;
+  entry.fj_time        = last_fj_time;
+  entry.verify_lp_time = last_verify_lp_time;
+  // proj_begin is stamped at the top of every descent loop body, so this is the whole iteration.
+  entry.iteration_time = proj_begin - timer.remaining_time();
   metrics->feasible_events += feasible;
 }
 
@@ -414,8 +440,13 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
-  auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
-  const auto term_info            = solver_response.get_additional_termination_information();
+  last_warm_start_stats           = {};
+  if (metrics != nullptr) { lp_settings.warm_start_stats = &last_warm_start_stats; }
+  const auto solve_begin = std::chrono::steady_clock::now();
+  auto solver_response   = get_relaxed_lp_solution(temp_p, solution, lp_settings);
+  last_projection_solve_time =
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - solve_begin).count();
+  const auto term_info = solver_response.get_additional_termination_information();
   set_projection_solver_metrics(term_info.number_of_steps_taken,
                                 term_info.total_number_of_attempted_steps,
                                 (i_t)solver_response.get_termination_status(),
@@ -779,11 +810,14 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
         // Verifying a candidate we believe is on the polytope; leaving PDLP's infeasibility
         // detection on makes it return a spurious PrimalInfeasible for a near-feasible point.
         lp_settings.check_infeasibility = false;
+        const auto verify_begin         = timing_clock::now();
         run_lp_with_vars_fixed(*solution.problem_ptr,
                                solution,
                                solution.problem_ptr->integer_indices,
                                lp_settings,
                                &constraint_prop.bounds_update);
+        last_verify_lp_time =
+          std::chrono::duration<double>(timing_clock::now() - verify_begin).count();
         is_feasible = solution.get_feasible();
         n_integers  = solution.compute_number_of_integers();
         if (is_feasible && n_integers == solution.problem_ptr->n_integer_vars) {
@@ -806,7 +840,9 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     proj_and_round_time = proj_begin - timer.remaining_time();
     if (!is_feasible) {
       const f_t time_ratio = 0.2;
+      const auto fj_begin  = timing_clock::now();
       is_feasible          = test_fj_feasible(solution, time_ratio * proj_and_round_time);
+      last_fj_time         = std::chrono::duration<double>(timing_clock::now() - fj_begin).count();
     }
     if (is_feasible) {
       bool res = solution.compute_feasibility();

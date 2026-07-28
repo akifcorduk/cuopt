@@ -16,6 +16,17 @@ namespace cuopt::mathematical_optimization::mip {
 template <typename i_t, typename f_t>
 class problem_t;
 
+// Accounting for a dual warm start. A carried dual is resized against the current projection
+// problem, and rmm::device_uvector::resize leaves the grown tail uninitialised, so the tail must be
+// zeroed explicitly; those bits are frequently finite garbage that an isfinite check would pass.
+// nonfinite counts entries the previous solve itself produced, which is a defect worth surfacing
+// rather than silently absorbing.
+struct lp_warm_start_stats_t {
+  bool dual_used  = false;
+  int nonfinite   = 0;
+  int zeroed_tail = 0;
+};
+
 template <typename i_t, typename f_t>
 class lp_state_t {
  public:

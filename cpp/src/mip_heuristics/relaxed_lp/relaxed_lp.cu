@@ -18,7 +18,10 @@
 #include <raft/core/cusparse_macros.hpp>
 #include <raft/linalg/binary_op.cuh>
 
+#include <thrust/count.h>
 #include <thrust/tabulate.h>
+
+#include <algorithm>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -66,6 +69,16 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
       op_problem.n_constraints);
     lp_state.resize(op_problem, op_problem.handle_ptr->get_stream());
     clamp_within_var_bounds(assignment, &op_problem, op_problem.handle_ptr);
+    if (settings.warm_start_stats != nullptr) {
+      const i_t carried                      = std::min(prev_size, op_problem.n_constraints);
+      settings.warm_start_stats->dual_used   = prev_size > 0;
+      settings.warm_start_stats->zeroed_tail = (int)(op_problem.n_constraints - carried);
+      settings.warm_start_stats->nonfinite =
+        (int)thrust::count_if(op_problem.handle_ptr->get_thrust_policy(),
+                              lp_state.prev_dual.data(),
+                              lp_state.prev_dual.data() + carried,
+                              [] __device__(f_t x) { return !isfinite(x); });
+    }
     // The previous dual sometimes contain invalid values w.r.t current problem
     // Adjust better dual values when we use warm start
     thrust::tabulate(op_problem.handle_ptr->get_thrust_policy(),

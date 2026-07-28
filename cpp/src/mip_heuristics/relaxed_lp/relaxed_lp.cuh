@@ -25,6 +25,9 @@ struct relaxed_lp_settings_t {
   bool per_constraint_residual      = true;
   bool has_initial_primal           = true;
   std::atomic<int>* concurrent_halt = nullptr;
+  // When set, the dual warm start is accounted into it. Costs one extra device reduction, so it is
+  // opt-in and only used while instrumenting.
+  lp_warm_start_stats_t* warm_start_stats = nullptr;
 };
 
 template <typename i_t, typename f_t>

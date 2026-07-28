@@ -350,6 +350,12 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
   const f_t int_tol         = context.settings.tolerances.integrality_tolerance;
   const f_t rlp_base        = context.settings.heuristic_params.relaxed_lp_time_limit;
   const double lp_tolerance = context.settings.tolerances.absolute_tolerance;
+  // set_optimality_tolerance() sets the relative tolerances to lp_tolerance too, which makes the
+  // per-row criterion abs + rel * |bound| nearly vacuous on rows with large bounds. Mirror the
+  // single-path divisor (relaxed_lp.cu) so both paths project to the same accuracy.
+  double lp_tolerance_divisor =
+    context.settings.tolerances.absolute_tolerance / context.settings.tolerances.relative_tolerance;
+  if (lp_tolerance_divisor == 0) { lp_tolerance_divisor = 1; }
 
   CUOPT_LOG_TRACE(
     "changing alpha from %f to %f", config.alpha, config.alpha * config.alpha_decrease_factor);
@@ -455,13 +461,14 @@ void feasibility_pump_t<i_t, f_t>::project_cloud(solution_t<i_t, f_t>& solution,
       settings.generate_batch_primal_dual_solution = true;
       const double base_time_limit =
         std::max(0.05, std::min((double)rlp_base, timer.remaining_time() / 10.));
-      settings.time_limit =
-        std::min(timer.remaining_time(), std::sqrt((double)try_n) * base_time_limit);
+      settings.time_limit = std::min(timer.remaining_time(), base_time_limit);
       settings.set_optimality_tolerance(lp_tolerance);
-      settings.per_constraint_residual = true;
-      settings.save_best_primal_so_far = false;
-      settings.save_best_kkt_so_far    = std::getenv("CUOPT_FP_DISABLE_BEST_KKT") == nullptr;
-      settings.detect_infeasibility    = false;
+      settings.tolerances.relative_primal_tolerance = lp_tolerance / lp_tolerance_divisor;
+      settings.tolerances.relative_dual_tolerance   = lp_tolerance / lp_tolerance_divisor;
+      settings.per_constraint_residual              = true;
+      settings.save_best_primal_so_far              = false;
+      settings.save_best_kkt_so_far = std::getenv("CUOPT_FP_DISABLE_BEST_KKT") == nullptr;
+      settings.detect_infeasibility = false;
 
       {
         const f_t* cloud_pp            = d_batch_assignments.data();
@@ -1068,6 +1075,10 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(
   static const bool use_single_fp = std::getenv("CUOPT_FP_SINGLE") != nullptr;
   if (use_single_fp) {
     const bool feasible = run_single_fp_descent(solution);
+    return {feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
+  }
+  if (batch_config.probe_projection) {
+    const bool feasible = run_probe_fp_descent(solution);
     return {feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
   }
 
