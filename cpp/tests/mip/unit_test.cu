@@ -384,11 +384,13 @@ TEST(FpSwitchPolicy, PhaseAwareBatchRestart)
   EXPECT_EQ(mip::fp_trajectory_limit(8, 2, true, true), 2);
 }
 
-TEST(FpSwitchPolicy, UnsetConfigMatchesConfigEight)
+TEST(FpSwitchPolicy, UnsetConfigProbesByDefault)
 {
-  EXPECT_EQ(mip::resolve_fp_quality_config_id(nullptr), 8);
+  EXPECT_EQ(mip::resolve_fp_quality_config_id(nullptr), 0);
   EXPECT_EQ(mip::make_fp_batch_config(mip::resolve_fp_quality_config_id(nullptr)),
-            mip::make_fp_batch_config(8));
+            mip::make_fp_batch_config(0));
+  EXPECT_TRUE(mip::make_fp_batch_config(0).probe_projection);
+  EXPECT_FALSE(mip::make_fp_batch_config(0).single_path);
 }
 
 TEST(FpSwitchPolicy, ExplicitConfigIdsKeepTheirMappings)
@@ -398,7 +400,9 @@ TEST(FpSwitchPolicy, ExplicitConfigIdsKeepTheirMappings)
     EXPECT_EQ(mip::resolve_fp_quality_config_id(text.c_str()), config_id);
     EXPECT_EQ(mip::make_fp_batch_config(config_id).quality_config_id, config_id);
   }
-  EXPECT_NE(mip::make_fp_batch_config(0), mip::make_fp_batch_config(8));
+  EXPECT_NE(mip::make_fp_batch_config(0), mip::make_fp_batch_config(1));
+  EXPECT_TRUE(mip::make_fp_batch_config(1).single_path);
+  EXPECT_FALSE(mip::make_fp_batch_config(1).probe_projection);
 }
 
 }  // namespace cuopt::mathematical_optimization::test

@@ -56,66 +56,7 @@ fp_batch_config_t make_fp_batch_config(int quality_config_id)
   config.skip_restart_for_large_pure = false;
   config.quality_config_id           = quality_config_id;
   switch (quality_config_id) {
-    case 1:
-      config.target_min_batch_size  = 1;
-      config.target_max_batch_size  = 1;
-      config.latency_max_batch_size = 1;
-      config.fallback_threshold     = 1;
-      break;
-    case 2:
-      config.adaptive_cloud         = true;
-      config.target_min_batch_size  = 1;
-      config.target_max_batch_size  = 64;
-      config.latency_max_batch_size = 64;
-      config.fallback_threshold     = 1;
-      break;
-    case 3:
-      config.adaptive_cloud         = true;
-      config.target_min_batch_size  = 1;
-      config.target_max_batch_size  = 64;
-      config.latency_max_batch_size = 64;
-      config.fallback_threshold     = 1;
-      config.diversity_frequency    = 4;
-      break;
-    case 4: config.legacy_diversity = true; break;
-    case 5:
-      config.adaptive_cloud         = true;
-      config.structural_selector    = 1;
-      config.target_min_batch_size  = 1;
-      config.target_max_batch_size  = 32;
-      config.latency_max_batch_size = 32;
-      config.fallback_threshold     = 1;
-      break;
-    case 6:
-      config.adaptive_cloud         = true;
-      config.structural_selector    = 2;
-      config.target_min_batch_size  = 1;
-      config.target_max_batch_size  = 64;
-      config.latency_max_batch_size = 64;
-      config.fallback_threshold     = 1;
-      break;
-    case 7:
-      config.adaptive_cloud         = true;
-      config.structural_selector    = 2;
-      config.feedback_cloud         = true;
-      config.target_min_batch_size  = 1;
-      config.target_max_batch_size  = 64;
-      config.latency_max_batch_size = 64;
-      config.fallback_threshold     = 1;
-      break;
-    case 8:
-      config.adaptive_cloud                 = true;
-      config.structural_selector            = 2;
-      config.feedback_cloud                 = true;
-      config.target_min_batch_size          = 1;
-      config.target_max_batch_size          = 64;
-      config.latency_max_batch_size         = 64;
-      config.fallback_threshold             = 1;
-      config.phase_restart_trajectory_limit = 2;
-      config.restart_batch_before_feasible  = true;
-      config.phase_restart_large_pure_only  = true;
-      break;
-    case 9:
+    case 0:
       config.probe_projection       = true;
       config.adaptive_cloud         = true;
       config.structural_selector    = 2;
@@ -124,6 +65,7 @@ fp_batch_config_t make_fp_batch_config(int quality_config_id)
       config.latency_max_batch_size = 64;
       config.fallback_threshold     = 1;
       break;
+    case 1: config.single_path = true; break;
     default: break;
   }
   return config;

@@ -1070,10 +1070,10 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(
   solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_batched_fp_cloud");
-  // Batched-PDLP cloud is the default path; set CUOPT_FP_SINGLE to force the classic single-point
-  // FP (the outer loop drives restarts either way).
+  // The probe projection (config 0) is the default path and config 1 is the single-point baseline;
+  // CUOPT_FP_SINGLE forces the baseline regardless. The outer loop drives restarts either way.
   static const bool use_single_fp = std::getenv("CUOPT_FP_SINGLE") != nullptr;
-  if (use_single_fp) {
+  if (use_single_fp || batch_config.single_path) {
     const bool feasible = run_single_fp_descent(solution);
     return {feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
   }

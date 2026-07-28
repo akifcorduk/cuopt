@@ -184,9 +184,26 @@ run_result_t run_fp(const std::string& mps_path,
   dm.ls.fp.reset();
   dm.ls.fp.resize_vectors(problem, problem.handle_ptr);
   if (variant == fp_variant_t::probe) {
-    dm.ls.fp.batch_config                         = mip::make_fp_batch_config(9);
+    dm.ls.fp.batch_config                         = mip::make_fp_batch_config(0);
     dm.ls.fp.batch_config.probe_adaptive_width    = !probe_fixed_width;
     dm.ls.fp.batch_config.probe_width_slack_ratio = probe_slack_ratio;
+  } else if (variant == fp_variant_t::single) {
+    dm.ls.fp.batch_config = mip::make_fp_batch_config(1);
+  } else if (variant == fp_variant_t::batched) {
+    // The diversity cloud is no longer a shipped config, but keeping it reachable from the harness
+    // preserves the arm the probe path is judged against and stops the code rotting unnoticed.
+    dm.ls.fp.batch_config                                = mip::make_fp_batch_config(1);
+    dm.ls.fp.batch_config.single_path                    = false;
+    dm.ls.fp.batch_config.adaptive_cloud                 = true;
+    dm.ls.fp.batch_config.structural_selector            = 2;
+    dm.ls.fp.batch_config.feedback_cloud                 = true;
+    dm.ls.fp.batch_config.target_min_batch_size          = 1;
+    dm.ls.fp.batch_config.target_max_batch_size          = 64;
+    dm.ls.fp.batch_config.latency_max_batch_size         = 64;
+    dm.ls.fp.batch_config.fallback_threshold             = 1;
+    dm.ls.fp.batch_config.phase_restart_trajectory_limit = 2;
+    dm.ls.fp.batch_config.restart_batch_before_feasible  = true;
+    dm.ls.fp.batch_config.phase_restart_large_pure_only  = true;
   }
   if ((variant == fp_variant_t::batched || variant == fp_variant_t::probe) && batch_size > 0) {
     dm.ls.fp.batch_config.target_min_batch_size  = batch_size;

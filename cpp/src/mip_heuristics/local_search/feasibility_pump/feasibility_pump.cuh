@@ -144,6 +144,8 @@ struct fp_batch_config_t {
   double fj_ratio                     = 0.2;  // 20% FJ run
   // Probe-based batched FP (run_probe_fp_descent) instead of the diversity cloud.
   bool probe_projection = false;
+  // Classic single-point FP, kept as the instrumented baseline the probe path is measured against.
+  bool single_path = false;
   // 0 = row repair first then most-ambiguous for the remaining slots, 1 = row repair only,
   // 2 = most ambiguous only.
   int probe_generator = 0;
@@ -164,8 +166,11 @@ struct fp_batch_config_t {
   bool operator==(const fp_batch_config_t&) const = default;
 };
 
-constexpr int n_fp_quality_configs      = 10;
-constexpr int default_fp_quality_config = 8;
+// 0 = probe projection, 1 = single-point FP. The diversity-cloud configs were all tuned against a
+// batched projection whose per-row tolerance was a million times too loose, so their measurements
+// no longer say anything and they are gone.
+constexpr int n_fp_quality_configs      = 2;
+constexpr int default_fp_quality_config = 0;
 
 int resolve_fp_quality_config_id(const char* config);
 fp_batch_config_t make_fp_batch_config(int quality_config_id);
