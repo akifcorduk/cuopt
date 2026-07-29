@@ -348,10 +348,10 @@ i_t feasibility_pump_t<i_t, f_t>::build_probe_new_bounds(
 }
 
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::probe_project_onto_polytope(solution_t<i_t, f_t>& solution)
+bool feasibility_pump_t<i_t, f_t>::probe_project_onto_polytope(solution_t<i_t, f_t>& solution,
+                                                               f_t ratio_of_set_integers)
 {
   raft::common::nvtx::range fun_scope("probe_project_onto_polytope");
-  CUOPT_LOG_INFO("linear projection of fp");
   auto* pb             = solution.problem_ptr;
   auto stream          = solution.handle_ptr->get_stream();
   auto& op             = *unified_problem;
@@ -372,7 +372,13 @@ bool feasibility_pump_t<i_t, f_t>::probe_project_onto_polytope(solution_t<i_t, f
   // the previous projection's slack, and is only ever 1 or the cap.
   i_t target_width = cloud_batch_capacity;
   if (batch_config.probe_adaptive_width) {
-    target_width = (probe_width_had_slack && probe_width_backoff == 0) ? cloud_batch_capacity : 1;
+    const bool affordable = probe_width_had_slack && probe_width_backoff == 0;
+    // Slack says width is affordable, not that it is worth anything. A wide projection costs about
+    // 4x a narrow one, so unless the pump has stopped improving, those are 4 iterations better
+    // spent on depth.
+    const bool worth_it = !batch_config.probe_width_on_stagnation ||
+                          probe_no_improve >= batch_config.probe_width_stagnation_limit;
+    target_width = (affordable && worth_it) ? cloud_batch_capacity : 1;
   }
 
   // Probe selection first: the batch size follows from how many probes actually survive, which
@@ -444,6 +450,36 @@ bool feasibility_pump_t<i_t, f_t>::probe_project_onto_polytope(solution_t<i_t, f
                      obj_ptr[g]         = dist_obj * distance_weight + orig_obj_weight * orig_obj;
                    });
 
+  // A general integer sitting on a bound needs no distance variable at all - the single path simply
+  // does not create one, since the distance can only go one way. The unified problem's sparsity is
+  // fixed across projections, so the closest equivalent is to pin the auxiliary variable to zero,
+  // which stops it from contributing a free direction that PDLP has to resolve every projection.
+  // Its two rows are already relaxed to free below, so zero is feasible for them.
+  {
+    f_t* aux_ub_ptr = op.get_variable_upper_bounds().data();
+    thrust::for_each(solution.handle_ptr->get_thrust_policy(),
+                     thrust::make_counting_iterator<i_t>(0),
+                     thrust::make_counting_iterator<i_t>(unified_n_aux),
+                     [=] __device__(i_t k) {
+                       const i_t col       = aux_idx_ptr[k];
+                       const f_t val       = cloud_ptr[col];
+                       const f_t lo        = vlb_ptr[col];
+                       const f_t hi        = vub_ptr[col];
+                       const bool at_bound = abs(val - lo) <= int_tol || abs(val - hi) <= int_tol;
+                       aux_ub_ptr[n_vars + k] = at_bound ? f_t(0.) : (hi - lo) + int_tol;
+                     });
+    const i_t active_aux = (i_t)thrust::count_if(solution.handle_ptr->get_thrust_policy(),
+                                                 aux_ub_ptr + n_vars,
+                                                 aux_ub_ptr + n_vars + unified_n_aux,
+                                                 [] __device__(f_t ub) { return ub > f_t(0.); });
+    CUOPT_LOG_INFO("linear projection of fp: n_vars %d n_constr %d aux %d active_aux %d members %d",
+                   nvt,
+                   nct,
+                   unified_n_aux,
+                   active_aux,
+                   n_members);
+  }
+
   const i_t n_constr      = unified_n_constr;
   const f_t* base_clb_ptr = pb->constraint_lower_bounds.data();
   const f_t* base_cub_ptr = pb->constraint_upper_bounds.data();
@@ -481,9 +517,13 @@ bool feasibility_pump_t<i_t, f_t>::probe_project_onto_polytope(solution_t<i_t, f
   // Base limit with no batch inflation: the whole point is that width must not cost depth.
   const double base_time_limit =
     std::max(0.05, std::min((double)rlp_base, timer.remaining_time() / 10.));
-  settings.time_limit       = std::min(timer.remaining_time(), base_time_limit);
-  probe_projection_budget   = settings.time_limit;
-  const double lp_tolerance = context.settings.tolerances.absolute_tolerance;
+  settings.time_limit     = std::min(timer.remaining_time(), base_time_limit);
+  probe_projection_budget = settings.time_limit;
+  // Same schedule as the single path. Running every projection at full absolute tolerance instead
+  // made the probe path 4-5x slower per FP iteration on instances whose projections converge, which
+  // swamped any effect the probes themselves had.
+  const double lp_tolerance =
+    get_tolerance_from_ratio(ratio_of_set_integers, context.settings.tolerances.absolute_tolerance);
   settings.set_optimality_tolerance(lp_tolerance);
   // set_optimality_tolerance also overwrites the relative tolerances, which would make the per-row
   // criterion abs + rel * |bound| nearly vacuous on rows with large bounds. Mirror the single-path
@@ -717,9 +757,11 @@ bool feasibility_pump_t<i_t, f_t>::run_probe_fp_descent(solution_t<i_t, f_t>& so
       return false;
     }
     proj_begin = timer.remaining_time();
+    const f_t ratio_of_assigned_integers =
+      f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
     if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
     const auto projection_begin = timing_clock::now();
-    bool is_feasible            = probe_project_onto_polytope(solution);
+    bool is_feasible            = probe_project_onto_polytope(solution, ratio_of_assigned_integers);
     if (metrics != nullptr) { solution.handle_ptr->sync_stream(); }
     const double projection_time =
       std::chrono::duration<double>(timing_clock::now() - projection_begin).count();
@@ -812,6 +854,17 @@ bool feasibility_pump_t<i_t, f_t>::run_probe_fp_descent(solution_t<i_t, f_t>& so
       is_feasible,
       std::chrono::duration<double>(timing_clock::now() - rounding_begin).count());
     cuopt_func_call(solution.test_variable_bounds(true));
+    // Only the stagnation gate reads this, and get_total_excess reduces to a host value, so leaving
+    // it unconditional would add a sync per iteration to the configs that do not use it.
+    if (batch_config.probe_width_on_stagnation) {
+      const f_t rounding_violation = solution.get_total_excess();
+      if (rounding_violation < probe_best_rounding_violation) {
+        probe_best_rounding_violation = rounding_violation;
+        probe_no_improve              = 0;
+      } else {
+        ++probe_no_improve;
+      }
+    }
     proj_and_round_time = proj_begin - timer.remaining_time();
     if (!is_feasible) {
       const auto fj_begin = timing_clock::now();
@@ -851,7 +904,7 @@ bool feasibility_pump_t<i_t, f_t>::run_probe_fp_descent(solution_t<i_t, f_t>& so
 #define INSTANTIATE_PROBE(F_TYPE)                                                                \
   template bool feasibility_pump_t<int, F_TYPE>::run_probe_fp_descent(solution_t<int, F_TYPE>&); \
   template bool feasibility_pump_t<int, F_TYPE>::probe_project_onto_polytope(                    \
-    solution_t<int, F_TYPE>&);                                                                   \
+    solution_t<int, F_TYPE>&, F_TYPE);                                                           \
   template int feasibility_pump_t<int, F_TYPE>::build_probe_new_bounds(                          \
     solution_t<int, F_TYPE>&, int, std::vector<std::tuple<int, int, F_TYPE, F_TYPE>>&);          \
   template void feasibility_pump_t<int, F_TYPE>::prepare_probe_dual_warm_start(                  \

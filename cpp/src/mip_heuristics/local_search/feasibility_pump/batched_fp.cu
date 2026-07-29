@@ -1070,14 +1070,24 @@ fp_batched_result_t feasibility_pump_t<i_t, f_t>::run_batched_fp_cloud(
   solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_batched_fp_cloud");
-  // The probe projection (config 0) is the default path and config 1 is the single-point baseline;
-  // CUOPT_FP_SINGLE forces the baseline regardless. The outer loop drives restarts either way.
+  // The probe projection is the default path; CUOPT_FP_SINGLE forces the single-point baseline,
+  // which no config selects any more. The outer loop drives restarts either way.
   static const bool use_single_fp = std::getenv("CUOPT_FP_SINGLE") != nullptr;
   if (use_single_fp || batch_config.single_path) {
     const bool feasible = run_single_fp_descent(solution);
     return {feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
   }
   if (batch_config.probe_projection) {
+    // With every integer binary the unified projection problem has no auxiliary structure at all
+    // and matches the single path's formulation exactly; with general integers it carries an aux
+    // variable and two rows for each of them on every projection.
+    const bool all_integers_binary =
+      solution.problem_ptr->n_integer_vars == solution.problem_ptr->get_n_binary_variables();
+    if (batch_config.probe_binary_only && !all_integers_binary) {
+      const bool feasible = run_single_fp_descent(solution);
+      return {
+        feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
+    }
     const bool feasible = run_probe_fp_descent(solution);
     return {feasible, feasible ? fp_batched_exit_t::feasible : fp_batched_exit_t::climber_cycle, 1};
   }

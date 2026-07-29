@@ -149,6 +149,16 @@ struct fp_batch_config_t {
   // 0 = row repair first then most-ambiguous for the remaining slots, 1 = row repair only,
   // 2 = most ambiguous only.
   int probe_generator = 0;
+  // Run the probe path only when every integer is binary. The unified projection problem carries an
+  // auxiliary distance variable and two rows per general integer on every projection, while the
+  // single path materialises them only for integers strictly interior to their bounds, so a
+  // mixed-integer instance pays for structure it largely does not use.
+  bool probe_binary_only = false;
+  // Open the width only once the pump has stopped making progress, instead of whenever the previous
+  // projection finished inside its budget. A wide projection costs roughly 4x a narrow one, so it
+  // has to be paid for out of iterations that were not buying anything.
+  bool probe_width_on_stagnation   = false;
+  int probe_width_stagnation_limit = 3;
   // Broadcast the committed member's dual to every member on the next projection.
   bool probe_dual_warm_start = true;
   // Choose the width per projection from the previous projection's slack instead of always running
@@ -166,14 +176,25 @@ struct fp_batch_config_t {
   bool operator==(const fp_batch_config_t&) const = default;
 };
 
-// 0 = probe projection, 1 = single-point FP. The diversity-cloud configs were all tuned against a
-// batched projection whose per-row tolerance was a million times too loose, so their measurements
-// no longer say anything and they are gone.
-constexpr int n_fp_quality_configs      = 2;
+// 0 = probe projection, 1 = probe with the width gated on stagnation rather than on slack, 2 = same
+// as 1 but only on problems whose integers are all binary. The diversity-cloud configs were all
+// tuned against a batched projection whose per-row tolerance was a million times too loose, so
+// their measurements no longer say anything and they are gone. The single-point baseline is not a
+// config either: it is reachable through CUOPT_FP_SINGLE and through fp_regression's single
+// variant, which is where it is actually measured.
+constexpr int n_fp_quality_configs      = 3;
 constexpr int default_fp_quality_config = 0;
 
 int resolve_fp_quality_config_id(const char* config);
+// Settings every config shares, separated out so the paths that are not shipped configs (the
+// single-point baseline and the diversity cloud, both reachable only from fp_regression) start from
+// the same place instead of from the struct's declared defaults.
+fp_batch_config_t make_base_fp_batch_config();
 fp_batch_config_t make_fp_batch_config(int quality_config_id);
+
+// Projection LP tolerance as a function of how integral the current point is. Early FP iterations
+// do not need accuracy, so the tolerance starts at 0.1 and only reaches absolute_tol above 97%.
+double get_tolerance_from_ratio(double ratio_integer, double absolute_tol);
 
 struct fp_structure_metrics_t {
   double unified_growth;
@@ -353,7 +374,7 @@ class feasibility_pump_t {
   // One probe projection: member 0 is the plain FP step, members 1..K each carry one hard fixing
   // (plus its implied-bound closure) via new_bounds. Ranks the members and commits exactly one into
   // solution.assignment. Returns whether the committed projection is feasible.
-  bool probe_project_onto_polytope(solution_t<i_t, f_t>& solution);
+  bool probe_project_onto_polytope(solution_t<i_t, f_t>& solution, f_t ratio_of_set_integers);
   // Selects up to max_probes candidate fixings from the current rounding and expands each into its
   // implied-bound closure. Returns the number of probes emitted (== number of members beyond 0).
   i_t build_probe_new_bounds(solution_t<i_t, f_t>& solution,
@@ -547,6 +568,10 @@ class feasibility_pump_t {
   i_t probe_width_backoff        = 0;
   bool probe_all_members_optimal = false;
   double probe_projection_budget = 0.;
+  // Best rounding violation on the current trajectory and how many projections have passed without
+  // improving it. Drives the stagnation width gate.
+  f_t probe_best_rounding_violation = std::numeric_limits<f_t>::infinity();
+  i_t probe_no_improve              = 0;
   // Per-iteration phase timings, stamped into the metrics entry by record_projection_metrics and
   // finish_iteration_metrics so the single and probe paths report the same breakdown.
   double last_projection_solve_time = 0.;

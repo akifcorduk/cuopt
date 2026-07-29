@@ -40,14 +40,24 @@ namespace {
 
 using metrics_t = mip::fp_run_metrics_t<int, double>;
 
-enum class fp_variant_t { single, batched, probe, vanilla };
+// probe_stag and probe_bin are the same probe path as probe under configs 2 and 3: width gated on
+// stagnation, and additionally restricted to all-binary problems.
+enum class fp_variant_t { single, batched, probe, probe_stag, probe_bin, vanilla };
 
 const char* variant_name(fp_variant_t variant)
 {
   if (variant == fp_variant_t::single) { return "single"; }
   if (variant == fp_variant_t::batched) { return "batched"; }
   if (variant == fp_variant_t::probe) { return "probe"; }
+  if (variant == fp_variant_t::probe_stag) { return "probe_stag"; }
+  if (variant == fp_variant_t::probe_bin) { return "probe_bin"; }
   return "vanilla";
+}
+
+bool is_probe(fp_variant_t variant)
+{
+  return variant == fp_variant_t::probe || variant == fp_variant_t::probe_stag ||
+         variant == fp_variant_t::probe_bin;
 }
 
 struct run_result_t {
@@ -160,6 +170,12 @@ run_result_t run_fp(const std::string& mps_path,
     // so the binary table has to be refreshed here or it stays inconsistent with the bounds.
     problem.compute_binary_var_table();
   }
+  // General-integer count decides whether the probe path's unified problem carries auxiliary
+  // distance structure at all, which dominates its per-projection cost.
+  std::cerr << "n_variables=" << problem.n_variables << " n_integer_vars=" << problem.n_integer_vars
+            << " n_binary=" << problem.get_n_binary_variables()
+            << " n_general_integer=" << problem.n_integer_vars - problem.get_n_binary_variables()
+            << '\n';
   problem.compute_integer_fixed_problem();
   cuopt_func_call(
     dm.ls.constraint_prop.bounds_update.calculate_activity_on_problem_bounds(problem));
@@ -188,17 +204,21 @@ run_result_t run_fp(const std::string& mps_path,
   dm.ls.fp.cycle_queue.reset(solution);
   dm.ls.fp.reset();
   dm.ls.fp.resize_vectors(problem, problem.handle_ptr);
-  if (variant == fp_variant_t::probe) {
-    dm.ls.fp.batch_config                         = mip::make_fp_batch_config(0);
+  if (is_probe(variant)) {
+    const int config_id                           = variant == fp_variant_t::probe        ? 0
+                                                    : variant == fp_variant_t::probe_stag ? 1
+                                                                                          : 2;
+    dm.ls.fp.batch_config                         = mip::make_fp_batch_config(config_id);
     dm.ls.fp.batch_config.probe_adaptive_width    = !probe_fixed_width;
     dm.ls.fp.batch_config.probe_width_slack_ratio = probe_slack_ratio;
   } else if (variant == fp_variant_t::single) {
-    dm.ls.fp.batch_config = mip::make_fp_batch_config(1);
+    // No config selects the single-point path any more, so the baseline arm asks for it directly.
+    dm.ls.fp.batch_config             = mip::make_base_fp_batch_config();
+    dm.ls.fp.batch_config.single_path = true;
   } else if (variant == fp_variant_t::batched) {
     // The diversity cloud is no longer a shipped config, but keeping it reachable from the harness
     // preserves the arm the probe path is judged against and stops the code rotting unnoticed.
-    dm.ls.fp.batch_config                                = mip::make_fp_batch_config(1);
-    dm.ls.fp.batch_config.single_path                    = false;
+    dm.ls.fp.batch_config                                = mip::make_base_fp_batch_config();
     dm.ls.fp.batch_config.adaptive_cloud                 = true;
     dm.ls.fp.batch_config.structural_selector            = 2;
     dm.ls.fp.batch_config.feedback_cloud                 = true;
@@ -210,7 +230,7 @@ run_result_t run_fp(const std::string& mps_path,
     dm.ls.fp.batch_config.restart_batch_before_feasible  = true;
     dm.ls.fp.batch_config.phase_restart_large_pure_only  = true;
   }
-  if ((variant == fp_variant_t::batched || variant == fp_variant_t::probe) && batch_size > 0) {
+  if ((variant == fp_variant_t::batched || is_probe(variant)) && batch_size > 0) {
     dm.ls.fp.batch_config.target_min_batch_size  = batch_size;
     dm.ls.fp.batch_config.target_max_batch_size  = batch_size;
     dm.ls.fp.batch_config.latency_max_batch_size = batch_size;
@@ -218,9 +238,13 @@ run_result_t run_fp(const std::string& mps_path,
   }
   auto wall_begin = clock_t::now();
   bool feasible   = false;
+  // run_fp dispatches through run_batched_fp_cloud, which honours single_path and probe_projection,
+  // so the outer loop measures whichever variant set batch_config above. This is the only mode that
+  // says anything about instances whose first descent succeeds: a bare descent returns on the first
+  // feasible solution, while the outer loop adds an objective cut and keeps pumping.
   if (outer_loop) {
-    if (variant != fp_variant_t::batched) {
-      throw std::runtime_error("Outer-loop regression only supports batched FP");
+    if (variant == fp_variant_t::vanilla) {
+      throw std::runtime_error("Outer-loop regression does not support the vanilla variant");
     }
     dm.timer            = timer_t(time_limit);
     dm.population.timer = dm.timer;
@@ -236,7 +260,7 @@ run_result_t run_fp(const std::string& mps_path,
     feasible = dm.ls.fp.run_single_fp_descent(solution);
   } else if (variant == fp_variant_t::batched) {
     feasible = dm.ls.fp.run_batched_fp_cloud(solution).feasible;
-  } else if (variant == fp_variant_t::probe) {
+  } else if (is_probe(variant)) {
     feasible = dm.ls.fp.run_probe_fp_descent(solution);
   } else {
     feasible = mip::run_vanilla_fp_descent(
@@ -247,7 +271,7 @@ run_result_t run_fp(const std::string& mps_path,
   double total_run_time = std::chrono::duration<double>(clock_t::now() - wall_begin).count();
   metrics.total_time    = total_run_time;
   bool vanilla          = variant == fp_variant_t::vanilla;
-  bool batched          = variant == fp_variant_t::batched || variant == fp_variant_t::probe;
+  bool batched          = variant == fp_variant_t::batched || is_probe(variant);
   return {run,
           seed,
           mps_path,
@@ -389,6 +413,9 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   int diversity_best_updates        = 0;
   int climber1_feasible_candidates  = 0;
   int climber1_best_updates         = 0;
+  int outer_iterations              = 0;
+  int outer_improvements            = 0;
+  double best_objective             = std::numeric_limits<double>::infinity();
   size_t count                      = 0;
 
   for (const auto& result : results) {
@@ -396,6 +423,13 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
     feasible_runs += result.feasible;
     feasible_events += result.metrics.feasible_events;
     total_time.push_back(result.total_run_time);
+    outer_iterations += (int)result.metrics.outer_iterations.size();
+    for (const auto& outer : result.metrics.outer_iterations) {
+      outer_improvements += outer.objective_improved;
+      if (std::isfinite(outer.best_objective)) {
+        best_objective = std::min(best_objective, (double)outer.best_objective);
+      }
+    }
     for (const auto& metric : result.metrics.iterations) {
       ++count;
       projected_integers.push_back(metric.projected_integers);
@@ -466,7 +500,10 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
             << " dual_warm_start_nonfinite=" << dual_warm_start_nonfinite
             << " dual_warm_start_zeroed_tail=" << dual_warm_start_zeroed_tail
             << " probe_wins=" << probe_wins << " projections_optimal=" << projections_optimal
-            << " projections_time_limited=" << projections_time_limited << '\n';
+            << " projections_time_limited=" << projections_time_limited
+            << " outer_iterations=" << outer_iterations
+            << " outer_improvements=" << outer_improvements << " best_objective=" << best_objective
+            << '\n';
   print_distribution("projected_integers", projected_integers);
   print_distribution("projected_ratio", projected_ratio);
   print_distribution("projection_l1", projection_l1);
@@ -487,12 +524,13 @@ void print_summary(const std::vector<run_result_t>& results, const std::string& 
   print_distribution("pdlp_primal_residual", pdlp_primal_residual);
   print_distribution("pdlp_dual_residual", pdlp_dual_residual);
   print_distribution("pdlp_gap", pdlp_gap);
-  if (path == "batched" || path == "probe") {
+  const bool probe_path = path.rfind("probe", 0) == 0;
+  if (path == "batched" || probe_path) {
     print_distribution("projection_time_per_climber", normalized_projection_time);
     print_distribution("batch_mean_pdlp_iterations", batch_mean_pdlp_iterations);
     print_distribution("batch_max_pdlp_iterations", batch_max_pdlp_iterations);
   }
-  if (path == "probe") {
+  if (probe_path) {
     print_distribution("probes_emitted", probes_emitted);
     print_distribution("probe_win_margin", probe_win_margin);
     print_distribution("probe_winner_fixings", probe_winner_fixings);
@@ -528,6 +566,10 @@ std::vector<fp_variant_t> parse_variants(const std::string& value)
       variants.push_back(fp_variant_t::batched);
     } else if (item == "probe") {
       variants.push_back(fp_variant_t::probe);
+    } else if (item == "probe_stag") {
+      variants.push_back(fp_variant_t::probe_stag);
+    } else if (item == "probe_bin") {
+      variants.push_back(fp_variant_t::probe_bin);
     } else if (item == "vanilla") {
       variants.push_back(fp_variant_t::vanilla);
     } else {

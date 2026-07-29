@@ -46,26 +46,41 @@ int resolve_fp_quality_config_id(const char* config)
   return config == nullptr ? default_fp_quality_config : std::stoi(config);
 }
 
-fp_batch_config_t make_fp_batch_config(int quality_config_id)
+fp_batch_config_t make_base_fp_batch_config()
 {
-  cuopt_assert(quality_config_id >= 0 && quality_config_id < n_fp_quality_configs,
-               "FP quality config ID out of bounds");
   fp_batch_config_t config;
   config.max_work_without_feasible   = std::numeric_limits<int>::max();
   config.restart_batch_exhausted     = false;
   config.skip_restart_for_large_pure = false;
-  config.quality_config_id           = quality_config_id;
+  return config;
+}
+
+fp_batch_config_t make_fp_batch_config(int quality_config_id)
+{
+  cuopt_assert(quality_config_id >= 0 && quality_config_id < n_fp_quality_configs,
+               "FP quality config ID out of bounds");
+  fp_batch_config_t config = make_base_fp_batch_config();
+  config.quality_config_id = quality_config_id;
+  auto make_probe          = [&config]() {
+    config.probe_projection       = true;
+    config.adaptive_cloud         = true;
+    config.structural_selector    = 2;
+    config.target_min_batch_size  = 1;
+    config.target_max_batch_size  = 64;
+    config.latency_max_batch_size = 64;
+    config.fallback_threshold     = 1;
+  };
   switch (quality_config_id) {
-    case 0:
-      config.probe_projection       = true;
-      config.adaptive_cloud         = true;
-      config.structural_selector    = 2;
-      config.target_min_batch_size  = 1;
-      config.target_max_batch_size  = 64;
-      config.latency_max_batch_size = 64;
-      config.fallback_threshold     = 1;
+    case 0: make_probe(); break;
+    case 1:
+      make_probe();
+      config.probe_width_on_stagnation = true;
       break;
-    case 1: config.single_path = true; break;
+    case 2:
+      make_probe();
+      config.probe_width_on_stagnation = true;
+      config.probe_binary_only         = true;
+      break;
     default: break;
   }
   return config;
@@ -297,7 +312,6 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
                                                                 bool longer_lp_run)
 {
   raft::common::nvtx::range fun_scope("linear_project_onto_polytope");
-  CUOPT_LOG_INFO("linear projection of fp");
   auto h_assignment = solution.get_host_assignment();
   auto h_variable_bounds =
     cuopt::host_copy(solution.problem_ptr->variable_bounds, solution.handle_ptr->get_stream());
@@ -355,6 +369,11 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   if (h_constraints.n_constraints() > 0 || h_variables.size() > 0) {
     temp_p.compute_transpose_of_problem();
   }
+  CUOPT_LOG_INFO("linear projection of fp: n_vars %d n_constr %d nnz %d aux %d",
+                 temp_p.n_variables,
+                 temp_p.n_constraints,
+                 temp_p.nnz,
+                 (int)h_variables.size());
   cuopt_assert(h_assignment.size() == temp_p.n_variables, "Var count mismatch!");
   cuopt_assert(temp_p.objective_coefficients.size() == temp_p.n_variables, "Var count mismatch!");
   solution.copy_new_assignment(h_assignment);
@@ -570,6 +589,8 @@ void feasibility_pump_t<i_t, f_t>::reset()
   max_n_of_integers         = 0;
   config.alpha              = default_alpha;
   last_distances.resize(0);
+  probe_best_rounding_violation = std::numeric_limits<f_t>::infinity();
+  probe_no_improve              = 0;
   thrust::fill(context.problem_ptr->handle_ptr->get_thrust_policy(),
                last_projection.begin(),
                last_projection.end(),
