@@ -155,6 +155,10 @@ run_result_t run_fp(const std::string& mps_path,
     std::cerr << "probing_cache_entries="
               << dm.ls.constraint_prop.bounds_update.probing_cache.probing_cache.size()
               << " probing_infeasible=" << infeasible << '\n';
+    // Probing tightens variable bounds, which can turn a general integer into a binary. The solver
+    // picks that up through the trivial_presolve that follows probing; this harness skips presolve,
+    // so the binary table has to be refreshed here or it stays inconsistent with the bounds.
+    problem.compute_binary_var_table();
   }
   problem.compute_integer_fixed_problem();
   cuopt_func_call(

@@ -63,16 +63,23 @@ struct probe_candidate_t {
 
 }  // namespace
 
-// Scores every batch member against the original problem. Unlike the diversity-cloud kernels this
-// includes member 0, because member 0 is the reference step that the probes must beat. Each row
-// accumulates straight into its member's totals, so no per-row excess is materialised and the
-// reduction over rows is the grid rather than a loop.
+// Scores every batch member against the original problem, member 0 included, because member 0 is
+// the reference step that the probes must beat. Each row accumulates straight into its member's
+// totals, so no per-row excess is materialised and the reduction over rows is the grid rather than
+// a loop.
+//
+// The score is taken on the member's *rounding*, not on its LP point. Every member solves an LP
+// over the same polytope, so all of them satisfy the constraints and scoring the LP point cannot
+// separate them - measured over a full benchmark, 94% of members scored exactly zero violation and
+// the decision degenerated to whatever tiebreaker came last. What FP needs is a rounding that is
+// feasible, and roundings do differ, so that is what is compared here - by nearest rounding, as a
+// cheap proxy for the CP rounding the winner will actually go through.
 template <typename i_t, typename f_t>
-__global__ void probe_member_row_excess_kernel(typename problem_t<i_t, f_t>::view_t problem,
-                                               const f_t* __restrict__ assignments,
-                                               f_t* __restrict__ adjusted_excess,
-                                               i_t* __restrict__ violated_counts,
-                                               i_t n_vars)
+__global__ void probe_member_rounded_excess_kernel(typename problem_t<i_t, f_t>::view_t problem,
+                                                   const f_t* __restrict__ assignments,
+                                                   f_t* __restrict__ adjusted_excess,
+                                                   i_t* __restrict__ violated_counts,
+                                                   i_t n_vars)
 {
   __shared__ f_t shmem[raft::WarpSize];
   const i_t constraint = blockIdx.x;
@@ -81,7 +88,9 @@ __global__ void probe_member_row_excess_kernel(typename problem_t<i_t, f_t>::vie
   const f_t* x         = assignments + (size_t)member * (size_t)n_vars;
   f_t activity         = 0.;
   for (i_t p = begin + threadIdx.x; p < end; p += blockDim.x) {
-    activity += problem.coefficients[p] * x[problem.variables[p]];
+    const i_t var = problem.variables[p];
+    const f_t val = problem.is_integer_var(var) ? round(x[var]) : x[var];
+    activity += problem.coefficients[p] * val;
   }
   activity = raft::blockReduce(activity, (char*)shmem);
   if (threadIdx.x == 0) {
@@ -98,24 +107,6 @@ __global__ void probe_member_row_excess_kernel(typename problem_t<i_t, f_t>::vie
     if (lower > tolerance || upper > tolerance) { atomicAdd(&violated_counts[member], 1); }
   }
 }
-
-template <typename i_t, typename f_t>
-__global__ void probe_member_integer_count_kernel(typename problem_t<i_t, f_t>::view_t problem,
-                                                  const f_t* __restrict__ assignments,
-                                                  i_t* __restrict__ integer_counts,
-                                                  i_t n_vars)
-{
-  __shared__ i_t shmem[raft::WarpSize];
-  const i_t member = blockIdx.y;
-  const f_t* x     = assignments + (size_t)member * (size_t)n_vars;
-  i_t count        = 0;
-  for (i_t j = blockIdx.x * blockDim.x + threadIdx.x; j < n_vars; j += blockDim.x * gridDim.x) {
-    count += problem.is_integer_var(j) && problem.is_integer(x[j]);
-  }
-  count = raft::blockReduce(count, (char*)shmem);
-  if (threadIdx.x == 0 && count > 0) { atomicAdd(&integer_counts[member], count); }
-}
-
 // The trajectory dual is resized against the current projection problem and then broadcast to every
 // member. rmm::device_uvector::resize does not initialise the grown tail, and those bits are
 // frequently finite garbage that PDLP's own isfinite clamp would let through, so the tail has to be
@@ -603,47 +594,37 @@ bool feasibility_pump_t<i_t, f_t>::probe_project_onto_polytope(solution_t<i_t, f
 
   rmm::device_uvector<f_t> adjusted_excess((size_t)n_members, stream);
   rmm::device_uvector<i_t> violated_counts((size_t)n_members, stream);
-  rmm::device_uvector<i_t> integer_counts((size_t)n_members, stream);
   {
     auto policy = solution.handle_ptr->get_thrust_policy();
     thrust::fill(policy, adjusted_excess.begin(), adjusted_excess.end(), f_t(0));
     thrust::fill(policy, violated_counts.begin(), violated_counts.end(), i_t(0));
-    thrust::fill(policy, integer_counts.begin(), integer_counts.end(), i_t(0));
-    constexpr i_t row_tpb   = 64;
-    constexpr i_t count_tpb = 128;
+    constexpr i_t row_tpb = 64;
     const dim3 row_grid(pb->n_constraints, n_members);
-    probe_member_row_excess_kernel<i_t, f_t>
+    probe_member_rounded_excess_kernel<i_t, f_t>
       <<<row_grid, row_tpb, 0, stream>>>(pb->view(),
                                          probe_batch_assignments.data(),
                                          adjusted_excess.data(),
                                          violated_counts.data(),
                                          n_vars);
     RAFT_CHECK_CUDA(stream);
-    const i_t count_blocks = std::max((i_t)1, (n_vars + count_tpb - 1) / count_tpb);
-    const dim3 count_grid(count_blocks, n_members);
-    probe_member_integer_count_kernel<i_t, f_t><<<count_grid, count_tpb, 0, stream>>>(
-      pb->view(), probe_batch_assignments.data(), integer_counts.data(), n_vars);
-    RAFT_CHECK_CUDA(stream);
   }
   const auto h_adjusted = cuopt::host_copy(adjusted_excess, stream);
   const auto h_violated = cuopt::host_copy(violated_counts, stream);
-  const auto h_integers = cuopt::host_copy(integer_counts, stream);
   solution.handle_ptr->sync_stream();
 
-  // Feasible first, then adjusted violation, then integer ratio. Ties go to member 0 so the scheme
-  // degrades to plain FP rather than drifting away from the reference trajectory.
+  // Violated rows of the rounding first, then how far the rounding misses by. Only a strict
+  // improvement displaces the incumbent, and the incumbent starts at member 0, so a probe has to
+  // beat the reference step outright and ties keep the plain-FP trajectory.
+  //
+  // Integrality is deliberately not a criterion. Every member's rounding is integral by
+  // construction, and on the LP point integrality is manufactured by the member's own fixings, so
+  // ranking on it selected the members that had drifted furthest from the rounding. Distance to the
+  // rounding is not one either: both L1 forms were measured and rejected, see
+  // design_summaries/batched_fp/PROBE_MEMBER_SCORING.md.
   i_t winner = 0;
   for (i_t c = 1; c < n_members; ++c) {
-    const bool feasible        = h_violated[c] == 0;
-    const bool winner_feasible = h_violated[winner] == 0;
-    bool better;
-    if (feasible != winner_feasible) {
-      better = feasible;
-    } else if (h_adjusted[c] != h_adjusted[winner]) {
-      better = h_adjusted[c] < h_adjusted[winner];
-    } else {
-      better = h_integers[c] > h_integers[winner];
-    }
+    const bool better = h_violated[c] != h_violated[winner] ? h_violated[c] < h_violated[winner]
+                                                            : h_adjusted[c] < h_adjusted[winner];
     if (better) { winner = c; }
   }
   last_probe_winner     = winner;
@@ -654,11 +635,14 @@ bool feasibility_pump_t<i_t, f_t>::probe_project_onto_polytope(solution_t<i_t, f
     });
   if (winner != 0) {
     CUOPT_LOG_INFO(
-      "Probe projection: member %d of %d wins, adjusted violation %g against member 0 %g",
+      "Probe projection: member %d of %d wins, rounded violation %g in %d rows against member 0 %g "
+      "in %d rows",
       winner,
       n_members,
       (double)h_adjusted[winner],
-      (double)h_adjusted[0]);
+      (int)h_violated[winner],
+      (double)h_adjusted[0],
+      (int)h_violated[0]);
   }
 
   raft::copy(solution.assignment.data(),
