@@ -40,23 +40,25 @@ namespace {
 
 using metrics_t = mip::fp_run_metrics_t<int, double>;
 
-// probe_stag and probe_bin are the same probe path as probe under configs 2 and 3: width gated on
-// stagnation, and additionally restricted to all-binary problems.
-enum class fp_variant_t { single, batched, probe, probe_stag, probe_bin, vanilla };
+// probe is the shipped config. probe_slack and probe_bin are the same path with the width gated on
+// slack instead of stagnation, and restricted to all-binary problems: both were dropped as configs
+// because the benchmark could not separate them from probe, and they stay here so the comparison
+// can be redone against repeated seeds.
+enum class fp_variant_t { single, batched, probe, probe_slack, probe_bin, vanilla };
 
 const char* variant_name(fp_variant_t variant)
 {
   if (variant == fp_variant_t::single) { return "single"; }
   if (variant == fp_variant_t::batched) { return "batched"; }
   if (variant == fp_variant_t::probe) { return "probe"; }
-  if (variant == fp_variant_t::probe_stag) { return "probe_stag"; }
+  if (variant == fp_variant_t::probe_slack) { return "probe_slack"; }
   if (variant == fp_variant_t::probe_bin) { return "probe_bin"; }
   return "vanilla";
 }
 
 bool is_probe(fp_variant_t variant)
 {
-  return variant == fp_variant_t::probe || variant == fp_variant_t::probe_stag ||
+  return variant == fp_variant_t::probe || variant == fp_variant_t::probe_slack ||
          variant == fp_variant_t::probe_bin;
 }
 
@@ -205,12 +207,12 @@ run_result_t run_fp(const std::string& mps_path,
   dm.ls.fp.reset();
   dm.ls.fp.resize_vectors(problem, problem.handle_ptr);
   if (is_probe(variant)) {
-    const int config_id                           = variant == fp_variant_t::probe        ? 0
-                                                    : variant == fp_variant_t::probe_stag ? 1
-                                                                                          : 2;
-    dm.ls.fp.batch_config                         = mip::make_fp_batch_config(config_id);
-    dm.ls.fp.batch_config.probe_adaptive_width    = !probe_fixed_width;
-    dm.ls.fp.batch_config.probe_width_slack_ratio = probe_slack_ratio;
+    dm.ls.fp.batch_config                      = mip::make_fp_batch_config(0);
+    dm.ls.fp.batch_config.probe_adaptive_width = !probe_fixed_width;
+    // The two dropped variants are only reachable here, by overriding the shipped config's gates.
+    dm.ls.fp.batch_config.probe_width_on_stagnation = variant != fp_variant_t::probe_slack;
+    dm.ls.fp.batch_config.probe_binary_only         = variant == fp_variant_t::probe_bin;
+    dm.ls.fp.batch_config.probe_width_slack_ratio   = probe_slack_ratio;
   } else if (variant == fp_variant_t::single) {
     // No config selects the single-point path any more, so the baseline arm asks for it directly.
     dm.ls.fp.batch_config             = mip::make_base_fp_batch_config();
@@ -566,8 +568,8 @@ std::vector<fp_variant_t> parse_variants(const std::string& value)
       variants.push_back(fp_variant_t::batched);
     } else if (item == "probe") {
       variants.push_back(fp_variant_t::probe);
-    } else if (item == "probe_stag") {
-      variants.push_back(fp_variant_t::probe_stag);
+    } else if (item == "probe_slack") {
+      variants.push_back(fp_variant_t::probe_slack);
     } else if (item == "probe_bin") {
       variants.push_back(fp_variant_t::probe_bin);
     } else if (item == "vanilla") {

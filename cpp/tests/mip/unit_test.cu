@@ -400,11 +400,10 @@ TEST(FpSwitchPolicy, ExplicitConfigIdsKeepTheirMappings)
     EXPECT_EQ(mip::resolve_fp_quality_config_id(text.c_str()), config_id);
     EXPECT_EQ(mip::make_fp_batch_config(config_id).quality_config_id, config_id);
   }
-  EXPECT_NE(mip::make_fp_batch_config(0), mip::make_fp_batch_config(1));
-  EXPECT_FALSE(mip::make_fp_batch_config(0).probe_width_on_stagnation);
-  EXPECT_TRUE(mip::make_fp_batch_config(1).probe_width_on_stagnation);
-  EXPECT_FALSE(mip::make_fp_batch_config(1).probe_binary_only);
-  EXPECT_TRUE(mip::make_fp_batch_config(2).probe_binary_only);
+  // The width is gated on stagnation and the path is not restricted to all-binary problems; the
+  // slack-gated and binary-only variants are reachable only from fp_regression.
+  EXPECT_TRUE(mip::make_fp_batch_config(0).probe_width_on_stagnation);
+  EXPECT_FALSE(mip::make_fp_batch_config(0).probe_binary_only);
   // Every config is a probe config now; the single-point path is only reachable outside them.
   for (int config_id = 0; config_id < mip::n_fp_quality_configs; ++config_id) {
     EXPECT_TRUE(mip::make_fp_batch_config(config_id).probe_projection);

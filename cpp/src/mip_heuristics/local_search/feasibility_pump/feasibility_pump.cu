@@ -59,30 +59,15 @@ fp_batch_config_t make_fp_batch_config(int quality_config_id)
 {
   cuopt_assert(quality_config_id >= 0 && quality_config_id < n_fp_quality_configs,
                "FP quality config ID out of bounds");
-  fp_batch_config_t config = make_base_fp_batch_config();
-  config.quality_config_id = quality_config_id;
-  auto make_probe          = [&config]() {
-    config.probe_projection       = true;
-    config.adaptive_cloud         = true;
-    config.structural_selector    = 2;
-    config.target_min_batch_size  = 1;
-    config.target_max_batch_size  = 64;
-    config.latency_max_batch_size = 64;
-    config.fallback_threshold     = 1;
-  };
-  switch (quality_config_id) {
-    case 0: make_probe(); break;
-    case 1:
-      make_probe();
-      config.probe_width_on_stagnation = true;
-      break;
-    case 2:
-      make_probe();
-      config.probe_width_on_stagnation = true;
-      config.probe_binary_only         = true;
-      break;
-    default: break;
-  }
+  fp_batch_config_t config      = make_base_fp_batch_config();
+  config.quality_config_id      = quality_config_id;
+  config.probe_projection       = true;
+  config.adaptive_cloud         = true;
+  config.structural_selector    = 2;
+  config.target_min_batch_size  = 1;
+  config.target_max_batch_size  = 64;
+  config.latency_max_batch_size = 64;
+  config.fallback_threshold     = 1;
   return config;
 }
 
