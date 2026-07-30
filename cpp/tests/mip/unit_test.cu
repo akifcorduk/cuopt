@@ -411,4 +411,21 @@ TEST(FpSwitchPolicy, ExplicitConfigIdsKeepTheirMappings)
   }
 }
 
+TEST(FpSwitchPolicy, IdsBeyondTheConfigCountRepeatTheSameConfig)
+{
+  // A benchmark sweeps CUOPT_CONFIG_ID to launch repeated runs, so an id that names no distinct
+  // configuration has to resolve to the only one there is rather than being rejected.
+  for (const int config_id : {1, 2, 7}) {
+    const auto config = mip::make_fp_batch_config(config_id);
+    EXPECT_EQ(config.quality_config_id, config_id);
+    EXPECT_TRUE(config.probe_projection);
+    EXPECT_TRUE(config.probe_width_on_stagnation);
+    EXPECT_FALSE(config.probe_binary_only);
+    EXPECT_FALSE(config.single_path);
+    auto relabelled              = config;
+    relabelled.quality_config_id = 0;
+    EXPECT_EQ(relabelled, mip::make_fp_batch_config(0));
+  }
+}
+
 }  // namespace cuopt::mathematical_optimization::test

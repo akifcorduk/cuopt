@@ -57,8 +57,9 @@ fp_batch_config_t make_base_fp_batch_config()
 
 fp_batch_config_t make_fp_batch_config(int quality_config_id)
 {
-  cuopt_assert(quality_config_id >= 0 && quality_config_id < n_fp_quality_configs,
-               "FP quality config ID out of bounds");
+  // There is only one config, so the id selects nothing and is kept purely as a run label: a
+  // benchmark sweeping ids gets independent repetitions of the same config, which is how the
+  // run-to-run variance gets measured.
   fp_batch_config_t config      = make_base_fp_batch_config();
   config.quality_config_id      = quality_config_id;
   config.probe_projection       = true;
@@ -98,20 +99,13 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     probe_prev_dual(0, context.problem_ptr->handle_ptr->get_stream()),
     probe_batch_assignments(0, context.problem_ptr->handle_ptr->get_stream())
 {
-  int max_config             = n_fp_quality_configs;
-  const char* max_config_env = std::getenv("CUOPT_MAX_CONFIG");
-  if (max_config_env != nullptr) { max_config = std::stoi(max_config_env); }
-  cuopt_assert(max_config > 0 && max_config <= n_fp_quality_configs,
-               "CUOPT_MAX_CONFIG must be in [1, n_fp_quality_configs]");
-
-  const char* config  = std::getenv("CUOPT_CONFIG_ID");
-  const int config_id = resolve_fp_quality_config_id(config);
-  cuopt_assert(config_id >= 0 && config_id < n_fp_quality_configs,
-               "CUOPT_CONFIG_ID must be in [0, n_fp_quality_configs)");
-  cuopt_assert(config == nullptr || config_id < max_config,
-               "CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
-  batch_config = make_fp_batch_config(config_id);
-  CUOPT_LOG_INFO("Using batched FP quality configuration %d of %d", config_id, max_config);
+  // Any id is accepted and resolves to the single config, so a benchmark can sweep CUOPT_CONFIG_ID
+  // to launch repeated runs of it without the id having to name a distinct configuration. The id is
+  // logged so the runs can be told apart afterwards. CUOPT_MAX_CONFIG no longer bounds anything
+  // here; the diversity manager still reads it for its own override.
+  const int config_id = resolve_fp_quality_config_id(std::getenv("CUOPT_CONFIG_ID"));
+  batch_config        = make_fp_batch_config(config_id);
+  CUOPT_LOG_INFO("Using batched FP probe configuration, run label %d", config_id);
 }
 
 template <typename i_t, typename f_t>
