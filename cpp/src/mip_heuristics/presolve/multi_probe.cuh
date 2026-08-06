@@ -17,7 +17,7 @@
 #include "bounds_update_data.cuh"
 #include "utils.cuh"
 
-namespace cuopt::linear_programming::detail {
+namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
 class multi_probe_t {
@@ -75,17 +75,14 @@ class multi_probe_t {
   bool skip_0;
   bool skip_1;
   settings_t settings;
-  bool compute_stats            = true;
-  bool init_changed_constraints = true;
-  // When non-null (multi-threaded probing cache), deterministic per-iteration work is added here
-  // instead of the shared global work counter, avoiding a cross-thread data race; the caller sums
-  // these per-task accumulators at the step barrier. nullptr => record straight to the global work
-  // clock and work-clock the loop (single-threaded use, e.g. rounding).
-  double* local_work_accumulator = nullptr;
+  // Per-task iteration count; a shared counter would race and make the budget nondeterministic.
+  double* local_iter_accumulator = nullptr;
+  bool compute_stats             = true;
+  bool init_changed_constraints  = true;
   i_t infeas_constraints_count_0 = 0;
   i_t redund_constraints_count_0 = 0;
   i_t infeas_constraints_count_1 = 0;
   i_t redund_constraints_count_1 = 0;
 };
 
-}  // namespace cuopt::linear_programming::detail
+}  // namespace cuopt::mathematical_optimization::mip

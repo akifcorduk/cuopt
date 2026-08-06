@@ -28,7 +28,7 @@ namespace cg = cooperative_groups;
 #define CONSTRAINT_FLAG_INSERT 0
 #define CONSTRAINT_FLAG_REMOVE 1
 
-namespace cuopt::linear_programming::detail {
+namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
 DI void charge_deterministic_iteration_work(typename fj_t<i_t, f_t>::climber_data_t::view_t fj,
@@ -1536,6 +1536,251 @@ __global__ void handle_local_minimum_kernel(typename fj_t<i_t, f_t>::climber_dat
 
 #include "load_balancing.cuh"
 
+template <typename i_t, typename f_t>
+void launch_load_balancing_prepare_iteration(dim3 grid,
+                                             dim3 blocks,
+                                             void** kernel_args,
+                                             rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchCooperativeKernel(
+    (void*)load_balancing_prepare_iteration<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_update_assignment_kernel(int TPB,
+                                                               const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)update_assignment_kernel<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+void launch_update_assignment_kernel(dim3 grid,
+                                     dim3 blocks,
+                                     void** kernel_args,
+                                     rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)update_assignment_kernel<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t, MTMMoveType move_type, bool is_binary_pb>
+std::pair<dim3, dim3> get_launch_dims_compute_mtm_moves_kernel(int TPB,
+                                                               const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)compute_mtm_moves_kernel<i_t, f_t, move_type, is_binary_pb>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_handle_local_minimum_kernel(int TPB,
+                                                                  const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)handle_local_minimum_kernel<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_update_lift_moves_kernel(int TPB,
+                                                               const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)update_lift_moves_kernel<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_load_balancing_compute_workid_mappings(
+  int TPB, const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)load_balancing_compute_workid_mappings<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_load_balancing_compute_scores_binary(
+  int TPB, const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)load_balancing_compute_scores_binary<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_load_balancing_mtm_compute_candidates(
+  int TPB, const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)load_balancing_mtm_compute_candidates<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_load_balancing_mtm_compute_scores(
+  int TPB, const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)load_balancing_mtm_compute_scores<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_load_balancing_prepare_iteration(
+  int TPB, const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)load_balancing_prepare_iteration<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t, MTMMoveType move_type, bool is_binary_pb>
+void launch_compute_mtm_moves_kernel(dim3 grid,
+                                     dim3 blocks,
+                                     void** kernel_args,
+                                     rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(
+    cudaLaunchCooperativeKernel((void*)compute_mtm_moves_kernel<i_t, f_t, move_type, is_binary_pb>,
+                                grid,
+                                blocks,
+                                kernel_args,
+                                0,
+                                stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_load_balancing_sanity_checks(dim3 grid,
+                                         dim3 blocks,
+                                         void** kernel_args,
+                                         rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchCooperativeKernel(
+    (void*)load_balancing_sanity_checks<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_handle_local_minimum_kernel(dim3 grid,
+                                        dim3 blocks,
+                                        void** kernel_args,
+                                        rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchCooperativeKernel(
+    (void*)handle_local_minimum_kernel<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+std::pair<dim3, dim3> get_launch_dims_update_changed_constraints_kernel(
+  int TPB, const raft::handle_t* handle_ptr)
+{
+  return cuopt::get_launch_dims_max_occupancy(
+    (void*)update_changed_constraints_kernel<i_t, f_t>, TPB, handle_ptr);
+}
+
+template <typename i_t, typename f_t>
+void launch_update_changed_constraints_kernel(dim3 grid,
+                                              dim3 blocks,
+                                              void** kernel_args,
+                                              rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)update_changed_constraints_kernel<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_update_lift_moves_kernel(dim3 grid,
+                                     dim3 blocks,
+                                     void** kernel_args,
+                                     rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)update_lift_moves_kernel<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_update_breakthrough_moves_kernel(dim3 grid,
+                                             dim3 blocks,
+                                             void** kernel_args,
+                                             rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)update_breakthrough_moves_kernel<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_select_variable_kernel(dim3 grid,
+                                   dim3 blocks,
+                                   void** kernel_args,
+                                   rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)select_variable_kernel<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_init_lhs_and_violation(dim3 grid,
+                                   dim3 blocks,
+                                   void** kernel_args,
+                                   rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)init_lhs_and_violation<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_update_best_solution_kernel(dim3 grid,
+                                        dim3 blocks,
+                                        void** kernel_args,
+                                        rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)update_best_solution_kernel<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_load_balancing_compute_workid_mappings(dim3 grid,
+                                                   dim3 blocks,
+                                                   void** kernel_args,
+                                                   rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)load_balancing_compute_workid_mappings<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_load_balancing_init_cstr_bounds_csr(dim3 grid,
+                                                dim3 blocks,
+                                                void** kernel_args,
+                                                rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)load_balancing_init_cstr_bounds_csr<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_load_balancing_compute_scores_binary(dim3 grid,
+                                                 dim3 blocks,
+                                                 void** kernel_args,
+                                                 rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)load_balancing_compute_scores_binary<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_load_balancing_mtm_compute_candidates(dim3 grid,
+                                                  dim3 blocks,
+                                                  void** kernel_args,
+                                                  rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)load_balancing_mtm_compute_candidates<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
+template <typename i_t, typename f_t>
+void launch_load_balancing_mtm_compute_scores(dim3 grid,
+                                              dim3 blocks,
+                                              void** kernel_args,
+                                              rmm::cuda_stream_view stream)
+{
+  RAFT_CUDA_TRY(cudaLaunchKernel(
+    (void*)load_balancing_mtm_compute_scores<i_t, f_t>, grid, blocks, kernel_args, 0, stream));
+}
+
 // to save from compilation time, separate those and instantiate separately rather being part of a
 // class
 
@@ -1600,4 +1845,4 @@ INSTANTIATE(double)
 
 #undef INSTANTIATE
 
-}  // namespace cuopt::linear_programming::detail
+}  // namespace cuopt::mathematical_optimization::mip

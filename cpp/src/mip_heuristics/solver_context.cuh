@@ -5,7 +5,7 @@
  */
 /* clang-format on */
 
-#include <cuopt/linear_programming/mip/solver_stats.hpp>
+#include <cuopt/mathematical_optimization/mip/solver_stats.hpp>
 
 #include <mip_heuristics/deterministic_calibrator/work_model.hpp>
 #include <mip_heuristics/problem/problem.cuh>
@@ -24,14 +24,14 @@
 #pragma once
 
 // Forward declare
-namespace cuopt::linear_programming::dual_simplex {
+namespace cuopt::mathematical_optimization::mip {
 template <typename i_t, typename f_t>
 class branch_and_bound_t;
 }
 
 #include <branch_and_bound/symmetry.hpp>
 
-namespace cuopt::linear_programming::detail {
+namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
 class diversity_manager_t;
@@ -120,7 +120,7 @@ struct mip_solver_context_t {
 
   raft::handle_t const* const handle_ptr;
   problem_t<i_t, f_t>* problem_ptr;
-  dual_simplex::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};
+  mip::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
   // Root termination checker (wall-clock cap; infinite in deterministic mode). FJ derives child
@@ -206,7 +206,7 @@ struct mip_solver_context_t {
   std::vector<f_t> initial_incumbent_assignment{};
 
   // Symmetry information for orbital fixing during B&B. Null if no exploitable symmetry.
-  std::unique_ptr<dual_simplex::mip_symmetry_t<i_t, f_t>> symmetry;
+  std::unique_ptr<mip::mip_symmetry_t<i_t, f_t>> symmetry;
 };
 
-}  // namespace cuopt::linear_programming::detail
+}  // namespace cuopt::mathematical_optimization::mip

@@ -17,7 +17,7 @@
 
 #include <thrust/partition.h>
 
-namespace cuopt::linear_programming::detail {
+namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
 class fp_recombiner_t : public recombiner_t<i_t, f_t> {
@@ -160,4 +160,4 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
   feasibility_pump_t<i_t, f_t> fp;
 };
 
-}  // namespace cuopt::linear_programming::detail
+}  // namespace cuopt::mathematical_optimization::mip

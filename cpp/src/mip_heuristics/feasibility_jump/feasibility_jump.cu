@@ -34,7 +34,7 @@
 
 #define FJ_LOG_PREFIX "FJ: "
 
-namespace cuopt::linear_programming::detail {
+namespace cuopt::mathematical_optimization::mip {
 
 #if FJ_SINGLE_STEP
 static constexpr int iterations_per_graph = 1;
@@ -1448,4 +1448,4 @@ template class fj_t<int, float>;
 template class fj_t<int, double>;
 #endif
 
-}  // namespace cuopt::linear_programming::detail
+}  // namespace cuopt::mathematical_optimization::mip
