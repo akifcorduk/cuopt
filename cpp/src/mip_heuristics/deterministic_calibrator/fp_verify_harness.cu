@@ -7,8 +7,8 @@
 
 #include <mip_heuristics/deterministic_calibrator/fp_verify_harness.hpp>
 
-#include <cuopt/linear_programming/io/parser.hpp>
-#include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/mathematical_optimization/io/parser.hpp>
+#include <cuopt/mathematical_optimization/solve.hpp>
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/problem/problem_helpers.cuh>
@@ -31,7 +31,7 @@
 #include <limits>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 namespace {
 
@@ -81,7 +81,7 @@ fj_run_t run_fj_to_budget(mip_solver_context_t<int, double>& ctx, double budget)
   solution.handle_ptr->sync_stream();
   auto t1 = std::chrono::steady_clock::now();
   return {fj.climbers[0]->iterations.value(stream),
-          detail::compute_hash(solution.assignment, stream),
+          compute_hash(solution.assignment, stream),
           std::chrono::duration<double>(t1 - t0).count()};
 }
 
@@ -96,7 +96,7 @@ pdlp_run_t run_pdlp_to_iters(problem_t<int, double>& problem, int iter_limit)
   set_pdlp_solver_mode(s);
   s.set_optimality_tolerance(1e-14);  // never converge early; run the full work budget
 
-  pdlp_solver_t<int, double> lp(problem, s);
+  pdlp::pdlp_solver_t<int, double> lp(problem, s);
   lp.set_inside_mip(true);
   problem.handle_ptr->sync_stream();
   cuopt::timer_t lp_timer(std::numeric_limits<double>::infinity());
@@ -114,7 +114,7 @@ pdlp_run_t run_pdlp_to_iters(problem_t<int, double>& problem, int iter_limit)
 bool run_fp_verify(const std::string& mps_path, const std::string& instance_name)
 {
   const raft::handle_t handle_{};
-  auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
+  auto mps_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
   auto op_problem = mps_data_model_to_optimization_problem(&handle_, mps_problem);
 
@@ -180,4 +180,4 @@ bool run_fp_verify(const std::string& mps_path, const std::string& instance_name
   return ok;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

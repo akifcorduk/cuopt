@@ -77,6 +77,7 @@ class multi_probe_t {
   settings_t settings;
   // Per-task iteration count; a shared counter would race and make the budget nondeterministic.
   double* local_iter_accumulator = nullptr;
+  double* local_work_accumulator = nullptr;
   bool compute_stats             = true;
   bool init_changed_constraints  = true;
   i_t infeas_constraints_count_0 = 0;

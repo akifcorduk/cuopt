@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // One calibration observation: the (median) feature vector and (median) measured per-iteration
 // wall time for a single instance / leaf algorithm.
@@ -70,8 +70,8 @@ class work_calibrator_t {
     bool pin_median    = true;    // pin median ratio to 1 (else mean)
   };
 
-  // Median / dispersion / within-band diagnostics of the ratio r_i = measured/predicted. Reports the
-  // metric we actually ship against (median deviation + fraction within +-band).
+  // Median / dispersion / within-band diagnostics of the ratio r_i = measured/predicted. Reports
+  // the metric we actually ship against (median deviation + fraction within +-band).
   struct ratio_stats_t {
     double median{0.0};
     double within_band{0.0};  // fraction with |r-1| <= band
@@ -191,8 +191,8 @@ class work_calibrator_t {
       }
     }
 
-    std::vector<double> w(n, 1.0);       // IRLS robustness weights
-    std::vector<double> pred(n, 0.0);    // dot(c, A[i])
+    std::vector<double> w(n, 1.0);     // IRLS robustness weights
+    std::vector<double> pred(n, 0.0);  // dot(c, A[i])
     std::vector<double> wdenom(n_features, 0.0);
     int total_passes = 0;
 
@@ -290,7 +290,7 @@ inline void emit_coeffs_header(const std::string& path,
   f << "/* clang-format on */\n";
   f << "#pragma once\n\n";
   f << "#include <array>\n\n";
-  f << "namespace cuopt::linear_programming::detail::calib {\n\n";
+  f << "namespace cuopt::mathematical_optimization::mip::calib {\n\n";
   f << "// Per-instance fit diagnostics (measured s/iter, predicted work, ratio):\n";
   for (const auto& s : samples) {
     const double pred  = predict_work(result.coeffs, s.features);
@@ -305,7 +305,7 @@ inline void emit_coeffs_header(const std::string& path,
     f << "  " << result.coeffs[i] << ",  // " << fname << "\n";
   }
   f << "};\n\n";
-  f << "}  // namespace cuopt::linear_programming::detail::calib\n";
+  f << "}  // namespace cuopt::mathematical_optimization::mip::calib\n";
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

@@ -1022,6 +1022,7 @@ if (BUILD_MIP_WORK_CALIBRATOR AND NOT BUILD_LP_ONLY)
             PUBLIC
             cuopt
             OpenMP::OpenMP_CXX
+            OpenMP::OpenMP_CUDA
             PRIVATE
     )
     if (NOT DEFINED INSTALL_TARGET OR "${INSTALL_TARGET}" STREQUAL "")

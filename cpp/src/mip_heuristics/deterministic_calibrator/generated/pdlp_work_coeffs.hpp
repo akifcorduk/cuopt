@@ -12,7 +12,7 @@
 
 #include <array>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Saturation hinge: excess = max(0, excess_warp_loads - threshold).
 constexpr double pdlp_excess_warp_loads_threshold = 128000;
@@ -30,4 +30,4 @@ constexpr std::array<double, 10> pdlp_work_coeffs = {
   7.88452e-11,  // excess_warp_loads
 };
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

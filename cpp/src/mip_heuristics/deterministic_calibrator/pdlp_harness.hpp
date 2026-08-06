@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Feature layout for the PDLP per-iteration work model (base structural features + SpMV warp-load
 // depth terms). The last entry is total_warp_loads, on which the saturation hinge is built.
@@ -22,4 +22,4 @@ std::vector<std::string> pdlp_feature_names();
 calibration_sample_t run_pdlp_calibration_sample(const std::string& mps_path,
                                                  const std::string& instance_name);
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

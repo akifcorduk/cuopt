@@ -8,8 +8,8 @@
 #include <mip_heuristics/deterministic_calibrator/bp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
 
-#include <cuopt/linear_programming/io/parser.hpp>
-#include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/mathematical_optimization/io/parser.hpp>
+#include <cuopt/mathematical_optimization/solve.hpp>
 #include <mip_heuristics/presolve/bounds_presolve.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/solver.cuh>
@@ -29,7 +29,7 @@
 #include <utility>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 std::vector<std::string> bp_feature_names()
 {
@@ -52,7 +52,7 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
                                         const std::string& instance_name)
 {
   const raft::handle_t handle_{};
-  auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
+  auto mps_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
   // Intentionally heap-allocated and leaked: destroying this optimization_problem_t after a
   // mip_solver_t has been constructed segfaults in rmm::device_buffer::deallocate_async (an RMM
@@ -200,4 +200,4 @@ bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
   return out;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

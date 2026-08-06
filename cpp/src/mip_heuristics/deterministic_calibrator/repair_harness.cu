@@ -8,8 +8,8 @@
 #include <mip_heuristics/deterministic_calibrator/repair_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
 
-#include <cuopt/linear_programming/io/parser.hpp>
-#include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/mathematical_optimization/io/parser.hpp>
+#include <cuopt/mathematical_optimization/solve.hpp>
 #include <mip_heuristics/local_search/rounding/bounds_repair.cuh>
 #include <mip_heuristics/presolve/bounds_presolve.cuh>
 #include <mip_heuristics/problem/problem.cuh>
@@ -30,7 +30,7 @@
 #include <utility>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 std::vector<std::string> repair_feature_names()
 {
@@ -59,7 +59,7 @@ std::vector<calibration_sample_t> run_repair_calibration_sample(const std::strin
                                                                 const std::string& instance_name)
 {
   const raft::handle_t handle_{};
-  auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
+  auto mps_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
   // Leaked on purpose: destroying this after a mip_solver_t exists segfaults in RMM async free
   // (teardown-order issue on newer CUDA). Offline tool with a fixed instance list -> leak is fine.
@@ -194,4 +194,4 @@ std::vector<calibration_sample_t> run_repair_calibration_sample(const std::strin
   return out;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

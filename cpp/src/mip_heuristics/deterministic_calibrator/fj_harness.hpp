@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Names of the FJ feature vector entries (base structural features + FJ-specific dynamic feature).
 std::vector<std::string> fj_feature_names();
@@ -22,4 +22,4 @@ std::vector<std::string> fj_feature_names();
 calibration_sample_t run_fj_calibration_sample(const std::string& mps_path,
                                                const std::string& instance_name);
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

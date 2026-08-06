@@ -11,7 +11,7 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/transform_reduce.h>
 
-namespace cuopt::linear_programming::detail {
+namespace cuopt::mathematical_optimization::mip {
 
 // Dynamic features of a changed-constraint set used by the bound-presolve / multi-probe work model:
 // (#changed, nnz of changed rows, warp-loads = sum ceil(rowsize/32) of changed rows).
@@ -44,4 +44,4 @@ inline changed_feat_t reduce_changed_features(problem_t<i_t, f_t>& pb,
     thrust::plus<changed_feat_t>{});
 }
 
-}  // namespace cuopt::linear_programming::detail
+}  // namespace cuopt::mathematical_optimization::mip

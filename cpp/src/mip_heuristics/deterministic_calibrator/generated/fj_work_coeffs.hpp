@@ -13,7 +13,7 @@
 
 #include <array>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Per-instance fit diagnostics (measured s/iter, predicted work, ratio):
 //   gen-ip054: measured=6.70719e-05 pred=5.70056e-05 ratio=1.17658
@@ -39,4 +39,4 @@ constexpr std::array<double, 7> fj_work_coeffs = {
   2.06324e-10,  // frontier_work_mean
 };
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

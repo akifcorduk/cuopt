@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Names of the bound-presolve feature vector entries (base structural features + bound-presolve
 // dynamic per-iteration features). Both per-kernel sub-models share this layout.
@@ -30,4 +30,4 @@ struct bp_samples_t {
 bp_samples_t run_bp_calibration_samples(const std::string& mps_path,
                                         const std::string& instance_name);
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

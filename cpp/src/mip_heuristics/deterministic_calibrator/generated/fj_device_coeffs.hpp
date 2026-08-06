@@ -12,36 +12,16 @@
 
 #include <array>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 constexpr double fj_device_hinge_k = 0;
 constexpr bool fj_device_use_hinge = false;
 
 constexpr std::array<double, 24> fj_device_coeffs = {
-  3.08068e-05,
-  7.76331e-05,
-  3.07405e-08,
-  1.27303e-08,
-  8.96498e-11,
-  0,
-  0,
-  0,
-  3.50655e-10,
-  1.45214e-10,
-  1.02263e-12,
-  1.5327e-09,
-  6.34721e-10,
-  4.46987e-12,
-  1.28002e-08,
-  5.30082e-09,
-  3.73297e-11,
-  5.09895e-08,
-  2.11158e-08,
-  1.48703e-10,
-  2.53666e-11,
-  9.50975e-08,
-  7.75071e-09,
-  0,
+  3.08068e-05, 7.76331e-05, 3.07405e-08, 1.27303e-08, 8.96498e-11, 0,
+  0,           0,           3.50655e-10, 1.45214e-10, 1.02263e-12, 1.5327e-09,
+  6.34721e-10, 4.46987e-12, 1.28002e-08, 5.30082e-09, 3.73297e-11, 5.09895e-08,
+  2.11158e-08, 1.48703e-10, 2.53666e-11, 9.50975e-08, 7.75071e-09, 0,
 };
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // multi_probe runs the same activity/bounds-update kernels as bound presolve, over two probe
 // buffers. The activity kernel scales with changed *constraints*; the bounds-update kernel scales
@@ -30,4 +30,4 @@ std::size_t mp_vars_warp_index();
 bp_samples_t run_mp_calibration_samples(const std::string& mps_path,
                                         const std::string& instance_name);
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

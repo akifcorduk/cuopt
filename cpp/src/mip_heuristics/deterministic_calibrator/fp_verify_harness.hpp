@@ -8,7 +8,7 @@
 
 #include <string>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Standalone FP-leaf work-unit verification for one instance. For a set of pseudo-second work
 // budgets it converts each into a deterministic per-leaf iteration budget via the calibrated work
@@ -18,4 +18,4 @@ namespace cuopt::linear_programming::detail::calib {
 // Prints a per-instance report. Returns true if all checks pass.
 bool run_fp_verify(const std::string& mps_path, const std::string& instance_name);
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

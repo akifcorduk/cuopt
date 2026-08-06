@@ -8,8 +8,8 @@
 #include <mip_heuristics/deterministic_calibrator/pdlp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
 
-#include <cuopt/linear_programming/io/parser.hpp>
-#include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/mathematical_optimization/io/parser.hpp>
+#include <cuopt/mathematical_optimization/solve.hpp>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/problem/problem_helpers.cuh>
 #include <mip_heuristics/utils.cuh>
@@ -27,7 +27,7 @@
 #include <limits>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 std::vector<std::string> pdlp_feature_names()
 {
@@ -58,7 +58,7 @@ std::pair<double, int> time_pdlp_run(problem_t<int, double>& problem, int iter_l
   // one-time setup).
   s.set_optimality_tolerance(1e-14);
 
-  pdlp_solver_t<int, double> lp_solver(problem, s);
+  pdlp::pdlp_solver_t<int, double> lp_solver(problem, s);
   lp_solver.set_inside_mip(true);
   auto stream = problem.handle_ptr->get_stream();
   problem.handle_ptr->sync_stream();
@@ -81,7 +81,7 @@ calibration_sample_t run_pdlp_calibration_sample(const std::string& mps_path,
                                                  const std::string& instance_name)
 {
   const raft::handle_t handle_{};
-  auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
+  auto mps_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
   auto op_problem = mps_data_model_to_optimization_problem(&handle_, mps_problem);
 
@@ -151,4 +151,4 @@ calibration_sample_t run_pdlp_calibration_sample(const std::string& mps_path,
   return s;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

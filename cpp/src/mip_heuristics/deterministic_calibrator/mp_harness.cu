@@ -24,8 +24,8 @@
 #include <mip_heuristics/deterministic_calibrator/mp_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
 
-#include <cuopt/linear_programming/io/parser.hpp>
-#include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/mathematical_optimization/io/parser.hpp>
+#include <cuopt/mathematical_optimization/solve.hpp>
 #include <mip_heuristics/presolve/multi_probe.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/solver.cuh>
@@ -42,7 +42,7 @@
 #include <tuple>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 std::vector<std::string> mp_feature_names()
 {
@@ -71,7 +71,7 @@ bp_samples_t run_mp_calibration_samples(const std::string& mps_path,
                                         const std::string& instance_name)
 {
   const raft::handle_t handle_{};
-  auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
+  auto mps_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
   // Leaked on purpose: destroying this after a mip_solver_t exists segfaults in RMM async free
   // (teardown-order issue on newer CUDA). Offline tool with a fixed instance list -> leak is fine.
@@ -263,4 +263,4 @@ bp_samples_t run_mp_calibration_samples(const std::string& mps_path,
   return out;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

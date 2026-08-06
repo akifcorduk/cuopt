@@ -31,7 +31,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Static structural features of a problem, computed once from its CSR offsets.
 struct work_features_t {
@@ -320,4 +320,4 @@ inline double repair_device_work_per_move(const work_features_t& f,
   return w > 0.0 ? w : 0.0;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

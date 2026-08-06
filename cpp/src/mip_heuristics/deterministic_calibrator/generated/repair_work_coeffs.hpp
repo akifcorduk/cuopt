@@ -12,7 +12,7 @@
 
 #include <array>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Saturation hinge: excess = max(0, excess_warp_loads - threshold).
 constexpr double repair_excess_warp_loads_threshold = 32000;
@@ -30,4 +30,4 @@ constexpr std::array<double, 10> repair_work_coeffs = {
   4.64913e-09,  // excess_warp_loads
 };
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

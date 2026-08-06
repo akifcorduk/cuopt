@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Feature vector used by the deterministic work-unit linear model. The model predicts the
 // per-iteration runtime (in seconds, since wups == 1) of a leaf algorithm as a linear combination
@@ -67,4 +67,4 @@ inline std::pair<double, double> row_nnz_mean_var(const std::vector<int>& offset
   return {mean, var};
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

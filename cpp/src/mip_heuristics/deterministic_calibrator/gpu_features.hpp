@@ -15,7 +15,7 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 struct gpu_features_t {
   double mem_bandwidth_gb_s{0.0};  // peak global memory bandwidth (GB/s)
@@ -74,4 +74,4 @@ inline void print_gpu_features(const gpu_features_t& g)
     g.warp_capacity);
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

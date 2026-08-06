@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Predicted per-iteration work (== predicted seconds, since wups == 1) for a leaf algorithm:
 // a plain dot product of the calibrated coefficients with the feature vector. Clamped to a small
@@ -26,4 +26,4 @@ inline double predict_work(const std::vector<double>& coeffs, const std::vector<
   return w > kMinWork ? w : kMinWork;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

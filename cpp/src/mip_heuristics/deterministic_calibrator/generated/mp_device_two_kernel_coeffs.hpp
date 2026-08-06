@@ -11,7 +11,7 @@
 
 #include <array>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 constexpr double mp_device_hinge_k = 0;
 
@@ -31,4 +31,4 @@ constexpr std::array<double, 39> mp_device_update_coeffs = {
   4.31911e-06, 0,           0,
 };
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

@@ -8,8 +8,8 @@
 #include <mip_heuristics/deterministic_calibrator/fj_harness.hpp>
 #include <mip_heuristics/deterministic_calibrator/work_features.hpp>
 
-#include <cuopt/linear_programming/io/parser.hpp>
-#include <cuopt/linear_programming/solve.hpp>
+#include <cuopt/mathematical_optimization/io/parser.hpp>
+#include <cuopt/mathematical_optimization/solve.hpp>
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/solution/solution.cuh>
@@ -27,7 +27,7 @@
 #include <limits>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 std::vector<std::string> fj_feature_names()
 {
@@ -90,7 +90,7 @@ calibration_sample_t run_fj_calibration_sample(const std::string& mps_path,
                                                const std::string& instance_name)
 {
   const raft::handle_t handle_{};
-  auto mps_problem = cuopt::linear_programming::io::read_mps<int, double>(mps_path, false);
+  auto mps_problem = cuopt::mathematical_optimization::io::read_mps<int, double>(mps_path, false);
   handle_.sync_stream();
   auto op_problem = mps_data_model_to_optimization_problem(&handle_, mps_problem);
 
@@ -167,4 +167,4 @@ calibration_sample_t run_fj_calibration_sample(const std::string& mps_path,
   return sample;
 }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

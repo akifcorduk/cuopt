@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // bounds_repair per-move work model. Each repair move: compute_best_shift (chosen constraint row),
 // compute_damages (per candidate column + sort), apply_move, get_ii_violation (full-matrix activity
@@ -25,4 +25,4 @@ std::vector<std::string> repair_feature_names();
 std::vector<calibration_sample_t> run_repair_calibration_sample(const std::string& mps_path,
                                                                 const std::string& instance_name);
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

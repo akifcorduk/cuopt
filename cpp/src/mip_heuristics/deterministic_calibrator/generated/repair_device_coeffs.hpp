@@ -12,42 +12,17 @@
 
 #include <array>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 constexpr double repair_device_hinge_k = 8;
 constexpr bool repair_device_use_hinge = true;
 
 constexpr std::array<double, 30> repair_device_coeffs = {
-  6.05779e-05,
-  0.000152656,
-  9.32671e-09,
-  3.86238e-09,
-  2.71999e-11,
-  1.50347e-06,
-  6.22618e-07,
-  4.38463e-09,
-  1.75722e-09,
-  7.27696e-10,
-  5.12466e-12,
-  0,
-  0,
-  0,
-  4.93422e-10,
-  2.04336e-10,
-  1.43899e-12,
-  3.85846e-06,
-  1.59787e-06,
-  1.12526e-08,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  2.94597e-10,
-  8.63211e-09,
-  2.58126e-09,
-  1.48488e-07,
+  6.05779e-05, 0.000152656, 9.32671e-09, 3.86238e-09, 2.71999e-11, 1.50347e-06,
+  6.22618e-07, 4.38463e-09, 1.75722e-09, 7.27696e-10, 5.12466e-12, 0,
+  0,           0,           4.93422e-10, 2.04336e-10, 1.43899e-12, 3.85846e-06,
+  1.59787e-06, 1.12526e-08, 0,           0,           0,           0,
+  0,           0,           2.94597e-10, 8.63211e-09, 2.58126e-09, 1.48488e-07,
 };
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

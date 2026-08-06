@@ -12,42 +12,17 @@
 
 #include <array>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 constexpr double pdlp_device_hinge_k = 16;
 constexpr bool pdlp_device_use_hinge = true;
 
 constexpr std::array<double, 30> pdlp_device_coeffs = {
-  2.79269e-05,
-  7.03758e-05,
-  2.25704e-09,
-  9.34685e-10,
-  6.58236e-12,
-  7.00348e-10,
-  2.90077e-10,
-  2.04439e-12,
-  5.67813e-09,
-  2.35143e-09,
-  1.65593e-11,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  1.81107e-09,
-  1.28302e-08,
-  0,
-  8.73417e-08,
+  2.79269e-05, 7.03758e-05, 2.25704e-09, 9.34685e-10, 6.58236e-12, 7.00348e-10,
+  2.90077e-10, 2.04439e-12, 5.67813e-09, 2.35143e-09, 1.65593e-11, 0,
+  0,           0,           0,           0,           0,           0,
+  0,           0,           0,           0,           0,           0,
+  0,           0,           1.81107e-09, 1.28302e-08, 0,           8.73417e-08,
 };
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib

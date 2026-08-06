@@ -21,7 +21,7 @@
 
 #include <vector>
 
-namespace cuopt::linear_programming::detail::calib {
+namespace cuopt::mathematical_optimization::mip::calib {
 
 // Build the device-aware regression terms from a leaf's raw count features and the device
 // descriptor. `hinge_excess` is the saturation term max(0, warp_loads - k*warp_capacity) already
@@ -85,4 +85,4 @@ inline std::vector<double> device_terms(const std::vector<double>& raw,
 // Number of device terms produced for `n_raw` raw count features (+ L2 split + serial + hinge).
 inline std::size_t device_term_count(std::size_t n_raw) { return 3 * n_raw + 6; }
 
-}  // namespace cuopt::linear_programming::detail::calib
+}  // namespace cuopt::mathematical_optimization::mip::calib
