@@ -629,9 +629,13 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
       context.ensure_work_features();
       pdlp_settings.iteration_limit = context.pdlp_iters_for_budget(lp_time_limit);
-      pdlp_settings.time_limit      = std::numeric_limits<f_t>::infinity();
+      // The iteration cap is the whole budget here, so nothing else may stop the solve: a wall
+      // deadline would truncate the root LP at a load-dependent step count and shift every
+      // downstream decision. heur_wall_remaining() is infinity under an explicit --work-limit and
+      // only finite in the deterministic wall-cutoff mode, which wants that truncation.
+      pdlp_settings.time_limit = context.heur_wall_remaining();
     }
-    timer_t lp_timer(lp_time_limit);
+    timer_t lp_timer(pdlp_settings.time_limit);
     const auto root_lp_wall_start    = std::chrono::steady_clock::now();
     const double root_lp_work_before = context.gpu_heur_loop.global_work_units_elapsed;
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);

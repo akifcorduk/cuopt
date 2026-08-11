@@ -353,6 +353,9 @@ void local_search_t<i_t, f_t>::generate_fast_solution(solution_t<i_t, f_t>& solu
   fj.settings.time_limit             = std::min(30., timer.remaining_time());
   while (!context.diversity_manager_ptr->check_b_b_preemption() && !timer.check_time_limit()) {
     timer_t constr_prop_timer = timer_t(std::min(timer.remaining_time(), 2.));
+    // The rounding loop derives its repair budget from this timer's elapsed/remaining, so leaving
+    // it on the wall clock makes the number of repair iterations depend on machine speed.
+    context.maybe_work_clock(constr_prop_timer);
     // do constraint prop on lp optimal solution
     constraint_prop.apply_round(solution, 1., constr_prop_timer);
     if (solution.compute_feasibility()) { return; }
@@ -502,6 +505,7 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
   cuopt_func_call(solution.test_variable_bounds(false));
   f_t lp_run_time_after_feasible = std::min(1., timer.remaining_time());
   timer_t bounds_prop_timer      = timer_t(std::min(timer.remaining_time(), 10.));
+  context.maybe_work_clock(bounds_prop_timer);
   bool is_feasible =
     constraint_prop.apply_round(solution, lp_run_time_after_feasible, bounds_prop_timer);
   if (!is_feasible) {
