@@ -2936,6 +2936,7 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
   f_t& last_objective,
   f_t root_relax_objective,
   i_t& cut_pool_size,
+  f_t& previous_cut_change,
   [[maybe_unused]] const std::vector<f_t>& saved_solution) -> cut_pass_result_t
 {
 #ifdef PRINT_FRACTIONAL_INFO
@@ -3017,6 +3018,7 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
     cuts_to_add.row_start[cuts_to_add.m],
     cut_pool.pool_size(),
     cuts_to_add.m + original_lp_.num_rows);
+  cut_pool.drop_cuts();
   lp_settings.log.log = false;
 
   f_t add_cuts_start_time = tic();
@@ -3197,18 +3199,22 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
     return {cut_pass_action_t::RETURN, mip_status_t::OPTIMAL};
   }
 
-  f_t change_in_objective = root_objective_ - last_objective;
-  const f_t factor        = settings_.cut_change_threshold;
-  const f_t min_objective = 1e-3;
-  if (factor > 0.0 &&
-      change_in_objective <= factor * std::max(min_objective, std::abs(root_relax_objective))) {
+  f_t change_in_objective    = root_objective_ - last_objective;
+  const f_t factor           = settings_.cut_change_threshold;
+  const f_t min_objective    = 1e-3;
+  const f_t change_tolerance = factor * std::max(min_objective, std::abs(root_relax_objective));
+  if (factor > 0.0 && change_in_objective <= change_tolerance &&
+      previous_cut_change <= 2.0 * change_tolerance) {
     settings_.log.printf(
-      "Change in objective %.16e is less than 1e-3 of root relax objective %.16e\n",
+      "Change in objective %.16e was less than %.3e of root relax objective %.16e after a "
+      "modest previous cut pass\n",
       change_in_objective,
+      factor,
       root_relax_objective);
     return {cut_pass_action_t::BREAK, mip_status_t::UNSET};
   }
-  last_objective = root_objective_;
+  previous_cut_change = change_in_objective;
+  last_objective      = root_objective_;
   return {cut_pass_action_t::CONTINUE, mip_status_t::UNSET};
 }
 
@@ -3462,6 +3468,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
   f_t cut_generation_start_time = tic();
   i_t cut_pool_size             = 0;
+  f_t previous_cut_change       = std::numeric_limits<f_t>::infinity();
   for (i_t cut_pass = 0; cut_pass < settings_.max_cut_passes; cut_pass++) {
     if (toc(exploration_stats_.start_time) >= settings_.time_limit) {
       solver_status_ = mip_status_t::TIME_LIMIT;
@@ -3510,6 +3517,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                   last_objective,
                                   root_relax_objective,
                                   cut_pool_size,
+                                  previous_cut_change,
                                   saved_solution);
     root_fj_cpu_worker.stop();
 

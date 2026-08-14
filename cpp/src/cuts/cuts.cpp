@@ -1455,7 +1455,20 @@ void cut_pool_t<i_t, f_t>::age_cuts()
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::drop_cuts()
 {
-  // TODO: Implement this
+  // Separators run again at every root pass. Keeping the previous candidates makes duplicate
+  // detection repeatedly compare the same large implied-bound pools, even though the selected
+  // cuts have already been copied into the LP and the remaining candidates were generated for
+  // an obsolete relaxation.
+  cut_storage_ = csr_matrix_t<i_t, f_t>(0, original_vars_, 0);
+  rhs_storage_.clear();
+  cut_age_.clear();
+  cut_type_.clear();
+  cut_distances_.clear();
+  cut_norms_.clear();
+  cut_orthogonality_.clear();
+  cut_scores_.clear();
+  best_cuts_.clear();
+  scored_cuts_ = 0;
 }
 
 enum class flow_cover_bound_side_t : int8_t { UPPER, LOWER };
@@ -1525,16 +1538,16 @@ single_node_flow_arc_t<i_t, f_t> flow_cover_build_arc(const flow_cover_context_t
 }
 
 template <typename i_t, typename f_t>
-void flow_cover_try_add_candidate(const flow_cover_context_t<i_t, f_t>& context,
+bool flow_cover_try_add_candidate(const flow_cover_context_t<i_t, f_t>& context,
                                   const flow_cover_arc_spec_t<i_t, f_t>& spec,
                                   f_t y_star,
                                   std::vector<single_node_flow_candidate_t<i_t, f_t>>& candidates)
 {
   const f_t bound_tol       = context.settings.primal_tol;
   const f_t feasibility_tol = context.settings.primal_tol;
-  if (spec.u < -bound_tol) { return; }
+  if (spec.u < -bound_tol) { return false; }
   const f_t capacity = std::max<f_t>(0.0, spec.u);
-  if (capacity <= feasibility_tol) { return; }
+  if (capacity <= feasibility_tol) { return false; }
 
   single_node_flow_candidate_t<i_t, f_t> candidate;
   candidate.arc                  = flow_cover_build_arc(context,
@@ -1550,6 +1563,7 @@ void flow_cover_try_add_candidate(const flow_cover_context_t<i_t, f_t>& context,
   candidate.distance             = std::abs(spec.active_bound - y_star);
   candidate.absorbs_binary_coeff = spec.absorbs_binary_coeff;
   candidates.push_back(candidate);
+  return true;
 }
 
 template <typename f_t>
@@ -1686,6 +1700,97 @@ flow_cover_generation_t<i_t, f_t>::flow_cover_generation_t(
 }
 
 template <typename i_t, typename f_t>
+void flow_cover_generation_t<i_t, f_t>::prepare_bound_candidates(
+  const simplex::lp_problem_t<i_t, f_t>& lp,
+  const simplex::simplex_solver_settings_t<i_t, f_t>& settings,
+  const variable_bounds_t<i_t, f_t>& variable_bounds,
+  const std::vector<simplex::variable_type_t>& var_types,
+  const std::vector<f_t>& xstar)
+{
+  constexpr f_t coefficient_tol = static_cast<f_t>(1e-6);
+  const f_t max_endpoint_slack  = settings.primal_tol / coefficient_tol;
+  auto is_zero_one_integer      = [&](i_t j) {
+    return var_types[j] == variable_type_t::INTEGER &&
+           std::abs(lp.lower[j]) <= settings.primal_tol &&
+           std::abs(lp.upper[j] - 1.0) <= settings.primal_tol;
+  };
+  auto prepare_side = [&](const std::vector<i_t>& offsets,
+                          const std::vector<i_t>& variables,
+                          const std::vector<f_t>& weights,
+                          const std::vector<f_t>& biases,
+                          std::vector<i_t>& order,
+                          std::vector<f_t>& distances,
+                          std::unordered_map<uint64_t, std::vector<i_t>>& entries_by_controller,
+                          bool upper) {
+    order.resize(variables.size());
+    distances.resize(variables.size());
+    std::iota(order.begin(), order.end(), 0);
+    entries_by_controller.clear();
+    entries_by_controller.reserve(variables.size());
+    const i_t num_cols =
+      std::min<i_t>(static_cast<i_t>(offsets.size()) - 1, static_cast<i_t>(xstar.size()));
+    for (i_t j = 0; j < num_cols; j++) {
+      const i_t start = offsets[j];
+      const i_t end   = offsets[j + 1];
+      for (i_t p = start; p < end; p++) {
+        const f_t active_bound = weights[p] * xstar[variables[p]] + biases[p];
+        distances[p] = std::isfinite(active_bound) ? std::abs(active_bound - xstar[j]) : inf;
+      }
+      std::sort(order.begin() + start, order.begin() + end, [&](i_t a, i_t b) {
+        if (distances[a] != distances[b]) { return distances[a] < distances[b]; }
+        return a < b;
+      });
+      for (i_t position = start; position < end; position++) {
+        const i_t p = order[position];
+        if (!is_zero_one_integer(variables[p]) || !std::isfinite(weights[p]) ||
+            !std::isfinite(biases[p])) {
+          continue;
+        }
+        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(j)) << 32) |
+                             static_cast<uint32_t>(variables[p]);
+        entries_by_controller[key].push_back(p);
+      }
+      // Every continuous row coefficient has magnitude greater than coefficient_tol. Therefore
+      // primal_tol / coefficient_tol is a safe upper bound on its endpoint slack. Move zero-direct
+      // candidates that cannot satisfy the binary domain, capacity sign, or endpoint condition to
+      // the end, so a failed search does not rescan them for every row.
+      for (i_t p = start; p < end; p++) {
+        const bool invalid_controller = !is_zero_one_integer(variables[p]);
+        const bool invalid_upper =
+          upper && (weights[p] <= 0.0 || biases[p] > lp.lower[j] + max_endpoint_slack);
+        const bool invalid_lower =
+          !upper && (weights[p] >= 0.0 || biases[p] < lp.upper[j] - max_endpoint_slack);
+        if (invalid_controller || invalid_upper || invalid_lower) { distances[p] = inf; }
+      }
+      std::sort(order.begin() + start, order.begin() + end, [&](i_t a, i_t b) {
+        if (distances[a] != distances[b]) { return distances[a] < distances[b]; }
+        return a < b;
+      });
+    }
+  };
+
+  zero_direct_bound_cache_.clear();
+  direct_bound_cache_.clear();
+
+  prepare_side(variable_bounds.upper_offsets,
+               variable_bounds.upper_variables,
+               variable_bounds.upper_weights,
+               variable_bounds.upper_biases,
+               upper_bound_candidate_order_,
+               upper_bound_candidate_distance_,
+               upper_bound_entries_by_controller_,
+               true);
+  prepare_side(variable_bounds.lower_offsets,
+               variable_bounds.lower_variables,
+               variable_bounds.lower_weights,
+               variable_bounds.lower_biases,
+               lower_bound_candidate_order_,
+               lower_bound_candidate_distance_,
+               lower_bound_entries_by_controller_,
+               false);
+}
+
+template <typename i_t, typename f_t>
 bool flow_cover_generation_t<i_t, f_t>::normalize_row_side(
   const flow_cover_context_t<i_t, f_t>& context,
   const flow_cover_row_t<i_t>& flow_cover_row,
@@ -1796,48 +1901,95 @@ bool flow_cover_generation_t<i_t, f_t>::build_single_node_flow_relaxation(
     const i_t end      = use_upper_bound ? context.variable_bounds.upper_offsets[j + 1]
                                          : context.variable_bounds.lower_offsets[j + 1];
     const f_t endpoint = use_upper_bound ? lower_j : upper_j;
+    const auto& candidate_order =
+      use_upper_bound ? upper_bound_candidate_order_ : lower_bound_candidate_order_;
+    const auto& candidate_distance =
+      use_upper_bound ? upper_bound_candidate_distance_ : lower_bound_candidate_distance_;
+    const auto& bound_variables = use_upper_bound ? context.variable_bounds.upper_variables
+                                                  : context.variable_bounds.lower_variables;
+    const auto& bound_weights   = use_upper_bound ? context.variable_bounds.upper_weights
+                                                  : context.variable_bounds.lower_weights;
+    const auto& bound_biases =
+      use_upper_bound ? context.variable_bounds.upper_biases : context.variable_bounds.lower_biases;
+    const auto& entries_by_controller =
+      use_upper_bound ? upper_bound_entries_by_controller_ : lower_bound_entries_by_controller_;
 
-    for (i_t p = start; p < end; p++) {
-      const i_t x_col = use_upper_bound ? context.variable_bounds.upper_variables[p]
-                                        : context.variable_bounds.lower_variables[p];
-      if (!flow_cover_is_zero_one_integer_variable(context, x_col)) { continue; }
-      const f_t gamma = use_upper_bound ? context.variable_bounds.upper_weights[p]
-                                        : context.variable_bounds.lower_weights[p];
-      const f_t alpha = use_upper_bound ? context.variable_bounds.upper_biases[p]
-                                        : context.variable_bounds.lower_biases[p];
-      if (!std::isfinite(gamma) || !std::isfinite(alpha)) { continue; }
+    auto try_bound_candidate = [&](i_t p, f_t direct_coeff) {
+      const i_t x_col = bound_variables[p];
+      if (!flow_cover_is_zero_one_integer_variable(context, x_col)) { return false; }
+      const f_t gamma = bound_weights[p];
+      const f_t alpha = bound_biases[p];
+      if (!std::isfinite(gamma) || !std::isfinite(alpha)) { return false; }
 
-      const f_t direct_coeff            = scratch.binary_coefficients_touched[x_col]
-                                            ? scratch.binary_coefficients[x_col]
-                                            : static_cast<f_t>(0.0);
-      const std::array<f_t, 2> a_values = {direct_coeff, 0.0};
-      const i_t num_a_values            = std::abs(direct_coeff) > coefficient_tol ? 2 : 1;
-      for (i_t h = 0; h < num_a_values; h++) {
-        const f_t a               = a_values[h];
-        const bool in_n2          = use_upper_bound ? c < 0.0 : c > 0.0;
-        const f_t signed_capacity = c * gamma + a;
-        const f_t endpoint_term   = c * (endpoint - alpha);
-        const bool valid_endpoint =
-          in_n2 ? (endpoint_term <= bound_tol && endpoint_term + a <= bound_tol &&
-                   signed_capacity <= bound_tol)
-                : (endpoint_term >= -bound_tol && endpoint_term + a >= -bound_tol &&
-                   signed_capacity >= -bound_tol);
-        if (!valid_endpoint) { continue; }
+      const bool in_n2          = use_upper_bound ? c < 0.0 : c > 0.0;
+      const f_t signed_capacity = c * gamma + direct_coeff;
+      const f_t endpoint_term   = c * (endpoint - alpha);
+      const bool valid_endpoint =
+        in_n2 ? (endpoint_term <= bound_tol && endpoint_term + direct_coeff <= bound_tol &&
+                 signed_capacity <= bound_tol)
+              : (endpoint_term >= -bound_tol && endpoint_term + direct_coeff >= -bound_tol &&
+                 signed_capacity >= -bound_tol);
+      if (!valid_endpoint) { return false; }
 
-        flow_cover_arc_spec_t<i_t, f_t> spec;
-        spec.u                    = in_n2 ? -signed_capacity : signed_capacity;
-        spec.in_n2                = in_n2;
-        spec.x_col                = x_col;
-        spec.fixed_x              = 0.0;
-        spec.y_const              = in_n2 ? c * alpha : -c * alpha;
-        spec.y_col                = j;
-        spec.y_coeff              = in_n2 ? -c : c;
-        spec.y_x_coeff            = in_n2 ? -a : a;
-        spec.b_shift              = c * alpha;
-        spec.active_bound         = gamma * context.xstar[x_col] + alpha;
-        spec.absorbs_binary_coeff = std::abs(a) > coefficient_tol;
-        flow_cover_try_add_candidate(context, spec, context.xstar[j], scratch.candidates);
+      flow_cover_arc_spec_t<i_t, f_t> spec;
+      spec.u                    = in_n2 ? -signed_capacity : signed_capacity;
+      spec.in_n2                = in_n2;
+      spec.x_col                = x_col;
+      spec.fixed_x              = 0.0;
+      spec.y_const              = in_n2 ? c * alpha : -c * alpha;
+      spec.y_col                = j;
+      spec.y_coeff              = in_n2 ? -c : c;
+      spec.y_x_coeff            = in_n2 ? -direct_coeff : direct_coeff;
+      spec.b_shift              = c * alpha;
+      spec.active_bound         = gamma * context.xstar[x_col] + alpha;
+      spec.absorbs_binary_coeff = std::abs(direct_coeff) > coefficient_tol;
+      return flow_cover_try_add_candidate(context, spec, context.xstar[j], scratch.candidates);
+    };
+
+    // Direct-coefficient candidates only exist for binary controllers present in this row. Use the
+    // inverse (continuous variable, controller) index instead of rescanning every implied bound.
+    for (i_t x_col : scratch.binary_columns) {
+      const f_t direct_coeff = scratch.binary_coefficients[x_col];
+      if (std::abs(direct_coeff) <= coefficient_tol) { continue; }
+      const uint64_t controller_key =
+        (static_cast<uint64_t>(static_cast<uint32_t>(j)) << 32) | static_cast<uint32_t>(x_col);
+      const flow_cover_direct_bound_cache_key_t<i_t, f_t> direct_cache_key{
+        j, c, use_upper_bound, x_col, direct_coeff};
+      auto [direct_cache_it, inserted] = direct_bound_cache_.try_emplace(direct_cache_key);
+      if (inserted) {
+        const auto entries_it = entries_by_controller.find(controller_key);
+        if (entries_it != entries_by_controller.end()) {
+          for (i_t p : entries_it->second) {
+            if (try_bound_candidate(p, direct_coeff)) {
+              direct_cache_it->second.found     = true;
+              direct_cache_it->second.candidate = scratch.candidates.back();
+              scratch.candidates.pop_back();
+              break;
+            }
+          }
+        }
       }
+      if (direct_cache_it->second.found) {
+        scratch.candidates.push_back(direct_cache_it->second.candidate);
+      }
+    }
+
+    // The best a=0 candidate depends only on (variable, coefficient, side) at this LP point, so
+    // cache both hits and misses across row sides that reuse the same continuous term.
+    const flow_cover_bound_cache_key_t<i_t, f_t> cache_key{j, c, use_upper_bound};
+    auto [cache_it, inserted] = zero_direct_bound_cache_.try_emplace(cache_key);
+    if (inserted) {
+      for (i_t position = start; position < end; position++) {
+        const i_t p = candidate_order[position];
+        if (!std::isfinite(candidate_distance[p])) { break; }
+        if (try_bound_candidate(p, 0.0)) {
+          cache_it->second.found     = true;
+          cache_it->second.candidate = scratch.candidates.back();
+          break;
+        }
+      }
+    } else if (cache_it->second.found) {
+      scratch.candidates.push_back(cache_it->second.candidate);
     }
   };
 
@@ -2030,10 +2182,6 @@ flow_cover_generation_t<i_t, f_t>::evaluate_c_mir_flow_cover_inequality(
 
   auto add_ubar_candidate = [&](f_t candidate) {
     if (candidate <= lambda + lambda_tol || !std::isfinite(candidate)) { return; }
-    for (f_t existing : scratch.ubar_candidates) {
-      const f_t duplicate_tol = static_cast<f_t>(1e-8) * std::max<f_t>(1.0, std::abs(candidate));
-      if (std::abs(existing - candidate) <= duplicate_tol) { return; }
-    }
     scratch.ubar_candidates.push_back(candidate);
   };
 
@@ -2054,6 +2202,21 @@ flow_cover_generation_t<i_t, f_t>::evaluate_c_mir_flow_cover_inequality(
   add_ubar_candidate(max_c1);
   add_ubar_candidate(max_u_ge_lambda + 1.0);
   add_ubar_candidate(lambda + 1.0);
+
+  // A row can have thousands of arcs. Checking every new capacity against every capacity already
+  // seen makes this setup quadratic, even though the actual flow-cover evaluation below is
+  // linear in the number of unique capacities. Sort once and compact adjacent near-duplicates.
+  std::sort(scratch.ubar_candidates.begin(), scratch.ubar_candidates.end());
+  size_t num_unique_candidates = 0;
+  for (const f_t candidate : scratch.ubar_candidates) {
+    if (num_unique_candidates > 0) {
+      const f_t previous      = scratch.ubar_candidates[num_unique_candidates - 1];
+      const f_t duplicate_tol = static_cast<f_t>(1e-8) * std::max<f_t>(1.0, std::abs(candidate));
+      if (std::abs(previous - candidate) <= duplicate_tol) { continue; }
+    }
+    scratch.ubar_candidates[num_unique_candidates++] = candidate;
+  }
+  scratch.ubar_candidates.resize(num_unique_candidates);
 
   flow_cover_evaluation_t<f_t> best{0.0, 0.0};
   if (scratch.ubar_candidates.empty()) { return best; }
@@ -3675,6 +3838,8 @@ void cut_generation_t<i_t, f_t>::generate_flow_cover_cuts(
   f_t start_time)
 {
   if (flow_cover_generation_.num_constraints() > 0) {
+    flow_cover_generation_.prepare_bound_candidates(
+      lp, settings, variable_bounds, var_types, xstar);
     for (const auto& flow_cover_row : flow_cover_generation_.get_constraints()) {
       if (toc(start_time) >= settings.time_limit) { return; }
       inequality_t<i_t, f_t> cut(lp.num_cols);

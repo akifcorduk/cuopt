@@ -403,6 +403,63 @@ struct single_node_flow_candidate_t {
 };
 
 template <typename i_t, typename f_t>
+struct flow_cover_bound_cache_key_t {
+  i_t variable;
+  f_t coefficient;
+  bool upper;
+
+  bool operator==(const flow_cover_bound_cache_key_t& other) const
+  {
+    return variable == other.variable && coefficient == other.coefficient && upper == other.upper;
+  }
+};
+
+template <typename i_t, typename f_t>
+struct flow_cover_bound_cache_key_hash_t {
+  std::size_t operator()(const flow_cover_bound_cache_key_t<i_t, f_t>& key) const
+  {
+    std::size_t seed = std::hash<i_t>{}(key.variable);
+    seed ^= std::hash<f_t>{}(key.coefficient) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<bool>{}(key.upper) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    return seed;
+  }
+};
+
+template <typename i_t, typename f_t>
+struct flow_cover_direct_bound_cache_key_t {
+  i_t variable;
+  f_t coefficient;
+  bool upper;
+  i_t controller;
+  f_t direct_coefficient;
+
+  bool operator==(const flow_cover_direct_bound_cache_key_t& other) const
+  {
+    return variable == other.variable && coefficient == other.coefficient && upper == other.upper &&
+           controller == other.controller && direct_coefficient == other.direct_coefficient;
+  }
+};
+
+template <typename i_t, typename f_t>
+struct flow_cover_direct_bound_cache_key_hash_t {
+  std::size_t operator()(const flow_cover_direct_bound_cache_key_t<i_t, f_t>& key) const
+  {
+    std::size_t seed = std::hash<i_t>{}(key.variable);
+    seed ^= std::hash<f_t>{}(key.coefficient) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<bool>{}(key.upper) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<i_t>{}(key.controller) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<f_t>{}(key.direct_coefficient) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    return seed;
+  }
+};
+
+template <typename i_t, typename f_t>
+struct flow_cover_bound_cache_value_t {
+  bool found{false};
+  single_node_flow_candidate_t<i_t, f_t> candidate{};
+};
+
+template <typename i_t, typename f_t>
 struct flow_cover_arc_spec_t {
   f_t u;
   bool in_n2;
@@ -455,6 +512,11 @@ class flow_cover_generation_t {
   {
     return flow_cover_constraints_;
   }
+  void prepare_bound_candidates(const simplex::lp_problem_t<i_t, f_t>& lp,
+                                const simplex::simplex_solver_settings_t<i_t, f_t>& settings,
+                                const variable_bounds_t<i_t, f_t>& variable_bounds,
+                                const std::vector<simplex::variable_type_t>& var_types,
+                                const std::vector<f_t>& xstar);
 
  private:
   bool normalize_row_side(const flow_cover_context_t<i_t, f_t>& context,
@@ -554,6 +616,20 @@ class flow_cover_generation_t {
   std::vector<f_t> lhs_coefficients;
   std::vector<uint8_t> lhs_coefficients_touched;
   std::vector<i_t> touched_lhs_coefficients;
+  std::vector<i_t> upper_bound_candidate_order_;
+  std::vector<i_t> lower_bound_candidate_order_;
+  std::vector<f_t> upper_bound_candidate_distance_;
+  std::vector<f_t> lower_bound_candidate_distance_;
+  std::unordered_map<uint64_t, std::vector<i_t>> upper_bound_entries_by_controller_;
+  std::unordered_map<uint64_t, std::vector<i_t>> lower_bound_entries_by_controller_;
+  std::unordered_map<flow_cover_bound_cache_key_t<i_t, f_t>,
+                     flow_cover_bound_cache_value_t<i_t, f_t>,
+                     flow_cover_bound_cache_key_hash_t<i_t, f_t>>
+    zero_direct_bound_cache_;
+  std::unordered_map<flow_cover_direct_bound_cache_key_t<i_t, f_t>,
+                     flow_cover_bound_cache_value_t<i_t, f_t>,
+                     flow_cover_direct_bound_cache_key_hash_t<i_t, f_t>>
+    direct_bound_cache_;
 };
 
 template <typename i_t, typename f_t>
