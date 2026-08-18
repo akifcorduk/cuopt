@@ -714,17 +714,16 @@ void set_presolve_methods(
 
 template <typename i_t, typename f_t>
 void set_presolve_options(papilo::Presolve<f_t>& presolver,
-                          problem_category_t category,
-                          f_t absolute_tolerance,
+                          [[maybe_unused]] problem_category_t category,
+                          [[maybe_unused]] f_t absolute_tolerance,
                           f_t time_limit,
                           bool dual_postsolve,
                           i_t num_cpu_threads,
                           i_t max_rounds)
 {
-  presolver.getPresolveOptions().tlim       = time_limit;
-  presolver.getPresolveOptions().threads    = num_cpu_threads;  //  user setting or  0 (automatic)
-  presolver.getPresolveOptions().useabsfeas = false;
-  presolver.getPresolveOptions().feastol    = absolute_tolerance;
+  presolver.getPresolveOptions().tlim    = time_limit;
+  presolver.getPresolveOptions().threads = num_cpu_threads;  //  user setting or  0 (automatic)
+  presolver.getPresolveOptions().feastol = 1e-5;
   if (max_rounds > 0) { presolver.getPresolveOptions().maxrounds = max_rounds; }
   if (dual_postsolve) {
     presolver.getPresolveOptions().componentsmaxint = -1;
