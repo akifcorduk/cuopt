@@ -44,7 +44,6 @@ TEST(problem, find_implied_integers)
     cuopt::mathematical_optimization::presolver_t::Papilo,
     false,
     1e-6,
-    1e-12,
     20,
     1);
   ASSERT_NE(result.status, mip::third_party_presolve_status_t::INFEASIBLE);

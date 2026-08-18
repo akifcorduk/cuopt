@@ -522,7 +522,6 @@ TEST_P(dual_crush_round_trip, kkt_check)
                                                          presolver_t::Papilo,
                                                          /*dual_postsolve=*/true,
                                                          /*abs_tol=*/1e-6,
-                                                         /*rel_tol=*/1e-9,
                                                          /*time_limit=*/60.0);
   ASSERT_TRUE(result.status == mip::third_party_presolve_status_t::REDUCED ||
               result.status == mip::third_party_presolve_status_t::UNCHANGED);
@@ -780,7 +779,6 @@ TEST_P(crush_warmstart, round_trip)
                                                          presolver_t::Papilo,
                                                          /*dual_postsolve=*/true,
                                                          /*abs_tol=*/1e-6,
-                                                         /*rel_tol=*/1e-9,
                                                          /*time_limit=*/60.0);
   ASSERT_TRUE(result.status == mip::third_party_presolve_status_t::REDUCED ||
               result.status == mip::third_party_presolve_status_t::UNCHANGED);

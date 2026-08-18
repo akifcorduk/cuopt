@@ -577,7 +577,6 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         settings.presolver,
         dual_postsolve,
         settings.tolerances.absolute_tolerance,
-        settings.tolerances.relative_tolerance,
         presolve_time_limit,
         settings.num_cpu_threads,
         papilo_budget.papilo_max_rounds,

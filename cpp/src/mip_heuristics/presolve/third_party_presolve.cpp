@@ -716,15 +716,15 @@ template <typename i_t, typename f_t>
 void set_presolve_options(papilo::Presolve<f_t>& presolver,
                           problem_category_t category,
                           f_t absolute_tolerance,
-                          f_t relative_tolerance,
                           f_t time_limit,
                           bool dual_postsolve,
                           i_t num_cpu_threads,
                           i_t max_rounds)
 {
-  presolver.getPresolveOptions().tlim    = time_limit;
-  presolver.getPresolveOptions().threads = num_cpu_threads;  //  user setting or  0 (automatic)
-  presolver.getPresolveOptions().feastol = absolute_tolerance;
+  presolver.getPresolveOptions().tlim       = time_limit;
+  presolver.getPresolveOptions().threads    = num_cpu_threads;  //  user setting or  0 (automatic)
+  presolver.getPresolveOptions().useabsfeas = false;
+  presolver.getPresolveOptions().feastol    = absolute_tolerance;
   if (max_rounds > 0) { presolver.getPresolveOptions().maxrounds = max_rounds; }
   if (dual_postsolve) {
     presolver.getPresolveOptions().componentsmaxint = -1;
@@ -843,7 +843,6 @@ third_party_presolve_status_t third_party_presolve_t<i_t, f_t>::apply_papilo(
   problem_category_t category,
   bool dual_postsolve,
   f_t absolute_tolerance,
-  f_t relative_tolerance,
   double time_limit,
   i_t num_cpu_threads,
   i_t max_rounds,
@@ -868,7 +867,6 @@ third_party_presolve_status_t third_party_presolve_t<i_t, f_t>::apply_papilo(
   set_presolve_options<i_t, f_t>(papilo_presolver,
                                  category,
                                  absolute_tolerance,
-                                 relative_tolerance,
                                  time_limit,
                                  dual_postsolve,
                                  num_cpu_threads,
@@ -954,7 +952,6 @@ third_party_presolve_t<i_t, f_t>::apply_presolve_from_op_problem(
   cuopt::mathematical_optimization::presolver_t presolver,
   bool dual_postsolve,
   f_t absolute_tolerance,
-  f_t relative_tolerance,
   double time_limit,
   i_t num_cpu_threads,
   i_t max_rounds,
@@ -976,7 +973,6 @@ third_party_presolve_t<i_t, f_t>::apply_presolve_from_op_problem(
                                                presolver,
                                                dual_postsolve,
                                                absolute_tolerance,
-                                               relative_tolerance,
                                                time_limit,
                                                num_cpu_threads,
                                                max_rounds,
@@ -1018,7 +1014,6 @@ third_party_presolve_t<i_t, f_t>::apply_presolve_from_mps_data(
   cuopt::mathematical_optimization::presolver_t presolver,
   bool dual_postsolve,
   f_t absolute_tolerance,
-  f_t relative_tolerance,
   double time_limit,
   i_t num_cpu_threads,
   i_t max_rounds,
@@ -1070,7 +1065,6 @@ third_party_presolve_t<i_t, f_t>::apply_presolve_from_mps_data(
                                category,
                                dual_postsolve,
                                absolute_tolerance,
-                               relative_tolerance,
                                time_limit,
                                num_cpu_threads,
                                max_rounds,
@@ -1134,7 +1128,6 @@ third_party_presolve_status_t third_party_presolve_t<i_t, f_t>::apply_to_subprob
   set_presolve_options<i_t, f_t>(papilo_presolver,
                                  problem_category_t::MIP,
                                  settings.primal_tol,
-                                 settings.dual_tol,
                                  time_limit,
                                  dual_postsolve,
                                  num_threads,

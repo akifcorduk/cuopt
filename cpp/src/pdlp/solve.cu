@@ -2068,7 +2068,6 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
         settings.presolver,
         settings.dual_postsolve,
         settings.tolerances.absolute_primal_tolerance,
-        settings.tolerances.relative_primal_tolerance,
         presolve_time_limit);
       if (auto terminal = terminal_solution_from_presolve_status<i_t, f_t>(
             result->status, op_problem.get_handle_ptr()->get_stream())) {
@@ -2525,7 +2524,6 @@ optimization_problem_solution_t<i_t, f_t> solve_lp_distributed_from_mps(
       settings_resolved.presolver,
       settings_resolved.dual_postsolve,
       settings_resolved.tolerances.absolute_primal_tolerance,
-      settings_resolved.tolerances.relative_primal_tolerance,
       presolve_time_limit);
 
     if (auto terminal = terminal_solution_from_presolve_status<i_t, f_t>(

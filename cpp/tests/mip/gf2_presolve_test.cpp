@@ -349,7 +349,7 @@ mip::third_party_presolve_device_result_t<int, double> run_gf2_presolve(std::str
   auto presolver      = std::make_unique<mip::third_party_presolve_t<int, double>>();
   presolver->set_reduction_allowlist(std::unordered_set<std::string>{"gf2presolve"});
   return presolver->apply_presolve_from_op_problem(
-    op_problem, problem_category_t::MIP, presolver_t::Papilo, false, 1e-6, 1e-12, 20, 1);
+    op_problem, problem_category_t::MIP, presolver_t::Papilo, false, 1e-6, 20, 1);
 }
 
 }  // namespace
@@ -435,7 +435,7 @@ TEST(gf2_presolve, uses_compact_constraint_indices)
   auto presolver = std::make_unique<mip::third_party_presolve_t<int, double>>();
   presolver->set_reduction_allowlist(std::unordered_set<std::string>{"gf2presolve"});
   auto result = presolver->apply_presolve_from_op_problem(
-    problem, problem_category_t::MIP, presolver_t::Papilo, false, 1e-6, 1e-12, 20, 1);
+    problem, problem_category_t::MIP, presolver_t::Papilo, false, 1e-6, 20, 1);
 
   EXPECT_EQ(result.status, mip::third_party_presolve_status_t::REDUCED);
 }
