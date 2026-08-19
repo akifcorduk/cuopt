@@ -3018,7 +3018,6 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
     cuts_to_add.row_start[cuts_to_add.m],
     cut_pool.pool_size(),
     cuts_to_add.m + original_lp_.num_rows);
-  cut_pool.drop_cuts();
   lp_settings.log.log = false;
 
   f_t add_cuts_start_time = tic();

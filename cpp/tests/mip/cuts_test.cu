@@ -983,6 +983,51 @@ TEST(cuts, test_duplicate_cuts_detection)
   cut_pool.check_for_duplicate_cuts();
 }
 
+TEST(cuts, cut_pool_ages_unselected_cuts)
+{
+  simplex::simplex_solver_settings_t<int, double> settings;
+  mip::cut_pool_t<int, double> cut_pool(3, settings);
+
+  mip::inequality_t<int, double> selected_cut;
+  selected_cut.push_back(0, 1.0);
+  selected_cut.rhs = 1.0;
+  cut_pool.add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, selected_cut);
+
+  mip::inequality_t<int, double> inactive_cut_1;
+  inactive_cut_1.push_back(1, 1.0);
+  inactive_cut_1.rhs = -1.0;
+  cut_pool.add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, inactive_cut_1);
+
+  mip::inequality_t<int, double> inactive_cut_2;
+  inactive_cut_2.push_back(2, 1.0);
+  inactive_cut_2.rhs = -2.0;
+  cut_pool.add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, inactive_cut_2);
+
+  std::vector<double> relaxation(3, 0.0);
+  for (int pass = 0; pass < 3; pass++) {
+    csr_matrix_t<int, double> cuts(0, 3, 0);
+    std::vector<double> rhs;
+    std::vector<mip::cut_type_t> types;
+    cut_pool.score_cuts(relaxation);
+    EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 1);
+  }
+
+  EXPECT_EQ(cut_pool.pool_size(), 1);
+
+  // Once the surviving cut is no longer violated, it should age out too. A zero-distance cut can
+  // appear in the scoring permutation, but it was not returned to the LP and must not be refreshed.
+  relaxation[0] = 2.0;
+  for (int pass = 0; pass < 3; pass++) {
+    csr_matrix_t<int, double> cuts(0, 3, 0);
+    std::vector<double> rhs;
+    std::vector<mip::cut_type_t> types;
+    cut_pool.score_cuts(relaxation);
+    EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 0);
+  }
+
+  EXPECT_EQ(cut_pool.pool_size(), 0);
+}
+
 TEST(cuts, clique_phase1_smoke_conflict_graph_edges)
 {
   const raft::handle_t handle{};
