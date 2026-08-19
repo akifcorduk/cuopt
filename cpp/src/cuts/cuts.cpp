@@ -1462,21 +1462,43 @@ template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
 {
   const i_t pool_size = cut_storage_.m;
-  std::vector<char> selected(pool_size, 0);
+  std::vector<char> consumed(pool_size, 0);
+  i_t num_consumed = 0;
   for (const i_t cut : best_cuts_) {
-    if (cut_distances_[cut] > min_cut_distance_) { selected[cut] = 1; }
+    if (cut_distances_[cut] > min_cut_distance_) {
+      consumed[cut] = 1;
+      num_consumed++;
+    }
   }
+
+  // A separator can create a large transient batch even when normal aging keeps the pool small.
+  // Measure pressure using the size baseline aging would retain, so acceleration responds only to
+  // persistent candidates and not to one-pass generation bursts.
+  i_t baseline_retained_size = 0;
+  for (i_t i = 0; i < pool_size; i++) {
+    const i_t baseline_age = consumed[i] ? 0 : cut_age_[i] + 1;
+    baseline_retained_size += baseline_age <= max_cut_age_;
+  }
+  constexpr i_t material_selection_size = max_selected_cuts_ / 20;
+  const bool pool_under_pressure =
+    baseline_retained_size > max_selected_cuts_ && num_consumed >= material_selection_size;
 
   std::vector<i_t> retained;
   retained.reserve(pool_size);
   std::vector<i_t> cuts_to_remove(pool_size, 0);
   for (i_t i = 0; i < pool_size; i++) {
-    if (selected[i]) {
-      // Selection is the cut-pool equivalent of activity: the cut was useful at this relaxation.
-      cut_age_[i] = 0;
-    } else {
-      cut_age_[i]++;
+    if (consumed[i]) {
+      // The caller will copy this cut into the LP. Under pool pressure, give its candidate copy one
+      // grace pass for LP-row aging instead of restarting its full lifetime. Small pools keep the
+      // longer baseline grace period because pruning them has negligible selection cost.
+      cut_age_[i] = pool_under_pressure ? max_cut_age_ : 0;
+      retained.push_back(i);
+      continue;
     }
+    // Unselected candidates age even while violated. They remain available for several passes,
+    // which lets the relaxation move enough for a previously parallel cut to become useful, but
+    // prevents permanently excluded cuts from occupying the pool indefinitely.
+    cut_age_[i]++;
     if (cut_age_[i] <= max_cut_age_) {
       retained.push_back(i);
     } else {
@@ -1485,11 +1507,11 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
   }
 
   if (retained.size() > static_cast<size_t>(max_cut_pool_size_)) {
-    // Keep every selected cut, then favor recent and efficacious alternatives. This preserves
-    // candidates that can become useful at a later relaxation without allowing a large separator
-    // (notably implied bounds) to make duplicate detection grow on every pass.
+    // Favor recent and efficacious alternatives. This preserves candidates that can become useful
+    // at a later relaxation without allowing a large separator (notably implied bounds) to make
+    // duplicate detection grow on every pass.
     std::sort(retained.begin(), retained.end(), [&](i_t lhs, i_t rhs) {
-      if (selected[lhs] != selected[rhs]) { return selected[lhs] > selected[rhs]; }
+      if (consumed[lhs] != consumed[rhs]) { return consumed[lhs] > consumed[rhs]; }
       if (cut_age_[lhs] != cut_age_[rhs]) { return cut_age_[lhs] < cut_age_[rhs]; }
       if (cut_distances_[lhs] != cut_distances_[rhs]) {
         return cut_distances_[lhs] > cut_distances_[rhs];
