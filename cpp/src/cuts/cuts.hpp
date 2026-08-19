@@ -328,10 +328,6 @@ class cut_pool_t {
                     std::vector<f_t>& best_rhs,
                     std::vector<cut_type_t>& best_cut_types);
 
-  void age_cuts();
-
-  void drop_cuts();
-
   i_t pool_size() const { return cut_storage_.m; }
 
   void print_cutpool_types() { print_cut_types("In cut pool", cut_type_, settings_); }
@@ -342,6 +338,8 @@ class cut_pool_t {
   f_t cut_distance(i_t row, const std::vector<f_t>& x, f_t& cut_violation, f_t& cut_norm);
   f_t cut_density(i_t row);
   f_t cut_orthogonality(i_t i, i_t j);
+  void age_and_prune_cuts();
+  void remove_marked_cuts(std::vector<i_t>& cuts_to_remove);
 
   i_t original_vars_;
   const simplex::simplex_solver_settings_t<i_t, f_t>& settings_;
@@ -358,6 +356,9 @@ class cut_pool_t {
   std::vector<f_t> cut_scores_;
   std::vector<i_t> best_cuts_;
   const f_t min_cut_distance_{1e-4};
+  static constexpr i_t max_selected_cuts_{2000};
+  static constexpr i_t max_cut_pool_size_{2 * max_selected_cuts_};
+  static constexpr i_t max_cut_age_{2};
 };
 
 template <typename i_t, typename f_t>

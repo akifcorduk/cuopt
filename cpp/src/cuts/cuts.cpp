@@ -1338,21 +1338,7 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
 
   if (num_cuts_to_remove > 0) {
     settings_.log.debug("Removing %d duplicate cuts\n", num_cuts_to_remove);
-    csr_matrix_t<i_t, f_t> new_cut_storage(0, 0, 0);
-    cut_storage_.remove_rows(cuts_to_remove, new_cut_storage);
-    cut_storage_ = new_cut_storage;
-    i_t write    = 0;
-    for (i_t i = 0; i < m; i++) {
-      if (cuts_to_remove[i] == 0) {
-        rhs_storage_[write] = rhs_storage_[i];
-        cut_type_[write]    = cut_type_[i];
-        cut_age_[write]     = cut_age_[i];
-        write++;
-      }
-    }
-    rhs_storage_.resize(write);
-    cut_type_.resize(write);
-    cut_age_.resize(write);
+    remove_marked_cuts(cuts_to_remove);
   }
 }
 
@@ -1381,9 +1367,8 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
   std::vector<i_t> sorted_indices;
   best_score_last_permutation(cut_distances_, sorted_indices);
 
-  const i_t max_cuts          = 2000;
   const f_t min_orthogonality = settings_.cut_min_orthogonality;
-  best_cuts_.reserve(std::min(max_cuts, cut_storage_.m));
+  best_cuts_.reserve(std::min(max_selected_cuts_, cut_storage_.m));
   best_cuts_.clear();
   scored_cuts_ = 0;
 
@@ -1394,7 +1379,7 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
     scored_cuts_++;
   }
 
-  while (scored_cuts_ < max_cuts && !sorted_indices.empty()) {
+  while (scored_cuts_ < max_selected_cuts_ && !sorted_indices.empty()) {
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
 
@@ -1439,36 +1424,89 @@ i_t cut_pool_t<i_t, f_t>::get_best_cuts(csr_matrix_t<i_t, f_t>& best_cuts,
     best_cut_types.push_back(cut_type_[i]);
   }
 
-  age_cuts();
+  age_and_prune_cuts();
 
   return static_cast<i_t>(best_rhs.size());
 }
 
 template <typename i_t, typename f_t>
-void cut_pool_t<i_t, f_t>::age_cuts()
+void cut_pool_t<i_t, f_t>::remove_marked_cuts(std::vector<i_t>& cuts_to_remove)
 {
-  for (i_t i = 0; i < cut_age_.size(); i++) {
-    cut_age_[i]++;
-  }
-}
+  const i_t old_pool_size = cut_storage_.m;
+  csr_matrix_t<i_t, f_t> new_cut_storage(0, 0, 0);
+  cut_storage_.remove_rows(cuts_to_remove, new_cut_storage);
+  cut_storage_ = std::move(new_cut_storage);
 
-template <typename i_t, typename f_t>
-void cut_pool_t<i_t, f_t>::drop_cuts()
-{
-  // Separators run again at every root pass. Keeping the previous candidates makes duplicate
-  // detection repeatedly compare the same large implied-bound pools, even though the selected
-  // cuts have already been copied into the LP and the remaining candidates were generated for
-  // an obsolete relaxation.
-  cut_storage_ = csr_matrix_t<i_t, f_t>(0, original_vars_, 0);
-  rhs_storage_.clear();
-  cut_age_.clear();
-  cut_type_.clear();
+  i_t write = 0;
+  for (i_t i = 0; i < old_pool_size; i++) {
+    if (cuts_to_remove[i] == 0) {
+      rhs_storage_[write] = rhs_storage_[i];
+      cut_type_[write]    = cut_type_[i];
+      cut_age_[write]     = cut_age_[i];
+      write++;
+    }
+  }
+  rhs_storage_.resize(write);
+  cut_type_.resize(write);
+  cut_age_.resize(write);
+
   cut_distances_.clear();
   cut_norms_.clear();
   cut_orthogonality_.clear();
   cut_scores_.clear();
   best_cuts_.clear();
   scored_cuts_ = 0;
+}
+
+template <typename i_t, typename f_t>
+void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
+{
+  const i_t pool_size = cut_storage_.m;
+  std::vector<char> selected(pool_size, 0);
+  for (const i_t cut : best_cuts_) {
+    if (cut_distances_[cut] > min_cut_distance_) { selected[cut] = 1; }
+  }
+
+  std::vector<i_t> retained;
+  retained.reserve(pool_size);
+  std::vector<i_t> cuts_to_remove(pool_size, 0);
+  for (i_t i = 0; i < pool_size; i++) {
+    if (selected[i]) {
+      // Selection is the cut-pool equivalent of activity: the cut was useful at this relaxation.
+      cut_age_[i] = 0;
+    } else {
+      cut_age_[i]++;
+    }
+    if (cut_age_[i] <= max_cut_age_) {
+      retained.push_back(i);
+    } else {
+      cuts_to_remove[i] = 1;
+    }
+  }
+
+  if (retained.size() > static_cast<size_t>(max_cut_pool_size_)) {
+    // Keep every selected cut, then favor recent and efficacious alternatives. This preserves
+    // candidates that can become useful at a later relaxation without allowing a large separator
+    // (notably implied bounds) to make duplicate detection grow on every pass.
+    std::sort(retained.begin(), retained.end(), [&](i_t lhs, i_t rhs) {
+      if (selected[lhs] != selected[rhs]) { return selected[lhs] > selected[rhs]; }
+      if (cut_age_[lhs] != cut_age_[rhs]) { return cut_age_[lhs] < cut_age_[rhs]; }
+      if (cut_distances_[lhs] != cut_distances_[rhs]) {
+        return cut_distances_[lhs] > cut_distances_[rhs];
+      }
+      return lhs < rhs;
+    });
+    for (size_t k = max_cut_pool_size_; k < retained.size(); k++) {
+      cuts_to_remove[retained[k]] = 1;
+    }
+  }
+
+  const i_t num_removed = std::accumulate(cuts_to_remove.begin(), cuts_to_remove.end(), i_t{0});
+  if (num_removed > 0) {
+    settings_.log.debug(
+      "Aging %d cuts out of pool; retaining %d\n", num_removed, pool_size - num_removed);
+    remove_marked_cuts(cuts_to_remove);
+  }
 }
 
 enum class flow_cover_bound_side_t : int8_t { UPPER, LOWER };
