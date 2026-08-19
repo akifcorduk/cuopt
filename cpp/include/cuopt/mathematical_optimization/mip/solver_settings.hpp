@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <vector>
 
@@ -30,6 +32,49 @@ struct benchmark_info_t {
   double last_improvement_of_best_feasible    = 0;
   double last_improvement_after_recombination = 0;
   double objective_of_initial_population      = std::numeric_limits<double>::max();
+  double primal_integral                      = std::numeric_limits<double>::quiet_NaN();
+
+  void initialize_primal_integral(double reference_objective, double time_limit, bool maximize)
+  {
+    primal_integral_reference_objective_ = reference_objective;
+    primal_integral_time_limit_          = time_limit;
+    primal_integral_maximize_            = maximize;
+    primal_integral_area_                = 0.0;
+    primal_integral_last_time_           = 0.0;
+    primal_integral_current_error_       = 1.0;
+    primal_integral_has_incumbent_       = false;
+    primal_integral_best_objective_ =
+      maximize ? -std::numeric_limits<double>::infinity() : std::numeric_limits<double>::infinity();
+    primal_integral = std::numeric_limits<double>::quiet_NaN();
+  }
+
+  void update_primal_integral(double objective, double elapsed_time)
+  {
+    const bool improves = primal_integral_maximize_ ? objective > primal_integral_best_objective_
+                                                    : objective < primal_integral_best_objective_;
+    if (!improves) { return; }
+
+    const double integration_time = std::isfinite(primal_integral_time_limit_)
+                                      ? std::min(elapsed_time, primal_integral_time_limit_)
+                                      : elapsed_time;
+    primal_integral_area_ +=
+      primal_integral_current_error_ * (integration_time - primal_integral_last_time_);
+    primal_integral_last_time_      = integration_time;
+    primal_integral_best_objective_ = objective;
+    primal_integral_current_error_  = primal_error(objective);
+    primal_integral_has_incumbent_  = true;
+  }
+
+  void finalize_primal_integral(double elapsed_time)
+  {
+    const double integration_time =
+      std::isfinite(primal_integral_time_limit_) ? primal_integral_time_limit_ : elapsed_time;
+    primal_integral_area_ +=
+      primal_integral_current_error_ * (integration_time - primal_integral_last_time_);
+    primal_integral_last_time_ = integration_time;
+    primal_integral =
+      primal_integral_has_incumbent_ ? primal_integral_area_ / integration_time : 2.0;
+  }
   // LP relaxation objective at the root node, BEFORE any cuts have been
   // added. quiet_NaN() means "B&B did not run cut passes / value was
   // never written" — distinguishes it from a legitimate 0.0.
@@ -51,6 +96,27 @@ struct benchmark_info_t {
   // root_lp_with_cuts is finalised. quiet_NaN() means "cut loop did
   // not run / value never written".
   double cut_generation_time_sec = std::numeric_limits<double>::quiet_NaN();
+
+ private:
+  double primal_error(double objective) const
+  {
+    if (!std::isfinite(objective)) { return 2.0; }
+    if ((objective < 0.0 && primal_integral_reference_objective_ > 0.0) ||
+        (objective > 0.0 && primal_integral_reference_objective_ < 0.0)) {
+      return 1.0;
+    }
+    return std::abs(objective - primal_integral_reference_objective_) /
+           std::max({std::abs(objective), std::abs(primal_integral_reference_objective_), 1.0});
+  }
+
+  double primal_integral_reference_objective_ = 0.0;
+  double primal_integral_time_limit_          = 0.0;
+  double primal_integral_area_                = 0.0;
+  double primal_integral_last_time_           = 0.0;
+  double primal_integral_current_error_       = 1.0;
+  double primal_integral_best_objective_      = std::numeric_limits<double>::infinity();
+  bool primal_integral_maximize_              = false;
+  bool primal_integral_has_incumbent_         = false;
 };
 
 // Forward declare solver_settings_t for friend class
