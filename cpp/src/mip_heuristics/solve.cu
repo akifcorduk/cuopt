@@ -65,6 +65,7 @@
 #include <omp.h>
 
 #include <cmath>
+#include <mutex>
 #include <sstream>
 
 namespace cuopt::mathematical_optimization {
@@ -254,7 +255,6 @@ mip_solution_t<i_t, f_t> run_mip_solver(
                            settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                            problem.original_problem_ptr->get_n_integers() > 0;
     if (run_early_cpufj) {
-      auto early_fj_start = std::chrono::steady_clock::now();
       auto* presolver_ptr = problem.presolve_data.papilo_presolve_ptr;
       auto mip_callbacks  = settings.get_mip_callbacks();
       f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
@@ -269,22 +269,19 @@ mip_solution_t<i_t, f_t> run_mip_solver(
            mip_solver_settings_accessor<i_t, f_t>::get_semi_continuous_original_num_variables(
              settings),
          ctx_ptr = &solver.context,
-         early_fj_start](f_t solver_obj,
-                         f_t user_obj,
-                         const std::vector<f_t>& assignment,
-                         const char* heuristic_name) {
+         &timer](f_t solver_obj,
+                 f_t user_obj,
+                 const std::vector<f_t>& assignment,
+                 const char* heuristic_name) {
           std::vector<f_t> user_assignment;
           presolver_ptr->uncrush_primal_solution(assignment, user_assignment);
           ctx_ptr->initial_incumbent_assignment = user_assignment;
           ctx_ptr->initial_upper_bound          = user_obj;
-          double elapsed =
-            std::chrono::duration<double>(std::chrono::steady_clock::now() - early_fj_start)
-              .count();
           CUOPT_LOG_INFO(
             "New solution from early primal heuristics (%s). Objective %+.6e. Time %.2f",
             heuristic_name,
             user_obj,
-            elapsed);
+            timer.elapsed_time());
           invoke_solution_callbacks(mip_callbacks,
                                     has_semi_continuous_callback_translation,
                                     semi_continuous_original_num_variables,
@@ -503,14 +500,13 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
                         op_problem.get_n_integers() > 0 && op_problem.get_n_constraints() > 0;
     f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
     if (run_early_fj) {
-      auto early_fj_start = std::chrono::steady_clock::now();
       auto early_fj_callback =
         [&early_best_objective,
          &early_best_user_obj,
          &early_best_user_assignment,
          &early_incumbent_pool,
          &early_callback_mutex,
-         early_fj_start,
+         &timer,
          mip_callbacks = settings.get_mip_callbacks(),
          has_semi_continuous_callback_translation =
            mip_solver_settings_accessor<i_t, f_t>::has_semi_continuous_callback_translation(
@@ -528,14 +524,11 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
           early_best_user_obj        = user_obj;
           early_best_user_assignment = assignment;
           early_incumbent_pool.push_back({user_obj, assignment});
-          double elapsed =
-            std::chrono::duration<double>(std::chrono::steady_clock::now() - early_fj_start)
-              .count();
           CUOPT_LOG_INFO(
             "New solution from early primal heuristics (%s). Objective %+.6e. Time %.2f",
             heuristic_name,
             user_obj,
-            elapsed);
+            timer.elapsed_time());
           auto user_assignment = assignment;
           invoke_solution_callbacks(mip_callbacks,
                                     has_semi_continuous_callback_translation,
@@ -626,7 +619,7 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         papilo_features.nnz);
 
       if (result.status == mip::third_party_presolve_status_t::OPTIMAL) {
-        CUOPT_LOG_INFO("Optimal solution found during presolve.");
+        CUOPT_LOG_INFO("Optimal solution found during presolve. Time %.2f", timer.elapsed_time());
       }
     }
 

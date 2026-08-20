@@ -20,6 +20,8 @@
 
 #include <utilities/scope_guard.hpp>
 
+#include <thrust/logical.h>
+
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -297,16 +299,31 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
   if (termination_criterion_t::NO_UPDATE != term_crit) {
     ls.constraint_prop.bounds_update.set_updated_bounds(*problem_ptr);
   }
-  const auto& hp              = context.settings.heuristic_params;
-  const auto probing_features = probing_presolve_features(*problem_ptr);
-  const auto probing_budget   = evaluate_presolve_budget(hp, probing_features);
-  bool run_probing_cache      = !fj_only_run;
+  const auto& hp               = context.settings.heuristic_params;
+  const auto probing_features  = probing_presolve_features(*problem_ptr);
+  const auto probing_budget    = evaluate_presolve_budget(hp, probing_features);
+  bool run_probing_cache       = !fj_only_run;
+  const bool feasibility_shape = should_prioritize_early_feasibility(probing_features, true);
+  const bool zero_objective =
+    feasibility_shape &&
+    thrust::all_of(problem_ptr->handle_ptr->get_thrust_policy(),
+                   problem_ptr->objective_coefficients.begin(),
+                   problem_ptr->objective_coefficients.end(),
+                   [] __device__(f_t coefficient) { return coefficient == f_t{0}; });
+  if (zero_objective) {
+    CUOPT_LOG_INFO(
+      "Skipping probing cache for large zero-objective feasibility model; prioritizing root LP "
+      "and feasibility pump");
+    context.prioritize_early_feasibility = true;
+    run_probing_cache                    = false;
+  }
   // Allow the user to disable the probing-cache step of cuOpt's internal presolve
   // independently of the higher-level presolver setting.
   if (!context.settings.probing) {
     CUOPT_LOG_INFO("Probing-cache step disabled via %s=false", CUOPT_MIP_PROBING);
     run_probing_cache = false;
   }
+
   if (run_probing_cache) {
     log_presolve_budget("PROBING", probing_features, probing_budget);
     f_t time_for_probing_cache = std::min(time_limit, (f_t)global_timer.remaining_time());

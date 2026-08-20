@@ -57,6 +57,9 @@ struct mip_solver_context_t {
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
   const mip_solver_settings_t<i_t, f_t> settings;
+  // Set during presolve for large, tall, zero-objective mixed models where reaching the root LP
+  // and feasibility pump is more valuable than building the probing cache.
+  bool prioritize_early_feasibility{false};
   solver_stats_t<i_t, f_t> stats;
   // Work limit context for tracking work units in deterministic mode (shared across all timers in
   // GPU heuristic loop)

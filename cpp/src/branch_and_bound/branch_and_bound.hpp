@@ -175,6 +175,9 @@ class branch_and_bound_t {
     std::vector<i_t>& nonbasic_list,
     std::vector<f_t>& edge_norms);
 
+  // Set symmetry detected concurrently with B&B construction. Call before solve().
+  void set_symmetry(mip_symmetry_t<i_t, f_t>* symmetry) { symmetry_ = symmetry; }
+
   i_t find_reduced_cost_fixings(f_t upper_bound,
                                 std::vector<f_t>& lower_bounds,
                                 std::vector<f_t>& upper_bounds);

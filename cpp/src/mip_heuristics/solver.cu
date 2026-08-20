@@ -33,6 +33,7 @@
 #include <future>
 #include <memory>
 #include <thread>
+#include <utility>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -83,6 +84,14 @@ struct branch_and_bound_solution_helper_t {
   diversity_manager_t<i_t, f_t>* dm;
   simplex_solver_settings_t<i_t, f_t>& settings_;
 };
+
+template <typename i_t, typename f_t>
+std::unique_ptr<mip_symmetry_t<i_t, f_t>> detect_symmetry_for_branch_and_bound(
+  user_problem_t<i_t, f_t> problem, simplex_solver_settings_t<i_t, f_t> settings)
+{
+  bool has_symmetry = false;
+  return detect_symmetry(problem, settings, has_symmetry);
+}
 
 // Extract probing cache into CPU-only CSR struct for implied bounds cuts
 template <typename i_t, typename f_t>
@@ -287,17 +296,21 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   context.work_unit_scheduler_.register_context(context.gpu_heur_loop);
 
 #ifdef DETECT_SYMMETRY_AFTER_PRESOLVE
-  // Detect symmetry after all presolve steps (PaPILO, cuOpt probing, bounds, trivial presolve).
-  // context.problem_ptr is the final reduced problem with correct variable indices.
-  if (context.settings.symmetry != 0 && !context.problem_ptr->empty) {
+  std::future<std::unique_ptr<mip_symmetry_t<i_t, f_t>>> symmetry_future;
+  // Snapshot the final reduced problem after all presolve steps. Symmetry detection is read-only,
+  // so overlap it with the remaining B&B setup and join at its first consumer.
+  if (context.settings.symmetry != 0 && !context.problem_ptr->empty &&
+      !context.settings.heuristics_only) {
     simplex_solver_settings_t<i_t, f_t> simplex_settings;
     simplex_settings.set_log(true);
     simplex_settings.time_limit                    = context.settings.time_limit;
     user_problem_t<i_t, f_t> post_presolve_problem = cuopt_problem_to_user_problem<i_t, f_t>(
       context.problem_ptr->handle_ptr, *context.problem_ptr);
-    bool has_symmetry_post = false;
-    context.symmetry       = cuopt::mathematical_optimization::mip::detect_symmetry(
-      post_presolve_problem, simplex_settings, has_symmetry_post);
+    symmetry_future = std::async(std::launch::async,
+                                 detect_symmetry_for_branch_and_bound<i_t, f_t>,
+                                 std::move(post_presolve_problem),
+                                 std::move(simplex_settings));
+    CUOPT_LOG_DEBUG("Started post-presolve symmetry detection asynchronously");
   }
 #endif
 
@@ -485,6 +498,15 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (!context.settings.heuristics_only) {
 #pragma omp task default(shared) priority(CUOPT_CRITICAL_TASK_PRIORITY)
       {
+#ifdef DETECT_SYMMETRY_AFTER_PRESOLVE
+        // The heuristics can start immediately because B&B is the first symmetry consumer. Only
+        // the B&B task waits, then installs the completed result before solve() can use it.
+        if (symmetry_future.valid()) {
+          context.symmetry = symmetry_future.get();
+          branch_and_bound->set_symmetry(context.symmetry.get());
+          CUOPT_LOG_DEBUG("B&B joined post-presolve symmetry detection before solve");
+        }
+#endif
         branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
       }
     }

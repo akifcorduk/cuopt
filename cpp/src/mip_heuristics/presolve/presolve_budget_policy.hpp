@@ -94,6 +94,16 @@ struct presolve_budget_t {
   int probing_step_size{probing_budget_step_size};
 };
 
+// Very tall mixed feasibility models can spend the short-horizon budget in integer probing even
+// though their first useful primal path is root-LP rounding and repair. Keep this gate structural
+// and objective-aware so ordinary optimization models retain the default presolve order.
+inline bool should_prioritize_early_feasibility(const presolve_features_t& feat,
+                                                bool zero_objective)
+{
+  return zero_objective && feat.n_cons >= 100000.0 && feat.n_cons >= 8.0 * feat.n_vars &&
+         feat.n_int > 0.0 && feat.n_int < feat.n_vars;
+}
+
 // Derives both presolve stages' budgets from the problem's dimensions and structure. Rounds and
 // badge accept an explicit override from the hyper-parameters; a negative setting asks for the
 // measured rule below, and any other value is passed through, where <=0 removes the cap.

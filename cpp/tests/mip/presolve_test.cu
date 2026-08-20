@@ -10,6 +10,7 @@
 #include <cuopt/mathematical_optimization/io/mps_data_model.hpp>
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 #include <cuopt/mathematical_optimization/solve.hpp>
+#include <mip_heuristics/presolve/presolve_budget_policy.hpp>
 #include <mip_heuristics/presolve/third_party_presolve.hpp>
 #include <mip_heuristics/problem/problem.cuh>
 #include <pdlp/utils.cuh>
@@ -63,6 +64,30 @@ TEST(problem, find_implied_integers)
   // Ensure it is an implied integer
   EXPECT_EQ(problem.presolve_data.var_flags.element(it - var_types.begin(), handle_.get_stream()),
             ((int)mip::problem_t<int, double>::var_flags_t::VAR_IMPLIED_INTEGER));
+}
+
+TEST(presolve_budget_policy, prioritize_large_tall_zero_objective_mixed_model)
+{
+  mip::presolve_features_t features{};
+  features.n_vars = 11928;
+  features.n_cons = 131865;
+  features.n_int  = 7482;
+
+  EXPECT_TRUE(mip::should_prioritize_early_feasibility(features, true));
+  EXPECT_FALSE(mip::should_prioritize_early_feasibility(features, false));
+
+  features.n_vars = 1000;
+  features.n_cons = 99999;
+  EXPECT_FALSE(mip::should_prioritize_early_feasibility(features, true));
+
+  features.n_vars = 20000;
+  features.n_cons = 8 * features.n_vars - 1;
+  EXPECT_FALSE(mip::should_prioritize_early_feasibility(features, true));
+
+  features.n_vars = 11928;
+  features.n_cons = 131865;
+  features.n_int  = features.n_vars;
+  EXPECT_FALSE(mip::should_prioritize_early_feasibility(features, true));
 }
 
 }  // namespace cuopt::mathematical_optimization::test
