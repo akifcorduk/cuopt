@@ -38,6 +38,9 @@ OPTIMAL_ROOT_RE = re.compile(
 PAPILO_TIME_RE = re.compile(rf"Papilo presolve time:\s+({FLOAT_PATTERN})")
 BEST_OBJECTIVE_RE = re.compile(rf"Best objective\s+({FLOAT_PATTERN})")
 
+ScoreRow = tuple[str, int, float, int]
+RepeatSummary = tuple[int, int, int, float]
+
 
 def read_optimal_objectives(path: Path) -> dict[str, float]:
     with path.open(newline="", encoding="utf-8-sig") as stream:
@@ -122,6 +125,46 @@ def primal_integral(
             last_value = gap
     integral += (horizon - last_time) * last_value
     return integral / horizon
+
+
+def shifted_geomean(scores: Iterable[float], shift: float) -> float:
+    values = list(scores)
+    if not values:
+        raise ValueError("at least one score is required")
+    return (
+        math.exp(
+            sum(math.log(score + shift) for score in values) / len(values)
+        )
+        - shift
+    )
+
+
+def summarize_repeats(
+    rows: Iterable[ScoreRow], shift: float
+) -> list[RepeatSummary]:
+    rows = list(rows)
+    instances = {instance for instance, _, _, _ in rows}
+    repeats = {repeat for _, repeat, _, _ in rows}
+    summaries = []
+    for repeat in sorted(repeats):
+        repeat_rows = [row for row in rows if row[1] == repeat]
+        repeat_instances = {instance for instance, _, _, _ in repeat_rows}
+        if repeat_instances != instances:
+            missing = ", ".join(sorted(instances - repeat_instances))
+            raise RuntimeError(
+                f"repeat {repeat} is missing instances: {missing}"
+            )
+        scores = [score for _, _, score, _ in repeat_rows]
+        contributing = sum(score < 1.0 for score in scores)
+        summaries.append(
+            (
+                repeat,
+                len(repeat_instances),
+                contributing,
+                shifted_geomean(scores, shift),
+            )
+        )
+    return summaries
 
 
 def collect_instances(directories: Iterable[Path]) -> list[Path]:
@@ -215,18 +258,14 @@ def score_logs(args: argparse.Namespace) -> None:
     if not rows:
         raise RuntimeError(f"no scoreable logs found in {args.log_dir}")
 
-    scores = [row[2] for row in rows]
-    shifted_geomean = (
-        math.exp(
-            sum(math.log(score + args.shift) for score in scores) / len(scores)
-        )
-        - args.shift
-    )
-    feasible = sum(score < 1.0 for score in scores)
+    summaries = summarize_repeats(rows, args.shift)
     print(
-        f"instances={len(rows)} feasible={feasible} horizon={args.horizon:g} "
-        f"shift={args.shift:g} shifted_geomean={shifted_geomean:.9f}"
+        f"instances={summaries[0][1]} repeats={len(summaries)} "
+        f"horizon={args.horizon:g} shift={args.shift:g}"
     )
+    print("repeat,instances,contributing,shifted_geomean")
+    for repeat, instance_count, contributing, geomean in summaries:
+        print(f"{repeat},{instance_count},{contributing},{geomean:.9f}")
     print("instance,repeat,primal_integral,incumbents")
     for instance, repeat, score, count in rows:
         print(f"{instance},{repeat},{score:.12g},{count}")

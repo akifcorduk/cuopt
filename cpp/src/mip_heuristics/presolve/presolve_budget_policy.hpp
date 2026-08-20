@@ -24,10 +24,10 @@ inline constexpr double probing_iter_work  = 0.01;  // per multi-probe propagati
 
 // Probing work allowed per unit of the cost proxy below; dividing by that proxy is what turns it
 // into a per-instance work ceiling. It is a work coefficient, and nothing here converts it to
-// seconds. Since the wall cap was removed this is the only bound on probing, which is what the
-// value was picked to survive: over 240 instances it stopped every run before the 120s wall could
-// fire, worst case 44.7s, while looser scales of 4e8 and 1e9 needed that wall on 2 and 8 instances
-// and spent 2-3x the total probing time to do it.
+// seconds. This remains the primary, reproducible probing bound. Before the narrow early-primal
+// wall backstop below was added, it stopped every one of 240 runs before a 120s external wall could
+// fire (worst case 44.7s); looser scales of 4e8 and 1e9 needed that wall on 2 and 8 instances and
+// spent 2-3x the total probing time to do it.
 //
 // Tight enough to bound time is also tight enough to truncate, and that trade is deliberate:
 // probing takes its time from branch and bound, and the truncation measured neutral on solution
@@ -45,6 +45,14 @@ inline constexpr double probing_work_scale = 1.5e8;
 // Probed variables between work-budget checks, i.e. the granularity at which the budget can be
 // enforced. Work is only folded in at the step barrier, so too large a step runs unbudgeted.
 inline constexpr int probing_budget_step_size = 128;
+
+// Large probing problems can consume most of a short solve before the first root relaxation or
+// repair heuristic is started. Keep the deterministic work budget as the primary limit, but add a
+// small wall-clock backstop once the reduced problem is large enough for startup latency to matter.
+// Completed probing batches are retained when this expires, so this limits latency without
+// discarding the reductions already found.
+inline constexpr double early_primal_probing_size_threshold = 10000.0;
+inline constexpr double early_primal_probing_wall_limit     = 0.5;
 
 // cuOpt forces probing.minbadgesize to ncols/2 to stop Papilo aborting probing on its own work
 // budget, so the first badge overshoots that budget in a single pass and the badge cap is the only
@@ -91,6 +99,8 @@ struct presolve_budget_t {
   // Probing-cache budget in work units: a reproducible count of probing effort, not a time
   // estimate.
   double probing_work_limit{std::numeric_limits<double>::infinity()};
+  // Wall-clock backstop for probing. Infinity leaves the work limit as the only bound.
+  double probing_wall_limit{std::numeric_limits<double>::infinity()};
   int probing_step_size{probing_budget_step_size};
 };
 
@@ -102,6 +112,14 @@ inline bool should_prioritize_early_feasibility(const presolve_features_t& feat,
 {
   return zero_objective && feat.n_cons >= 100000.0 && feat.n_cons >= 8.0 * feat.n_vars &&
          feat.n_int > 0.0 && feat.n_int < feat.n_vars;
+}
+
+// A zero-seeded repair has too little constraint guidance on very wide models and can perturb the
+// subsequent tree without producing a useful seed. Restrict the pre-root detour to models with at
+// least one row per two columns; this still covers the slow-root, repair-friendly shapes.
+inline bool should_run_pre_root_quick_repair(const presolve_features_t& feat)
+{
+  return feat.n_vars > 0.0 && feat.n_cons >= 0.5 * feat.n_vars;
 }
 
 // Derives both presolve stages' budgets from the problem's dimensions and structure. Rounds and
@@ -138,14 +156,17 @@ presolve_budget_t evaluate_presolve_budget(const mip_heuristics_hyper_params_t<i
   // bounds the wall time that a pure coverage target cannot: throughput ranged 1.9 to 689 work
   // units per second, so the same budget was worth 360x more time on one instance than another.
   //
-  // The ceiling is the only work bound; there is no coverage target alongside it. A coverage
-  // fraction cuts every instance by the same proportion whether or not it is the expensive one,
-  // which both obscured which of the two stopped a run and penalised the cheap instances. Dropping
-  // it left probing running over a second on 102 instances against 81 before, while runs over ten
-  // seconds fell from 34 to 11, since the ceiling truncates by cost rather than uniformly.
+  // The ceiling is the only deterministic work bound; there is no coverage target alongside it. A
+  // coverage fraction cuts every instance by the same proportion whether or not it is the expensive
+  // one, which both obscured which of the two stopped a run and penalised the cheap instances.
+  // Dropping it left probing running over a second on 102 instances against 81 before, while runs
+  // over ten seconds fell from 34 to 11, since the ceiling truncates by cost rather than uniformly.
   const double probing_cost_proxy = nnz + n_cand * acl;
   b.probing_work_limit            = probing_work_scale / probing_cost_proxy;
-  b.probing_step_size             = probing_budget_step_size;
+  if (feat.n_vars >= early_primal_probing_size_threshold) {
+    b.probing_wall_limit = early_primal_probing_wall_limit;
+  }
+  b.probing_step_size = probing_budget_step_size;
   return b;
 }
 
@@ -158,7 +179,7 @@ inline void log_presolve_budget(const char* stage,
   CUOPT_LOG_DEBUG(
     "PRESOLVE_BUDGET stage=%s nvars=%.0f ncons=%.0f nnz=%.0f nint=%.0f "
     "nbin=%.0f arl=%.3f acl=%.3f maxrow=%.0f density=%.3e intfrac=%.3f binfrac=%.3f "
-    "rounds=%d badge=%d work=%.3f step=%d",
+    "rounds=%d badge=%d work=%.3f wall=%.3f step=%d",
     stage,
     f.n_vars,
     f.n_cons,
@@ -174,6 +195,7 @@ inline void log_presolve_budget(const char* stage,
     b.papilo_max_rounds,
     b.papilo_max_badgesize,
     b.probing_work_limit,
+    b.probing_wall_limit,
     b.probing_step_size);
 }
 

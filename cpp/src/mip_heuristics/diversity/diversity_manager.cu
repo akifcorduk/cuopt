@@ -28,7 +28,8 @@
 #include <memory>
 #include <numeric>
 
-constexpr bool fj_only_run = false;
+constexpr bool fj_only_run                        = false;
+constexpr double pre_root_quick_repair_time_limit = 1.0;
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -326,7 +327,9 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
 
   if (run_probing_cache) {
     log_presolve_budget("PROBING", probing_features, probing_budget);
-    f_t time_for_probing_cache = std::min(time_limit, (f_t)global_timer.remaining_time());
+    f_t time_for_probing_cache = std::min({time_limit,
+                                           (f_t)global_timer.remaining_time(),
+                                           static_cast<f_t>(probing_budget.probing_wall_limit)});
     timer_t probing_timer{time_for_probing_cache};
     [[maybe_unused]] const auto probing_t0 = std::chrono::steady_clock::now();
     // this function computes probing cache, finds singletons, substitutions and changes the problem
@@ -550,6 +553,21 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
   ls.start_cpufj_scratch_threads(population);
+
+  if (check_b_b_preemption()) { return population.best_feasible(); }
+  presolve_features_t quick_repair_features{};
+  quick_repair_features.n_vars = problem_ptr->n_variables;
+  quick_repair_features.n_cons = problem_ptr->n_constraints;
+  if (!population.is_feasible() && should_run_pre_root_quick_repair(quick_repair_features) &&
+      timer.remaining_time() > pre_root_quick_repair_time_limit) {
+    // The normal GPU heuristic sequence waits for the root relaxation. Spend one bounded second
+    // on zero-seeded propagation and FJ first when presolve has not produced an incumbent, so a
+    // slow concurrent root does not leave the early primal metric empty.
+    solution_t<i_t, f_t> quick_sol(*problem_ptr);
+    timer_t quick_sol_timer(pre_root_quick_repair_time_limit);
+    ls.generate_fast_solution(quick_sol, quick_sol_timer);
+    population.add_solution(std::move(quick_sol));
+  }
 
   if (check_b_b_preemption()) { return population.best_feasible(); }
   lp_state_t<i_t, f_t>& lp_state = problem_ptr->lp_state;

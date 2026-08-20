@@ -19,6 +19,8 @@ _SPEC.loader.exec_module(_MODULE)
 parse_incumbents = _MODULE.parse_incumbents
 primal_gap = _MODULE.primal_gap
 primal_integral = _MODULE.primal_integral
+shifted_geomean = _MODULE.shifted_geomean
+summarize_repeats = _MODULE.summarize_repeats
 
 
 class EarlyPrimalIntegralTest(unittest.TestCase):
@@ -34,6 +36,25 @@ class EarlyPrimalIntegralTest(unittest.TestCase):
 
     def test_integral_is_bounded_without_an_incumbent(self) -> None:
         self.assertEqual(primal_integral([], 1.0, 10.0), 1.0)
+
+    def test_shifted_geomean_is_computed_across_instances_per_repeat(
+        self,
+    ) -> None:
+        rows = [
+            ("a", 0, 0.1, 1),
+            ("b", 0, 0.9, 1),
+            ("a", 1, 0.2, 1),
+            ("b", 1, 0.8, 1),
+        ]
+        summaries = summarize_repeats(rows, 0.001)
+        self.assertEqual(summaries[0][:3], (0, 2, 2))
+        self.assertEqual(summaries[1][:3], (1, 2, 2))
+        self.assertAlmostEqual(
+            summaries[0][3], shifted_geomean([0.1, 0.9], 0.001)
+        )
+        self.assertAlmostEqual(
+            summaries[1][3], shifted_geomean([0.2, 0.8], 0.001)
+        )
 
     def test_parses_global_and_legacy_early_times(self) -> None:
         log = """\

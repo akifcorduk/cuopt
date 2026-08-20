@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <sstream>
 #include <string>
@@ -88,6 +89,34 @@ TEST(presolve_budget_policy, prioritize_large_tall_zero_objective_mixed_model)
   features.n_cons = 131865;
   features.n_int  = features.n_vars;
   EXPECT_FALSE(mip::should_prioritize_early_feasibility(features, true));
+}
+
+TEST(presolve_budget_policy, bound_large_probing_startup_latency)
+{
+  mip::mip_heuristics_hyper_params_t<int, double> hp{};
+  mip::presolve_features_t features{};
+  features.n_vars = mip::early_primal_probing_size_threshold - 1;
+  features.n_cons = 1000;
+  features.nnz    = 10000;
+  features.n_int  = features.n_vars;
+
+  auto budget = mip::evaluate_presolve_budget(hp, features);
+  EXPECT_TRUE(std::isinf(budget.probing_wall_limit));
+
+  features.n_vars = mip::early_primal_probing_size_threshold;
+  budget          = mip::evaluate_presolve_budget(hp, features);
+  EXPECT_EQ(budget.probing_wall_limit, mip::early_primal_probing_wall_limit);
+}
+
+TEST(presolve_budget_policy, run_pre_root_quick_repair_only_with_constraint_guidance)
+{
+  mip::presolve_features_t features{};
+  features.n_vars = 1000;
+  features.n_cons = 499;
+  EXPECT_FALSE(mip::should_run_pre_root_quick_repair(features));
+
+  features.n_cons = 500;
+  EXPECT_TRUE(mip::should_run_pre_root_quick_repair(features));
 }
 
 }  // namespace cuopt::mathematical_optimization::test
