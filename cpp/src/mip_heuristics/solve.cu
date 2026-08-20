@@ -519,7 +519,15 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
                    const std::vector<f_t>& assignment,
                    const char* heuristic_name) {
           std::lock_guard<std::mutex> lock(early_callback_mutex);
-          if (solver_obj >= early_best_objective.load()) { return; }
+          if (solver_obj >= early_best_objective.load()) {
+            CUOPT_LOG_ERROR(
+              "Incumbent callback rejected early candidate from %s: "
+              "user_objective=%g best_user_objective=%g",
+              heuristic_name,
+              user_obj,
+              early_best_user_obj);
+            return;
+          }
           early_best_objective.store(solver_obj);
           early_best_user_obj        = user_obj;
           early_best_user_assignment = assignment;

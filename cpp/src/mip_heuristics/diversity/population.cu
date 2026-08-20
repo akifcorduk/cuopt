@@ -316,6 +316,13 @@ void population_t<i_t, f_t>::run_solution_callbacks(solution_t<i_t, f_t>& sol)
     // Save the best objective here even if callback handling later exits early.
     // This prevents older solutions from being reported as "new best" in subsequent callbacks.
     best_feasible_objective = sol.get_objective();
+  } else {
+    CUOPT_LOG_ERROR(
+      "Incumbent callback rejected candidate: user_objective=%g "
+      "best_user_objective=%g feasible=%d",
+      sol.get_user_objective(),
+      problem_ptr->get_user_obj_from_solver_obj(best_feasible_objective),
+      sol.get_feasible());
   }
 
   for (auto callback : user_callbacks) {
