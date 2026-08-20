@@ -2103,6 +2103,10 @@ flow_cover_generation_t<i_t, f_t>::evaluate_c_mir_flow_cover_inequality(
 
   auto add_ubar_candidate = [&](f_t candidate) {
     if (candidate <= lambda + lambda_tol || !std::isfinite(candidate)) { return; }
+    for (f_t existing : scratch.ubar_candidates) {
+      const f_t duplicate_tol = static_cast<f_t>(1e-8) * std::max<f_t>(1.0, std::abs(candidate));
+      if (std::abs(existing - candidate) <= duplicate_tol) { return; }
+    }
     scratch.ubar_candidates.push_back(candidate);
   };
 
@@ -2123,21 +2127,6 @@ flow_cover_generation_t<i_t, f_t>::evaluate_c_mir_flow_cover_inequality(
   add_ubar_candidate(max_c1);
   add_ubar_candidate(max_u_ge_lambda + 1.0);
   add_ubar_candidate(lambda + 1.0);
-
-  // A row can have thousands of arcs. Checking every new capacity against every capacity already
-  // seen makes this setup quadratic, even though the actual flow-cover evaluation below is
-  // linear in the number of unique capacities. Sort once and compact adjacent near-duplicates.
-  std::sort(scratch.ubar_candidates.begin(), scratch.ubar_candidates.end());
-  size_t num_unique_candidates = 0;
-  for (const f_t candidate : scratch.ubar_candidates) {
-    if (num_unique_candidates > 0) {
-      const f_t previous      = scratch.ubar_candidates[num_unique_candidates - 1];
-      const f_t duplicate_tol = static_cast<f_t>(1e-8) * std::max<f_t>(1.0, std::abs(candidate));
-      if (std::abs(previous - candidate) <= duplicate_tol) { continue; }
-    }
-    scratch.ubar_candidates[num_unique_candidates++] = candidate;
-  }
-  scratch.ubar_candidates.resize(num_unique_candidates);
 
   flow_cover_evaluation_t<f_t> best{0.0, 0.0};
   if (scratch.ubar_candidates.empty()) { return best; }
