@@ -1506,7 +1506,7 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
     }
   }
 
-  if (retained.size() > static_cast<size_t>(max_cut_pool_size_)) {
+  if (retained.size() > (size_t)max_cut_pool_size_) {
     // Favor recent and efficacious alternatives. This preserves candidates that can become useful
     // at a later relaxation without allowing a large separator (notably implied bounds) to make
     // duplicate detection grow on every pass.
