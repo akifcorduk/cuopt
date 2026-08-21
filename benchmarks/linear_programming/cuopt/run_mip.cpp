@@ -320,7 +320,7 @@ int run_single_file(std::string file_path,
   }
 
   std::stringstream ss;
-  int decimal_places = 2;
+  int decimal_places = 5;
   double mip_gap     = solution.get_mip_gap();
   int is_optimal     = solution.get_termination_status() ==
                        cuopt::mathematical_optimization::mip_termination_status_t::Optimal
