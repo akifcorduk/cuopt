@@ -46,6 +46,19 @@ enum cut_type_t : int8_t {
   MAX_CUT_TYPE           = 8
 };
 
+template <typename i_t>
+struct cut_pool_prune_stats_t {
+  i_t pool_before_dedup{0};
+  i_t duplicates_pruned{0};
+  i_t pool_before_aging{0};
+  i_t selected{0};
+  i_t age_pruned{0};
+  i_t capacity_pruned{0};
+  i_t retained{0};
+  std::array<i_t, MAX_CUT_TYPE> selected_by_type{0};
+  std::array<i_t, MAX_CUT_TYPE> retained_by_type{0};
+};
+
 template <typename f_t>
 struct cut_gap_closure_t {
   f_t initial_gap{0.0};
@@ -330,6 +343,8 @@ class cut_pool_t {
 
   i_t pool_size() const { return cut_storage_.m; }
 
+  const cut_pool_prune_stats_t<i_t>& last_prune_stats() const { return last_prune_stats_; }
+
   void print_cutpool_types() { print_cut_types("In cut pool", cut_type_, settings_); }
 
   void check_for_duplicate_cuts();
@@ -355,6 +370,7 @@ class cut_pool_t {
   std::vector<f_t> cut_orthogonality_;
   std::vector<f_t> cut_scores_;
   std::vector<i_t> best_cuts_;
+  cut_pool_prune_stats_t<i_t> last_prune_stats_;
   const f_t min_cut_distance_{1e-4};
   static constexpr i_t max_selected_cuts_{2000};
   static constexpr i_t max_cut_pool_size_{2 * max_selected_cuts_};

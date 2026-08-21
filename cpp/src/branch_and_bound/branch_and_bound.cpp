@@ -2919,7 +2919,7 @@ lp_status_t branch_and_bound_t<i_t, f_t>::solve_root_relaxation(
 
 template <typename i_t, typename f_t>
 auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
-  [[maybe_unused]] i_t cut_pass,
+  i_t cut_pass,
   mip_solution_t<i_t, f_t>& solution,
   i_t& num_fractional,
   std::vector<i_t>& fractional,
@@ -2989,6 +2989,38 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
   std::vector<f_t> cut_rhs;
   std::vector<cut_type_t> cut_types;
   i_t num_cuts = cut_pool.get_best_cuts(cuts_to_add, cut_rhs, cut_types);
+  if (settings_.benchmark_info_ptr != nullptr) {
+    const auto& stats = cut_pool.last_prune_stats();
+    settings_.log.printf(
+      "CutPoolPass pass=%d pool_before_dedup=%d duplicates_pruned=%d "
+      "pool_before_aging=%d selected=%d age_pruned=%d capacity_pruned=%d retained=%d "
+      "selected_by_type=%d,%d,%d,%d,%d,%d,%d,%d "
+      "retained_by_type=%d,%d,%d,%d,%d,%d,%d,%d\n",
+      cut_pass,
+      stats.pool_before_dedup,
+      stats.duplicates_pruned,
+      stats.pool_before_aging,
+      stats.selected,
+      stats.age_pruned,
+      stats.capacity_pruned,
+      stats.retained,
+      stats.selected_by_type[0],
+      stats.selected_by_type[1],
+      stats.selected_by_type[2],
+      stats.selected_by_type[3],
+      stats.selected_by_type[4],
+      stats.selected_by_type[5],
+      stats.selected_by_type[6],
+      stats.selected_by_type[7],
+      stats.retained_by_type[0],
+      stats.retained_by_type[1],
+      stats.retained_by_type[2],
+      stats.retained_by_type[3],
+      stats.retained_by_type[4],
+      stats.retained_by_type[5],
+      stats.retained_by_type[6],
+      stats.retained_by_type[7]);
+  }
   if (num_cuts == 0) { return {cut_pass_action_t::BREAK, mip_status_t::UNSET}; }
   cut_info.record_cut_types(cut_types);
 #ifdef PRINT_CUT_POOL_TYPES
@@ -3114,6 +3146,16 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
   f_t dual_phase2_time = toc(dual_phase2_start_time);
   if (dual_phase2_time > 1.0) {
     settings_.log.debug("Dual phase2 time %.2f seconds\n", dual_phase2_time);
+  }
+  if (settings_.benchmark_info_ptr != nullptr) {
+    settings_.log.printf(
+      "CutPassLP pass=%d cuts=%d dual_phase2_iterations=%d "
+      "dual_phase2_time=%.6f status=%s\n",
+      cut_pass,
+      num_cuts,
+      iter,
+      dual_phase2_time,
+      simplex::dual_status_to_string(cut_status).c_str());
   }
   if (cut_status == dual_status_t::TIME_LIMIT) {
     solver_status_ = mip_status_t::TIME_LIMIT;

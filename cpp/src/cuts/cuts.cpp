@@ -1345,7 +1345,10 @@ void cut_pool_t<i_t, f_t>::check_for_duplicate_cuts()
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
 {
+  last_prune_stats_                   = {};
+  last_prune_stats_.pool_before_dedup = cut_storage_.m;
   check_for_duplicate_cuts();
+  last_prune_stats_.duplicates_pruned = last_prune_stats_.pool_before_dedup - cut_storage_.m;
   cut_distances_.resize(cut_storage_.m, 0.0);
   cut_norms_.resize(cut_storage_.m, 0.0);
 
@@ -1461,13 +1464,15 @@ void cut_pool_t<i_t, f_t>::remove_marked_cuts(std::vector<i_t>& cuts_to_remove)
 template <typename i_t, typename f_t>
 void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
 {
-  const i_t pool_size = cut_storage_.m;
+  const i_t pool_size                 = cut_storage_.m;
+  last_prune_stats_.pool_before_aging = pool_size;
   std::vector<char> consumed(pool_size, 0);
   i_t num_consumed = 0;
   for (const i_t cut : best_cuts_) {
     if (cut_distances_[cut] > min_cut_distance_) {
       consumed[cut] = 1;
       num_consumed++;
+      last_prune_stats_.selected_by_type[cut_type_[cut]]++;
     }
   }
 
@@ -1503,6 +1508,7 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
       retained.push_back(i);
     } else {
       cuts_to_remove[i] = 1;
+      last_prune_stats_.age_pruned++;
     }
   }
 
@@ -1520,8 +1526,16 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
     });
     for (size_t k = max_cut_pool_size_; k < retained.size(); k++) {
       cuts_to_remove[retained[k]] = 1;
+      last_prune_stats_.capacity_pruned++;
     }
   }
+
+  for (i_t i = 0; i < pool_size; i++) {
+    if (cuts_to_remove[i] == 0) { last_prune_stats_.retained_by_type[cut_type_[i]]++; }
+  }
+  last_prune_stats_.selected = num_consumed;
+  last_prune_stats_.retained =
+    pool_size - last_prune_stats_.age_pruned - last_prune_stats_.capacity_pruned;
 
   const i_t num_removed = std::accumulate(cuts_to_remove.begin(), cuts_to_remove.end(), i_t{0});
   if (num_removed > 0) {

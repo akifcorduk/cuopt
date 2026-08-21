@@ -1027,6 +1027,39 @@ TEST(cuts, cut_pool_ages_unselected_cuts)
   EXPECT_EQ(cut_pool.pool_size(), 0);
 }
 
+TEST(cuts, cut_pool_reports_pruning_stats)
+{
+  simplex::simplex_solver_settings_t<int, double> settings;
+  mip::cut_pool_t<int, double> cut_pool(3, settings);
+
+  for (int i = 0; i < 3; i++) {
+    mip::inequality_t<int, double> cut;
+    cut.push_back(i, 1.0);
+    cut.rhs = i == 0 ? 1.0 : -1.0;
+    cut_pool.add_cut(static_cast<mip::cut_type_t>(i), cut);
+  }
+
+  std::vector<double> relaxation(3, 0.0);
+  for (int pass = 0; pass < 3; pass++) {
+    csr_matrix_t<int, double> cuts(0, 3, 0);
+    std::vector<double> rhs;
+    std::vector<mip::cut_type_t> types;
+    cut_pool.score_cuts(relaxation);
+    EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 1);
+  }
+
+  const auto& stats = cut_pool.last_prune_stats();
+  EXPECT_EQ(stats.pool_before_dedup, 3);
+  EXPECT_EQ(stats.duplicates_pruned, 0);
+  EXPECT_EQ(stats.pool_before_aging, 3);
+  EXPECT_EQ(stats.selected, 1);
+  EXPECT_EQ(stats.age_pruned, 2);
+  EXPECT_EQ(stats.capacity_pruned, 0);
+  EXPECT_EQ(stats.retained, 1);
+  EXPECT_EQ(stats.selected_by_type[mip::MIXED_INTEGER_GOMORY], 1);
+  EXPECT_EQ(stats.retained_by_type[mip::MIXED_INTEGER_GOMORY], 1);
+}
+
 TEST(cuts, cut_pool_retains_violated_unselected_cut_during_aging_window)
 {
   simplex::simplex_solver_settings_t<int, double> settings;
