@@ -52,6 +52,7 @@ struct cut_pool_prune_stats_t {
   i_t duplicates_pruned{0};
   i_t pool_before_aging{0};
   i_t selected{0};
+  i_t selected_retired{0};
   i_t age_pruned{0};
   i_t capacity_pruned{0};
   i_t retained{0};

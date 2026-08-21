@@ -1481,11 +1481,10 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
   std::vector<i_t> cuts_to_remove(pool_size, 0);
   for (i_t i = 0; i < pool_size; i++) {
     if (consumed[i]) {
-      // Selection is evidence that the cut is useful at the current relaxation. Restart its
-      // missed-pass age so LP-row aging can remove and later reactivate it without requiring the
-      // separator to regenerate the same candidate.
-      cut_age_[i] = 0;
-      retained.push_back(i);
+      // The caller has copied this cut into the LP. It cannot be violated while that row remains
+      // active, and a separator can regenerate it if LP-row aging later makes it useful again.
+      cuts_to_remove[i] = 1;
+      last_prune_stats_.selected_retired++;
       continue;
     }
     // Unselected candidates age even while violated. They remain available for several passes,
@@ -1522,8 +1521,8 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
     if (cuts_to_remove[i] == 0) { last_prune_stats_.retained_by_type[cut_type_[i]]++; }
   }
   last_prune_stats_.selected = num_consumed;
-  last_prune_stats_.retained =
-    pool_size - last_prune_stats_.age_pruned - last_prune_stats_.capacity_pruned;
+  last_prune_stats_.retained = pool_size - last_prune_stats_.selected_retired -
+                               last_prune_stats_.age_pruned - last_prune_stats_.capacity_pruned;
 
   const i_t num_removed = std::accumulate(cuts_to_remove.begin(), cuts_to_remove.end(), i_t{0});
   if (num_removed > 0) {
