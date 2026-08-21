@@ -1889,8 +1889,6 @@ TEST(cuts, flow_cover_generates_valid_single_node_flow_cut)
                                                       test_problem.Arow,
                                                       test_problem.new_slacks);
   ASSERT_GT(generator.num_constraints(), 0);
-  generator.prepare_bound_candidates(
-    test_problem.lp, test_problem.settings, variable_bounds, test_problem.var_types, xstar);
 
   int generated_cuts = 0;
   for (const auto& flow_cover_row : generator.get_constraints()) {
