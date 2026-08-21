@@ -1476,27 +1476,15 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
     }
   }
 
-  // A separator can create a large transient batch even when normal aging keeps the pool small.
-  // Measure pressure using the size baseline aging would retain, so acceleration responds only to
-  // persistent candidates and not to one-pass generation bursts.
-  i_t baseline_retained_size = 0;
-  for (i_t i = 0; i < pool_size; i++) {
-    const i_t baseline_age = consumed[i] ? 0 : cut_age_[i] + 1;
-    baseline_retained_size += baseline_age <= max_cut_age_;
-  }
-  constexpr i_t material_selection_size = max_selected_cuts_ / 20;
-  const bool pool_under_pressure =
-    baseline_retained_size > max_selected_cuts_ && num_consumed >= material_selection_size;
-
   std::vector<i_t> retained;
   retained.reserve(pool_size);
   std::vector<i_t> cuts_to_remove(pool_size, 0);
   for (i_t i = 0; i < pool_size; i++) {
     if (consumed[i]) {
-      // The caller will copy this cut into the LP. Under pool pressure, give its candidate copy one
-      // grace pass for LP-row aging instead of restarting its full lifetime. Small pools keep the
-      // longer baseline grace period because pruning them has negligible selection cost.
-      cut_age_[i] = pool_under_pressure ? max_cut_age_ : 0;
+      // Selection is evidence that the cut is useful at the current relaxation. Restart its
+      // missed-pass age so LP-row aging can remove and later reactivate it without requiring the
+      // separator to regenerate the same candidate.
+      cut_age_[i] = 0;
       retained.push_back(i);
       continue;
     }
@@ -1513,9 +1501,9 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
   }
 
   if (retained.size() > static_cast<size_t>(max_cut_pool_size_)) {
-    // Favor recent and efficacious alternatives. This preserves candidates that can become useful
-    // at a later relaxation without allowing a large separator (notably implied bounds) to make
-    // duplicate detection grow on every pass.
+    // The capacity covers one full selection budget for every retained age cohort. Favor selected,
+    // recent, and efficacious alternatives when a separator produces more candidates than those
+    // cohorts can represent.
     std::sort(retained.begin(), retained.end(), [&](i_t lhs, i_t rhs) {
       if (consumed[lhs] != consumed[rhs]) { return consumed[lhs] > consumed[rhs]; }
       if (cut_age_[lhs] != cut_age_[rhs]) { return cut_age_[lhs] < cut_age_[rhs]; }

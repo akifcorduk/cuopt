@@ -1117,14 +1117,12 @@ TEST(cuts, cut_pool_retains_violated_unselected_cut_during_aging_window)
   EXPECT_EQ(cut_pool.pool_size(), 1);
 }
 
-TEST(cuts, cut_pool_shortens_consumed_cut_grace_under_pressure)
+TEST(cuts, cut_pool_uses_same_aging_window_under_pressure)
 {
   simplex::simplex_solver_settings_t<int, double> settings;
   constexpr int num_cuts = 2001;
   mip::cut_pool_t<int, double> cut_pool(num_cuts, settings);
 
-  // More retained candidates than can be selected, with a material number actually selected, puts
-  // the pool under pressure.
   for (int i = 0; i < num_cuts; i++) {
     mip::inequality_t<int, double> cut;
     cut.push_back(i, 1.0);
@@ -1143,6 +1141,15 @@ TEST(cuts, cut_pool_shortens_consumed_cut_grace_under_pressure)
   EXPECT_EQ(cut_pool.pool_size(), num_cuts);
 
   std::fill(relaxation.begin(), relaxation.end(), 2.0);
+  for (int pass = 0; pass < 2; pass++) {
+    csr_matrix_t<int, double> cuts(0, num_cuts, 0);
+    std::vector<double> rhs;
+    std::vector<mip::cut_type_t> types;
+    cut_pool.score_cuts(relaxation);
+    EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 0);
+  }
+  EXPECT_EQ(cut_pool.pool_size(), 2000);
+
   {
     csr_matrix_t<int, double> cuts(0, num_cuts, 0);
     std::vector<double> rhs;
@@ -1150,7 +1157,7 @@ TEST(cuts, cut_pool_shortens_consumed_cut_grace_under_pressure)
     cut_pool.score_cuts(relaxation);
     EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 0);
   }
-  EXPECT_EQ(cut_pool.pool_size(), 1);
+  EXPECT_EQ(cut_pool.pool_size(), 0);
 }
 
 TEST(cuts, cut_pool_preserves_grace_for_large_filtered_batch)
@@ -1186,6 +1193,29 @@ TEST(cuts, cut_pool_preserves_grace_for_large_filtered_batch)
     EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 0);
   }
   EXPECT_EQ(cut_pool.pool_size(), num_cuts);
+}
+
+TEST(cuts, cut_pool_capacity_covers_all_age_cohorts)
+{
+  simplex::simplex_solver_settings_t<int, double> settings;
+  constexpr int num_cuts = 6001;
+  mip::cut_pool_t<int, double> cut_pool(num_cuts, settings);
+
+  for (int i = 0; i < num_cuts; i++) {
+    mip::inequality_t<int, double> cut;
+    cut.push_back(i, 1.0);
+    cut.rhs = 1.0;
+    cut_pool.add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, cut);
+  }
+
+  std::vector<double> relaxation(num_cuts, 0.0);
+  csr_matrix_t<int, double> cuts(0, num_cuts, 0);
+  std::vector<double> rhs;
+  std::vector<mip::cut_type_t> types;
+  cut_pool.score_cuts(relaxation);
+  EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 2000);
+  EXPECT_EQ(cut_pool.pool_size(), 6000);
+  EXPECT_EQ(cut_pool.last_prune_stats().capacity_pruned, 1);
 }
 
 TEST(cuts, clique_phase1_smoke_conflict_graph_edges)

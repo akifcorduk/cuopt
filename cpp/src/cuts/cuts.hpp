@@ -373,8 +373,8 @@ class cut_pool_t {
   cut_pool_prune_stats_t<i_t> last_prune_stats_;
   const f_t min_cut_distance_{1e-4};
   static constexpr i_t max_selected_cuts_{2000};
-  static constexpr i_t max_cut_pool_size_{2 * max_selected_cuts_};
   static constexpr i_t max_cut_age_{2};
+  static constexpr i_t max_cut_pool_size_{(max_cut_age_ + 1) * max_selected_cuts_};
 };
 
 template <typename i_t, typename f_t>
