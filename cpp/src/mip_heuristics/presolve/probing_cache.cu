@@ -22,6 +22,7 @@
 #include <utilities/timer.hpp>
 
 #include <chrono>
+#include <limits>
 #include <unordered_set>
 #include <utilities/omp_helpers.hpp>
 
@@ -859,10 +860,11 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
   auto stream            = problem.handle_ptr->get_stream();
   auto h_integer_indices = host_copy(problem.integer_indices, stream);
   auto h_var_bounds      = host_copy(problem.variable_bounds, stream);
-  // TODO adjust the iteration limit depending on the total time limit and time it takes for single
-  // var
+  // Probing is bounded by deterministic work below, never by wall time. multi_probe_t is also used
+  // outside the probing cache and retains generic timer support, so give these instances an
+  // explicitly unbounded time limit.
   bound_presolve.settings.iteration_limit = 50;
-  bound_presolve.settings.time_limit      = timer.remaining_time();
+  bound_presolve.settings.time_limit      = std::numeric_limits<double>::infinity();
 
   size_t num_tasks = bound_presolve.settings.num_tasks < 0 ? omp_get_num_threads() - 1
                                                            : bound_presolve.settings.num_tasks;
@@ -912,7 +914,7 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
 
   // Main parallel loop
   for (size_t step_start = 0; step_start < priority_indices.size(); step_start += step_size) {
-    if (timer.check_time_limit() || early_exit || problem_is_infeasible.load()) { break; }
+    if (early_exit || problem_is_infeasible.load()) { break; }
     if (work_used >= work_limit) { break; }
     size_t step_end = std::min(step_start + step_size, priority_indices.size());
 
@@ -923,11 +925,9 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
       auto& multi_probe_presolve = multi_probe_presolve_pool[task_id];
       auto& modification_vector  = modification_vector_pool[task_id];
       auto& substitution_vector  = substitution_vector_pool[task_id];
-      if (timer.check_time_limit()) { continue; }
 
       for (size_t i = step_start + begin; i < step_start + end; ++i) {
         auto var_idx = priority_indices[i];
-        if (timer.check_time_limit()) { continue; }
 
         CUOPT_LOG_TRACE("Computing probing cache for var %d on task %zu", var_idx, task_id);
         compute_cache_for_var<i_t, f_t>(var_idx,
@@ -974,8 +974,8 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
     std::chrono::duration<double>(std::chrono::steady_clock::now() - probing_t0).count();
   CUOPT_LOG_DEBUG(
     "PRESOLVE_PROBING probes=%zu candidates=%zu iters=%.0f work=%.3f work_limit=%.3f step=%zu "
-    "iter_cost=%.5f probe_cost=%.5f wall=%.3f wall_limit=%.3f units_per_s=%.1f "
-    "budget_exhausted=%d early_exit=%d timed_out=%d cached=%lu implied_singletons=%lu",
+    "iter_cost=%.5f probe_cost=%.5f wall=%.3f units_per_s=%.1f "
+    "budget_exhausted=%d early_exit=%d cached=%lu implied_singletons=%lu",
     probes_done,
     priority_indices.size(),
     iters_done,
@@ -985,11 +985,9 @@ bool compute_probing_cache(bound_presolve_t<i_t, f_t>& bound_presolve,
     iter_cost,
     probe_cost,
     probing_wall,
-    timer.get_time_limit(),
     probing_wall > 0.0 ? work_used / probing_wall : 0.0,
     (int)(work_used >= work_limit),
     (int)early_exit,
-    (int)timer.check_time_limit(),
     n_of_cached_probings.load(),
     n_of_implied_singletons.load());
   // restore the settings

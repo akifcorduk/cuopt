@@ -852,18 +852,7 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   auto n_vars         = solution.problem_ptr->n_variables;
   auto n_binary_vars  = solution.problem_ptr->get_n_binary_variables();
   auto n_integer_vars = solution.problem_ptr->n_integer_vars;
-  bool ran_early_fp   = false;
-  if (lp_optimal_exists && context.prioritize_early_feasibility) {
-    solution.copy_new_assignment(lp_optimal_solution);
-    fp.timer = timer;
-    fp.cycle_queue.reset(solution);
-    fp.reset();
-    fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
-    ran_early_fp     = true;
-    bool is_feasible = run_staged_fp(solution, timer, population_ptr);
-    if (is_feasible || timer.check_time_limit()) { return is_feasible; }
-  }
-  bool is_feasible = check_fj_on_lp_optimal(solution, perturb, timer);
+  bool is_feasible    = check_fj_on_lp_optimal(solution, perturb, timer);
   if (is_feasible) {
     CUOPT_LOG_DEBUG("Solution generated with FJ on LP optimal: is_feasible %d", is_feasible);
     return true;
@@ -894,14 +883,12 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
     CUOPT_LOG_DEBUG("Preempting heuristic solver!");
     return is_feasible;
   }
-  if (!ran_early_fp) {
-    fp.timer = timer;
-    // continue with the solution with fj on lp optimal
-    fp.cycle_queue.reset(solution);
-    fp.reset();
-    fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
-    is_feasible = run_staged_fp(solution, timer, population_ptr);
-  }
+  fp.timer = timer;
+  // continue with the solution with fj on lp optimal
+  fp.cycle_queue.reset(solution);
+  fp.reset();
+  fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
+  is_feasible = run_staged_fp(solution, timer, population_ptr);
   // is_feasible = run_fp(solution, timer);
   CUOPT_LOG_DEBUG("Solution generated with FP: is_feasible %d", is_feasible);
   return is_feasible;

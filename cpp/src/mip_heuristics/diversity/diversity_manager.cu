@@ -28,8 +28,7 @@
 #include <memory>
 #include <numeric>
 
-constexpr bool fj_only_run                        = false;
-constexpr double pre_root_quick_repair_time_limit = 1.0;
+constexpr bool fj_only_run = false;
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -300,24 +299,10 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
   if (termination_criterion_t::NO_UPDATE != term_crit) {
     ls.constraint_prop.bounds_update.set_updated_bounds(*problem_ptr);
   }
-  const auto& hp               = context.settings.heuristic_params;
-  const auto probing_features  = probing_presolve_features(*problem_ptr);
-  const auto probing_budget    = evaluate_presolve_budget(hp, probing_features);
-  bool run_probing_cache       = !fj_only_run;
-  const bool feasibility_shape = should_prioritize_early_feasibility(probing_features, true);
-  const bool zero_objective =
-    feasibility_shape &&
-    thrust::all_of(problem_ptr->handle_ptr->get_thrust_policy(),
-                   problem_ptr->objective_coefficients.begin(),
-                   problem_ptr->objective_coefficients.end(),
-                   [] __device__(f_t coefficient) { return coefficient == f_t{0}; });
-  if (zero_objective) {
-    CUOPT_LOG_INFO(
-      "Skipping probing cache for large zero-objective feasibility model; prioritizing root LP "
-      "and feasibility pump");
-    context.prioritize_early_feasibility = true;
-    run_probing_cache                    = false;
-  }
+  const auto& hp              = context.settings.heuristic_params;
+  const auto probing_features = probing_presolve_features(*problem_ptr);
+  const auto probing_budget   = evaluate_presolve_budget(hp, probing_features);
+  bool run_probing_cache      = !fj_only_run;
   // Allow the user to disable the probing-cache step of cuOpt's internal presolve
   // independently of the higher-level presolver setting.
   if (!context.settings.probing) {
@@ -327,11 +312,7 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
 
   if (run_probing_cache) {
     log_presolve_budget("PROBING", probing_features, probing_budget);
-    f_t time_for_probing_cache = std::min({time_limit,
-                                           (f_t)global_timer.remaining_time(),
-                                           static_cast<f_t>(probing_budget.probing_wall_limit)});
-    timer_t probing_timer{time_for_probing_cache};
-    [[maybe_unused]] const auto probing_t0 = std::chrono::steady_clock::now();
+    timer_t probing_timer{std::numeric_limits<f_t>::infinity()};
     // this function computes probing cache, finds singletons, substitutions and changes the problem
     bool problem_is_infeasible = compute_probing_cache(ls.constraint_prop.bounds_update,
                                                        *problem_ptr,
@@ -339,9 +320,6 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
                                                        probing_budget.probing_work_limit,
                                                        (size_t)probing_budget.probing_step_size);
     problem_ptr->handle_ptr->sync_stream();
-    CUOPT_LOG_DEBUG(
-      "PRESOLVE_PROBING_WALL wall=%.3f",
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - probing_t0).count());
     if (problem_is_infeasible) { return false; }
   }
   const bool remap_cache_ids           = true;
@@ -547,27 +525,13 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver()
     "The problem must not be ii");
   population.initialize_population();
   population.allocate_solutions();
+  generate_quick_feasible_solution();
   add_user_given_solutions(initial_sol_vector);
   population.add_solutions_from_vec(std::move(initial_sol_vector));
   if (check_b_b_preemption()) { return population.best_feasible(); }
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
   ls.start_cpufj_scratch_threads(population);
-
-  if (check_b_b_preemption()) { return population.best_feasible(); }
-  presolve_features_t quick_repair_features{};
-  quick_repair_features.n_vars = problem_ptr->n_variables;
-  quick_repair_features.n_cons = problem_ptr->n_constraints;
-  if (!population.is_feasible() && should_run_pre_root_quick_repair(quick_repair_features) &&
-      timer.remaining_time() > pre_root_quick_repair_time_limit) {
-    // The normal GPU heuristic sequence waits for the root relaxation. Spend one bounded second
-    // on zero-seeded propagation and FJ first when presolve has not produced an incumbent, so a
-    // slow concurrent root does not leave the early primal metric empty.
-    solution_t<i_t, f_t> quick_sol(*problem_ptr);
-    timer_t quick_sol_timer(pre_root_quick_repair_time_limit);
-    ls.generate_fast_solution(quick_sol, quick_sol_timer);
-    population.add_solution(std::move(quick_sol));
-  }
 
   if (check_b_b_preemption()) { return population.best_feasible(); }
   lp_state_t<i_t, f_t>& lp_state = problem_ptr->lp_state;
