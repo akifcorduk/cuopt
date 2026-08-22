@@ -3504,6 +3504,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     return solver_status_;
   }
 
+  if (root_status == lp_status_t::CONCURRENT_LIMIT) {
+    settings_.log.printf("\n");
+    solver_status_ = mip_status_t::SUBMIP_HALT;
+    set_final_solution(solution, -inf);
+    signal_extend_cliques_.store(true, std::memory_order_release);
+#pragma omp taskwait depend(in : *clique_signal)
+    return solver_status_;
+  }
+
   if (root_status == lp_status_t::NUMERICAL_ISSUES) {
     settings_.log.printf("\n");
     solver_status_ = mip_status_t::NUMERICAL;
