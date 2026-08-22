@@ -59,6 +59,7 @@ struct fj_hyper_parameters_t {
   // The value added to the objective weight everytime a new best solution is
   // found in order to move towards better solutions
   double objective_weight_increment       = 0.01;
+  double initial_objective_weight         = 0.0;
   int load_balancing_variable_threshold   = 300;
   int load_balancing_constraint_threshold = 5000;
   int load_balancing_variable_split_size  = 50;
@@ -639,6 +640,9 @@ class fj_t {
 
   fj_improvement_callback_t<f_t> improvement_callback;
   f_t last_reported_objective_{std::numeric_limits<f_t>::infinity()};
+
+ private:
+  void reset_objective_weight(const rmm::cuda_stream_view& stream);
 };
 
 }  // namespace cuopt::mathematical_optimization::mip

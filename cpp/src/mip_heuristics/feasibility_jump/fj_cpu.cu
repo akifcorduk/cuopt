@@ -722,7 +722,9 @@ static void update_weights(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
     }
   }
 
-  if (fj_cpu.violated_constraints.empty()) { fj_cpu.h_objective_weight += 1; }
+  if (!fj_cpu.settings.feasibility_run && fj_cpu.violated_constraints.empty()) {
+    fj_cpu.h_objective_weight += 1;
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -1784,7 +1786,9 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_standalone(
   auto fj_cpu = std::make_unique<fj_cpu_climber_t<i_t, f_t>>(preemption_flag);
 
   std::vector<f_t> default_weights(problem.n_constraints, 1.0);
-  init_fj_cpu(*fj_cpu, solution, default_weights, default_weights, 0.0);
+  const f_t initial_objective_weight =
+    settings.feasibility_run ? f_t{0} : settings.parameters.initial_objective_weight;
+  init_fj_cpu(*fj_cpu, solution, default_weights, default_weights, initial_objective_weight);
   fj_cpu->settings      = settings;
   fj_cpu->settings.seed = cuopt::seed_generator::get_seed();
 
