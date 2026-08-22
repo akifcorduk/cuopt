@@ -211,6 +211,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   const f_t rlp_base = context.settings.heuristic_params.relaxed_lp_time_limit;
   f_t time_limit     = longer_lp_run ? 5. * rlp_base : rlp_base;
   time_limit         = std::max(0.05, std::min(time_limit, timer.remaining_time() / 10.));
+  if (strict_time_limit) { time_limit = std::min(time_limit, timer.remaining_time()); }
   static f_t lp_time = 0;
   static i_t n_calls = 0;
   f_t old_remaining  = timer.remaining_time();
@@ -219,6 +220,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
+  lp_settings.concurrent_halt     = concurrent_halt;
   auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
   cuopt_func_call(solution.test_variable_bounds(false));
   last_lp_time = old_remaining - timer.remaining_time();
@@ -246,9 +248,13 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
 template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
 {
+  if (strict_time_limit && timer.check_time_limit()) { return false; }
+
   bool result;
   CUOPT_LOG_DEBUG("Rounding the point");
-  timer_t bounds_prop_timer(std::max(0.05, std::min(0.5, timer.remaining_time() / 10.)));
+  f_t bounds_prop_time = std::max(0.05, std::min(0.5, timer.remaining_time() / 10.));
+  if (strict_time_limit) { bounds_prop_time = std::min(bounds_prop_time, timer.remaining_time()); }
+  timer_t bounds_prop_timer(bounds_prop_time);
   const f_t lp_run_time_after_feasible     = 0.;
   bool old_var                             = constraint_prop.round_all_vars;
   f_t old_time                             = constraint_prop.max_time_for_bounds_prop;
@@ -381,6 +387,28 @@ void feasibility_pump_t<i_t, f_t>::reset()
   max_n_of_integers         = 0;
   config.alpha              = default_alpha;
   last_distances.resize(0);
+  concurrent_halt   = nullptr;
+  strict_time_limit = false;
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::reset_for_standalone_run(solution_t<i_t, f_t>& solution,
+                                                            double time_limit,
+                                                            std::atomic<int>* concurrent_halt_)
+{
+  timer = timer_t(time_limit);
+  cycle_queue.reset(solution);
+  reset();
+  concurrent_halt   = concurrent_halt_;
+  strict_time_limit = true;
+}
+
+template <typename i_t, typename f_t>
+bool feasibility_pump_t<i_t, f_t>::check_preemption() const
+{
+  return context.preempt_heuristic_solver_.load(std::memory_order_acquire) ||
+         (context.diversity_manager_ptr != nullptr &&
+          context.diversity_manager_ptr->check_b_b_preemption());
 }
 
 template <typename i_t, typename f_t>
@@ -472,6 +500,8 @@ template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
+  if (check_preemption() || timer.check_time_limit()) { return false; }
+
   // start by doing nearest rounding
   solution.round_nearest();
   raft::copy(last_rounding.data(),
@@ -479,9 +509,10 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
   while (true) {
-    if (context.diversity_manager_ptr->check_b_b_preemption() || timer.check_time_limit()) {
-      CUOPT_LOG_DEBUG("FP time limit reached!");
-      round(solution);
+    const bool preempted = check_preemption();
+    if (preempted || timer.check_time_limit()) {
+      CUOPT_LOG_DEBUG(preempted ? "FP preempted!" : "FP time limit reached!");
+      if (!preempted && !strict_time_limit) { round(solution); }
       return false;
     }
     proj_begin = timer.remaining_time();
@@ -489,7 +520,8 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     f_t ratio_of_assigned_integers =
       f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
-    i_t n_integers   = solution.compute_number_of_integers();
+    if (check_preemption() || (strict_time_limit && timer.check_time_limit())) { return false; }
+    i_t n_integers = solution.compute_number_of_integers();
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
                     n_integers,
                     solution.problem_ptr->n_integer_vars);
@@ -521,13 +553,17 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
       }
       // if the solution is almost on polytope
       else if (last_distances[0] < distance_to_check_for_feasible) {
+        if (strict_time_limit && timer.check_time_limit()) { return false; }
         // run the LP with full precision to check if it actually is feasible
         const f_t lp_verify_time_limit = 5.;
         relaxed_lp_settings_t lp_settings;
-        lp_settings.time_limit            = lp_verify_time_limit;
+        lp_settings.time_limit            = strict_time_limit
+                                              ? std::min(lp_verify_time_limit, timer.remaining_time())
+                                              : lp_verify_time_limit;
         lp_settings.tolerance             = solution.problem_ptr->tolerances.absolute_tolerance;
         lp_settings.return_first_feasible = true;
         lp_settings.save_state            = true;
+        lp_settings.concurrent_halt       = concurrent_halt;
         run_lp_with_vars_fixed(*solution.problem_ptr,
                                solution,
                                solution.problem_ptr->integer_indices,
@@ -543,6 +579,7 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     }
     cuopt_func_call(solution.test_variable_bounds(false));
     is_feasible = round(solution);
+    if (check_preemption() || (strict_time_limit && timer.check_time_limit())) { return false; }
     cuopt_func_call(solution.test_variable_bounds(true));
     proj_and_round_time = proj_begin - timer.remaining_time();
     if (!is_feasible) {

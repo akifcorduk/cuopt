@@ -21,7 +21,7 @@ namespace cuopt::mathematical_optimization::mip {
 
 // Each experiment branch changes this internal constant so checking out the branch activates its
 // treatment without adding a product setting or command-line selector. The scaffold remains idle.
-inline constexpr int pre_presolve_primal_branch_mode = 0;
+inline constexpr int pre_presolve_primal_branch_mode = 5;
 
 inline bool pre_presolve_primal_mode_replaces_early_gpufj(int mode)
 {
@@ -81,7 +81,8 @@ class pre_presolve_primal_t {
     std::exception_ptr exception;
   };
 
-  using work_t = std::function<void(std::atomic<bool>&)>;
+  using work_t         = std::function<void(std::atomic<bool>&)>;
+  using request_stop_t = std::function<void()>;
 
   void configure_work(const optimization_problem_t<i_t, f_t>& op_problem,
                       const mip_solver_settings_t<i_t, f_t>& settings,
@@ -92,6 +93,7 @@ class pre_presolve_primal_t {
   pre_presolve_thread_budget_t& thread_budget_;
   std::unique_ptr<task_state_t> task_state_;
   work_t work_;
+  request_stop_t request_stop_;
   bool replaces_early_gpufj_{false};
   bool started_{false};
 };

@@ -15,6 +15,7 @@
 
 #include <thrust/count.h>
 
+#include <atomic>
 #include <deque>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -76,6 +77,8 @@ struct cycle_queue_t {
 
   void reset(solution_t<i_t, f_t>& solution)
   {
+    curr_recent_sol            = cycle_detection_length - 1;
+    n_iterations_without_cycle = 0;
     for (i_t i = 0; i < cycle_detection_length; ++i) {
       recent_solutions[i].resize(solution.problem_ptr->n_variables,
                                  solution.handle_ptr->get_stream());
@@ -127,6 +130,9 @@ class feasibility_pump_t {
   bool test_number_all_integer(solution_t<i_t, f_t>& solution);
   bool check_distance_cycle(solution_t<i_t, f_t>& solution);
   void reset();
+  void reset_for_standalone_run(solution_t<i_t, f_t>& solution,
+                                double time_limit,
+                                std::atomic<int>* concurrent_halt);
   void resize_vectors(problem_t<i_t, f_t>& problem, const raft::handle_t* handle_ptr);
   bool random_round_with_fj(solution_t<i_t, f_t>& solution, timer_t& round_timer);
   bool round_multiple_points(solution_t<i_t, f_t>& solution);
@@ -157,6 +163,11 @@ class feasibility_pump_t {
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
+  std::atomic<int>* concurrent_halt{nullptr};
+  bool strict_time_limit{false};
+
+ private:
+  bool check_preemption() const;
 };
 
 }  // namespace cuopt::mathematical_optimization::mip
