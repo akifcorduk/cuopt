@@ -13,6 +13,7 @@
 #include <cuopt/mathematical_optimization/solve.hpp>
 #include <cuopt/mathematical_optimization/utilities/internals.hpp>
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
+#include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
 #include <mip_heuristics/solution/solution.cuh>
 #include <mip_heuristics/solver_context.cuh>
@@ -29,8 +30,10 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/sequence.h>
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -47,7 +50,8 @@ void init_handler(const raft::handle_t* handle_ptr)
 }
 
 struct fj_tweaks_t {
-  double objective_weight = 0;
+  std::optional<double> objective_weight;
+  bool inspect_cpu_objective_weight = false;
 };
 
 struct fj_state_t {
@@ -56,6 +60,10 @@ struct fj_state_t {
   int minimums;
   double incumbent_objective;
   double incumbent_violation;
+  double constructor_objective_weight;
+  double reset_objective_weight;
+  double final_objective_weight;
+  std::optional<double> cpu_objective_weight;
 };
 
 // Helper function to setup MIP solver and run FJ with given settings and initial solution
@@ -97,18 +105,38 @@ static fj_state_t run_fj(std::string test_instance,
   solution.clamp_within_bounds();
 
   mip::fj_t<int, double> fj(solver.context, fj_settings);
+  const double constructor_objective_weight =
+    fj.objective_weight.value(solution.handle_ptr->get_stream());
   fj.reset_weights(solution.handle_ptr->get_stream(), 1.);
-  fj.objective_weight.set_value_async(tweaks.objective_weight, solution.handle_ptr->get_stream());
+  const double reset_objective_weight =
+    fj.objective_weight.value(solution.handle_ptr->get_stream());
+  if (tweaks.objective_weight.has_value()) {
+    fj.objective_weight.set_value_async(*tweaks.objective_weight,
+                                        solution.handle_ptr->get_stream());
+  }
   solution.handle_ptr->sync_stream();
+
+  std::optional<double> cpu_objective_weight;
+  if (tweaks.inspect_cpu_objective_weight) {
+    std::atomic<bool> preemption_flag{false};
+    auto fj_cpu = mip::init_fj_cpu_standalone(problem, solution, preemption_flag, fj_settings);
+    cpu_objective_weight = fj_cpu->h_objective_weight;
+  }
 
   fj.solve(solution);
   auto solution_vector = host_copy(solution.assignment, solution.handle_ptr->get_stream());
+  const double final_objective_weight =
+    fj.objective_weight.value(solution.handle_ptr->get_stream());
 
   return {solution,
           solution_vector,
           fj.climbers[0]->local_minimums_reached.value(solution.handle_ptr->get_stream()),
           fj.climbers[0]->incumbent_objective.value(solution.handle_ptr->get_stream()),
-          fj.climbers[0]->violation_score.value(solution.handle_ptr->get_stream())};
+          fj.climbers[0]->violation_score.value(solution.handle_ptr->get_stream()),
+          constructor_objective_weight,
+          reset_objective_weight,
+          final_objective_weight,
+          cpu_objective_weight};
 }
 
 // FJ had a bug causing objective/violation values to explode in magnitude in certain scenarios.
@@ -257,6 +285,48 @@ TEST(mip_solve, feasibility_jump_obj_runoff_test)
                                /*"buildingenergy.mps"*/}) {
     run_fj_check_no_obj_runoff(instance);
   }
+}
+
+TEST(mip_solve, feasibility_jump_initial_objective_weight_test)
+{
+  constexpr double initial_objective_weight = 5.0;
+  mip::fj_settings_t fj_settings;
+  fj_settings.time_limit                          = 30.;
+  fj_settings.mode                                = mip::fj_mode_t::EXIT_NON_IMPROVING;
+  fj_settings.iteration_limit                     = 0;
+  fj_settings.feasibility_run                     = false;
+  fj_settings.parameters.initial_objective_weight = initial_objective_weight;
+
+  fj_tweaks_t tweaks;
+  tweaks.inspect_cpu_objective_weight = true;
+  const auto state                    = run_fj("gen-ip054.mps", fj_settings, tweaks);
+
+  EXPECT_DOUBLE_EQ(state.constructor_objective_weight, initial_objective_weight);
+  EXPECT_DOUBLE_EQ(state.reset_objective_weight, initial_objective_weight);
+  EXPECT_DOUBLE_EQ(state.final_objective_weight, initial_objective_weight);
+  ASSERT_TRUE(state.cpu_objective_weight.has_value());
+  EXPECT_DOUBLE_EQ(*state.cpu_objective_weight, initial_objective_weight);
+}
+
+TEST(mip_solve, feasibility_jump_feasibility_run_ignores_initial_objective_weight_test)
+{
+  constexpr double initial_objective_weight = 5.0;
+  mip::fj_settings_t fj_settings;
+  fj_settings.time_limit                          = 30.;
+  fj_settings.mode                                = mip::fj_mode_t::EXIT_NON_IMPROVING;
+  fj_settings.iteration_limit                     = 0;
+  fj_settings.feasibility_run                     = true;
+  fj_settings.parameters.initial_objective_weight = initial_objective_weight;
+
+  fj_tweaks_t tweaks;
+  tweaks.inspect_cpu_objective_weight = true;
+  const auto state                    = run_fj("gen-ip054.mps", fj_settings, tweaks);
+
+  EXPECT_DOUBLE_EQ(state.constructor_objective_weight, initial_objective_weight);
+  EXPECT_DOUBLE_EQ(state.reset_objective_weight, initial_objective_weight);
+  EXPECT_DOUBLE_EQ(state.final_objective_weight, 0.0);
+  ASSERT_TRUE(state.cpu_objective_weight.has_value());
+  EXPECT_DOUBLE_EQ(*state.cpu_objective_weight, 0.0);
 }
 
 }  // namespace cuopt::mathematical_optimization::test
