@@ -7,12 +7,24 @@
 
 #include "pre_presolve_primal.cuh"
 
+#include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
 #include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
+#include <mip_heuristics/solution/solution.cuh>
+#include <utilities/copy_helpers.hpp>
 #include <utilities/logger.hpp>
 
+#include <raft/sparse/detail/cusparse_wrappers.h>
+#include <raft/core/handle.hpp>
+#include <raft/linalg/detail/cublas_wrappers.hpp>
+
+#include <thrust/fill.h>
+
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -74,6 +86,217 @@ class task_slot_release_t {
   int slots_;
 };
 
+template <typename f_t>
+struct cpufj_worker_result_t {
+  void reset()
+  {
+    has_solution    = false;
+    best_objective  = std::numeric_limits<f_t>::infinity();
+    best_assignment = {};
+  }
+
+  bool has_solution{false};
+  f_t best_objective{std::numeric_limits<f_t>::infinity()};
+  std::vector<f_t> best_assignment;
+};
+
+template <typename i_t, typename f_t>
+class pdlp_cpufj_runtime_t {
+ public:
+  pdlp_cpufj_runtime_t(problem_t<i_t, f_t>& problem,
+                       fj_cpu_climber_t<i_t, f_t>& worker,
+                       std::atomic<bool>& stop_requested,
+                       std::atomic<bool>& cpufj_preemption,
+                       early_incumbent_callback_t<f_t> incumbent_callback,
+                       pre_presolve_thread_budget_t& thread_budget)
+    : problem_(problem),
+      worker_(worker),
+      stop_requested_(stop_requested),
+      cpufj_preemption_(cpufj_preemption),
+      incumbent_callback_(std::move(incumbent_callback)),
+      thread_budget_(thread_budget)
+  {
+    auto* result                 = &result_;
+    worker_.improvement_callback = [result](
+                                     f_t objective, const std::vector<f_t>& assignment, double) {
+      if (!result->has_solution || objective < result->best_objective) {
+        result->has_solution    = true;
+        result->best_objective  = objective;
+        result->best_assignment = assignment;
+      }
+    };
+    worker_.log_prefix = "PDLP-CPUFJ: ";
+  }
+
+  void on_major_iteration(i_t,
+                          raft::device_span<const f_t> unscaled_primal,
+                          rmm::cuda_stream_view stream)
+  {
+    ++firings_;
+
+    if (stop_requested_.load(std::memory_order_acquire) ||
+        cpufj_preemption_.load(std::memory_order_acquire)) {
+      ++skipped_stopping_;
+      return;
+    }
+    if (!thread_budget_.try_reserve(1)) {
+      ++skipped_no_slot_;
+      return;
+    }
+
+    task_slot_release_t release(&thread_budget_, 1);
+    auto host_primal = cuopt::host_copy(unscaled_primal, stream);
+    reseed_fj_cpu_from_host(worker_, host_primal);
+    result_.reset();
+    ++launched_;
+
+    // Run on the already executing dispatcher task. The reservation is an admission-control token,
+    // not a deferred OpenMP task, so a callback is skipped instead of entering the task queue.
+    constexpr f_t worker_time_limit{0.05};
+    cpufj_solve(&worker_, worker_time_limit);
+    report_worker_result(stream);
+  }
+
+  void log_counts() const
+  {
+    CUOPT_LOG_INFO(
+      "Pre-presolve mode 6 (PDLP-CPUFJ): firings=%d launched=%d skipped_no_slot=%d "
+      "skipped_stopping=%d reports=%d",
+      static_cast<int>(firings_),
+      static_cast<int>(launched_),
+      static_cast<int>(skipped_no_slot_),
+      static_cast<int>(skipped_stopping_),
+      static_cast<int>(reports_));
+  }
+
+ private:
+  void report_worker_result(rmm::cuda_stream_view stream)
+  {
+    if (!result_.has_solution) { return; }
+
+    rmm::device_uvector<f_t> assignment(result_.best_assignment.size(), stream);
+    raft::copy(assignment.data(), result_.best_assignment.data(), assignment.size(), stream);
+    // CPUFJ's callback only reports assignments that passed its feasibility checks. GPU work is
+    // deferred until PDLP is paused in this callback.
+    problem_.post_process_assignment(assignment, true, stream);
+    auto user_assignment     = cuopt::host_copy(assignment, stream);
+    const f_t user_objective = problem_.get_user_obj_from_solver_obj(result_.best_objective);
+    if (incumbent_callback_) {
+      incumbent_callback_(result_.best_objective, user_objective, user_assignment, "PDLP-CPUFJ");
+      ++reports_;
+    }
+  }
+
+  problem_t<i_t, f_t>& problem_;
+  fj_cpu_climber_t<i_t, f_t>& worker_;
+  std::atomic<bool>& stop_requested_;
+  std::atomic<bool>& cpufj_preemption_;
+  early_incumbent_callback_t<f_t> incumbent_callback_;
+  pre_presolve_thread_budget_t& thread_budget_;
+  cpufj_worker_result_t<f_t> result_;
+  i_t firings_{0};
+  i_t launched_{0};
+  i_t skipped_no_slot_{0};
+  i_t skipped_stopping_{0};
+  i_t reports_{0};
+};
+
+template <typename i_t, typename f_t>
+class pdlp_cpufj_arm_t {
+ public:
+  pdlp_cpufj_arm_t(const optimization_problem_t<i_t, f_t>& op_problem,
+                   const mip_solver_settings_t<i_t, f_t>& settings,
+                   early_incumbent_callback_t<f_t> incumbent_callback,
+                   pre_presolve_thread_budget_t& thread_budget)
+    : incumbent_callback_(std::move(incumbent_callback)), thread_budget_(thread_budget)
+  {
+    RAFT_CUDA_TRY(cudaGetDevice(&device_id_));
+
+    // Complete source-side copies before PaPILO starts. The worker deep-copies this immutable
+    // preprocessed snapshot onto a RAFT handle constructed on the worker host thread.
+    snapshot_problem_ =
+      std::make_unique<problem_t<i_t, f_t>>(op_problem, settings.get_tolerances(), false);
+    snapshot_problem_->preprocess_problem();
+    snapshot_problem_->handle_ptr->sync_stream();
+  }
+
+  void request_stop()
+  {
+    pdlp_halt_.store(1, std::memory_order_release);
+    cpufj_preemption_.store(true, std::memory_order_release);
+  }
+
+  void run(std::atomic<bool>& stop_requested)
+  {
+    if (stop_requested.load(std::memory_order_acquire)) {
+      request_stop();
+      return;
+    }
+    RAFT_CUDA_TRY(cudaSetDevice(device_id_));
+
+    raft::handle_t handle;
+    RAFT_CUBLAS_TRY(raft::linalg::detail::cublassetpointermode(
+      handle.get_cublas_handle(), CUBLAS_POINTER_MODE_DEVICE, handle.get_stream()));
+    RAFT_CUSPARSE_TRY(raft::sparse::detail::cusparsesetpointermode(
+      handle.get_cusparse_handle(), CUSPARSE_POINTER_MODE_DEVICE, handle.get_stream()));
+    problem_t<i_t, f_t> problem(*snapshot_problem_, &handle);
+    handle.sync_stream();
+
+    solution_t<i_t, f_t> solution(problem);
+    thrust::fill(
+      handle.get_thrust_policy(), solution.assignment.begin(), solution.assignment.end(), f_t{0});
+    solution.clamp_within_bounds();
+
+    fj_settings_t fj_settings;
+    fj_settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;
+    fj_settings.n_of_minimums_for_exit = std::numeric_limits<int>::max();
+    fj_settings.time_limit             = std::numeric_limits<f_t>::infinity();
+    fj_settings.iteration_limit        = std::numeric_limits<int>::max();
+    fj_settings.update_weights         = true;
+    fj_settings.feasibility_run        = false;
+    auto worker =
+      init_fj_cpu_standalone(problem, solution, cpufj_preemption_, std::move(fj_settings));
+
+    pdlp_cpufj_runtime_t<i_t, f_t> runtime(
+      problem, *worker, stop_requested, cpufj_preemption_, incumbent_callback_, thread_budget_);
+    relaxed_lp_settings_t lp_settings;
+    lp_settings.time_limit      = std::numeric_limits<double>::infinity();
+    lp_settings.save_state      = false;
+    lp_settings.concurrent_halt = &pdlp_halt_;
+
+    auto* runtime_ptr = &runtime;
+    relaxed_lp_major_iteration_callback_t<i_t, f_t> major_iteration_callback =
+      [runtime_ptr](
+        i_t iteration, raft::device_span<const f_t> primal, rmm::cuda_stream_view stream) {
+        runtime_ptr->on_major_iteration(iteration, primal, stream);
+      };
+
+    try {
+      constexpr i_t callback_interval{1};
+      get_relaxed_lp_solution(problem,
+                              solution.assignment,
+                              solution.lp_state,
+                              lp_settings,
+                              std::move(major_iteration_callback),
+                              callback_interval);
+    } catch (...) {
+      cpufj_preemption_.store(true, std::memory_order_release);
+      runtime.log_counts();
+      throw;
+    }
+    cpufj_preemption_.store(true, std::memory_order_release);
+    runtime.log_counts();
+  }
+
+ private:
+  int device_id_{0};
+  std::unique_ptr<problem_t<i_t, f_t>> snapshot_problem_;
+  early_incumbent_callback_t<f_t> incumbent_callback_;
+  pre_presolve_thread_budget_t& thread_budget_;
+  std::atomic<int> pdlp_halt_{0};
+  std::atomic<bool> cpufj_preemption_{false};
+};
+
 }  // namespace
 
 template <typename i_t, typename f_t>
@@ -97,11 +320,17 @@ pre_presolve_primal_t<i_t, f_t>::~pre_presolve_primal_t()
 }
 
 template <typename i_t, typename f_t>
-void pre_presolve_primal_t<i_t, f_t>::configure_work(const optimization_problem_t<i_t, f_t>&,
-                                                     const mip_solver_settings_t<i_t, f_t>&,
-                                                     early_incumbent_callback_t<f_t>)
+void pre_presolve_primal_t<i_t, f_t>::configure_work(
+  const optimization_problem_t<i_t, f_t>& op_problem,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  early_incumbent_callback_t<f_t> incumbent_callback)
 {
-  // Independent experiment branches install exactly one implementation here.
+  if (mode_ != 6) { return; }
+
+  auto arm = std::make_shared<pdlp_cpufj_arm_t<i_t, f_t>>(
+    op_problem, settings, std::move(incumbent_callback), thread_budget_);
+  work_         = [arm](std::atomic<bool>& stop_requested) { arm->run(stop_requested); };
+  request_stop_ = [arm]() { arm->request_stop(); };
 }
 
 template <typename i_t, typename f_t>
@@ -142,6 +371,7 @@ void pre_presolve_primal_t<i_t, f_t>::stop()
 {
   if (!started_) { return; }
   task_state_->stop_requested.store(true, std::memory_order_release);
+  if (request_stop_) { request_stop_(); }
   auto* task_state = task_state_.get();
 #pragma omp taskwait depend(in : *task_state)
   started_ = false;

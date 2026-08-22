@@ -38,6 +38,23 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   lp_state_t<i_t, f_t>& lp_state,
   const relaxed_lp_settings_t& settings)
 {
+  return get_relaxed_lp_solution(op_problem,
+                                 assignment,
+                                 lp_state,
+                                 settings,
+                                 relaxed_lp_major_iteration_callback_t<i_t, f_t>{},
+                                 i_t{0});
+}
+
+template <typename i_t, typename f_t>
+optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
+  problem_t<i_t, f_t>& op_problem,
+  rmm::device_uvector<f_t>& assignment,
+  lp_state_t<i_t, f_t>& lp_state,
+  const relaxed_lp_settings_t& settings,
+  relaxed_lp_major_iteration_callback_t<i_t, f_t> major_iteration_callback,
+  i_t major_iteration_callback_interval)
+{
   raft::common::nvtx::range fun_scope("get_relaxed_lp_solution");
   pdlp_solver_settings_t<i_t, f_t> pdlp_settings{};
   pdlp_settings.detect_infeasibility = settings.check_infeasibility;
@@ -56,6 +73,8 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   set_pdlp_solver_mode(pdlp_settings);
   // TODO: set Stable3 here?
   pdlp::pdlp_solver_t<i_t, f_t> lp_solver(op_problem, pdlp_settings);
+  lp_solver.set_major_iteration_callback(std::move(major_iteration_callback),
+                                         major_iteration_callback_interval);
   if (settings.has_initial_primal) {
     i_t prev_size = lp_state.prev_dual.size();
     CUOPT_LOG_DEBUG(
@@ -209,6 +228,13 @@ bool run_lp_with_vars_fixed(problem_t<i_t, f_t>& op_problem,
     rmm::device_uvector<F_TYPE> & assignment,                                                 \
     lp_state_t<int, F_TYPE> & lp_state,                                                       \
     const relaxed_lp_settings_t& settings);                                                   \
+  template optimization_problem_solution_t<int, F_TYPE> get_relaxed_lp_solution<int, F_TYPE>( \
+    problem_t<int, F_TYPE> & op_problem,                                                      \
+    rmm::device_uvector<F_TYPE> & assignment,                                                 \
+    lp_state_t<int, F_TYPE> & lp_state,                                                       \
+    const relaxed_lp_settings_t& settings,                                                    \
+    relaxed_lp_major_iteration_callback_t<int, F_TYPE> major_iteration_callback,              \
+    int major_iteration_callback_interval);                                                   \
   template bool run_lp_with_vars_fixed<int, F_TYPE>(                                          \
     problem_t<int, F_TYPE> & op_problem,                                                      \
     solution_t<int, F_TYPE> & solution,                                                       \

@@ -765,6 +765,14 @@ void pdlp_solver_t<i_t, f_t>::set_inside_mip(bool inside_mip)
 }
 
 template <typename i_t, typename f_t>
+void pdlp_solver_t<i_t, f_t>::set_major_iteration_callback(major_iteration_callback_t callback,
+                                                           i_t interval)
+{
+  major_iteration_callback_          = std::move(callback);
+  major_iteration_callback_interval_ = interval;
+}
+
+template <typename i_t, typename f_t>
 void pdlp_solver_t<i_t, f_t>::record_best_primal_so_far(
   const pdlp::pdlp_termination_strategy_t<i_t, f_t>& current,
   const pdlp::pdlp_termination_strategy_t<i_t, f_t>& average,
@@ -2831,6 +2839,7 @@ optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::run_solver(co
         "   Iter    Primal Obj.      Dual Obj.    Gap        Primal Res.  Dual Res.   Time");
     }
   }
+  i_t major_iteration_callback_count = 0;
   while (true) {
 #ifdef CUPDLP_DEBUG_MODE
     printf("Step: %d\n", total_pdlp_iterations_);
@@ -2965,6 +2974,20 @@ optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::run_solver(co
       std::optional<optimization_problem_solution_t<i_t, f_t>> solution = check_termination(timer);
 
       if (solution.has_value()) { return std::move(solution.value()); }
+
+      if (is_major_iteration) {
+        ++major_iteration_callback_count;
+        if (major_iteration_callback_ && major_iteration_callback_interval_ > 0 &&
+            major_iteration_callback_count % major_iteration_callback_interval_ == 0) {
+          const auto& unscaled_primal = settings_.hyper_params.use_adaptive_step_size_strategy
+                                          ? pdhg_solver_.get_primal_solution()
+                                          : pdhg_solver_.get_potential_next_primal_solution();
+          major_iteration_callback_(
+            total_pdlp_iterations_,
+            raft::device_span<const f_t>(unscaled_primal.data(), unscaled_primal.size()),
+            stream_view_);
+        }
+      }
 
       if (settings_.hyper_params.rescale_for_restart) {
         if (!settings_.hyper_params.never_restart_to_average) {

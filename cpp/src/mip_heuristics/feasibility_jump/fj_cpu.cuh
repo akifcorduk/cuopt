@@ -204,4 +204,11 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_standalone(
   std::atomic<bool>& preemption_flag,
   fj_settings_t settings = fj_settings_t{});
 
+// Reuse a fully initialized host climber with a new assignment. The caller must ensure that no
+// CPUFJ solve is using the climber. Static problem data is retained, avoiding another
+// device-to-host model copy for every seed.
+template <typename i_t, typename f_t>
+void reseed_fj_cpu_from_host(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
+                             const std::vector<f_t>& seed_assignment);
+
 }  // namespace cuopt::mathematical_optimization::mip

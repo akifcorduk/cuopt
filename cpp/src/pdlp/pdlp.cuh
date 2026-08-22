@@ -27,11 +27,14 @@
 
 #include <utilities/timer.hpp>
 
+#include <raft/core/device_span.hpp>
 #include <raft/core/handle.hpp>
 
+#include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_scalar.hpp>
 #include <rmm/device_uvector.hpp>
 
+#include <functional>
 #include <optional>
 #include <unordered_set>
 
@@ -96,6 +99,12 @@ class pdlp_solver_t {
   void set_initial_step_size(f_t initial_primal_weight);
   void set_initial_k(i_t initial_k);
   void set_relative_primal_tolerance_factor(f_t primal_tolerance_factor);
+
+  // Internal hook used by MIP experiments. The unscaled primal view is valid only for the
+  // duration of the callback.
+  using major_iteration_callback_t =
+    std::function<void(i_t, raft::device_span<const f_t>, rmm::cuda_stream_view)>;
+  void set_major_iteration_callback(major_iteration_callback_t callback, i_t interval);
 
   using primal_quality_adapter_t =
     typename convergence_information_t<i_t, f_t>::primal_quality_adapter_t;
@@ -179,6 +188,8 @@ class pdlp_solver_t {
   rmm::cuda_stream_view stream_view_;
   // Intentionnaly take a copy to avoid an unintentional modification in the calling context
   const pdlp_solver_settings_t<i_t, f_t> settings_;
+  major_iteration_callback_t major_iteration_callback_;
+  i_t major_iteration_callback_interval_{0};
   mip::shared_strong_branching_context_view_t<i_t, f_t> sb_view_{settings_.shared_sb_solved};
 
   mip::problem_t<i_t, f_t>* problem_ptr;

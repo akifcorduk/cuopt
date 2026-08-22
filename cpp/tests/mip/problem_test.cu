@@ -34,6 +34,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <sstream>
 #include <string>
@@ -203,6 +204,37 @@ TEST(problem, run_small_tests)
   for (const auto& val : cnst_var_vals) {
     test_equal_val_bounds<int, double>(val.first, val.second);
   }
+}
+
+TEST(problem, post_process_assignment_restores_free_variable_dimension)
+{
+  raft::handle_t handle;
+  auto op_problem                   = create_problem<int, double>(&handle, 2, 3);
+  const auto original_num_variables = op_problem.get_n_variables();
+
+  auto lower = op_problem.get_variable_lower_bounds_host();
+  auto upper = op_problem.get_variable_upper_bounds_host();
+  lower[1]   = -std::numeric_limits<double>::infinity();
+  upper[1]   = std::numeric_limits<double>::infinity();
+  op_problem.set_variable_lower_bounds(lower.data(), static_cast<int>(lower.size()));
+  op_problem.set_variable_upper_bounds(upper.data(), static_cast<int>(upper.size()));
+
+  dtl::problem_t<int, double> problem(op_problem);
+  problem.preprocess_problem();
+  ASSERT_EQ(problem.n_variables, original_num_variables + 1);
+
+  std::vector<double> standardized_assignment(problem.n_variables, 0.0);
+  const auto additional_var = problem.presolve_data.additional_var_id_per_var[1];
+  ASSERT_GE(additional_var, 0);
+  standardized_assignment[1]              = 5.0;
+  standardized_assignment[additional_var] = 2.0;
+
+  auto assignment = device_copy(standardized_assignment, handle.get_stream());
+  problem.post_process_assignment(assignment, true, handle.get_stream());
+  auto original_assignment = host_copy(assignment, handle.get_stream());
+
+  ASSERT_EQ(original_assignment.size(), original_num_variables);
+  EXPECT_DOUBLE_EQ(original_assignment[1], 3.0);
 }
 
 namespace ds = cuopt::mathematical_optimization::simplex;

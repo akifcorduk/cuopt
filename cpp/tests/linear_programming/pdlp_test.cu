@@ -46,6 +46,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -90,6 +91,46 @@ TEST(pdlp_class, run_double)
   EXPECT_EQ((int)solution.get_termination_status(), CUOPT_TERMINATION_STATUS_OPTIMAL);
   EXPECT_FALSE(is_incorrect_objective(
     afiro_primal_objective, solution.get_additional_termination_information().primal_objective));
+}
+
+TEST(pdlp_class, major_iteration_callback_interval)
+{
+  const raft::handle_t handle{};
+  auto path           = make_path_absolute("linear_programming/afiro_original.mps");
+  auto mps_data_model = cuopt::mathematical_optimization::io::read_mps<int, double>(path, true);
+  auto op_problem =
+    cuopt::mathematical_optimization::mps_data_model_to_optimization_problem<int, double>(
+      &handle, mps_data_model);
+  cuopt::mathematical_optimization::mip::problem_t<int, double> problem(op_problem);
+
+  auto settings             = pdlp_solver_settings_t<int, double>{};
+  settings.iteration_limit  = 6;
+  settings.pdlp_solver_mode = pdlp_solver_mode_t::Stable2;
+  set_pdlp_solver_mode(settings);
+  settings.hyper_params.major_iteration       = 1;
+  settings.hyper_params.min_iteration_restart = 0;
+
+  int callback_count     = 0;
+  int previous_iteration = -1;
+  auto callback =
+    [&](int iteration, raft::device_span<const double> primal, rmm::cuda_stream_view stream) {
+      ++callback_count;
+      EXPECT_GT(iteration, previous_iteration);
+      previous_iteration = iteration;
+      EXPECT_EQ(primal.size(), static_cast<size_t>(problem.n_variables));
+      const auto host_primal = cuopt::host_copy(primal, stream);
+      EXPECT_TRUE(std::all_of(
+        host_primal.begin(), host_primal.end(), [](double value) { return std::isfinite(value); }));
+    };
+
+  cuopt::mathematical_optimization::pdlp::pdlp_solver_t<int, double> solver(problem, settings);
+  constexpr int callback_interval = 2;
+  solver.set_major_iteration_callback(std::move(callback), callback_interval);
+  auto timer = timer_t(settings.time_limit);
+  solver.run_solver(timer);
+
+  EXPECT_GE(callback_count, 1);
+  EXPECT_LE(callback_count, settings.iteration_limit / callback_interval);
 }
 
 TEST(pdlp_class, precision_mixed)

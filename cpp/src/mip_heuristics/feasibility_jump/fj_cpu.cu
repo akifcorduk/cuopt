@@ -1792,6 +1792,77 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_standalone(
 }
 
 template <typename i_t, typename f_t>
+void reseed_fj_cpu_from_host(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
+                             const std::vector<f_t>& seed_assignment)
+{
+  cuopt_assert(seed_assignment.size() == fj_cpu.h_assignment.size(),
+               "CPUFJ seed assignment size mismatch");
+
+  for (i_t var_idx = 0; var_idx < fj_cpu.view.pb.n_variables; ++var_idx) {
+    const auto& bounds = fj_cpu.h_var_bounds[var_idx].get();
+    auto value         = std::clamp(seed_assignment[var_idx], get_lower(bounds), get_upper(bounds));
+    if (fj_cpu.h_var_types[var_idx] == var_t::INTEGER) {
+      value = std::clamp(std::round(value), get_lower(bounds), get_upper(bounds));
+    }
+    fj_cpu.h_assignment[var_idx] = value;
+  }
+  fj_cpu.h_best_assignment = fj_cpu.h_assignment;
+
+  std::fill(fj_cpu.h_cstr_left_weights.begin(), fj_cpu.h_cstr_left_weights.end(), f_t{1});
+  std::fill(fj_cpu.h_cstr_right_weights.begin(), fj_cpu.h_cstr_right_weights.end(), f_t{1});
+  std::fill(fj_cpu.h_lhs_sumcomp.begin(), fj_cpu.h_lhs_sumcomp.end(), f_t{0});
+  std::fill(fj_cpu.h_tabu_nodec_until.begin(), fj_cpu.h_tabu_nodec_until.end(), i_t{0});
+  std::fill(fj_cpu.h_tabu_noinc_until.begin(), fj_cpu.h_tabu_noinc_until.end(), i_t{0});
+  std::fill(fj_cpu.h_tabu_lastdec.begin(), fj_cpu.h_tabu_lastdec.end(), i_t{0});
+  std::fill(fj_cpu.h_tabu_lastinc.begin(), fj_cpu.h_tabu_lastinc.end(), i_t{0});
+  std::fill(fj_cpu.flip_move_computed.begin(), fj_cpu.flip_move_computed.end(), false);
+  std::fill(fj_cpu.var_bitmap.begin(), fj_cpu.var_bitmap.end(), false);
+  for (auto& cached_move : fj_cpu.cached_mtm_moves) {
+    cached_move = std::make_pair(f_t{0}, fj_staged_score_t::zero());
+  }
+
+  fj_cpu.max_weight                      = f_t{1};
+  fj_cpu.h_objective_weight              = f_t{0};
+  fj_cpu.h_best_objective                = std::numeric_limits<f_t>::infinity();
+  fj_cpu.last_feasible_entrance_iter     = 0;
+  fj_cpu.iterations                      = 0;
+  fj_cpu.feasible_found                  = false;
+  fj_cpu.trigger_early_lhs_recomputation = false;
+  fj_cpu.total_violations                = f_t{0};
+  fj_cpu.hit_count                       = 0;
+  fj_cpu.miss_count                      = 0;
+  std::fill(std::begin(fj_cpu.candidate_move_hits), std::end(fj_cpu.candidate_move_hits), i_t{0});
+  std::fill(
+    std::begin(fj_cpu.candidate_move_misses), std::end(fj_cpu.candidate_move_misses), i_t{0});
+  fj_cpu.iter_mtm_vars.clear();
+
+  fj_cpu.find_lift_move_times.clear();
+  fj_cpu.find_mtm_move_viol_times.clear();
+  fj_cpu.find_mtm_move_sat_times.clear();
+  fj_cpu.apply_move_times.clear();
+  fj_cpu.update_weights_times.clear();
+  fj_cpu.compute_score_times.clear();
+  fj_cpu.nnz_processed_window      = 0;
+  fj_cpu.n_lift_moves_window       = 0;
+  fj_cpu.n_mtm_viol_moves_window   = 0;
+  fj_cpu.n_mtm_sat_moves_window    = 0;
+  fj_cpu.n_variable_updates_window = 0;
+  fj_cpu.n_local_minima_window     = 0;
+  fj_cpu.hit_count_window_start    = 0;
+  fj_cpu.miss_count_window_start   = 0;
+  fj_cpu.iterations_since_best     = 0;
+  fj_cpu.prev_best_objective       = std::numeric_limits<f_t>::infinity();
+  fj_cpu.unique_cstrs_accessed_window.clear();
+  fj_cpu.unique_vars_accessed_window.clear();
+  fj_cpu.work_units_elapsed.store(0.0, std::memory_order_release);
+  fj_cpu.memory_aggregator.flush();
+  fj_cpu.settings.seed = cuopt::seed_generator::get_seed();
+  fj_cpu.halted.store(false, std::memory_order_release);
+
+  recompute_lhs(fj_cpu);
+}
+
+template <typename i_t, typename f_t>
 void fj_cpu_worker_t<i_t, f_t>::fj_cpu_deleter_t::operator()(fj_cpu_climber_t<i_t, f_t>* ptr) const
 {
   delete ptr;
@@ -1853,6 +1924,8 @@ template std::unique_ptr<fj_cpu_climber_t<int, float>> init_fj_cpu_standalone(
   solution_t<int, float>& solution,
   std::atomic<bool>& preemption_flag,
   fj_settings_t settings);
+template void reseed_fj_cpu_from_host(fj_cpu_climber_t<int, float>& fj_cpu,
+                                      const std::vector<float>& seed_assignment);
 template void finalize_fj_cpu_host_initialization(
   fj_cpu_climber_t<int, float>& fj_cpu,
   int n_variables,
@@ -1873,6 +1946,8 @@ template std::unique_ptr<fj_cpu_climber_t<int, double>> init_fj_cpu_standalone(
   solution_t<int, double>& solution,
   std::atomic<bool>& preemption_flag,
   fj_settings_t settings);
+template void reseed_fj_cpu_from_host(fj_cpu_climber_t<int, double>& fj_cpu,
+                                      const std::vector<double>& seed_assignment);
 template void finalize_fj_cpu_host_initialization(
   fj_cpu_climber_t<int, double>& fj_cpu,
   int n_variables,

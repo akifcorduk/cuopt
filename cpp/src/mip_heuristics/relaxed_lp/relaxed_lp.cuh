@@ -14,6 +14,8 @@
 #include <mip_heuristics/solution/solution.cuh>
 #include "lp_state.cuh"
 
+#include <functional>
+
 namespace cuopt::mathematical_optimization::mip {
 
 struct relaxed_lp_settings_t {
@@ -28,6 +30,10 @@ struct relaxed_lp_settings_t {
 };
 
 template <typename i_t, typename f_t>
+using relaxed_lp_major_iteration_callback_t =
+  std::function<void(i_t, raft::device_span<const f_t>, rmm::cuda_stream_view)>;
+
+template <typename i_t, typename f_t>
 optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   problem_t<i_t, f_t>& op_problem,
   solution_t<i_t, f_t>& solution,
@@ -39,6 +45,15 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   rmm::device_uvector<f_t>& assignment,
   lp_state_t<i_t, f_t>& lp_state,
   const relaxed_lp_settings_t& settings);
+
+template <typename i_t, typename f_t>
+optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
+  problem_t<i_t, f_t>& op_problem,
+  rmm::device_uvector<f_t>& assignment,
+  lp_state_t<i_t, f_t>& lp_state,
+  const relaxed_lp_settings_t& settings,
+  relaxed_lp_major_iteration_callback_t<i_t, f_t> major_iteration_callback,
+  i_t major_iteration_callback_interval);
 
 template <typename i_t, typename f_t>
 bool run_lp_with_vars_fixed(problem_t<i_t, f_t>& op_problem,
