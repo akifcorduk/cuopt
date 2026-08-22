@@ -50,12 +50,13 @@ void early_gpufj_t<i_t, f_t>::start()
   this->start_time_ = std::chrono::steady_clock::now();
 
   fj_settings_t fj_settings;
-  fj_settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;
-  fj_settings.n_of_minimums_for_exit = std::numeric_limits<int>::max();
-  fj_settings.time_limit             = std::numeric_limits<f_t>::infinity();
-  fj_settings.iteration_limit        = std::numeric_limits<int>::max();
-  fj_settings.update_weights         = true;
-  fj_settings.feasibility_run        = false;
+  fj_settings.mode                                = fj_mode_t::EXIT_NON_IMPROVING;
+  fj_settings.n_of_minimums_for_exit              = std::numeric_limits<int>::max();
+  fj_settings.time_limit                          = std::numeric_limits<f_t>::infinity();
+  fj_settings.iteration_limit                     = std::numeric_limits<int>::max();
+  fj_settings.update_weights                      = true;
+  fj_settings.feasibility_run                     = false;
+  fj_settings.parameters.initial_objective_weight = 1.0;
 
   fj_ptr_ = std::make_unique<fj_t<i_t, f_t>>(*context_ptr_, fj_settings);
 
