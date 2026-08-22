@@ -3739,6 +3739,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   pc_.Arow = Arow_;
 
   if (!has_initial_pseudocost_) {
+    wait_for_symmetry();
     raft::common::nvtx::range scope_sb("BB::strong_branching");
     strong_branching<i_t, f_t>(original_lp_,
                                settings_,
@@ -3822,6 +3823,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                       original_lp_,
                       log);
 
+  wait_for_symmetry();
   if (symmetry_ != nullptr) {
     i_t removed =
       symmetry_->generators.template prune_by_bounds<f_t>(original_lp_.lower, original_lp_.upper);

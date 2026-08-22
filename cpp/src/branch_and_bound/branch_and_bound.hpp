@@ -41,6 +41,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -175,8 +176,12 @@ class branch_and_bound_t {
     std::vector<i_t>& nonbasic_list,
     std::vector<f_t>& edge_norms);
 
-  // Set symmetry detected concurrently with B&B construction. Call before solve().
-  void set_symmetry(mip_symmetry_t<i_t, f_t>* symmetry) { symmetry_ = symmetry; }
+  // Defer joining symmetry detection until the first B&B operation that consumes symmetry.
+  // The callback returns a non-owning pointer or nullptr; its owner must outlive this object.
+  void set_symmetry_wait_callback(std::function<mip_symmetry_t<i_t, f_t>*()> callback)
+  {
+    symmetry_wait_callback_ = std::move(callback);
+  }
 
   i_t find_reduced_cost_fixings(f_t upper_bound,
                                 std::vector<f_t>& lower_bounds,
@@ -191,12 +196,21 @@ class branch_and_bound_t {
   producer_sync_t& get_producer_sync() { return producer_sync_; }
 
  private:
+  void wait_for_symmetry()
+  {
+    if (symmetry_wait_callback_) {
+      auto callback = std::exchange(symmetry_wait_callback_, {});
+      symmetry_     = callback();
+    }
+  }
+
   const simplex::user_problem_t<i_t, f_t>& original_problem_;
   const simplex::simplex_solver_settings_t<i_t, f_t> settings_;
   const probing_implied_bound_t<i_t, f_t>& probing_implied_bound_;
   std::shared_ptr<mip::clique_table_t<i_t, f_t>> clique_table_;
   omp_atomic_t<bool> signal_extend_cliques_{false};
   mip_symmetry_t<i_t, f_t>* symmetry_;
+  std::function<mip_symmetry_t<i_t, f_t>*()> symmetry_wait_callback_;
 
   work_limit_context_t work_unit_context_{"B&B"};
 

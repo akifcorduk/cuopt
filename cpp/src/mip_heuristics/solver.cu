@@ -482,6 +482,25 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     }
     context.branch_and_bound_ptr = branch_and_bound.get();
 
+#ifdef DETECT_SYMMETRY_AFTER_PRESOLVE
+    if (symmetry_future.valid()) {
+      branch_and_bound->set_symmetry_wait_callback([this, &symmetry_future]() {
+        const double wait_start =
+          context.startup_profile_ptr != nullptr && context.startup_profile_ptr->enabled
+            ? startup_profile_t::now()
+            : 0.0;
+        context.symmetry = symmetry_future.get();
+        if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->enabled) {
+          context.startup_profile_ptr->symmetry_wait += startup_profile_t::elapsed(wait_start);
+          CUOPT_LOG_INFO("Startup profile deferred wait: symmetry=%.6f",
+                         context.startup_profile_ptr->symmetry_wait);
+        }
+        CUOPT_LOG_DEBUG("B&B joined post-presolve symmetry detection at its first consumer");
+        return context.symmetry.get();
+      });
+    }
+#endif
+
     // Convert the best external upper bound from user-space to B&B's internal objective space.
     // context.problem_ptr is the post-trivial-presolve problem, whose get_solver_obj_from_user_obj
     // produces values in the same space as B&B node lower bounds.
@@ -546,23 +565,6 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (!context.settings.heuristics_only) {
 #pragma omp task default(shared) priority(CUOPT_CRITICAL_TASK_PRIORITY)
       {
-#ifdef DETECT_SYMMETRY_AFTER_PRESOLVE
-        // The heuristics can start immediately because B&B is the first symmetry consumer. Only
-        // the B&B task waits, then installs the completed result before solve() can use it.
-        if (symmetry_future.valid()) {
-          const double symmetry_wait_start =
-            context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()
-              ? startup_profile_t::now()
-              : 0.0;
-          context.symmetry = symmetry_future.get();
-          if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
-            context.startup_profile_ptr->symmetry_wait +=
-              startup_profile_t::elapsed(symmetry_wait_start);
-          }
-          branch_and_bound->set_symmetry(context.symmetry.get());
-          CUOPT_LOG_DEBUG("B&B joined post-presolve symmetry detection before solve");
-        }
-#endif
         branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
       }
     }
