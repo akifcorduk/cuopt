@@ -36,7 +36,11 @@ void early_cpufj_t<i_t, f_t>::start()
   this->preemption_flag_.store(false);
   this->start_time_ = std::chrono::steady_clock::now();
 
-  fj_cpu_ = init_fj_cpu_standalone(*this->problem_ptr_, *this->solution_ptr_, preemption_flag_);
+  fj_settings_t fj_settings;
+  fj_settings.feasibility_run                     = false;
+  fj_settings.parameters.initial_objective_weight = 2.0;
+  fj_cpu_                                         = init_fj_cpu_standalone(
+    *this->problem_ptr_, *this->solution_ptr_, preemption_flag_, fj_settings);
 
   fj_cpu_->log_prefix = "[Early CPUFJ] ";
 
