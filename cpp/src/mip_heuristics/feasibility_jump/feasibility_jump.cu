@@ -52,7 +52,8 @@ fj_t<i_t, f_t>::fj_t(mip_solver_context_t<i_t, f_t>& context_, fj_settings_t in_
     cstr_right_weights(pb_ptr->n_constraints, pb_ptr->handle_ptr->get_stream()),
     cstr_left_weights(pb_ptr->n_constraints, pb_ptr->handle_ptr->get_stream()),
     weight_update_increment(1.0),
-    objective_weight(0.0, pb_ptr->handle_ptr->get_stream()),
+    objective_weight(in_settings.parameters.initial_objective_weight,
+                     pb_ptr->handle_ptr->get_stream()),
     max_cstr_weight(0, pb_ptr->handle_ptr->get_stream()),
     climber_views(0, pb_ptr->handle_ptr->get_stream()),
     objective_vars(0, pb_ptr->handle_ptr->get_stream()),
@@ -118,11 +119,21 @@ fj_t<i_t, f_t>::~fj_t()
 }
 
 template <typename i_t, typename f_t>
+void fj_t<i_t, f_t>::reset_objective_weight(const rmm::cuda_stream_view& stream)
+{
+  if (settings.parameters.initial_objective_weight == 0.0) {
+    objective_weight.set_value_to_zero_async(stream);
+  } else {
+    objective_weight.set_value_async(settings.parameters.initial_objective_weight, stream);
+  }
+}
+
+template <typename i_t, typename f_t>
 void fj_t<i_t, f_t>::reset_weights(const rmm::cuda_stream_view& climber_stream, f_t weight)
 {
   // unless reset explicitly, the values are kept across runs and across climbers
   max_cstr_weight.set_value_async(weight, climber_stream);
-  objective_weight.set_value_to_zero_async(climber_stream);
+  reset_objective_weight(climber_stream);
   thrust::uninitialized_fill(
     rmm::exec_policy(climber_stream), cstr_weights.begin(), cstr_weights.end(), weight);
   thrust::uninitialized_fill(
