@@ -28,6 +28,7 @@
 #include <dual_simplex/presolve.hpp>
 #include <dual_simplex/random.hpp>
 #include <dual_simplex/user_problem.hpp>
+#include <math_optimization/startup_profile.hpp>
 #include <math_optimization/tic_toc.hpp>
 
 #include <raft/core/nvtx.hpp>
@@ -253,6 +254,97 @@ std::string to_percentage(f_t value)
   return std::format("{:5.2f}%", value * 100);
 }
 
+template <typename i_t, typename f_t>
+void emit_startup_profile(const simplex_solver_settings_t<i_t, f_t>& settings)
+{
+  auto* profile = settings.startup_profile_ptr;
+  if (profile == nullptr || !profile->active()) { return; }
+
+  const double pre_papilo =
+    startup_profile_t::interval(profile->solve_start, profile->papilo_start);
+  const double papilo = startup_profile_t::interval(profile->papilo_start, profile->papilo_end);
+  const double post_papilo =
+    startup_profile_t::interval(profile->papilo_end, profile->run_mip_start);
+  const double run_mip_setup =
+    startup_profile_t::interval(profile->run_mip_start, profile->cuopt_presolve_start);
+  const double cuopt_presolve =
+    startup_profile_t::interval(profile->cuopt_presolve_start, profile->cuopt_presolve_end);
+  const double post_cuopt =
+    startup_profile_t::interval(profile->cuopt_presolve_end, profile->bnb_export_start);
+  const double bnb_export =
+    startup_profile_t::interval(profile->bnb_export_start, profile->bnb_export_end);
+  const double bnb_setup =
+    startup_profile_t::interval(profile->bnb_export_end, profile->bnb_dispatch);
+  const double dispatch_wait =
+    startup_profile_t::interval(profile->bnb_dispatch, profile->bnb_solve_start);
+  const double bnb_pre_root =
+    startup_profile_t::interval(profile->bnb_solve_start, profile->root_lp_start);
+  const double root_lp = startup_profile_t::interval(profile->root_lp_start, profile->root_lp_end);
+  const double total   = startup_profile_t::interval(profile->solve_start, profile->root_lp_end);
+  const double accounted = pre_papilo + papilo + post_papilo + run_mip_setup + cuopt_presolve +
+                           post_cuopt + bnb_export + bnb_setup + dispatch_wait + bnb_pre_root +
+                           root_lp;
+
+  settings.log.print_format(
+    "Startup profile: total={:.6f} "
+    "critical[pre_papilo={:.6f} papilo={:.6f} post_papilo={:.6f} run_mip_setup={:.6f} "
+    "cuopt_presolve={:.6f} post_cuopt={:.6f} bnb_export={:.6f} bnb_setup={:.6f} "
+    "dispatch_wait={:.6f} bnb_pre_root={:.6f} root_lp={:.6f} residual={:.6f}] "
+    "detail[scale={:.6f} initial_problem={:.6f} sort_csr={:.6f} papilo_pipeline={:.6f} "
+    "reduced_problem={:.6f} scaled_copy={:.6f} mip_preprocess={:.6f} "
+    "cuopt_to_user={:.6f} host_export={:.6f} bnb_ctor={:.6f} bnb_convert={:.6f} "
+    "bnb_var_types={:.6f} bnb_arow={:.6f} bnb_var_bounds={:.6f} ds_presolve={:.6f} "
+    "ds_scaling={:.6f} ds_phase1_create={:.6f} ds_phase1={:.6f} ds_phase2={:.6f} "
+    "ds_first_refactor={:.6f}] "
+    "launch[cpufj={:.6f} gpufj={:.6f} presolved_cpufj={:.6f}] "
+    "background[cpufj={:.6f} gpufj={:.6f} presolved_cpufj={:.6f}] "
+    "blocked[cpufj={:.6f} gpufj={:.6f} presolved_cpufj={:.6f} symmetry={:.6f}]\n",
+    total,
+    pre_papilo,
+    papilo,
+    post_papilo,
+    run_mip_setup,
+    cuopt_presolve,
+    post_cuopt,
+    bnb_export,
+    bnb_setup,
+    dispatch_wait,
+    bnb_pre_root,
+    root_lp,
+    total - accounted,
+    profile->mip_scaling,
+    profile->initial_problem_ctor,
+    profile->sort_csr,
+    profile->papilo_pipeline,
+    profile->reduced_problem_ctor,
+    profile->scaled_problem_copy,
+    profile->mip_preprocess,
+    profile->cuopt_to_user_problem,
+    profile->bnb_problem_export,
+    profile->bnb_ctor,
+    profile->bnb_convert_user_problem,
+    profile->bnb_full_variable_types,
+    profile->bnb_arow,
+    profile->bnb_variable_bounds,
+    profile->dual_presolve,
+    profile->dual_scaling,
+    profile->dual_create_phase1,
+    profile->dual_phase1,
+    profile->dual_phase2,
+    profile->dual_first_refactor,
+    profile->original_cpufj_launch,
+    profile->original_gpufj_launch,
+    profile->presolved_cpufj_launch,
+    profile->original_cpufj_background,
+    profile->original_gpufj_background,
+    profile->presolved_cpufj_background,
+    profile->original_cpufj_wait,
+    profile->original_gpufj_wait,
+    profile->presolved_cpufj_wait,
+    profile->symmetry_wait);
+  profile->root_profile_emitted.store(true, std::memory_order_release);
+}
+
 }  // namespace
 
 template <typename i_t, typename f_t>
@@ -283,9 +375,25 @@ branch_and_bound_t<i_t, f_t>::branch_and_bound_t(
 #endif
 
   simplex::dualize_info_t<i_t, f_t> dualize_info;
+  const double convert_start =
+    settings_.startup_profile_ptr != nullptr && settings_.startup_profile_ptr->active()
+      ? startup_profile_t::now()
+      : 0;
   simplex::convert_user_problem(
     original_problem_, settings_, original_lp_, new_slacks_, dualize_info);
+  if (settings_.startup_profile_ptr != nullptr && settings_.startup_profile_ptr->active()) {
+    settings_.startup_profile_ptr->bnb_convert_user_problem +=
+      startup_profile_t::elapsed(convert_start);
+  }
+  const double variable_types_start =
+    settings_.startup_profile_ptr != nullptr && settings_.startup_profile_ptr->active()
+      ? startup_profile_t::now()
+      : 0;
   full_variable_types(original_problem_, original_lp_, var_types_);
+  if (settings_.startup_profile_ptr != nullptr && settings_.startup_profile_ptr->active()) {
+    settings_.startup_profile_ptr->bnb_full_variable_types +=
+      startup_profile_t::elapsed(variable_types_start);
+  }
 
   // Check slack
 #ifdef CHECK_SLACKS
@@ -3227,6 +3335,11 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 {
   raft::common::nvtx::range scope("BB::solve");
 
+  auto* startup_profile = settings_.startup_profile_ptr;
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->bnb_solve_start = startup_profile_t::now();
+  }
+
   logger_t log;
   log.log                             = false;
   log.log_prefix                      = settings_.log.log_prefix;
@@ -3235,13 +3348,23 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   root_lp_current_lower_bound_        = -inf;
   exploration_stats_.nodes_unexplored = 0;
   exploration_stats_.nodes_explored   = 0;
+  const double arow_start =
+    startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
   original_lp_.A.to_compressed_row(Arow_);
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->bnb_arow += startup_profile_t::elapsed(arow_start);
+  }
 
   settings_.log.debug("Reduced cost strengthening enabled: %d\n",
                       settings_.reduced_cost_strengthening);
 
+  const double variable_bounds_start =
+    startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
   variable_bounds_t<i_t, f_t> variable_bounds(
     original_lp_, settings_, var_types_, Arow_, new_slacks_);
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->bnb_variable_bounds += startup_profile_t::elapsed(variable_bounds_start);
+  }
 
   if (guess_.size() != 0) {
     raft::common::nvtx::range scope_guess("BB::check_initial_guess");
@@ -3303,6 +3426,9 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   lp_status_t root_status  = lp_status_t::UNSET;
   solving_root_relaxation_ = true;
 
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->root_lp_start = startup_profile_t::now();
+  }
   f_t root_relax_start_time = tic();
 
   if (!enable_concurrent_lp_root_solve()) {
@@ -3336,6 +3462,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   solving_root_relaxation_               = false;
   f_t root_relax_elapsed_time            = toc(root_relax_start_time);
   exploration_stats_.total_lp_solve_time = root_relax_elapsed_time;
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->root_lp_end = startup_profile_t::now();
+    emit_startup_profile(settings_);
+  }
 
   if (root_status == lp_status_t::INFEASIBLE) {
     settings_.log.printf("\nThe root LP relaxation is infeasible\n",

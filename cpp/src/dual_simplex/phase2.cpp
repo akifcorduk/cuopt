@@ -14,6 +14,7 @@
 #include <dual_simplex/random.hpp>
 #include <dual_simplex/solve.hpp>
 #include <linear_algebra/sparse_matrix.hpp>
+#include <math_optimization/startup_profile.hpp>
 #include <math_optimization/tic_toc.hpp>
 
 #include <utilities/scope_guard.hpp>
@@ -2598,9 +2599,17 @@ dual_status_t dual_phase2_with_advanced_basis(i_t phase,
     assert(superbasic_list.size() == 0);
     assert(nonbasic_list.size() == n - m);
 
-    f_t refactor_start_work = ft.work_estimate();
-    i_t refactor_status     = ft.refactor_basis(
+    f_t refactor_start_work           = ft.work_estimate();
+    auto* startup_profile             = settings.startup_profile_ptr;
+    const double first_refactor_start = startup_profile != nullptr && startup_profile->active() &&
+                                            startup_profile->dual_first_refactor == 0.0
+                                          ? startup_profile_t::now()
+                                          : 0.0;
+    i_t refactor_status               = ft.refactor_basis(
       lp.A, settings, lp.lower, lp.upper, start_time, basic_list, nonbasic_list, vstatus);
+    if (first_refactor_start != 0.0 && startup_profile->active()) {
+      startup_profile->dual_first_refactor = startup_profile_t::elapsed(first_refactor_start);
+    }
     refactor_work = ft.work_estimate() - refactor_start_work;
     if (refactor_status == CONCURRENT_HALT_RETURN) { return dual_status_t::CONCURRENT_LIMIT; }
     if (refactor_status == TIME_LIMIT_RETURN) { return dual_status_t::TIME_LIMIT; }

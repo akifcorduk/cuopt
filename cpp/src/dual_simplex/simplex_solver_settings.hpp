@@ -23,7 +23,8 @@
 
 namespace cuopt::mathematical_optimization {
 struct benchmark_info_t;
-}
+struct startup_profile_t;
+}  // namespace cuopt::mathematical_optimization
 
 namespace cuopt::mathematical_optimization::simplex {
 
@@ -242,6 +243,8 @@ struct simplex_solver_settings_t {
                                       // continue, 1 if solver should halt
   // Optional non-owning pointer to run-level benchmark stats.
   benchmark_info_t* benchmark_info_ptr = nullptr;
+  // Optional run-local startup instrumentation, owned by the top-level MIP solve.
+  startup_profile_t* startup_profile_ptr = nullptr;
 };
 
 }  // namespace cuopt::mathematical_optimization::simplex

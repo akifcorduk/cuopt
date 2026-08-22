@@ -23,6 +23,7 @@
 #include <dual_simplex/triangle_solve.hpp>
 #include <dual_simplex/user_problem.hpp>
 #include <linear_algebra/sparse_matrix.hpp>
+#include <math_optimization/startup_profile.hpp>
 #include <math_optimization/tic_toc.hpp>
 #include <math_optimization/types.hpp>
 
@@ -149,10 +150,16 @@ lp_status_t solve_linear_program_with_advanced_basis(
   lp_status_t lp_status = lp_status_t::UNSET;
   lp_problem_t<i_t, f_t> presolved_lp(original_lp.handle_ptr, 1, 1, 1);
   presolve_info_t<i_t, f_t> presolve_info;
+  auto* startup_profile = settings.startup_profile_ptr;
   i_t ok;
+  const double presolve_start =
+    startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
   {
     raft::common::nvtx::range scope_presolve("DualSimplex::presolve");
     ok = presolve(original_lp, settings, presolved_lp, presolve_info);
+  }
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->dual_presolve += startup_profile_t::elapsed(presolve_start);
   }
   if (ok == CONCURRENT_HALT_RETURN) { return lp_status_t::CONCURRENT_LIMIT; }
   if (ok == TIME_LIMIT_RETURN) { return lp_status_t::TIME_LIMIT; }
@@ -171,15 +178,25 @@ lp_status_t solve_linear_program_with_advanced_basis(
                             presolved_lp.A.col_start[presolved_lp.num_cols]);
   std::vector<f_t> column_scales;
   std::vector<f_t> row_scales_simplex;
+  const double scaling_start =
+    startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
   {
     raft::common::nvtx::range scope_scaling("DualSimplex::scaling");
     scaling(presolved_lp, settings, lp, column_scales, row_scales_simplex);
+  }
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->dual_scaling += startup_profile_t::elapsed(scaling_start);
   }
   assert(presolved_lp.num_cols == lp.num_cols);
   lp_problem_t<i_t, f_t> phase1_problem(original_lp.handle_ptr, 1, 1, 1);
   std::vector<variable_status_t> phase1_vstatus;
   f_t phase1_obj = -inf;
+  const double create_phase1_start =
+    startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
   create_phase1_problem(lp, phase1_problem);
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->dual_create_phase1 += startup_profile_t::elapsed(create_phase1_start);
+  }
   assert(phase1_problem.num_cols == presolved_lp.num_cols);
 
   // Set the vstatus for the phase1 problem based on a slack basis
@@ -201,6 +218,8 @@ lp_status_t solve_linear_program_with_advanced_basis(
   lp_solution_t<i_t, f_t> phase1_solution(phase1_problem.num_rows, phase1_problem.num_cols);
   edge_norms.clear();
   dual_status_t phase1_status;
+  const double phase1_start =
+    startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
   {
     raft::common::nvtx::range scope_phase1("DualSimplex::phase1");
     phase1_status = dual_phase2(1,
@@ -213,6 +232,9 @@ lp_status_t solve_linear_program_with_advanced_basis(
                                 iter,
                                 edge_norms,
                                 work_unit_context);
+  }
+  if (startup_profile != nullptr && startup_profile->active()) {
+    startup_profile->dual_phase1 += startup_profile_t::elapsed(phase1_start);
   }
   if (phase1_status == dual_status_t::NUMERICAL) {
     settings.log.printf("Failed in Phase 1\n");
@@ -237,7 +259,9 @@ lp_status_t solve_linear_program_with_advanced_basis(
     vstatus = phase1_vstatus;
     edge_norms.clear();
     bool initialize_basis_update = true;
-    dual_status_t status         = dual_phase2_with_advanced_basis(2,
+    const double phase2_start =
+      startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
+    dual_status_t status = dual_phase2_with_advanced_basis(2,
                                                            iter == 0 ? 1 : 0,
                                                            initialize_basis_update,
                                                            start_time,
@@ -251,12 +275,17 @@ lp_status_t solve_linear_program_with_advanced_basis(
                                                            iter,
                                                            edge_norms,
                                                            work_unit_context);
+    if (startup_profile != nullptr && startup_profile->active()) {
+      startup_profile->dual_phase2 += startup_profile_t::elapsed(phase2_start);
+    }
     if (status == dual_status_t::NUMERICAL) {
       // Became dual infeasible. Try phase 1 again
       phase1_vstatus = vstatus;
       settings.log.printf("Running Phase 1 again\n");
       edge_norms.clear();
       initialize_basis_update = false;
+      const double retry_phase1_start =
+        startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
       dual_phase2_with_advanced_basis(1,
                                       0,
                                       initialize_basis_update,
@@ -271,8 +300,13 @@ lp_status_t solve_linear_program_with_advanced_basis(
                                       iter,
                                       edge_norms,
                                       work_unit_context);
+      if (startup_profile != nullptr && startup_profile->active()) {
+        startup_profile->dual_phase1 += startup_profile_t::elapsed(retry_phase1_start);
+      }
       vstatus = phase1_vstatus;
       edge_norms.clear();
+      const double retry_phase2_start =
+        startup_profile != nullptr && startup_profile->active() ? startup_profile_t::now() : 0.0;
       status = dual_phase2_with_advanced_basis(2,
                                                0,
                                                initialize_basis_update,
@@ -287,6 +321,9 @@ lp_status_t solve_linear_program_with_advanced_basis(
                                                iter,
                                                edge_norms,
                                                work_unit_context);
+      if (startup_profile != nullptr && startup_profile->active()) {
+        startup_profile->dual_phase2 += startup_profile_t::elapsed(retry_phase2_start);
+      }
     }
     constexpr bool primal_cleanup = false;
     if (status == dual_status_t::OPTIMAL && primal_cleanup) {

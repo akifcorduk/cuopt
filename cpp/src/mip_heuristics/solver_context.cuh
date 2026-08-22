@@ -18,6 +18,10 @@
 #pragma once
 
 // Forward declare
+namespace cuopt::mathematical_optimization {
+struct startup_profile_t;
+}
+
 namespace cuopt::mathematical_optimization::mip {
 template <typename i_t, typename f_t>
 class branch_and_bound_t;
@@ -66,6 +70,7 @@ struct mip_solver_context_t {
   work_unit_scheduler_t work_unit_scheduler_{5.0};
 
   early_cpufj_t<i_t, f_t>* early_cpufj_ptr{nullptr};
+  startup_profile_t* startup_profile_ptr{nullptr};
   // Best upper bound from early heuristics, in user-space.
   // Must be converted to the target solver-space before use:
   //   - B&B: problem_ptr->get_solver_obj_from_user_obj(initial_upper_bound)

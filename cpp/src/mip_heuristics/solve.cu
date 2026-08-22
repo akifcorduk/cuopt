@@ -10,6 +10,7 @@
 #include <cuopt/mathematical_optimization/solve_remote.hpp>
 
 #include <linear_algebra/sort_csr.cuh>
+#include <math_optimization/startup_profile.hpp>
 #include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
 #include <mip_heuristics/feasibility_jump/early_gpufj.cuh>
 #include <mip_heuristics/mip_constants.hpp>
@@ -109,13 +110,13 @@ static void invoke_solution_callbacks(
 }
 
 template <typename i_t, typename f_t>
-mip_solution_t<i_t, f_t> run_mip_solver(
-  mip::problem_t<i_t, f_t>& problem,
-  mip_solver_settings_t<i_t, f_t> const& settings,
-  timer_t& timer,
-  f_t& initial_upper_bound,
-  std::vector<f_t>& initial_incumbent_assignment,
-  std::unique_ptr<mip::mip_symmetry_t<i_t, f_t>> symmetry = nullptr)
+mip_solution_t<i_t, f_t> run_mip_solver(mip::problem_t<i_t, f_t>& problem,
+                                        mip_solver_settings_t<i_t, f_t> const& settings,
+                                        timer_t& timer,
+                                        f_t& initial_upper_bound,
+                                        std::vector<f_t>& initial_incumbent_assignment,
+                                        std::unique_ptr<mip::mip_symmetry_t<i_t, f_t>> symmetry,
+                                        startup_profile_t* startup_profile_ptr)
 {
   try {
     raft::common::nvtx::range fun_scope("run_mip");
@@ -185,7 +186,12 @@ mip_solution_t<i_t, f_t> run_mip_solver(
       return solution.get_solution(true, stats, false);
     }
     // problem contains unpreprocessed data
+    const double scaled_problem_start =
+      startup_profile_ptr->active() ? startup_profile_t::now() : 0;
     mip::problem_t<i_t, f_t> scaled_problem(problem);
+    if (startup_profile_ptr->active()) {
+      startup_profile_ptr->scaled_problem_copy += startup_profile_t::elapsed(scaled_problem_start);
+    }
     cuopt_func_call(auto saved_problem = scaled_problem);
     CUOPT_LOG_INFO("Objective offset %f scaling_factor %f",
                    problem.presolve_data.objective_offset,
@@ -196,7 +202,12 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     cuopt_assert(problem.original_problem_ptr->get_n_constraints() == scaled_problem.n_constraints,
                  "Size mismatch");
     // only call preprocess on scaled problem, so we can compute feasibility on the original problem
+    const double mip_preprocess_start =
+      startup_profile_ptr->active() ? startup_profile_t::now() : 0;
     scaled_problem.preprocess_problem();
+    if (startup_profile_ptr->active()) {
+      startup_profile_ptr->mip_preprocess += startup_profile_t::elapsed(mip_preprocess_start);
+    }
     scaled_problem.related_vars_time_limit = settings.heuristic_params.related_vars_time_limit;
     const i_t n_vars_before                = scaled_problem.n_variables;
     mip::trivial_presolve(scaled_problem);
@@ -216,9 +227,15 @@ mip_solution_t<i_t, f_t> run_mip_solver(
       if (settings.symmetry != 0) {
         simplex_solver_settings_t<i_t, f_t> simplex_settings;
         simplex_settings.set_log(true);
-        simplex_settings.time_limit                   = settings.time_limit;
+        simplex_settings.time_limit = settings.time_limit;
+        const double conversion_start =
+          startup_profile_ptr->active() ? startup_profile_t::now() : 0.0;
         user_problem_t<i_t, f_t> reduced_user_problem = cuopt_problem_to_user_problem<i_t, f_t>(
           scaled_problem.original_problem_ptr->get_handle_ptr(), scaled_problem);
+        if (startup_profile_ptr->active()) {
+          startup_profile_ptr->cuopt_to_user_problem +=
+            startup_profile_t::elapsed(conversion_start);
+        }
         bool has_symmetry_reduced = false;
         symmetry =
           mip::detect_symmetry(reduced_user_problem, simplex_settings, has_symmetry_reduced);
@@ -230,6 +247,7 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     // after cuOpt's presolve (probing cache, bounds propagation, trivial presolve) completes.
 
     mip::mip_solver_t<i_t, f_t> solver(scaled_problem, settings, timer);
+    solver.context.startup_profile_ptr = startup_profile_ptr;
     // initial_upper_bound is in user-space (representation-invariant).
     // It will be converted to the target solver-space at each consumption point.
     solver.context.initial_upper_bound          = initial_upper_bound;
@@ -296,7 +314,13 @@ mip_solution_t<i_t, f_t> run_mip_solver(
       if (std::isfinite(initial_upper_bound)) {
         early_cpufj->set_best_objective(problem.get_solver_obj_from_user_obj(initial_upper_bound));
       }
+      const double launch_start = startup_profile_ptr->active() ? startup_profile_t::now() : 0.0;
       early_cpufj->start();
+      if (startup_profile_ptr->active()) {
+        startup_profile_ptr->presolved_cpufj_start = startup_profile_t::now();
+        startup_profile_ptr->presolved_cpufj_launch =
+          startup_profile_ptr->presolved_cpufj_start - launch_start;
+      }
       solver.context.early_cpufj_ptr = early_cpufj.get();
       CUOPT_LOG_DEBUG("Started early CPUFJ on papilo-presolved problem during cuOpt presolve");
     }
@@ -372,6 +396,7 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
 
     raft::common::nvtx::range fun_scope("Running solver");
     auto timer = timer_t(time_limit);
+    startup_profile_t startup_profile(true);
 
     problem_checking_t<i_t, f_t>::check_problem_representation(op_problem);
     problem_checking_t<i_t, f_t>::check_initial_solution_representation(op_problem, settings);
@@ -430,26 +455,43 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
 #ifdef DETECT_SYMMETRY_BEFORE_PRESOLVE
     bool has_symmetry = false;
     if (settings.symmetry != 0) {
+      const double symmetry_problem_start =
+        startup_profile.active() ? startup_profile_t::now() : 0.0;
       mip::problem_t<i_t, f_t> problem(op_problem);
+      if (startup_profile.active()) {
+        startup_profile.initial_problem_ctor += startup_profile_t::elapsed(symmetry_problem_start);
+      }
       simplex_solver_settings_t<i_t, f_t> simplex_settings;
       simplex_settings.set_log(true);
-      simplex_settings.time_limit = settings.time_limit;
+      simplex_settings.time_limit   = settings.time_limit;
+      const double conversion_start = startup_profile.active() ? startup_profile_t::now() : 0.0;
       user_problem_t<i_t, f_t> user_problem =
         cuopt_problem_to_user_problem<i_t, f_t>(op_problem.get_handle_ptr(), problem);
+      if (startup_profile.active()) {
+        startup_profile.cuopt_to_user_problem += startup_profile_t::elapsed(conversion_start);
+      }
       symmetry = mip::detect_symmetry(user_problem, simplex_settings, has_symmetry);
       if (has_symmetry) { settings.presolver = presolver_t::None; }
     }
 #endif
 
     if (settings.mip_scaling != CUOPT_MIP_SCALING_OFF) {
+      const double mip_scaling_start = startup_profile.active() ? startup_profile_t::now() : 0;
       mip::mip_scaling_strategy_t<i_t, f_t> scaling(op_problem);
       scaling.scale_problem(settings.mip_scaling != CUOPT_MIP_SCALING_NO_OBJECTIVE);
+      if (startup_profile.active()) {
+        startup_profile.mip_scaling += startup_profile_t::elapsed(mip_scaling_start);
+      }
     }
     double presolve_time = 0.0;
     std::unique_ptr<mip::third_party_presolve_t<i_t, f_t>> presolver;
     std::optional<mip::third_party_presolve_device_result_t<i_t, f_t>> presolve_result_opt;
+    const double initial_problem_start = startup_profile.active() ? startup_profile_t::now() : 0;
     mip::problem_t<i_t, f_t> problem(
       op_problem, settings.get_tolerances(), settings.determinism_mode == CUOPT_MODE_DETERMINISTIC);
+    if (startup_profile.active()) {
+      startup_profile.initial_problem_ctor += startup_profile_t::elapsed(initial_problem_start);
+    }
 
     auto run_presolve              = settings.presolver != presolver_t::None;
     bool has_set_solution_callback = false;
@@ -549,19 +591,36 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
       // Start early CPUFJ on original problem (will restart on presolved problem after Papilo)
       early_cpufj = std::make_unique<mip::early_cpufj_t<i_t, f_t>>(
         op_problem, settings.get_tolerances(), early_fj_callback);
+      const double cpufj_launch_start = startup_profile.active() ? startup_profile_t::now() : 0.0;
       early_cpufj->start();
+      if (startup_profile.active()) {
+        startup_profile.original_cpufj_start = startup_profile_t::now();
+        startup_profile.original_cpufj_launch =
+          startup_profile.original_cpufj_start - cpufj_launch_start;
+      }
       CUOPT_LOG_DEBUG("Started early CPUFJ on original problem");
 
       // Start early GPU FJ (uses GPU while CPU is busy with Papilo)
       early_gpufj =
         std::make_unique<mip::early_gpufj_t<i_t, f_t>>(op_problem, settings, early_fj_callback);
+      const double gpufj_launch_start = startup_profile.active() ? startup_profile_t::now() : 0.0;
       early_gpufj->start();
+      if (startup_profile.active()) {
+        startup_profile.original_gpufj_start = startup_profile_t::now();
+        startup_profile.original_gpufj_launch =
+          startup_profile.original_gpufj_start - gpufj_launch_start;
+      }
       CUOPT_LOG_DEBUG("Started early GPUFJ during presolve");
     }
 
     auto constexpr const dual_postsolve = false;
+    if (startup_profile.active()) { startup_profile.papilo_start = startup_profile_t::now(); }
     if (run_presolve) {
+      const double sort_csr_start = startup_profile.active() ? startup_profile_t::now() : 0;
       sort_csr(op_problem);
+      if (startup_profile.active()) {
+        startup_profile.sort_csr += startup_profile_t::elapsed(sort_csr_start);
+      }
       const auto& hp             = settings.heuristic_params;
       const auto papilo_features = mip::papilo_presolve_features(op_problem);
       const auto papilo_budget   = mip::evaluate_presolve_budget(hp, papilo_features);
@@ -571,8 +630,9 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
                                            ? std::numeric_limits<double>::infinity()
                                            : timer.remaining_time();
 
-      presolver   = std::make_unique<mip::third_party_presolve_t<i_t, f_t>>();
-      auto result = presolver->apply_presolve_from_op_problem(
+      presolver = std::make_unique<mip::third_party_presolve_t<i_t, f_t>>();
+      const double papilo_pipeline_start = startup_profile.active() ? startup_profile_t::now() : 0;
+      auto result                        = presolver->apply_presolve_from_op_problem(
         op_problem,
         cuopt::mathematical_optimization::problem_category_t::MIP,
         settings.presolver,
@@ -583,6 +643,9 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         settings.num_cpu_threads,
         papilo_budget.papilo_max_rounds,
         papilo_budget.papilo_max_badgesize);
+      if (startup_profile.active()) {
+        startup_profile.papilo_pipeline += startup_profile_t::elapsed(papilo_pipeline_start);
+      }
 
       if (result.status == mip::third_party_presolve_status_t::INFEASIBLE) {
         return mip_solution_t<i_t, f_t>(mip_termination_status_t::Infeasible,
@@ -601,7 +664,11 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
       }
       presolve_result_opt.emplace(std::move(result));
 
+      const double reduced_problem_start = startup_profile.active() ? startup_profile_t::now() : 0;
       problem = mip::problem_t<i_t, f_t>(presolve_result_opt->reduced_problem);
+      if (startup_profile.active()) {
+        startup_profile.reduced_problem_ctor += startup_profile_t::elapsed(reduced_problem_start);
+      }
       problem.set_papilo_presolve_data(presolver.get(),
                                        presolve_result_opt->reduced_to_original_map,
                                        presolve_result_opt->original_to_reduced_map,
@@ -630,10 +697,19 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         CUOPT_LOG_INFO("Optimal solution found during presolve. Time %.2f", timer.elapsed_time());
       }
     }
+    if (startup_profile.active()) { startup_profile.papilo_end = startup_profile_t::now(); }
 
     // Stop early GPU FJ now that Papilo presolve is complete
     if (early_gpufj) {
+      const double wait_start = startup_profile.active() ? startup_profile_t::now() : 0;
+      if (startup_profile.active()) {
+        startup_profile.original_gpufj_background =
+          startup_profile_t::interval(startup_profile.original_gpufj_start, wait_start);
+      }
       early_gpufj->stop();
+      if (startup_profile.active()) {
+        startup_profile.original_gpufj_wait += startup_profile_t::elapsed(wait_start);
+      }
       if (early_gpufj->solution_found()) {
         CUOPT_LOG_DEBUG("Early GPU FJ found incumbent with objective %.6e during presolve",
                         early_gpufj->get_best_objective());
@@ -642,7 +718,15 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
     }
 
     if (early_cpufj && run_presolve && presolve_result_opt.has_value()) {
+      const double wait_start = startup_profile.active() ? startup_profile_t::now() : 0;
+      if (startup_profile.active()) {
+        startup_profile.original_cpufj_background =
+          startup_profile_t::interval(startup_profile.original_cpufj_start, wait_start);
+      }
       early_cpufj->stop();
+      if (startup_profile.active()) {
+        startup_profile.original_cpufj_wait += startup_profile_t::elapsed(wait_start);
+      }
       if (early_cpufj->solution_found()) {
         CUOPT_LOG_DEBUG(
           "Early CPUFJ (original) found incumbent with objective %.6e during presolve",
@@ -674,12 +758,14 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
     // early_best_user_obj is in user-space.
     // run_mip_solver stores it in context.initial_upper_bound and converts to target spaces as
     // needed.
+    if (startup_profile.active()) { startup_profile.run_mip_start = startup_profile_t::now(); }
     auto sol = run_mip_solver(problem,
                               settings,
                               timer,
                               early_best_user_obj,
                               early_best_user_assignment,
-                              std::move(symmetry));
+                              std::move(symmetry),
+                              &startup_profile);
 
     const f_t cuopt_presolve_time = sol.get_stats().presolve_time;
 

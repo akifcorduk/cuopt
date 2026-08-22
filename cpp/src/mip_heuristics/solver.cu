@@ -11,6 +11,7 @@
 #include "local_search/rounding/simple_rounding.cuh"
 #include "solver.cuh"
 
+#include <math_optimization/startup_profile.hpp>
 #include <pdlp/pdlp.cuh>
 #include <pdlp/solve.cuh>
 
@@ -225,11 +226,28 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                                     : timer_.remaining_time();
   if (std::isfinite(presolve_time_limit))
     CUOPT_LOG_DEBUG("Presolve time limit: %g", presolve_time_limit);
+  if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+    context.startup_profile_ptr->cuopt_presolve_start = startup_profile_t::now();
+  }
   bool presolve_success = run_presolve ? dm.run_presolve(presolve_time_limit, timer_) : true;
+  if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+    context.startup_profile_ptr->cuopt_presolve_end = startup_profile_t::now();
+  }
 
   // Stop early CPUFJ after cuopt presolve (probing cache) but before main solve
   if (context.early_cpufj_ptr) {
+    const double wait_start =
+      context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()
+        ? startup_profile_t::now()
+        : 0;
+    if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+      context.startup_profile_ptr->presolved_cpufj_background =
+        startup_profile_t::interval(context.startup_profile_ptr->presolved_cpufj_start, wait_start);
+    }
     context.early_cpufj_ptr->stop();
+    if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+      context.startup_profile_ptr->presolved_cpufj_wait += startup_profile_t::elapsed(wait_start);
+    }
     if (context.early_cpufj_ptr->solution_found()) {
       CUOPT_LOG_DEBUG("Early CPUFJ found incumbent with user-space objective %g during presolve",
                       context.early_cpufj_ptr->get_best_user_objective());
@@ -303,9 +321,17 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       !context.settings.heuristics_only) {
     simplex_solver_settings_t<i_t, f_t> simplex_settings;
     simplex_settings.set_log(true);
-    simplex_settings.time_limit                    = context.settings.time_limit;
+    simplex_settings.time_limit = context.settings.time_limit;
+    const double conversion_start =
+      context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()
+        ? startup_profile_t::now()
+        : 0;
     user_problem_t<i_t, f_t> post_presolve_problem = cuopt_problem_to_user_problem<i_t, f_t>(
       context.problem_ptr->handle_ptr, *context.problem_ptr);
+    if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+      context.startup_profile_ptr->cuopt_to_user_problem +=
+        startup_profile_t::elapsed(conversion_start);
+    }
     symmetry_future = std::async(std::launch::async,
                                  detect_symmetry_for_branch_and_bound<i_t, f_t>,
                                  std::move(post_presolve_problem),
@@ -345,7 +371,18 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
   if (!context.settings.heuristics_only) {
     // Convert the presolved problem to user_problem_t
+    if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+      context.startup_profile_ptr->bnb_export_start = startup_profile_t::now();
+    }
+    const double export_start =
+      context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()
+        ? startup_profile_t::now()
+        : 0;
     op_problem_.get_host_user_problem(branch_and_bound_problem);
+    if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+      context.startup_profile_ptr->bnb_problem_export += startup_profile_t::elapsed(export_start);
+      context.startup_profile_ptr->bnb_export_end = startup_profile_t::now();
+    }
     // Resize the solution now that we know the number of columns/variables
     branch_and_bound_solution.resize(branch_and_bound_problem.num_cols);
 
@@ -386,7 +423,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     branch_and_bound_settings.cut_min_orthogonality = context.settings.cut_min_orthogonality;
     // Forward the run-level benchmark_info_t so B&B can publish root LP
     // bounds (before / after cuts) for gap-closed-by-cuts measurement.
-    branch_and_bound_settings.benchmark_info_ptr = context.settings.benchmark_info_ptr;
+    branch_and_bound_settings.benchmark_info_ptr  = context.settings.benchmark_info_ptr;
+    branch_and_bound_settings.startup_profile_ptr = context.startup_profile_ptr;
     branch_and_bound_settings.mip_batch_pdlp_strong_branching =
       context.settings.mip_batch_pdlp_strong_branching;
     branch_and_bound_settings.mip_batch_pdlp_reliability_branching =
@@ -428,6 +466,10 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     }
 
     // Create the branch and bound object
+    const double bnb_ctor_start =
+      context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()
+        ? startup_profile_t::now()
+        : 0;
     branch_and_bound =
       std::make_unique<mip::branch_and_bound_t<i_t, f_t>>(branch_and_bound_problem,
                                                           branch_and_bound_settings,
@@ -435,6 +477,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                                                           probing_implied_bound,
                                                           context.problem_ptr->clique_table,
                                                           context.symmetry.get());
+    if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+      context.startup_profile_ptr->bnb_ctor += startup_profile_t::elapsed(bnb_ctor_start);
+    }
     context.branch_and_bound_ptr = branch_and_bound.get();
 
     // Convert the best external upper bound from user-space to B&B's internal objective space.
@@ -493,6 +538,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     }
   }
 
+  if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+    context.startup_profile_ptr->bnb_dispatch = startup_profile_t::now();
+  }
 #pragma omp taskgroup
   {
     if (!context.settings.heuristics_only) {
@@ -502,7 +550,15 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         // The heuristics can start immediately because B&B is the first symmetry consumer. Only
         // the B&B task waits, then installs the completed result before solve() can use it.
         if (symmetry_future.valid()) {
+          const double symmetry_wait_start =
+            context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()
+              ? startup_profile_t::now()
+              : 0.0;
           context.symmetry = symmetry_future.get();
+          if (context.startup_profile_ptr != nullptr && context.startup_profile_ptr->active()) {
+            context.startup_profile_ptr->symmetry_wait +=
+              startup_profile_t::elapsed(symmetry_wait_start);
+          }
           branch_and_bound->set_symmetry(context.symmetry.get());
           CUOPT_LOG_DEBUG("B&B joined post-presolve symmetry detection before solve");
         }
