@@ -18,6 +18,12 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
+namespace {
+
+void set_cuda_device(int device_id) { RAFT_CUDA_TRY(cudaSetDevice(device_id)); }
+
+}  // namespace
+
 template <typename i_t, typename f_t>
 early_gpufj_t<i_t, f_t>::early_gpufj_t(const optimization_problem_t<i_t, f_t>& op_problem,
                                        const mip_solver_settings_t<i_t, f_t>& settings,
@@ -63,7 +69,7 @@ void early_gpufj_t<i_t, f_t>::start()
 #pragma omp task default(none) shared(fj_ptr_) priority(CUOPT_DEFAULT_TASK_PRIORITY) \
   depend(out : *fj_ptr_)
   {
-    RAFT_CUDA_TRY(cudaSetDevice(this->device_id_));
+    set_cuda_device(this->device_id_);
     fj_ptr_->solve(*this->solution_ptr_);
   }
 }
