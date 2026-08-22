@@ -20,6 +20,7 @@ set(MIP_LP_NECESSARY_FILES
 # Files that are MIP-specific and not needed for pure LP
 set(MIP_NON_LP_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/mip_scaling_strategy.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/pre_presolve_primal.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/solve.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/solver.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/diversity/assignment_hash_map.cu
