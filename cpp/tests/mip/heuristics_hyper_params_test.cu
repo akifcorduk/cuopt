@@ -8,6 +8,7 @@
 #include <cuopt/error.hpp>
 #include <cuopt/mathematical_optimization/mip/heuristics_hyper_params.hpp>
 #include <cuopt/mathematical_optimization/solver_settings.hpp>
+#include <mip_heuristics/pre_presolve_primal.cuh>
 
 #include <gtest/gtest.h>
 
@@ -31,6 +32,17 @@ class HeuristicsHyperParamsTest : public ::testing::Test {
 
   void TearDown() override { std::remove(tmp_path.c_str()); }
 };
+
+TEST(PrePresolvePrimalModeTest, GpuArmsReplaceEarlyGpuFj)
+{
+  EXPECT_FALSE(mip::pre_presolve_primal_mode_replaces_early_gpufj(0));
+  EXPECT_FALSE(mip::pre_presolve_primal_mode_replaces_early_gpufj(1));
+  EXPECT_FALSE(mip::pre_presolve_primal_mode_replaces_early_gpufj(2));
+  EXPECT_TRUE(mip::pre_presolve_primal_mode_replaces_early_gpufj(3));
+  EXPECT_TRUE(mip::pre_presolve_primal_mode_replaces_early_gpufj(4));
+  EXPECT_TRUE(mip::pre_presolve_primal_mode_replaces_early_gpufj(5));
+  EXPECT_TRUE(mip::pre_presolve_primal_mode_replaces_early_gpufj(6));
+}
 
 TEST_F(HeuristicsHyperParamsTest, DumpedFileIsAllCommentedOut)
 {
