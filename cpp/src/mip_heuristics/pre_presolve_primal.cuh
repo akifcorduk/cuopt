@@ -13,15 +13,20 @@
 #include <cuopt/mathematical_optimization/optimization_problem.hpp>
 
 #include <atomic>
+#include <cstddef>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <mutex>
+#include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
 
 // Each experiment branch changes this internal constant so checking out the branch activates its
 // treatment without adding a product setting or command-line selector. The scaffold remains idle.
-inline constexpr int pre_presolve_primal_branch_mode = 0;
+inline constexpr int pre_presolve_primal_branch_mode = 2;
+inline constexpr int pre_presolve_primal_task_slots  = 2;
 
 inline bool pre_presolve_primal_mode_replaces_early_gpufj(int mode)
 {
@@ -48,6 +53,38 @@ class pre_presolve_thread_budget_t {
  private:
   const int capacity_;
   std::atomic<int> available_;
+};
+
+template <typename f_t>
+class pre_presolve_best_candidate_store_t {
+ public:
+  struct snapshot_t {
+    bool has_candidate{false};
+    std::size_t generated{0};
+    f_t solver_objective{std::numeric_limits<f_t>::infinity()};
+    std::vector<f_t> assignment;
+  };
+
+  void consider(f_t solver_objective, const std::vector<f_t>& assignment)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++snapshot_.generated;
+    if (!snapshot_.has_candidate || solver_objective < snapshot_.solver_objective) {
+      snapshot_.has_candidate    = true;
+      snapshot_.solver_objective = solver_objective;
+      snapshot_.assignment       = assignment;
+    }
+  }
+
+  snapshot_t snapshot() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return snapshot_;
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  snapshot_t snapshot_;
 };
 
 /**
