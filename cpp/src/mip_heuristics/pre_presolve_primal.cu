@@ -7,10 +7,15 @@
 
 #include "pre_presolve_primal.cuh"
 
+#include <branch_and_bound/branch_and_bound.hpp>
+#include <dual_simplex/solve.hpp>
+#include <math_optimization/tic_toc.hpp>
 #include <mip_heuristics/mip_constants.hpp>
+#include <pdlp/translate.hpp>
 #include <utilities/logger.hpp>
 
 #include <algorithm>
+#include <numeric>
 #include <stdexcept>
 #include <utility>
 
@@ -53,6 +58,169 @@ void pre_presolve_thread_budget_t::release(int slots)
 }
 
 namespace {
+
+constexpr int pre_bnb_node_limit       = 64;
+constexpr int pre_bnb_num_threads      = 1;
+constexpr double pre_bnb_time_limit    = 0.15;
+constexpr const char* pre_bnb_arm_name = "PRE-BNB-SELECTIVE-FIRST-STOP";
+
+template <typename i_t, typename f_t>
+simplex::user_problem_t<i_t, f_t> snapshot_original_problem(
+  const optimization_problem_t<i_t, f_t>& op_problem)
+{
+  auto user_problem =
+    cuopt_problem_to_user_problem<i_t, f_t>(op_problem.get_handle_ptr(), op_problem);
+
+  // Match problem_t's always-minimizing solver space while retaining the user's objective
+  // scaling. The generic optimization_problem_t translation only records objective sense.
+  user_problem.obj_scale = op_problem.get_objective_scaling_factor();
+  if (op_problem.get_sense()) {
+    std::transform(user_problem.objective.begin(),
+                   user_problem.objective.end(),
+                   user_problem.objective.begin(),
+                   [](f_t value) { return -value; });
+    std::transform(user_problem.Q_values.begin(),
+                   user_problem.Q_values.end(),
+                   user_problem.Q_values.begin(),
+                   [](f_t value) { return -value; });
+    user_problem.obj_constant = -op_problem.get_objective_offset();
+    user_problem.obj_scale    = -user_problem.obj_scale;
+  }
+  return user_problem;
+}
+
+template <typename i_t, typename f_t>
+simplex::simplex_solver_settings_t<i_t, f_t> make_pre_bnb_settings(
+  const mip_solver_settings_t<i_t, f_t>& settings)
+{
+  simplex::simplex_solver_settings_t<i_t, f_t> bnb_settings;
+  bnb_settings.time_limit                         = static_cast<f_t>(pre_bnb_time_limit);
+  bnb_settings.num_threads                        = pre_bnb_num_threads;
+  bnb_settings.print_presolve_stats               = false;
+  bnb_settings.preserve_advanced_basis_dimensions = true;
+  bnb_settings.primal_tol                         = settings.tolerances.absolute_tolerance;
+  bnb_settings.dual_tol                           = settings.tolerances.absolute_tolerance;
+  bnb_settings.integer_tol                        = settings.tolerances.integrality_tolerance;
+  bnb_settings.absolute_mip_gap_tol               = settings.tolerances.absolute_mip_gap;
+  bnb_settings.relative_mip_gap_tol               = settings.tolerances.relative_mip_gap;
+  bnb_settings.set_log(false);
+
+  bnb_settings.node_limit                               = pre_bnb_node_limit;
+  bnb_settings.max_cut_passes                           = 0;
+  bnb_settings.mir_cuts                                 = 0;
+  bnb_settings.mixed_integer_gomory_cuts                = 0;
+  bnb_settings.knapsack_cuts                            = 0;
+  bnb_settings.flow_cover_cuts                          = 0;
+  bnb_settings.implied_bound_cuts                       = 0;
+  bnb_settings.clique_cuts                              = 0;
+  bnb_settings.zero_half_cuts                           = 0;
+  bnb_settings.strong_chvatal_gomory_cuts               = 0;
+  bnb_settings.reduced_cost_strengthening               = 0;
+  bnb_settings.reliability_branching                    = 0;
+  bnb_settings.strong_branching_simplex_iteration_limit = 0;
+  bnb_settings.mip_batch_pdlp_strong_branching          = 0;
+  bnb_settings.mip_batch_pdlp_reliability_branching     = 0;
+  bnb_settings.symmetry                                 = 0;
+  bnb_settings.submip_settings.rins                     = 0;
+  bnb_settings.submip_settings.max_level                = 0;
+  bnb_settings.submip_settings.enable_cpufj             = false;
+  bnb_settings.diving_settings                          = settings.diving_params;
+  bnb_settings.diving_settings.min_node_depth           = 0;
+  CUOPT_LOG_INFO(
+    "PRE_BNB_CONFIG variant=selective_first_stop task_slots=%d bnb_threads=%d "
+    "compact_nnz_limit=%d small_row_limit=%d absolute_nnz_limit=%d time_limit=%.3fs "
+    "node_limit=%d sb_simplex_iteration_limit=%d initial_root_sb=skipped "
+    "initial_pseudocost=neutral diving=retained preserve_advanced_basis_dimensions=%d "
+    "publication=first_immediate stop_on_candidate=1",
+    pre_presolve_primal_task_slots,
+    pre_bnb_num_threads,
+    pre_bnb_compact_nnz_limit,
+    pre_bnb_small_row_limit,
+    pre_bnb_absolute_nnz_limit,
+    pre_bnb_time_limit,
+    pre_bnb_node_limit,
+    bnb_settings.strong_branching_simplex_iteration_limit,
+    static_cast<int>(bnb_settings.preserve_advanced_basis_dimensions));
+  return bnb_settings;
+}
+
+template <typename i_t>
+void log_pre_bnb_summary(const char* status,
+                         double elapsed,
+                         i_t nodes,
+                         std::size_t generated,
+                         std::size_t submitted,
+                         bool candidate_stop_requested,
+                         bool external_stop_requested)
+{
+  CUOPT_LOG_INFO(
+    "PRE_BNB_SUMMARY eligible=1 status=%s elapsed=%.3fs nodes=%d candidates_generated=%zu "
+    "candidates_submitted=%zu candidate_stop_requested=%d external_stop_requested=%d",
+    status,
+    elapsed,
+    nodes,
+    generated,
+    submitted,
+    static_cast<int>(candidate_stop_requested),
+    static_cast<int>(external_stop_requested));
+}
+
+template <typename i_t, typename f_t>
+void run_pre_bnb_first_stop(simplex::user_problem_t<i_t, f_t>& user_problem,
+                            simplex::simplex_solver_settings_t<i_t, f_t>& bnb_settings,
+                            pre_presolve_first_candidate_publisher_t<f_t>& candidate_publisher,
+                            std::atomic<bool>& external_stop_requested)
+{
+  if (external_stop_requested.load(std::memory_order_acquire)) {
+    log_pre_bnb_summary("NOT_RUN", 0.0, i_t{0}, 0, 0, false, true);
+    return;
+  }
+
+  const double solve_start = tic();
+  try {
+    probing_implied_bound_t<i_t, f_t> probing_implied_bound(user_problem.num_cols);
+    branch_and_bound_t<i_t, f_t> branch_and_bound(
+      user_problem, bnb_settings, tic(), probing_implied_bound);
+
+    // An iteration limit of zero selects the single-pivot strong-branching estimate; it does not
+    // disable root pseudocost initialization. Zero-count initial pseudocosts mark initialization
+    // complete without biasing either direction, keeping this bounded arm off that estimate path.
+    pseudo_costs_t<i_t, f_t> neutral_pseudocosts(user_problem.num_cols, bnb_settings);
+    std::vector<i_t> identity_reduced_to_original(user_problem.num_cols);
+    std::iota(identity_reduced_to_original.begin(), identity_reduced_to_original.end(), i_t{0});
+    branch_and_bound.set_initial_pseudocost(neutral_pseudocosts, identity_reduced_to_original);
+
+    branch_and_bound.set_concurrent_lp_root_solve(false);
+    branch_and_bound.set_submip_halt_callback(
+      [&candidate_publisher, &external_stop_requested](f_t, f_t) {
+        return candidate_publisher.candidate_stop_requested() ||
+               external_stop_requested.load(std::memory_order_acquire);
+      });
+
+    simplex::mip_solution_t<i_t, f_t> solution(user_problem.num_cols);
+    const auto status   = branch_and_bound.solve(solution);
+    const auto snapshot = candidate_publisher.snapshot();
+
+    const auto status_name = mip_status_to_string(status);
+    log_pre_bnb_summary(status_name.c_str(),
+                        toc(solve_start),
+                        solution.nodes_explored,
+                        snapshot.generated,
+                        snapshot.submitted,
+                        snapshot.candidate_stop_requested,
+                        external_stop_requested.load(std::memory_order_acquire));
+  } catch (...) {
+    const auto snapshot = candidate_publisher.snapshot();
+    log_pre_bnb_summary("EXCEPTION",
+                        toc(solve_start),
+                        i_t{0},
+                        snapshot.generated,
+                        snapshot.submitted,
+                        snapshot.candidate_stop_requested,
+                        external_stop_requested.load(std::memory_order_acquire));
+    throw;
+  }
+}
 
 class task_slot_release_t {
  public:
@@ -97,11 +265,47 @@ pre_presolve_primal_t<i_t, f_t>::~pre_presolve_primal_t()
 }
 
 template <typename i_t, typename f_t>
-void pre_presolve_primal_t<i_t, f_t>::configure_work(const optimization_problem_t<i_t, f_t>&,
-                                                     const mip_solver_settings_t<i_t, f_t>&,
-                                                     early_incumbent_callback_t<f_t>)
+void pre_presolve_primal_t<i_t, f_t>::configure_work(
+  const optimization_problem_t<i_t, f_t>& op_problem,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  early_incumbent_callback_t<f_t> incumbent_callback)
 {
-  // Independent experiment branches install exactly one implementation here.
+  if (mode_ != 2) { return; }
+
+  const int num_constraints = op_problem.get_n_constraints();
+  const int nnz             = op_problem.get_nnz();
+  if (!pre_bnb_selective_problem_is_eligible(num_constraints, nnz)) {
+    CUOPT_LOG_INFO(
+      "PRE_BNB_SUMMARY eligible=0 reason=selective_gate rows=%d nnz=%d compact_nnz_limit=%d "
+      "small_row_limit=%d absolute_nnz_limit=%d",
+      num_constraints,
+      nnz,
+      pre_bnb_compact_nnz_limit,
+      pre_bnb_small_row_limit,
+      pre_bnb_absolute_nnz_limit);
+    return;
+  }
+
+  // This host snapshot is complete before the task is launched. PaPILO may subsequently mutate
+  // op_problem without racing the CPU B&B arm.
+  auto user_problem =
+    std::make_shared<simplex::user_problem_t<i_t, f_t>>(snapshot_original_problem(op_problem));
+  const f_t objective_scale    = user_problem->obj_scale;
+  const f_t objective_constant = user_problem->obj_constant;
+  auto candidate_publisher     = std::make_shared<pre_presolve_first_candidate_publisher_t<f_t>>(
+    std::move(incumbent_callback), objective_scale, objective_constant, pre_bnb_arm_name);
+  auto bnb_settings              = make_pre_bnb_settings<i_t, f_t>(settings);
+  bnb_settings.solution_callback = [candidate_publisher](std::vector<f_t>& assignment,
+                                                         f_t solver_objective) {
+    candidate_publisher->consider(solver_objective, assignment);
+  };
+
+  auto run_work = [user_problem, candidate_publisher, bnb_settings](
+                    std::atomic<bool>& external_stop_requested) mutable {
+    run_pre_bnb_first_stop(
+      *user_problem, bnb_settings, *candidate_publisher, external_stop_requested);
+  };
+  work_ = std::move(run_work);
 }
 
 template <typename i_t, typename f_t>
@@ -109,13 +313,17 @@ bool pre_presolve_primal_t<i_t, f_t>::start()
 {
   if (mode_ == 0 || started_) { return started_; }
   if (!work_) {
+    if (mode_ == 2) { return false; }
     CUOPT_LOG_WARN("Pre-presolve primal mode %d is not implemented on this branch", mode_);
     return false;
   }
 
-  constexpr int task_slots = 1;
-  if (!thread_budget_.try_reserve(task_slots)) {
-    CUOPT_LOG_DEBUG("Skipping pre-presolve primal mode %d: no OpenMP task slot", mode_);
+  if (!thread_budget_.try_reserve(pre_presolve_primal_task_slots)) {
+    CUOPT_LOG_INFO(
+      "PRE_BNB_SUMMARY eligible=1 status=NOT_STARTED reason=omp_budget task_slots=%d "
+      "candidates_generated=0 candidates_submitted=0 candidate_stop_requested=0 "
+      "external_stop_requested=0",
+      pre_presolve_primal_task_slots);
     return false;
   }
 
@@ -127,7 +335,7 @@ bool pre_presolve_primal_t<i_t, f_t>::start()
 #pragma omp task default(none) firstprivate(task_state, thread_budget, work) \
   priority(CUOPT_DEFAULT_TASK_PRIORITY) depend(out : *task_state)
   {
-    task_slot_release_t release(thread_budget, 1);
+    task_slot_release_t release(thread_budget, pre_presolve_primal_task_slots);
     try {
       (*work)(task_state->stop_requested);
     } catch (...) {
