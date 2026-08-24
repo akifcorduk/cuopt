@@ -21,7 +21,7 @@ namespace cuopt::mathematical_optimization::mip {
 
 // Each experiment branch changes this internal constant so checking out the branch activates its
 // treatment without adding a product setting or command-line selector. The scaffold remains idle.
-inline constexpr int pre_presolve_primal_branch_mode = 0;
+inline constexpr int pre_presolve_primal_branch_mode = 2;
 
 inline bool pre_presolve_primal_mode_replaces_early_gpufj(int mode)
 {
