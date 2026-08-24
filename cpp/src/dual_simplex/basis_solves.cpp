@@ -13,6 +13,7 @@
 #include <dual_simplex/triangle_solve.hpp>
 #include <math_optimization/tic_toc.hpp>
 
+#include <cuopt/error.hpp>
 #include <raft/core/nvtx.hpp>
 
 namespace cuopt::mathematical_optimization::simplex {
@@ -39,23 +40,39 @@ void get_basis_from_vstatus(i_t m,
   i_t n             = vstatus.size();
   i_t num_basic     = 0;
   i_t num_non_basic = 0;
+  EXE_CUOPT_EXPECTS(
+    m >= 0 && m <= n, "Basis row count %d must be between zero and the %d variable statuses", m, n);
+  EXE_CUOPT_EXPECTS(basis_list.size() >= static_cast<std::size_t>(m),
+                    "Basis list has %zu entries; expected storage for %d rows",
+                    basis_list.size(),
+                    m);
   for (i_t j = 0; j < n; ++j) {
     if (vstatus[j] == variable_status_t::BASIC) {
+      EXE_CUOPT_EXPECTS(
+        num_basic < m, "Basis status contains more than the expected %d basic variables", m);
       basis_list[num_basic++] = j;
-      assert(num_basic <= m);
     } else if (vstatus[j] == variable_status_t::NONBASIC_LOWER ||
                vstatus[j] == variable_status_t::NONBASIC_UPPER ||
                vstatus[j] == variable_status_t::NONBASIC_FREE ||
                vstatus[j] == variable_status_t::NONBASIC_FIXED) {
+      EXE_CUOPT_EXPECTS(
+        num_non_basic + static_cast<i_t>(superbasic_list.size()) < n - m,
+        "Basis status contains more than the expected %d nonbasic or superbasic variables",
+        n - m);
       nonbasic_list.push_back(j);
       num_non_basic++;
-      assert(num_non_basic <= n - m);
     } else if (vstatus[j] == variable_status_t::SUPERBASIC) {
+      EXE_CUOPT_EXPECTS(
+        num_non_basic + static_cast<i_t>(superbasic_list.size()) < n - m,
+        "Basis status contains more than the expected %d nonbasic or superbasic variables",
+        n - m);
       superbasic_list.push_back(j);
+    } else {
+      EXE_CUOPT_FAIL("Variable %d has invalid basis status %d", j, static_cast<int>(vstatus[j]));
     }
   }
-  i_t num_super_basic = superbasic_list.size();
-  assert(num_basic == m);
+  EXE_CUOPT_EXPECTS(
+    num_basic == m, "Basis status contains %d basic variables; expected %d", num_basic, m);
 }
 
 namespace {

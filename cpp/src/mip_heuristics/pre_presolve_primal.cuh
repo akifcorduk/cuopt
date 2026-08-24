@@ -21,7 +21,18 @@ namespace cuopt::mathematical_optimization::mip {
 
 // Each experiment branch changes this internal constant so checking out the branch activates its
 // treatment without adding a product setting or command-line selector. The scaffold remains idle.
-inline constexpr int pre_presolve_primal_branch_mode = 0;
+inline constexpr int pre_presolve_primal_branch_mode = 2;
+
+inline constexpr int pre_bnb_small_nnz_limit   = 5'000;
+inline constexpr int pre_bnb_low_row_limit     = 64;
+inline constexpr int pre_bnb_low_row_nnz_limit = 50'000;
+
+template <typename i_t>
+inline constexpr bool pre_bnb_selective_problem_is_eligible(i_t num_constraints, i_t nnz)
+{
+  return nnz <= pre_bnb_small_nnz_limit ||
+         (num_constraints <= pre_bnb_low_row_limit && nnz <= pre_bnb_low_row_nnz_limit);
+}
 
 inline bool pre_presolve_primal_mode_replaces_early_gpufj(int mode)
 {
