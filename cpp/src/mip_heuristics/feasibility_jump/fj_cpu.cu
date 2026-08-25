@@ -4677,6 +4677,19 @@ static void repair_difficult_anchor(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   fj_cpu.h_best_assignment = fj_cpu.h_assignment;
 }
 
+// Lane 1 continues its lock-weighted start into the rest of the structural seeds. Each pass reverts
+// to the anchor it was given when it cannot improve on it, so the chain is monotone.
+constexpr bool fj_lane1_structural_completion = true;
+
+template <typename i_t, typename f_t>
+static void apply_structural_completion_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
+{
+  apply_lock_weighted_seed<i_t, f_t>(fj_cpu);
+  apply_exact_k_seed<i_t, f_t>(fj_cpu);
+  apply_greedy_covering_seed<i_t, f_t>(fj_cpu);
+  repair_difficult_anchor<i_t, f_t>(fj_cpu);
+}
+
 // What makes one lane of a CPUFJ portfolio behave differently from another: which corner it starts
 // from, how it samples, and how hard it pulls on the objective. Lane 0 keeps the anchor assignment
 // so it is the lane every clone is built from.
@@ -4705,7 +4718,13 @@ void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& climber, int lane, i
   climber.use_move_batching = true;
   if (climber.n_colors == 0) climber.use_move_batching = false;
   switch (lane % 8) {
-    case 1: apply_lock_weighted_seed<i_t, f_t>(climber); break;
+    case 1:
+      if (fj_lane1_structural_completion) {
+        apply_structural_completion_seed<i_t, f_t>(climber);
+      } else {
+        apply_lock_weighted_seed<i_t, f_t>(climber);
+      }
+      break;
     case 2: apply_aggressive_constraint_seed<i_t, f_t>(climber); break;
     case 3: apply_greedy_covering_seed<i_t, f_t>(climber); break;
     case 5: apply_bipartite_matching_seed<i_t, f_t>(climber); break;
