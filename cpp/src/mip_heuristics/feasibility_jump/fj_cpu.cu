@@ -240,6 +240,12 @@ std::pair<f_t, f_t> feas_score_constraint(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 
 static constexpr double BIGVAL_THRESHOLD = 1e20;
 
+// At BIGVAL_THRESHOLD the drift trigger in apply_move cannot fire before h_lhs is already
+// meaningless. Comparing the compensation term against the row's own tolerance instead bounds the
+// drift by construction, at the cost of refreshing h_lhs often enough to hide a divergence that
+// audit_incremental_state is there to catch.
+constexpr bool fj_drift_trigger_at_row_tolerance = false;
+
 template <typename i_t, typename f_t>
 class timing_raii_t {
  public:
@@ -828,6 +834,307 @@ static void audit_breakthrough_inputs(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
     std::fflush(stderr);
     cuopt_assert(false, "breakthrough move input out of bounds");
     return;
+  }
+}
+
+// Row activity recomputed from a given assignment, bypassing the carried h_lhs entirely.
+template <typename i_t, typename f_t>
+static f_t fresh_row_activity(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
+                              i_t cstr_idx,
+                              const f_t* assignment)
+{
+  auto [offset_begin, offset_end] = range_for_constraint<i_t, f_t>(fj_cpu, cstr_idx);
+  auto delta_it =
+    thrust::make_transform_iterator(thrust::make_counting_iterator(0), [&fj_cpu, assignment](i_t j) {
+      return fj_cpu.h_coefficients[j] * assignment[fj_cpu.h_variables[j]];
+    });
+  return fj_kahan_babushka_neumaier_sum<i_t, f_t>(delta_it + offset_begin, delta_it + offset_end);
+}
+
+// Slack between a carried running value and a fresh recomputation of it, relative with an absolute
+// floor so a value near zero still has a scale.
+constexpr double fj_audit_rel_slack = 1e-9;
+constexpr double fj_audit_abs_floor = 1e-6;
+
+// Terms of a diverged row printed individually before the listing is truncated.
+constexpr int32_t fj_audit_row_terms_printed = 64;
+
+// Everything needed to name the writer that left h_lhs disagreeing with A*x on one row: the terms
+// the fresh sum saw, whether each of the row's variables can reach it through the reverse structure
+// apply_move updates through, the row bounds apply_move judges it against, and how stale h_lhs is.
+template <typename i_t, typename f_t>
+static void report_row_divergence(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
+                                  i_t cstr_idx,
+                                  const f_t* assignment,
+                                  const char* site)
+{
+  auto [row_begin, row_end] = range_for_constraint<i_t, f_t>(fj_cpu, cstr_idx);
+  const f_t sumcomp         = fj_cpu.h_lhs_sumcomp[cstr_idx];
+
+  std::fprintf(stderr,
+               "%sCPUFJ %s row %d state: iteration %d, width %d, h_lhs_sumcomp %.17g, refresh "
+               "period %d, recomputes total %lld periodic %lld bigval %lld perturb %lld "
+               "restart %lld\n",
+               fj_cpu.log_prefix.c_str(),
+               site,
+               (int)cstr_idx,
+               (int)fj_cpu.iterations,
+               (int)(row_end - row_begin),
+               (double)sumcomp,
+               (int)fj_cpu.lhs_refresh_period_used,
+               (long long)fj_cpu.n_lhs_recompute_total,
+               (long long)fj_cpu.n_lhs_recompute_periodic,
+               (long long)fj_cpu.n_lhs_recompute_bigval,
+               (long long)fj_cpu.n_lhs_recompute_perturb,
+               (long long)fj_cpu.n_lhs_recompute_restart);
+
+  i_t unreachable = 0;
+  i_t mismatched  = 0;
+  i_t rebounded   = 0;
+  for (i_t p = row_begin; p < row_end; ++p) {
+    const i_t var   = fj_cpu.h_variables[p];
+    const f_t coeff = fj_cpu.h_coefficients[p];
+    const f_t val   = assignment[var];
+
+    // apply_move reaches this row only through the variable's reverse range, and judges it against
+    // the bounds cached per reverse entry rather than h_cstr_lb/h_cstr_ub.
+    const auto [rev_begin, rev_end] = reverse_range_for_var<i_t, f_t>(fj_cpu, var);
+    bool reachable                  = false;
+    f_t rev_coeff                   = 0;
+    f_t cached_lb                   = 0;
+    f_t cached_ub                   = 0;
+    for (i_t q = rev_begin; q < rev_end; ++q) {
+      if (fj_cpu.h_reverse_constraints[q] != cstr_idx) continue;
+      reachable                   = true;
+      rev_coeff                   = fj_cpu.h_reverse_coefficients[q];
+      const auto [c_lb, c_ub]     = fj_cpu.cached_cstr_bounds[q].get();
+      cached_lb                   = c_lb;
+      cached_ub                   = c_ub;
+      break;
+    }
+
+    const bool bounds_agree =
+      cached_lb == (f_t)fj_cpu.h_cstr_lb[cstr_idx] && cached_ub == (f_t)fj_cpu.h_cstr_ub[cstr_idx];
+    if (!reachable) {
+      ++unreachable;
+    } else {
+      if (rev_coeff != coeff) ++mismatched;
+      if (!bounds_agree) ++rebounded;
+    }
+
+    if (p - row_begin >= (i_t)fj_audit_row_terms_printed) continue;
+    std::fprintf(stderr,
+                 "%sCPUFJ %s row %d term %d: var %d integer %d degree %d, coeff %.17g x %.17g "
+                 "product %.17g, reachable %d reverse coeff %.17g cached bounds [%.17g, %.17g]\n",
+                 fj_cpu.log_prefix.c_str(),
+                 site,
+                 (int)cstr_idx,
+                 (int)(p - row_begin),
+                 (int)var,
+                 (int)(var_t::INTEGER == fj_cpu.h_var_types[var]),
+                 (int)(rev_end - rev_begin),
+                 (double)coeff,
+                 (double)val,
+                 (double)(coeff * val),
+                 (int)reachable,
+                 (double)rev_coeff,
+                 (double)cached_lb,
+                 (double)cached_ub);
+  }
+
+  std::fprintf(stderr,
+               "%sCPUFJ %s row %d structure: %d of %d variables cannot reach it through the reverse "
+               "structure, %d carry a different reverse coefficient, %d carry different cached "
+               "bounds%s\n",
+               fj_cpu.log_prefix.c_str(),
+               site,
+               (int)cstr_idx,
+               (int)unreachable,
+               (int)(row_end - row_begin),
+               (int)mismatched,
+               (int)rebounded,
+               row_end - row_begin > (i_t)fj_audit_row_terms_printed ? " (terms truncated)" : "");
+  std::fflush(stderr);
+}
+
+// Runs audit_incremental_state after every iteration, which costs an O(nnz) pass on top of each
+// one. Kept out of sanity_checks so it can be turned off: on, the abort lands on the first
+// iteration whose incremental state diverges, which is what localises the writer.
+constexpr bool fj_audit_every_iteration = true;
+
+// Recomputes from h_assignment everything apply_move maintains incrementally, and names the first
+// disagreement. The violated set judged against A*x is the relation sanity_checks cannot see: it
+// judges the set against h_lhs, so an h_lhs that has left A*x behind is self-consistent there.
+template <typename i_t, typename f_t>
+static void audit_incremental_state(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* site)
+{
+  const f_t* const assignment = fj_cpu.h_assignment.data();
+
+  f_t fresh_total = 0;
+
+  for (i_t cstr_idx = 0; cstr_idx < fj_cpu.view.pb.n_constraints; ++cstr_idx) {
+    const f_t fresh = fresh_row_activity<i_t, f_t>(fj_cpu, cstr_idx, assignment);
+    const f_t tol   = fj_cpu.h_cstr_tolerance[cstr_idx];
+    const f_t cost  = fj_cpu.view.excess_score(cstr_idx, fresh);
+
+    const bool truly_violated = cost < -tol;
+    if (truly_violated) { fresh_total += cost; }
+
+    const bool carried_violated = fj_cpu.violated_constraints.contains(cstr_idx);
+    if (carried_violated == truly_violated) continue;
+
+    const f_t carried = fj_cpu.h_lhs[cstr_idx];
+    const f_t row_lb  = fj_cpu.h_cstr_lb[cstr_idx];
+    const f_t row_ub  = fj_cpu.h_cstr_ub[cstr_idx];
+    // stderr and flushed, so the abort below cannot swallow it.
+    std::fprintf(stderr,
+                 "%sCPUFJ %s row %d: carried violated %d actual %d, h_lhs %.17g vs A*x %.17g "
+                 "differ by %.17g, bounds [%.17g, %.17g], excess %.17g, tol %.17g\n",
+                 fj_cpu.log_prefix.c_str(),
+                 site,
+                 (int)cstr_idx,
+                 (int)carried_violated,
+                 (int)truly_violated,
+                 (double)carried,
+                 (double)fresh,
+                 (double)fabs(carried - fresh),
+                 (double)row_lb,
+                 (double)row_ub,
+                 (double)cost,
+                 (double)tol);
+    std::fflush(stderr);
+    report_row_divergence<i_t, f_t>(fj_cpu, cstr_idx, assignment, site);
+    cuopt_assert(false, "violated set disagrees with A*x");
+    return;
+  }
+
+  const f_t total_gap = fabs(fj_cpu.total_violations - fresh_total);
+  const f_t total_slack =
+    (f_t)fj_audit_abs_floor + (f_t)fj_audit_rel_slack * fabs(fresh_total);
+  if (total_gap > total_slack) {
+    std::fprintf(stderr,
+                 "%sCPUFJ %s total_violations %.17g vs re-summed %.17g, gap %.17g over slack "
+                 "%.17g, sumcomp %.17g, violated rows %d\n",
+                 fj_cpu.log_prefix.c_str(),
+                 site,
+                 (double)fj_cpu.total_violations,
+                 (double)fresh_total,
+                 (double)total_gap,
+                 (double)total_slack,
+                 (double)fj_cpu.total_violations_sumcomp,
+                 (int)fj_cpu.violated_constraints.size());
+    std::fflush(stderr);
+    cuopt_assert(false, "total_violations left the violated set behind");
+    return;
+  }
+
+  auto obj_it =
+    thrust::make_transform_iterator(thrust::make_counting_iterator(0), [&fj_cpu, assignment](i_t v) {
+      return fj_cpu.h_obj_coeffs[v] * assignment[v];
+    });
+  const f_t fresh_obj =
+    fj_kahan_babushka_neumaier_sum<i_t, f_t>(obj_it, obj_it + fj_cpu.view.pb.n_variables);
+  const f_t obj_gap = fabs(fj_cpu.h_incumbent_objective - fresh_obj);
+  const f_t obj_slack =
+    (f_t)fj_audit_abs_floor + (f_t)fj_audit_rel_slack * fabs(fresh_obj);
+  if (obj_gap > obj_slack) {
+    std::fprintf(stderr,
+                 "%sCPUFJ %s h_incumbent_objective %.17g vs c'x %.17g, gap %.17g over slack %.17g, "
+                 "sumcomp %.17g\n",
+                 fj_cpu.log_prefix.c_str(),
+                 site,
+                 (double)fj_cpu.h_incumbent_objective,
+                 (double)fresh_obj,
+                 (double)obj_gap,
+                 (double)obj_slack,
+                 (double)fj_cpu.h_objective_sumcomp);
+    std::fflush(stderr);
+    cuopt_assert(false, "h_incumbent_objective left c'x behind");
+  }
+}
+
+// Revalidates a latched incumbent from h_best_assignment. The acceptance gate reads the
+// incrementally maintained violated set, and nothing checks what it stored afterwards.
+template <typename i_t, typename f_t>
+static void audit_latched_incumbent(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* site)
+{
+  const f_t* const best = fj_cpu.h_best_assignment.data();
+
+  for (i_t cstr_idx = 0; cstr_idx < fj_cpu.view.pb.n_constraints; ++cstr_idx) {
+    const f_t fresh = fresh_row_activity<i_t, f_t>(fj_cpu, cstr_idx, best);
+    const f_t tol   = fj_cpu.h_cstr_tolerance[cstr_idx];
+    const f_t cost  = fj_cpu.view.excess_score(cstr_idx, fresh);
+    if (!(cost < -tol)) continue;
+
+    const f_t row_lb  = fj_cpu.h_cstr_lb[cstr_idx];
+    const f_t row_ub  = fj_cpu.h_cstr_ub[cstr_idx];
+    const f_t carried = fj_cpu.h_lhs[cstr_idx];
+    // stderr and flushed, so the abort below cannot swallow it.
+    std::fprintf(stderr,
+                 "%sCPUFJ %s incumbent violates row %d: A*x %.17g outside [%.17g, %.17g] by %.17g, "
+                 "tol %.17g, carried h_lhs %.17g, in violated set %d\n",
+                 fj_cpu.log_prefix.c_str(),
+                 site,
+                 (int)cstr_idx,
+                 (double)fresh,
+                 (double)row_lb,
+                 (double)row_ub,
+                 (double)-cost,
+                 (double)tol,
+                 (double)carried,
+                 (int)fj_cpu.violated_constraints.contains(cstr_idx));
+    std::fflush(stderr);
+    report_row_divergence<i_t, f_t>(fj_cpu, cstr_idx, best, site);
+    cuopt_assert(false, "latched incumbent violates a row");
+    return;
+  }
+
+  for (i_t var = 0; var < fj_cpu.view.pb.n_variables; ++var) {
+    const f_t val    = best[var];
+    const bool inbox = fj_cpu.view.pb.check_variable_within_bounds(var, val);
+    const bool integral =
+      var_t::INTEGER != fj_cpu.h_var_types[var] || fj_cpu.view.pb.is_integer(val);
+    if (inbox && integral) continue;
+
+    auto bounds = fj_cpu.h_var_bounds[var].get();
+    std::fprintf(stderr,
+                 "%sCPUFJ %s incumbent has var %d at %.17g outside [%.17g, %.17g], integer %d\n",
+                 fj_cpu.log_prefix.c_str(),
+                 site,
+                 (int)var,
+                 (double)val,
+                 (double)get_lower(bounds),
+                 (double)get_upper(bounds),
+                 (int)(var_t::INTEGER == fj_cpu.h_var_types[var]));
+    std::fflush(stderr);
+    cuopt_assert(false, "latched incumbent left the variable bounds");
+    return;
+  }
+
+  // h_best_objective is stored one epsilon below the assignment's true objective, so that offset is
+  // what the recomputation has to reproduce. Anything else is the ratchet drifting from reality.
+  auto obj_it =
+    thrust::make_transform_iterator(thrust::make_counting_iterator(0), [&fj_cpu, best](i_t v) {
+      return fj_cpu.h_obj_coeffs[v] * best[v];
+    });
+  const f_t fresh_obj =
+    fj_kahan_babushka_neumaier_sum<i_t, f_t>(obj_it, obj_it + fj_cpu.view.pb.n_variables);
+  const f_t expected = fresh_obj - fj_cpu.settings.parameters.breakthrough_move_epsilon;
+  const f_t obj_gap  = fabs(fj_cpu.h_best_objective - expected);
+  const f_t obj_slack =
+    (f_t)fj_audit_abs_floor + (f_t)fj_audit_rel_slack * fabs(expected);
+  if (obj_gap > obj_slack) {
+    std::fprintf(stderr,
+                 "%sCPUFJ %s h_best_objective %.17g vs c'x_best - epsilon %.17g, gap %.17g over "
+                 "slack %.17g\n",
+                 fj_cpu.log_prefix.c_str(),
+                 site,
+                 (double)fj_cpu.h_best_objective,
+                 (double)expected,
+                 (double)obj_gap,
+                 (double)obj_slack);
+    std::fflush(stderr);
+    cuopt_assert(false, "h_best_objective left the latched assignment behind");
   }
 }
 
@@ -1449,7 +1756,9 @@ static void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 
     // trigger early lhs recomputation if the sumcomp term gets too large
     // to avoid large numerical errors
-    if (fabs(new_sumcomp) > BIGVAL_THRESHOLD) fj_cpu.trigger_early_lhs_recomputation = true;
+    const f_t drift_trigger =
+      fj_drift_trigger_at_row_tolerance ? cstr_tolerance : (f_t)BIGVAL_THRESHOLD;
+    if (fabs(new_sumcomp) > drift_trigger) fj_cpu.trigger_early_lhs_recomputation = true;
 
     const bool was_violated = fj_cpu.violated_constraints.contains(cstr_idx);
     const bool now_violated = new_cost < -cstr_tolerance;
@@ -1501,9 +1810,11 @@ static void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   if (fj_cpu.h_incumbent_objective < fj_cpu.h_best_objective &&
       fj_cpu.violated_constraints.empty() && check_variable_feasibility<i_t, f_t>(fj_cpu)) {
     cuopt_assert(fj_cpu.satisfied_constraints.size() == fj_cpu.view.pb.n_constraints, "");
+    cuopt_func_call(audit_incremental_state(fj_cpu, "incumbent gate"));
     fj_cpu.h_best_objective =
       fj_cpu.h_incumbent_objective - fj_cpu.settings.parameters.breakthrough_move_epsilon;
     fj_cpu.h_best_assignment     = fj_cpu.h_assignment;
+    cuopt_func_call(audit_latched_incumbent(fj_cpu, "incumbent latch"));
     fj_cpu.iterations_since_best = 0;
     // DEBUG, and reporting the stored best rather than the pre-epsilon incumbent,
     // so it matches the binary path and the end-of-solve incumbent audit.
@@ -2159,6 +2470,7 @@ static void perturb(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   if (fj_cpu.feasible_found) {
     cuopt_assert(fj_cpu.h_assignment.size() == fj_cpu.h_best_assignment.size(),
                  "incumbent_assignment span would be invalidated");
+    cuopt_func_call(audit_latched_incumbent(fj_cpu, "perturb restore"));
     fj_cpu.h_assignment = fj_cpu.h_best_assignment;
     if (fj_cpu.shared_incumbent) {
       fj_cpu.shared_incumbent->adopt(fj_cpu.h_best_objective, fj_cpu.h_assignment);
@@ -2226,6 +2538,7 @@ static void track_infeasible_checkpoint(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
     return;
   }
 
+  cuopt_func_call(audit_incremental_state(fj_cpu, "checkpoint"));
   const f_t severity = -fj_cpu.total_violations;
   cuopt_assert(severity >= 0, "violation severity should be positive or zero");
 
@@ -2493,6 +2806,39 @@ static void set_host_data_view(
     raft::device_span<f_t>(fj_cpu.h_obj_coeffs.data(), fj_cpu.h_obj_coeffs.size());
 }
 
+// A move target comes out of a row residual, so an unbounded integer domain lets one variable reach
+// a magnitude at which its rows can no longer be evaluated: a row's summation error grows with the
+// sum of its absolute terms, and once that error passes the row tolerance the violated set carries
+// no information about it. randomize_variable already draws only from this range.
+constexpr double fj_integer_domain_limit = 1e7;
+constexpr bool fj_cap_integer_domains    = true;
+
+// Integers only, which leaves certify_epigraph_variables untouched: it needs a continuous variable
+// unbounded in the direction the objective pushes, and skips integers outright. A domain lying
+// wholly outside the range keeps what it had rather than being emptied.
+template <typename i_t, typename f_t>
+static void cap_integer_domains(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t n_variables)
+{
+  if (!fj_cap_integer_domains) return;
+  cuopt_assert(fj_cpu.h_best_assignment.size() == static_cast<size_t>(n_variables),
+               "best assignment size mismatch");
+
+  for (i_t var = 0; var < n_variables; ++var) {
+    if (var_t::INTEGER != fj_cpu.h_var_types[var]) continue;
+
+    const auto bounds = fj_cpu.h_var_bounds[var].get();
+    const f_t lower   = std::max(get_lower(bounds), (f_t)-fj_integer_domain_limit);
+    const f_t upper   = std::min(get_upper(bounds), (f_t)fj_integer_domain_limit);
+    if (lower > upper) continue;
+    if (lower == get_lower(bounds) && upper == get_upper(bounds)) continue;
+
+    // Both assignments, since the from-template path inherits h_lhs instead of recomputing it.
+    fj_cpu.h_var_bounds[var]      = typename type_2<f_t>::type{lower, upper};
+    fj_cpu.h_assignment[var]      = std::clamp((f_t)fj_cpu.h_assignment[var], lower, upper);
+    fj_cpu.h_best_assignment[var] = std::clamp((f_t)fj_cpu.h_best_assignment[var], lower, upper);
+  }
+}
+
 template <typename i_t, typename f_t>
 static void wire_fj_cpu_host_views(
   fj_cpu_climber_t<i_t, f_t>& fj_cpu,
@@ -2512,6 +2858,9 @@ static void wire_fj_cpu_host_views(
                "seed assignment size mismatch");
 
   set_host_data_view(fj_cpu, n_variables, n_constraints, n_integer_vars, nnz, tolerances);
+
+  // Ahead of everything that reads a domain: bound propagation, the seeds, and the scorers.
+  cap_integer_domains(fj_cpu, n_variables);
 
   fj_cpu.view.cstr_left_weights =
     raft::device_span<f_t>(fj_cpu.h_cstr_left_weights.data(), fj_cpu.h_cstr_left_weights.size());
@@ -3612,6 +3961,9 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
     }
 
     cuopt_func_call(sanity_checks(*fj_cpu));
+    if (fj_audit_every_iteration) {
+      cuopt_func_call(audit_incremental_state(*fj_cpu, "iteration"));
+    }
     fj_cpu->iterations++;
     fj_cpu->iterations_since_best++;
   }
@@ -4690,18 +5042,22 @@ static void apply_structural_completion_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   repair_difficult_anchor<i_t, f_t>(fj_cpu);
 }
 
+// Lane 3 gives up its pure-feasibility role for the portfolio's heaviest objective pressure.
+constexpr bool fj_obj_weight_ladder_v2 = false;
+
 // What makes one lane of a CPUFJ portfolio behave differently from another: which corner it starts
 // from, how it samples, and how hard it pulls on the objective. Lane 0 keeps the anchor assignment
 // so it is the lane every clone is built from.
 template <typename i_t, typename f_t>
 void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& climber, int lane, int64_t base_seed)
 {
-  // Objective pressure across the portfolio, indexed by lane. Lanes 0 and 3 stay pure feasibility
-  // seekers until they cross, since the objective term only enters the score once the weight is
-  // positive; their nonzero floor then keeps a pull on the objective afterwards rather than letting
-  // smooth_weights decay it back to nothing.
-  const f_t obj_weight_ladder[4] = {0, 4, 32, 0};
-  const f_t obj_weight_floor[4]  = {1, 4, 32, 1};
+  // Objective pressure across the portfolio, indexed by lane. A lane whose ladder entry is zero
+  // stays a pure feasibility seeker until it crosses, since the objective term only enters the score
+  // once the weight is positive; its nonzero floor then keeps a pull on the objective afterwards
+  // rather than letting smooth_weights decay it back to nothing.
+  constexpr bool ladder_v2       = fj_obj_weight_ladder_v2;
+  const f_t obj_weight_ladder[4] = {0, 4, ladder_v2 ? 16 : 32, ladder_v2 ? 64 : 0};
+  const f_t obj_weight_floor[4]  = {1, 4, ladder_v2 ? 16 : 32, ladder_v2 ? 64 : 1};
 
   // One structural start per lane; lanes 0, 4 and 7 keep the shared anchor here. Lane 4's is
   // replaced inside its own task by the LP pump, so construction does not wait on an LP.
