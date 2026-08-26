@@ -122,7 +122,7 @@ void invoke_random_round_nearest(solution_t<i_t, f_t>& solution, i_t n_target_ra
 {
   i_t TPB        = 128;
   i_t n_blocks   = (solution.problem_ptr->n_variables + TPB - 1) / TPB;
-  i_t n_integers = solution.compute_number_of_integers();
+  [[maybe_unused]] i_t n_integers = solution.compute_number_of_integers();
   CUOPT_LOG_TRACE("before random roundin n_integers %d total n_integers %d",
                   n_integers,
                   solution.problem_ptr->n_integer_vars);

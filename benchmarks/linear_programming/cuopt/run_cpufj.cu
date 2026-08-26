@@ -298,19 +298,19 @@ int main(int argc, char** argv)
     i_t rows_over          = 0;
     double worst_row_ratio = 0.0;
     for (i_t r = 0; r < c.view.pb.n_constraints; ++r) {
-      __float128 activity = 0;
+      _Float128 activity = 0;
       for (i_t j = c.h_offsets[r]; j < c.h_offsets[r + 1]; ++j) {
         const i_t var            = c.h_variables[j];
         const double coefficient = c.h_coefficients[j];
         const double value       = c.h_best_assignment[var];
-        activity += (__float128)coefficient * (__float128)value;
+        activity += (_Float128)coefficient * (_Float128)value;
       }
 
       const f_t lb           = c.h_cstr_lb[r];
       const f_t ub           = c.h_cstr_ub[r];
-      const __float128 below = (__float128)lb - activity;
-      const __float128 above = activity - (__float128)ub;
-      const double excess    = (double)std::max(std::max(below, above), (__float128)0);
+      const _Float128 below = (_Float128)lb - activity;
+      const _Float128 above = activity - (_Float128)ub;
+      const double excess    = (double)std::max(std::max(below, above), (_Float128)0);
       if (excess <= 0.0) continue;
 
       const double tol   = c.view.get_corrected_tolerance(r, lb, ub);
@@ -323,7 +323,7 @@ int main(int argc, char** argv)
     i_t integers_over          = 0;
     double worst_bound_ratio   = 0.0;
     double worst_integer_ratio = 0.0;
-    __float128 objective       = 0;
+    _Float128 objective       = 0;
     for (i_t v = 0; v < c.view.pb.n_variables; ++v) {
       auto bounds      = c.h_var_bounds[v].get();
       const double x   = (double)c.h_best_assignment[v];
@@ -338,11 +338,11 @@ int main(int argc, char** argv)
         worst_integer_ratio = std::max(worst_integer_ratio, int_tol > 0 ? residual / int_tol : 0.0);
       }
       const double coefficient = c.h_obj_coeffs[v];
-      objective += (__float128)coefficient * (__float128)x;
+      objective += (_Float128)coefficient * (_Float128)x;
     }
 
     // Differenced before narrowing; the drift is smaller than a double ulp of the sum.
-    const __float128 difference = objective - (__float128)results[k].best_objective;
+    const _Float128 difference = objective - (_Float128)results[k].best_objective;
     const double drift          = (double)(difference < 0 ? -difference : difference);
     const double exact          = (double)objective;
     const double scale          = std::max(std::fabs(exact), 1.0);

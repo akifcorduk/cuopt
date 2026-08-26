@@ -199,7 +199,7 @@ std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::get_external_solutions
 {
   std::lock_guard<std::mutex> lock(solution_mutex);
   std::vector<solution_t<i_t, f_t>> return_vector;
-  i_t counter                     = 0;
+  [[maybe_unused]] i_t counter    = 0;
   f_t new_best_feasible_objective = best_feasible_objective;
   f_t longest_wait_time           = 0;
   for (auto& queue : {external_solution_queue, external_solution_queue_cpufj}) {
@@ -834,7 +834,7 @@ void population_t<i_t, f_t>::print()
                   infeasibility_importance,
                   var_threshold,
                   problem_ptr->n_integer_vars);
-  i_t i = 0;
+  [[maybe_unused]] i_t i = 0;
   for (auto& index : indices) {
     if (index.first == 0 && solutions[0].first) {
       CUOPT_LOG_DEBUG(" Best feasible: %f", solutions[index.first].second.get_user_objective());

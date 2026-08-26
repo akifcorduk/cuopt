@@ -406,12 +406,12 @@ static void log_regression_features(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
                                     size_t mem_loads_bytes,
                                     size_t mem_stores_bytes)
 {
-  i_t total_nnz = fj_cpu.h_reverse_offsets.back();
-  i_t n_vars    = fj_cpu.h_reverse_offsets.size() - 1;
-  i_t n_cstrs   = fj_cpu.h_offsets.size() - 1;
+  [[maybe_unused]] i_t total_nnz = fj_cpu.h_reverse_offsets.back();
+  i_t n_vars                     = fj_cpu.h_reverse_offsets.size() - 1;
+  i_t n_cstrs                    = fj_cpu.h_offsets.size() - 1;
 
   // Dynamic runtime features
-  double violated_ratio = (double)fj_cpu.violated_constraints.size() / n_cstrs;
+  [[maybe_unused]] double violated_ratio = (double)fj_cpu.violated_constraints.size() / n_cstrs;
 
   // Compute per-iteration metrics
   [[maybe_unused]] double nnz_per_move = 0.0;
@@ -419,47 +419,47 @@ static void log_regression_features(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
     fj_cpu.n_lift_moves_window + fj_cpu.n_mtm_viol_moves_window + fj_cpu.n_mtm_sat_moves_window;
   if (total_moves > 0) { nnz_per_move = (double)fj_cpu.nnz_processed_window / total_moves; }
 
-  double eval_intensity = (double)fj_cpu.nnz_processed_window / 1000.0;
+  [[maybe_unused]] double eval_intensity = (double)fj_cpu.nnz_processed_window / 1000.0;
 
   // Cache and locality metrics
   int64_t cache_hits_window    = fj_cpu.hit_count - fj_cpu.hit_count_window_start;
   int64_t cache_misses_window  = fj_cpu.miss_count - fj_cpu.miss_count_window_start;
   int64_t total_cache_accesses = cache_hits_window + cache_misses_window;
-  double cache_hit_rate =
+  [[maybe_unused]] double cache_hit_rate =
     total_cache_accesses > 0 ? (double)cache_hits_window / total_cache_accesses : 0.0;
 
   i_t unique_cstrs = fj_cpu.unique_cstrs_accessed_window.size();
   i_t unique_vars  = fj_cpu.unique_vars_accessed_window.size();
 
   // Reuse ratios: how many times each constraint/variable was accessed on average
-  double cstr_reuse_ratio =
+  [[maybe_unused]] double cstr_reuse_ratio =
     unique_cstrs > 0 ? (double)fj_cpu.nnz_processed_window / unique_cstrs : 0.0;
-  double var_reuse_ratio =
+  [[maybe_unused]] double var_reuse_ratio =
     unique_vars > 0 ? (double)fj_cpu.n_variable_updates_window / unique_vars : 0.0;
 
   // Working set size estimation (KB)
   // Each constraint: lhs (f_t) + 2 bounds (f_t) + sumcomp (f_t) = 4 * sizeof(f_t)
   // Each variable: assignment (f_t) = 1 * sizeof(f_t)
   i_t working_set_bytes = unique_cstrs * 4 * sizeof(f_t) + unique_vars * sizeof(f_t);
-  double working_set_kb = working_set_bytes / 1024.0;
+  [[maybe_unused]] double working_set_kb = working_set_bytes / 1024.0;
 
   // Coverage: what fraction of problem is actively touched
-  double cstr_coverage = (double)unique_cstrs / n_cstrs;
-  double var_coverage  = (double)unique_vars / n_vars;
+  [[maybe_unused]] double cstr_coverage = (double)unique_cstrs / n_cstrs;
+  [[maybe_unused]] double var_coverage  = (double)unique_vars / n_vars;
 
-  double loads_per_iter  = 0.0;
-  double stores_per_iter = 0.0;
-  double l1_miss         = -1.0;
-  double l3_miss         = -1.0;
+  [[maybe_unused]] double loads_per_iter  = 0.0;
+  [[maybe_unused]] double stores_per_iter = 0.0;
+  [[maybe_unused]] double l1_miss         = -1.0;
+  [[maybe_unused]] double l3_miss         = -1.0;
 
   // Compute memory statistics
-  double mem_loads_mb             = mem_loads_bytes / 1e6;
-  double mem_stores_mb            = mem_stores_bytes / 1e6;
-  double mem_total_mb             = (mem_loads_bytes + mem_stores_bytes) / 1e6;
-  double mem_bandwidth_gb_per_sec = (mem_total_mb / 1000.0) / (time_window_ms / 1000.0);
+  [[maybe_unused]] double mem_loads_mb             = mem_loads_bytes / 1e6;
+  [[maybe_unused]] double mem_stores_mb            = mem_stores_bytes / 1e6;
+  double mem_total_mb                              = (mem_loads_bytes + mem_stores_bytes) / 1e6;
+  [[maybe_unused]] double mem_bandwidth_gb_per_sec = (mem_total_mb / 1000.0) / (time_window_ms / 1000.0);
 
   // Build per-wrapper memory statistics string
-  std::stringstream wrapper_stats;
+  [[maybe_unused]] std::stringstream wrapper_stats;
   auto per_wrapper_stats = fj_cpu.memory_aggregator.collect_per_wrapper();
   for (const auto& [name, loads, stores] : per_wrapper_stats) {
     wrapper_stats << " " << name << "_loads=" << loads << " " << name << "_stores=" << stores;
@@ -596,7 +596,7 @@ static void compute_variable_coloring(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
     return;
   }
 
-  const auto started = std::chrono::steady_clock::now();
+  [[maybe_unused]] const auto started = std::chrono::steady_clock::now();
   fj_cpu.h_var_color.assign(n_vars, -1);
   fj_cpu.n_colors = 0;
   std::vector<i_t> neighbor_stamp(n_vars, -1);
@@ -3333,7 +3333,7 @@ static bool solve_lp_relaxation(const simplex::user_problem_t<i_t, f_t>& relaxat
                                 std::vector<f_t>& x)
 {
   simplex::lp_status_t status = simplex::lp_status_t::UNSET;
-  double seconds              = 0;
+  [[maybe_unused]] double seconds = 0;
 
   // solve_linear_program_advanced, whose status separates a limit -- which leaves a usable vertex
   // behind -- from infeasibility. Guarded on f_t because dual simplex is only built for double.
@@ -3569,7 +3569,7 @@ static void apply_bound_propagation(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   fj_cpu.h_binary_indices.clear();
   fj_cpu.n_binary_vars  = 0;
   fj_cpu.n_integer_vars = 0;
-  i_t tightened         = 0;
+  [[maybe_unused]] i_t tightened = 0;
   bool clamped          = false;
   for (i_t var = 0; var < n_variables; ++var) {
     auto bounds = fj_cpu.h_var_bounds[var].get();
@@ -3744,7 +3744,7 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   // problem fits the binary fastpath shape? run it (engine is solve-local)
   if (try_cpufj_binary_solve(*fj_cpu, remaining, work_unit_limit)) return;
 
-  i_t local_mins = 0;
+  [[maybe_unused]] i_t local_mins = 0;
   std::vector<fj_move_t> batch_moves;
   // The LP comes out of this lane's own budget; every other lane's clock starts where it did.
   auto loop_start = (fj_cpu->use_lp_seed || fj_cpu->use_bound_prop)
@@ -3970,7 +3970,8 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   auto loop_end = std::chrono::high_resolution_clock::now();
   double total_time =
     std::chrono::duration_cast<std::chrono::duration<double>>(loop_end - loop_start).count();
-  double avg_time_per_iter = fj_cpu->iterations > 0 ? total_time / fj_cpu->iterations : 0;
+  [[maybe_unused]] double avg_time_per_iter =
+    fj_cpu->iterations > 0 ? total_time / fj_cpu->iterations : 0;
   CUOPT_LOG_TRACE("%sCPUFJ Average time per iteration: %.8fms",
                   fj_cpu->log_prefix.c_str(),
                   avg_time_per_iter * 1000.0);

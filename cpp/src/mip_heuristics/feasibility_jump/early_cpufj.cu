@@ -100,7 +100,7 @@ void early_cpufj_t<i_t, f_t>::stop()
 #pragma omp taskwait depend(in : *climbers_[k])  // Wait for each early CPUFJ task to finish
   }
 
-  i_t total_iterations = 0;
+  [[maybe_unused]] i_t total_iterations = 0;
   for (const auto& climber : climbers_) {
     total_iterations += climber->iterations;
   }

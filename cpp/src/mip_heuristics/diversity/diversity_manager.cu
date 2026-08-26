@@ -226,13 +226,14 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
                    "reduced objective size must match crushed solution dimension");
       // Map each solution to user space with its own problem's scale, so the comparison holds even
       // if the original and reduced objective scales ever diverge.
-      const double input_obj =
+      [[maybe_unused]] const double input_obj =
         (double)presolver_ptr->get_original_objective_scaling_factor() *
         std::inner_product(h_ori_obj.begin(),
                            h_ori_obj.end(),
                            h_original.begin(),
                            (double)presolver_ptr->get_original_objective_offset());
-      const double crushed_obj = (double)reduced_problem.get_objective_scaling_factor() *
+      [[maybe_unused]] const double crushed_obj =
+        (double)reduced_problem.get_objective_scaling_factor() *
                                  std::inner_product(h_red_obj.begin(),
                                                     h_red_obj.end(),
                                                     h_crushed.begin(),

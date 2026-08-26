@@ -472,12 +472,12 @@ struct bhw_stats_t {
     if (coefficients_reduced == 0) return;
     const size_t n_rows_rewritten = row_shrinks.size();
     cuopt_assert(n_rows_rewritten > 0, "a changed coefficient implies an accepted row");
-    const double mean =
+    [[maybe_unused]] const double mean =
       std::accumulate(row_shrinks.begin(), row_shrinks.end(), 0.0) / n_rows_rewritten;
     // One row collapsing to magnitude 1 dominates the mean, so report the median next to it.
     const auto middle = row_shrinks.begin() + n_rows_rewritten / 2;
     std::nth_element(row_shrinks.begin(), middle, row_shrinks.end());
-    double median = *middle;
+    [[maybe_unused]] double median = *middle;
     if (n_rows_rewritten % 2 == 0)
       median = (median + *std::max_element(row_shrinks.begin(), middle)) / 2.0;
 
