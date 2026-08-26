@@ -18,6 +18,8 @@
 
 #include <utilities/pcgenerator.hpp>
 
+#include <array>
+#include <mutex>
 #include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -149,12 +151,13 @@ class bfs_worker_t : public branch_and_bound_worker_t<i_t, f_t> {
                uint64_t rng_offset = 0)
     : Base(worker_id, original_lp, Arow, var_type, settings, rng_offset)
   {
-    this->start_lower     = original_lp.lower;
-    this->start_upper     = original_lp.upper;
-    this->search_strategy = search_strategy_t::BEST_FIRST;
-    max_diving_workers    = 0;
-    active_diving_workers = 0;
-    next_heuristic        = worker_id;
+    this->start_lower        = original_lp.lower;
+    this->start_upper        = original_lp.upper;
+    this->search_strategy    = search_strategy_t::BEST_FIRST;
+    max_diving_workers       = 0;
+    active_diving_workers    = 0;
+    next_heuristic           = worker_id;
+    unique_diving_heuristics = settings.num_best_first_workers > 0;
   }
 
   void set_inactive() { this->is_active = false; }
@@ -182,15 +185,31 @@ class bfs_worker_t : public branch_and_bound_worker_t<i_t, f_t> {
   // with all active diving heuristics.
   void update_diving_heuristic_list(const mip_diving_hyper_params_t<i_t, f_t>& settings)
   {
+    std::lock_guard lock(diving_heuristic_mutex);
     get_diving_heuristic_list(settings, diving_heuristics);
   }
 
-  // Get the next diving heuristic from the list
-  search_strategy_t next_diving_heuristic()
+  bool reserve_next_diving_heuristic(search_strategy_t& strategy)
   {
     assert(is_diving_enabled());
-    next_heuristic = next_heuristic % diving_heuristics.size();
-    return diving_heuristics[next_heuristic++];
+    std::lock_guard lock(diving_heuristic_mutex);
+    for (size_t attempt = 0; attempt < diving_heuristics.size(); ++attempt) {
+      next_heuristic = next_heuristic % diving_heuristics.size();
+      strategy       = diving_heuristics[next_heuristic++];
+      if (!unique_diving_heuristics || !active_diving_heuristics[strategy_index(strategy)]) {
+        if (unique_diving_heuristics) { active_diving_heuristics[strategy_index(strategy)] = true; }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void release_diving_heuristic(search_strategy_t strategy)
+  {
+    if (!unique_diving_heuristics) { return; }
+    std::lock_guard lock(diving_heuristic_mutex);
+    assert(active_diving_heuristics[strategy_index(strategy)]);
+    active_diving_heuristics[strategy_index(strategy)] = false;
   }
 
   bool is_diving_enabled() { return !diving_heuristics.empty(); }
@@ -207,8 +226,19 @@ class bfs_worker_t : public branch_and_bound_worker_t<i_t, f_t> {
   i_t max_diving_workers;
 
  private:
+  static constexpr size_t num_search_strategies =
+    static_cast<size_t>(search_strategy_t::SUBMIP) + 1;
+
+  static constexpr size_t strategy_index(search_strategy_t strategy)
+  {
+    return static_cast<size_t>(strategy);
+  }
+
+  omp_mutex_t diving_heuristic_mutex;
   std::vector<search_strategy_t> diving_heuristics;
+  std::array<bool, num_search_strategies> active_diving_heuristics{};
   i_t next_heuristic;
+  bool unique_diving_heuristics;
 };
 
 template <typename i_t, typename f_t>
@@ -231,6 +261,7 @@ class diving_worker_t : public branch_and_bound_worker_t<i_t, f_t> {
     this->is_active = false;
 
     if (bfs_worker) {
+      bfs_worker->release_diving_heuristic(this->search_strategy);
       assert(bfs_worker->active_diving_workers.load() > 0);
       --bfs_worker->active_diving_workers;
     }

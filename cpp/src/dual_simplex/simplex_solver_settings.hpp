@@ -89,6 +89,7 @@ struct simplex_solver_settings_t {
       iteration_log_frequency(1000),
       first_iteration_log(2),
       num_threads(omp_get_max_threads() - 1),
+      num_best_first_workers(-1),
       max_cut_passes(0),
       mir_cuts(-1),
       mixed_integer_gomory_cuts(-1),
@@ -181,13 +182,15 @@ struct simplex_solver_settings_t {
                                    // point, 1 to use initial point form dual least squares problem
   i_t postsolve_info;              // -1 automatic (disabled), 0 disabled, 1 enabled
   i_t barrier_presolve_bound_free_variables;  // -1 automatic, 0 disabled, 1 enabled
-  i_t qcqp_ruiz_equilibration;     // -1 automatic (imbalance heuristic), 0 disabled, 1 enabled
-  bool check_Q;                    // true to check if Q is positive semidefinite
-  bool crossover;                  // true to do crossover, false to not
-  i_t refactor_frequency;          // number of basis updates before refactorization
-  i_t iteration_log_frequency;     // number of iterations between log updates
-  i_t first_iteration_log;         // number of iterations to log at beginning of solve
-  i_t num_threads;                 // number of threads to use
+  i_t qcqp_ruiz_equilibration;  // -1 automatic (imbalance heuristic), 0 disabled, 1 enabled
+  bool check_Q;                 // true to check if Q is positive semidefinite
+  bool crossover;               // true to do crossover, false to not
+  i_t refactor_frequency;       // number of basis updates before refactorization
+  i_t iteration_log_frequency;  // number of iterations between log updates
+  i_t first_iteration_log;      // number of iterations to log at beginning of solve
+  i_t num_threads;              // number of threads to use
+  // Internal B&B worker-mix override. A nonpositive value retains the default balanced split.
+  i_t num_best_first_workers;
   i_t random_seed;                 // random seed
   i_t max_cut_passes;              // number of cut passes to make
   i_t mir_cuts;                    // -1 automatic, 0 to disable, >0 to enable MIR cuts

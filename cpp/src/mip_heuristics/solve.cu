@@ -515,11 +515,7 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
     // Only run if presolve is enabled (gives FJ time to find solutions)
     // and we're not in deterministic mode
 
-    struct early_incumbent_entry_t {
-      f_t user_obj;
-      std::vector<f_t> assignment;
-    };
-    std::vector<early_incumbent_entry_t> early_incumbent_pool;
+    std::vector<std::vector<f_t>> early_incumbent_pool;
 
     // Track best incumbent found during presolve (shared across CPU and GPU FJ).
     // early_best_objective is in the original problem's solver-space (always minimization),
@@ -573,7 +569,7 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         early_best_objective.store(solver_obj);
         early_best_user_obj        = user_obj;
         early_best_user_assignment = assignment;
-        early_incumbent_pool.push_back({user_obj, assignment});
+        early_incumbent_pool.push_back(assignment);
         CUOPT_LOG_INFO("New solution from early primal heuristics (%s). Objective %+.6e. Time %.2f",
                        heuristic_name,
                        user_obj,
@@ -589,27 +585,38 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
 
     // This budget covers only long-running tasks in the existing MIP OpenMP team. PaPILO keeps
     // the thread configuration pinned by this branch and is intentionally outside this count.
-    mip::pre_presolve_thread_budget_t pre_presolve_thread_budget(
-      std::max(omp_get_num_threads() - 1, 0));
+    const int mip_omp_threads = omp_get_num_threads();
+    mip::pre_presolve_thread_budget_t pre_presolve_thread_budget(std::max(mip_omp_threads - 1, 0));
     bool early_cpufj_slot_reserved = false;
     bool early_gpufj_slot_reserved = false;
     std::unique_ptr<mip::pre_presolve_primal_t<i_t, f_t>> pre_presolve_primal;
 
     if (run_early_fj) {
-      constexpr int pre_presolve_mode = mip::pre_presolve_primal_branch_mode;
-      bool pre_presolve_started       = false;
-      if (pre_presolve_mode != 0) {
+      bool pre_presolve_started = false;
+      if (mip_omp_threads >= 4) {
+        constexpr int max_pre_bnb_task_slots = 7;  // One best-first plus six rotating dives.
+        const int pre_bnb_task_slots =
+          std::min(max_pre_bnb_task_slots, std::max(2, mip_omp_threads - 3));
         pre_presolve_primal = std::make_unique<mip::pre_presolve_primal_t<i_t, f_t>>(
-          op_problem, settings, early_fj_callback, pre_presolve_thread_budget);
-        // Give the branch treatment first claim on its task slot. Stock early heuristics use only
-        // the remaining budget; if the treatment cannot start, retain the unbudgeted stock path.
+          op_problem, settings, early_fj_callback, pre_presolve_thread_budget, pre_bnb_task_slots);
+        // Give the treatment first claim on its task slots. If it is ineligible or cannot start,
+        // retain the unbudgeted stock path.
         pre_presolve_started = pre_presolve_primal->start();
       }
-      const bool replace_early_gpufj =
-        pre_presolve_started && pre_presolve_primal->replaces_early_gpufj();
+
+      if (pre_presolve_started) {
+        // At four total threads, preserve GPUFJ alongside the CPU-only pre-B&B treatment. With at
+        // least five threads, preserve the benchmarked CPUFJ-then-GPUFJ reservation order.
+        if (mip_omp_threads == 4) {
+          early_gpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+          early_cpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+        } else {
+          early_cpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+          early_gpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+        }
+      }
 
       // Start early CPUFJ on original problem (will restart on presolved problem after Papilo)
-      early_cpufj_slot_reserved = pre_presolve_started && pre_presolve_thread_budget.try_reserve(1);
       if (!pre_presolve_started || early_cpufj_slot_reserved) {
         early_cpufj = std::make_unique<mip::early_cpufj_t<i_t, f_t>>(
           op_problem, settings.get_tolerances(), early_fj_callback);
@@ -623,23 +630,18 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         CUOPT_LOG_DEBUG("Started early CPUFJ on original problem");
       }
 
-      // Start early GPU FJ (uses GPU while CPU is busy with Papilo)
-      if (!replace_early_gpufj) {
-        early_gpufj_slot_reserved =
-          pre_presolve_started && pre_presolve_thread_budget.try_reserve(1);
-        if (!pre_presolve_started || early_gpufj_slot_reserved) {
-          early_gpufj =
-            std::make_unique<mip::early_gpufj_t<i_t, f_t>>(op_problem, settings, early_fj_callback);
-          const double gpufj_launch_start =
-            startup_profile.active() ? startup_profile_t::now() : 0.0;
-          early_gpufj->start();
-          if (startup_profile.active()) {
-            startup_profile.original_gpufj_start = startup_profile_t::now();
-            startup_profile.original_gpufj_launch =
-              startup_profile.original_gpufj_start - gpufj_launch_start;
-          }
-          CUOPT_LOG_DEBUG("Started early GPUFJ during presolve");
+      // Start early GPU FJ (uses GPU while CPU is busy with Papilo).
+      if (!pre_presolve_started || early_gpufj_slot_reserved) {
+        early_gpufj =
+          std::make_unique<mip::early_gpufj_t<i_t, f_t>>(op_problem, settings, early_fj_callback);
+        const double gpufj_launch_start = startup_profile.active() ? startup_profile_t::now() : 0.0;
+        early_gpufj->start();
+        if (startup_profile.active()) {
+          startup_profile.original_gpufj_start = startup_profile_t::now();
+          startup_profile.original_gpufj_launch =
+            startup_profile.original_gpufj_start - gpufj_launch_start;
         }
+        CUOPT_LOG_DEBUG("Started early GPUFJ during presolve");
       }
     }
 
@@ -781,8 +783,8 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
     // PaPILO crushing + validation happens downstream in add_user_given_solutions().
     if (!early_incumbent_pool.empty()) {
       auto stream = op_problem.get_handle_ptr()->get_stream();
-      for (const auto& inc : early_incumbent_pool) {
-        auto d = std::make_shared<rmm::device_uvector<f_t>>(device_copy(inc.assignment, stream));
+      for (const auto& assignment : early_incumbent_pool) {
+        auto d = std::make_shared<rmm::device_uvector<f_t>>(device_copy(assignment, stream));
         settings.initial_solutions.emplace_back(std::move(d));
       }
       CUOPT_LOG_DEBUG("Added %zu early-heuristic incumbents to initial solutions",

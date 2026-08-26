@@ -18,6 +18,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -33,10 +34,6 @@ bool pre_presolve_thread_budget_t::try_reserve(int slots)
   while (available >= slots) {
     if (available_.compare_exchange_weak(
           available, available - slots, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-      CUOPT_LOG_DEBUG("Pre-presolve OMP budget: reserved=%d available=%d capacity=%d",
-                      reserved(),
-                      this->available(),
-                      capacity());
       return true;
     }
   }
@@ -51,19 +48,22 @@ void pre_presolve_thread_budget_t::release(int slots)
     available_.fetch_sub(slots, std::memory_order_relaxed);
     throw std::logic_error("pre-presolve OpenMP task budget released too many slots");
   }
-  CUOPT_LOG_DEBUG("Pre-presolve OMP budget: reserved=%d available=%d capacity=%d",
-                  reserved(),
-                  available(),
-                  capacity());
 }
 
 namespace {
 
-constexpr int pre_bnb_node_limit       = 64;
-constexpr int pre_bnb_num_threads      = 1;
-constexpr int pre_bnb_task_slots       = pre_bnb_num_threads + 1;
-constexpr double pre_bnb_time_limit    = 0.15;
-constexpr const char* pre_bnb_arm_name = "PRE-BNB-SELECTIVE-STREAM-ALL";
+constexpr int small_nnz_limit   = 5'000;
+constexpr int low_row_limit     = 64;
+constexpr int low_row_nnz_limit = 50'000;
+constexpr int node_limit        = 64;
+constexpr double time_limit     = 0.15;
+constexpr const char* arm_name  = "PRE-BNB-SELECTIVE-STREAM-ALL";
+
+template <typename i_t>
+bool is_eligible(i_t num_rows, i_t nnz)
+{
+  return nnz <= small_nnz_limit || (num_rows <= low_row_limit && nnz <= low_row_nnz_limit);
+}
 
 template <typename i_t, typename f_t>
 simplex::user_problem_t<i_t, f_t> snapshot_original_problem(
@@ -72,8 +72,7 @@ simplex::user_problem_t<i_t, f_t> snapshot_original_problem(
   auto user_problem =
     cuopt_problem_to_user_problem<i_t, f_t>(op_problem.get_handle_ptr(), op_problem);
 
-  // Match problem_t's always-minimizing solver space while retaining the user's objective
-  // scaling. The generic optimization_problem_t translation only records objective sense.
+  // Match problem_t's always-minimizing solver space while retaining the user's objective scale.
   user_problem.obj_scale = op_problem.get_objective_scaling_factor();
   if (op_problem.get_sense()) {
     std::transform(user_problem.objective.begin(),
@@ -91,110 +90,31 @@ simplex::user_problem_t<i_t, f_t> snapshot_original_problem(
 }
 
 template <typename i_t, typename f_t>
-simplex::simplex_solver_settings_t<i_t, f_t> make_pre_bnb_settings(
-  const mip_solver_settings_t<i_t, f_t>& settings)
+simplex::simplex_solver_settings_t<i_t, f_t> make_settings(
+  const mip_solver_settings_t<i_t, f_t>& settings, int task_slots)
 {
   simplex::simplex_solver_settings_t<i_t, f_t> bnb_settings;
-  bnb_settings.time_limit                         = static_cast<f_t>(pre_bnb_time_limit);
-  bnb_settings.num_threads                        = pre_bnb_num_threads;
-  bnb_settings.print_presolve_stats               = false;
-  bnb_settings.preserve_advanced_basis_dimensions = true;
-  bnb_settings.primal_tol                         = settings.tolerances.absolute_tolerance;
-  bnb_settings.dual_tol                           = settings.tolerances.absolute_tolerance;
-  bnb_settings.integer_tol                        = settings.tolerances.integrality_tolerance;
-  bnb_settings.absolute_mip_gap_tol               = settings.tolerances.absolute_mip_gap;
-  bnb_settings.relative_mip_gap_tol               = settings.tolerances.relative_mip_gap;
-  bnb_settings.set_log(false);
-  return bnb_settings;
-}
-
-template <typename i_t, typename f_t>
-void disable_pre_bnb_cuts(simplex::simplex_solver_settings_t<i_t, f_t>& settings)
-{
-  settings.max_cut_passes             = 0;
-  settings.mir_cuts                   = 0;
-  settings.mixed_integer_gomory_cuts  = 0;
-  settings.knapsack_cuts              = 0;
-  settings.flow_cover_cuts            = 0;
-  settings.implied_bound_cuts         = 0;
-  settings.clique_cuts                = 0;
-  settings.zero_half_cuts             = 0;
-  settings.strong_chvatal_gomory_cuts = 0;
-  settings.reduced_cost_strengthening = 0;
-}
-
-class task_slot_release_t {
- public:
-  task_slot_release_t(pre_presolve_thread_budget_t* budget, int slots)
-    : budget_(budget), slots_(slots)
-  {
-  }
-  ~task_slot_release_t()
-  {
-    try {
-      budget_->release(slots_);
-    } catch (const std::exception& e) {
-      CUOPT_LOG_ERROR("Failed to release pre-presolve OpenMP task slot: %s", e.what());
-    }
-  }
-
- private:
-  pre_presolve_thread_budget_t* budget_;
-  int slots_;
-};
-
-}  // namespace
-
-template <typename i_t, typename f_t>
-pre_presolve_primal_t<i_t, f_t>::pre_presolve_primal_t(
-  const optimization_problem_t<i_t, f_t>& op_problem,
-  const mip_solver_settings_t<i_t, f_t>& settings,
-  early_incumbent_callback_t<f_t> incumbent_callback,
-  pre_presolve_thread_budget_t& thread_budget)
-  : mode_(pre_presolve_primal_branch_mode),
-    thread_budget_(thread_budget),
-    task_state_(std::make_unique<task_state_t>()),
-    replaces_early_gpufj_(pre_presolve_primal_mode_replaces_early_gpufj(mode_))
-{
-  configure_work(op_problem, settings, std::move(incumbent_callback));
-}
-
-template <typename i_t, typename f_t>
-pre_presolve_primal_t<i_t, f_t>::~pre_presolve_primal_t()
-{
-  stop_no_throw();
-}
-
-template <typename i_t, typename f_t>
-void pre_presolve_primal_t<i_t, f_t>::configure_work(
-  const optimization_problem_t<i_t, f_t>& op_problem,
-  const mip_solver_settings_t<i_t, f_t>& settings,
-  early_incumbent_callback_t<f_t> incumbent_callback)
-{
-  if (mode_ != 2) { return; }
-
-  const i_t num_constraints = op_problem.get_n_constraints();
-  const i_t nnz             = op_problem.get_nnz();
-  if (!pre_bnb_selective_problem_is_eligible(num_constraints, nnz)) {
-    CUOPT_LOG_INFO(
-      "PRE_BNB_SUMMARY eligible=0 reason=selective_size_gate rows=%d nnz=%d "
-      "small_nnz_limit=%d low_row_limit=%d low_row_nnz_limit=%d",
-      num_constraints,
-      nnz,
-      pre_bnb_small_nnz_limit,
-      pre_bnb_low_row_limit,
-      pre_bnb_low_row_nnz_limit);
-    return;
-  }
-
-  // This host snapshot is complete before the task is launched. PaPILO may subsequently mutate
-  // op_problem without racing the CPU simplex/B&B arm.
-  auto user_problem =
-    std::make_shared<simplex::user_problem_t<i_t, f_t>>(snapshot_original_problem(op_problem));
-
-  auto bnb_settings       = make_pre_bnb_settings<i_t, f_t>(settings);
-  bnb_settings.node_limit = pre_bnb_node_limit;
-  disable_pre_bnb_cuts(bnb_settings);
+  bnb_settings.time_limit                               = static_cast<f_t>(time_limit);
+  bnb_settings.num_threads                              = task_slots;
+  bnb_settings.num_best_first_workers                   = 1;
+  bnb_settings.node_limit                               = node_limit;
+  bnb_settings.print_presolve_stats                     = false;
+  bnb_settings.preserve_advanced_basis_dimensions       = true;
+  bnb_settings.primal_tol                               = settings.tolerances.absolute_tolerance;
+  bnb_settings.dual_tol                                 = settings.tolerances.absolute_tolerance;
+  bnb_settings.integer_tol                              = settings.tolerances.integrality_tolerance;
+  bnb_settings.absolute_mip_gap_tol                     = settings.tolerances.absolute_mip_gap;
+  bnb_settings.relative_mip_gap_tol                     = settings.tolerances.relative_mip_gap;
+  bnb_settings.max_cut_passes                           = 0;
+  bnb_settings.mir_cuts                                 = 0;
+  bnb_settings.mixed_integer_gomory_cuts                = 0;
+  bnb_settings.knapsack_cuts                            = 0;
+  bnb_settings.flow_cover_cuts                          = 0;
+  bnb_settings.implied_bound_cuts                       = 0;
+  bnb_settings.clique_cuts                              = 0;
+  bnb_settings.zero_half_cuts                           = 0;
+  bnb_settings.strong_chvatal_gomory_cuts               = 0;
+  bnb_settings.reduced_cost_strengthening               = 0;
   bnb_settings.reliability_branching                    = 0;
   bnb_settings.strong_branching_simplex_iteration_limit = 0;
   bnb_settings.mip_batch_pdlp_strong_branching          = 0;
@@ -205,111 +125,123 @@ void pre_presolve_primal_t<i_t, f_t>::configure_work(
   bnb_settings.submip_settings.enable_cpufj             = false;
   bnb_settings.diving_settings                          = settings.diving_params;
   bnb_settings.diving_settings.min_node_depth           = 0;
+  bnb_settings.set_log(false);
+  return bnb_settings;
+}
 
-  CUOPT_LOG_INFO(
-    "PRE_BNB_CONFIG variant=selective_stream_all task_slots=%d bnb_threads=%d rows=%d nnz=%d "
-    "small_nnz_limit=%d low_row_limit=%d low_row_nnz_limit=%d time_limit=%.3fs "
-    "node_limit=%d sb_simplex_iteration_limit=%d initial_root_sb=skipped "
-    "initial_pseudocost=neutral diving=retained preserve_advanced_basis_dimensions=%d "
-    "publication=all",
-    pre_bnb_task_slots,
-    pre_bnb_num_threads,
-    num_constraints,
-    nnz,
-    pre_bnb_small_nnz_limit,
-    pre_bnb_low_row_limit,
-    pre_bnb_low_row_nnz_limit,
-    pre_bnb_time_limit,
-    pre_bnb_node_limit,
-    bnb_settings.strong_branching_simplex_iteration_limit,
-    static_cast<int>(bnb_settings.preserve_advanced_basis_dimensions));
-
-  auto candidates_generated      = std::make_shared<std::atomic<int>>(0);
-  auto candidates_published      = std::make_shared<std::atomic<int>>(0);
-  const f_t objective_scale      = user_problem->obj_scale;
-  const f_t objective_constant   = user_problem->obj_constant;
-  bnb_settings.solution_callback = [incumbent_callback = std::move(incumbent_callback),
-                                    objective_scale,
-                                    objective_constant,
-                                    candidates_generated,
-                                    candidates_published](std::vector<f_t>& assignment,
-                                                          f_t solver_obj) {
-    candidates_generated->fetch_add(1, std::memory_order_relaxed);
-    if (!incumbent_callback) { return; }
-    const f_t user_obj = objective_scale * (solver_obj + objective_constant);
-    incumbent_callback(solver_obj, user_obj, assignment, pre_bnb_arm_name);
-    // Publication means submitting the candidate to the shared callback. The callback's void
-    // interface does not expose whether another heuristic already supplied a better incumbent.
-    candidates_published->fetch_add(1, std::memory_order_relaxed);
-  };
-
-  work_ = [user_problem, bnb_settings, candidates_generated, candidates_published](
-            std::atomic<bool>& stop_requested) mutable {
-    if (stop_requested.load(std::memory_order_acquire)) {
-      CUOPT_LOG_INFO(
-        "PRE_BNB_SUMMARY eligible=1 status=NOT_RUN elapsed=0.000 nodes=0 "
-        "candidates_generated=0 candidates_published=0 stop_requested=1");
-      return;
+class task_slot_release_t {
+ public:
+  task_slot_release_t(pre_presolve_thread_budget_t& budget, int slots)
+    : budget_(budget), slots_(slots)
+  {
+  }
+  ~task_slot_release_t()
+  {
+    try {
+      budget_.release(slots_);
+    } catch (const std::exception& e) {
+      CUOPT_LOG_ERROR("Failed to release pre-presolve OpenMP task slot: %s", e.what());
     }
+  }
 
-    const double solve_start = tic();
-    probing_implied_bound_t<i_t, f_t> probing_implied_bound(user_problem->num_cols);
+ private:
+  pre_presolve_thread_budget_t& budget_;
+  int slots_;
+};
+
+}  // namespace
+
+template <typename i_t, typename f_t>
+struct pre_presolve_primal_t<i_t, f_t>::work_t {
+  work_t(const optimization_problem_t<i_t, f_t>& op_problem,
+         const mip_solver_settings_t<i_t, f_t>& settings,
+         early_incumbent_callback_t<f_t> incumbent_callback,
+         int task_slots)
+    : user_problem(snapshot_original_problem(op_problem)),
+      bnb_settings(make_settings(settings, task_slots))
+  {
+    const f_t objective_scale      = user_problem.obj_scale;
+    const f_t objective_constant   = user_problem.obj_constant;
+    bnb_settings.solution_callback = [this,
+                                      incumbent_callback = std::move(incumbent_callback),
+                                      objective_scale,
+                                      objective_constant](std::vector<f_t>& assignment,
+                                                          f_t solver_obj) {
+      if (!incumbent_callback) { return; }
+      const f_t user_obj = objective_scale * (solver_obj + objective_constant);
+      incumbent_callback(solver_obj, user_obj, assignment, arm_name);
+    };
+  }
+
+  void run(std::atomic<bool>& stop_requested)
+  {
+    if (stop_requested.load(std::memory_order_acquire)) { return; }
+
+    probing_implied_bound_t<i_t, f_t> probing_implied_bound(user_problem.num_cols);
     branch_and_bound_t<i_t, f_t> branch_and_bound(
-      *user_problem, bnb_settings, tic(), probing_implied_bound);
+      user_problem, bnb_settings, tic(), probing_implied_bound);
     branch_and_bound.set_concurrent_lp_root_solve(false);
     branch_and_bound.set_submip_halt_callback(
       [&stop_requested](f_t, f_t) { return stop_requested.load(std::memory_order_acquire); });
 
-    // A zero strong-branching simplex-iteration limit selects the single-pivot estimate path; it
-    // does not disable initial root strong branching. A zero-count initial pseudocost marks that
-    // initialization complete without supplying measurements, so B&B skips the root path and can
-    // learn pseudocosts normally while exploring the tree.
-    pseudo_costs_t<i_t, f_t> neutral_pseudocost(user_problem->num_cols, bnb_settings);
-    std::vector<i_t> identity_reduced_to_original(user_problem->num_cols);
+    // A zero simplex-iteration limit selects an estimate path rather than disabling initial root
+    // strong branching. Neutral zero-count pseudocosts skip that root block and learn at nodes.
+    pseudo_costs_t<i_t, f_t> neutral_pseudocost(user_problem.num_cols, bnb_settings);
+    std::vector<i_t> identity_reduced_to_original(user_problem.num_cols);
     std::iota(identity_reduced_to_original.begin(), identity_reduced_to_original.end(), i_t{0});
     branch_and_bound.set_initial_pseudocost(neutral_pseudocost, identity_reduced_to_original);
 
-    simplex::mip_solution_t<i_t, f_t> solution(user_problem->num_cols);
-    const auto status = branch_and_bound.solve(solution);
-    CUOPT_LOG_INFO(
-      "PRE_BNB_SUMMARY eligible=1 status=%s elapsed=%.3fs nodes=%d candidates_generated=%d "
-      "candidates_published=%d stop_requested=%d",
-      mip_status_to_string(status).c_str(),
-      toc(solve_start),
-      solution.nodes_explored,
-      candidates_generated->load(std::memory_order_relaxed),
-      candidates_published->load(std::memory_order_relaxed),
-      stop_requested.load(std::memory_order_acquire) ? 1 : 0);
-  };
+    simplex::mip_solution_t<i_t, f_t> solution(user_problem.num_cols);
+    branch_and_bound.solve(solution);
+  }
+
+  simplex::user_problem_t<i_t, f_t> user_problem;
+  simplex::simplex_solver_settings_t<i_t, f_t> bnb_settings;
+};
+
+template <typename i_t, typename f_t>
+pre_presolve_primal_t<i_t, f_t>::pre_presolve_primal_t(
+  const optimization_problem_t<i_t, f_t>& op_problem,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  early_incumbent_callback_t<f_t> incumbent_callback,
+  pre_presolve_thread_budget_t& thread_budget,
+  int task_slots)
+  : thread_budget_(thread_budget),
+    task_state_(std::make_unique<task_state_t>()),
+    task_slots_(task_slots)
+{
+  const i_t num_rows = op_problem.get_n_constraints();
+  const i_t nnz      = op_problem.get_nnz();
+  if (!is_eligible(num_rows, nnz)) { return; }
+
+  work_ =
+    std::make_unique<work_t>(op_problem, settings, std::move(incumbent_callback), task_slots_);
+}
+
+template <typename i_t, typename f_t>
+pre_presolve_primal_t<i_t, f_t>::~pre_presolve_primal_t()
+{
+  stop_no_throw();
 }
 
 template <typename i_t, typename f_t>
 bool pre_presolve_primal_t<i_t, f_t>::start()
 {
-  if (mode_ == 0 || started_) { return started_; }
-  if (!work_) {
-    if (mode_ == 2) { return false; }
-    CUOPT_LOG_WARN("Pre-presolve primal mode %d is not implemented on this branch", mode_);
-    return false;
-  }
-
-  if (!thread_budget_.try_reserve(pre_bnb_task_slots)) {
-    CUOPT_LOG_INFO("PRE_BNB_SUMMARY eligible=1 status=NOT_STARTED reason=omp_budget task_slots=%d",
-                   pre_bnb_task_slots);
-    return false;
-  }
+  if (started_) { return true; }
+  if (!work_) { return false; }
+  if (!thread_budget_.try_reserve(task_slots_)) { return false; }
 
   started_            = true;
   auto* task_state    = task_state_.get();
   auto* thread_budget = &thread_budget_;
-  auto* work          = &work_;
+  auto* work          = work_.get();
 
 #pragma omp task default(none) firstprivate(task_state, thread_budget, work) \
   priority(CUOPT_DEFAULT_TASK_PRIORITY) depend(out : *task_state)
   {
-    task_slot_release_t release(thread_budget, pre_bnb_task_slots);
+    task_slot_release_t release(*thread_budget, work->bnb_settings.num_threads);
     try {
-      (*work)(task_state->stop_requested);
+      work->run(task_state->stop_requested);
     } catch (...) {
       task_state->exception = std::current_exception();
     }

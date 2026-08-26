@@ -11,18 +11,13 @@
 
 #include <gtest/gtest.h>
 
-#include <dual_simplex/basis_solves.hpp>
 #include <dual_simplex/presolve.hpp>
 #include <dual_simplex/solve.hpp>
 #include <dual_simplex/user_problem.hpp>
 #include <math_optimization/tic_toc.hpp>
 
-#include <cuopt/error.hpp>
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 #include <utilities/logger.hpp>
-
-#include <algorithm>
-#include <vector>
 
 namespace cuopt::mathematical_optimization::simplex::test {
 
@@ -263,152 +258,6 @@ TEST(dual_simplex, empty_columns)
   EXPECT_NEAR(solution.x[6], 0, 1e-6);
   EXPECT_NEAR(solution.x[7], 0, 1e-6);
   EXPECT_NEAR(solution.x[8], 0, 1e-6);
-}
-
-TEST(dual_simplex, advanced_basis_preserves_interleaved_empty_columns)
-{
-  cuopt::init_logger_t log("", true);
-  raft::handle_t handle{};
-  user_problem_t<int, double> user_problem(&handle);
-  constexpr int m = 2;
-  constexpr int n = 10;
-
-  user_problem.num_rows = m;
-  user_problem.num_cols = n;
-  user_problem.objective.assign(n, 0.0);
-  user_problem.objective[0] = 2.0;
-  user_problem.objective[2] = -3.0;
-  user_problem.objective[4] = 1.0;
-
-  // Every even column is empty. The odd columns alternate between the two rows.
-  user_problem.A.m      = m;
-  user_problem.A.n      = n;
-  user_problem.A.nz_max = n / 2;
-  user_problem.A.reallocate(n / 2);
-  user_problem.A.col_start.resize(n + 1);
-  int nnz = 0;
-  for (int j = 0; j < n; ++j) {
-    user_problem.A.col_start[j] = nnz;
-    if (j % 2 != 0) {
-      user_problem.A.i[nnz] = (j / 2) % m;
-      user_problem.A.x[nnz] = 1.0 + j;
-      ++nnz;
-    }
-  }
-  user_problem.A.col_start[n] = nnz;
-
-  user_problem.rhs       = {1.0, 2.0};
-  user_problem.row_sense = {'L', 'L'};
-  user_problem.lower.assign(n, 0.0);
-  user_problem.upper.assign(n, inf);
-  user_problem.lower[2]       = -inf;
-  user_problem.upper[2]       = 4.0;
-  user_problem.lower[4]       = -1.0;
-  user_problem.upper[4]       = 3.0;
-  user_problem.lower[6]       = 2.0;
-  user_problem.upper[6]       = 2.0;
-  user_problem.lower[8]       = -2.0;
-  user_problem.upper[8]       = 5.0;
-  user_problem.num_range_rows = 0;
-  user_problem.obj_constant   = 0.0;
-  user_problem.obj_scale      = 1.0;
-  user_problem.var_types.assign(n, variable_type_t::CONTINUOUS);
-
-  simplex_solver_settings_t<int, double> settings;
-  lp_problem_t<int, double> lp(&handle, 1, 1, 1);
-  std::vector<int> new_slacks;
-  dualize_info_t<int, double> dualize_info;
-  convert_user_problem(user_problem, settings, lp, new_slacks, dualize_info);
-  ASSERT_EQ(lp.num_rows, m);
-  ASSERT_EQ(lp.num_cols, n + m);
-
-  // The ordinary path still reduces empty columns and must continue with the recomputed linear
-  // column count after that reduction.
-  lp_problem_t<int, double> reduced_lp(&handle, 1, 1, 1);
-  presolve_info_t<int, double> reduced_info;
-  ASSERT_EQ(presolve(lp, settings, reduced_lp, reduced_info), 0);
-  EXPECT_EQ(reduced_lp.num_cols, lp.num_cols - n / 2);
-  EXPECT_EQ(reduced_info.removed_variables, std::vector<int>({0, 2, 4, 6, 8}));
-  EXPECT_EQ(reduced_info.remaining_variables, std::vector<int>({1, 3, 5, 7, 9, 10, 11}));
-
-  settings.preserve_advanced_basis_dimensions = true;
-  lp_solution_t<int, double> solution(lp.num_rows, lp.num_cols);
-  basis_update_mpf_t<int, double> basis_update(lp.num_rows, settings.refactor_frequency);
-  std::vector<int> basic_list(lp.num_rows);
-  std::vector<int> nonbasic_list;
-  std::vector<variable_status_t> vstatus;
-  std::vector<double> edge_norms;
-  ASSERT_EQ(
-    solve_linear_program_with_advanced_basis(
-      lp, tic(), settings, solution, basis_update, basic_list, nonbasic_list, vstatus, edge_norms),
-    lp_status_t::OPTIMAL);
-
-  EXPECT_EQ(solution.x.size(), lp.num_cols);
-  EXPECT_EQ(solution.y.size(), lp.num_rows);
-  EXPECT_EQ(solution.z.size(), lp.num_cols);
-  EXPECT_EQ(vstatus.size(), lp.num_cols);
-  EXPECT_EQ(basic_list.size(), lp.num_rows);
-  EXPECT_EQ(nonbasic_list.size(), lp.num_cols - lp.num_rows);
-  EXPECT_EQ(edge_norms.size(), lp.num_cols);
-  EXPECT_EQ(basis_update.row_permutation().size(), lp.num_rows);
-  EXPECT_EQ(std::count(vstatus.begin(), vstatus.end(), variable_status_t::BASIC), lp.num_rows);
-
-  EXPECT_DOUBLE_EQ(solution.x[0], 0.0);
-  EXPECT_EQ(vstatus[0], variable_status_t::NONBASIC_LOWER);
-  EXPECT_DOUBLE_EQ(solution.x[2], 4.0);
-  EXPECT_EQ(vstatus[2], variable_status_t::NONBASIC_UPPER);
-  EXPECT_DOUBLE_EQ(solution.x[4], -1.0);
-  EXPECT_EQ(vstatus[4], variable_status_t::NONBASIC_LOWER);
-  EXPECT_DOUBLE_EQ(solution.x[6], 2.0);
-  EXPECT_EQ(vstatus[6], variable_status_t::NONBASIC_FIXED);
-  EXPECT_DOUBLE_EQ(solution.x[8], -2.0);
-  EXPECT_EQ(vstatus[8], variable_status_t::NONBASIC_LOWER);
-
-  std::vector<bool> listed(lp.num_cols, false);
-  for (const int j : basic_list) {
-    ASSERT_GE(j, 0);
-    ASSERT_LT(j, lp.num_cols);
-    EXPECT_FALSE(listed[j]);
-    listed[j] = true;
-    EXPECT_EQ(vstatus[j], variable_status_t::BASIC);
-  }
-  for (const int j : nonbasic_list) {
-    ASSERT_GE(j, 0);
-    ASSERT_LT(j, lp.num_cols);
-    EXPECT_FALSE(listed[j]);
-    listed[j] = true;
-    EXPECT_NE(vstatus[j], variable_status_t::BASIC);
-    EXPECT_NE(vstatus[j], variable_status_t::SUPERBASIC);
-  }
-  EXPECT_TRUE(std::all_of(listed.begin(), listed.end(), [](bool value) { return value; }));
-}
-
-TEST(dual_simplex, rejects_malformed_basis_metadata)
-{
-  std::vector<variable_status_t> vstatus;
-  EXPECT_THROW(decompress_vstatus(std::vector<uint8_t>(1), 8, vstatus), cuopt::logic_error);
-
-  const std::vector<variable_status_t> too_many_basic = {variable_status_t::BASIC,
-                                                         variable_status_t::BASIC,
-                                                         variable_status_t::BASIC,
-                                                         variable_status_t::NONBASIC_LOWER};
-  std::vector<int> basic_list(2);
-  std::vector<int> nonbasic_list;
-  std::vector<int> superbasic_list;
-  EXPECT_THROW(
-    get_basis_from_vstatus(2, too_many_basic, basic_list, nonbasic_list, superbasic_list),
-    cuopt::logic_error);
-
-  const std::vector<variable_status_t> too_many_nonbasic = {variable_status_t::NONBASIC_LOWER,
-                                                            variable_status_t::NONBASIC_UPPER,
-                                                            variable_status_t::NONBASIC_FIXED,
-                                                            variable_status_t::BASIC};
-  basic_list.assign(2, 0);
-  nonbasic_list.clear();
-  superbasic_list.clear();
-  EXPECT_THROW(
-    get_basis_from_vstatus(2, too_many_nonbasic, basic_list, nonbasic_list, superbasic_list),
-    cuopt::logic_error);
 }
 
 TEST(dual_simplex, dual_variable_greater_than)

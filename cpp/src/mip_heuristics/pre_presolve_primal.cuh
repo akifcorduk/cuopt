@@ -14,37 +14,12 @@
 
 #include <atomic>
 #include <exception>
-#include <functional>
 #include <memory>
 
 namespace cuopt::mathematical_optimization::mip {
 
-// Each experiment branch changes this internal constant so checking out the branch activates its
-// treatment without adding a product setting or command-line selector. The scaffold remains idle.
-inline constexpr int pre_presolve_primal_branch_mode = 2;
-
-inline constexpr int pre_bnb_small_nnz_limit   = 5'000;
-inline constexpr int pre_bnb_low_row_limit     = 64;
-inline constexpr int pre_bnb_low_row_nnz_limit = 50'000;
-
-template <typename i_t>
-inline constexpr bool pre_bnb_selective_problem_is_eligible(i_t num_constraints, i_t nnz)
-{
-  return nnz <= pre_bnb_small_nnz_limit ||
-         (num_constraints <= pre_bnb_low_row_limit && nnz <= pre_bnb_low_row_nnz_limit);
-}
-
-inline bool pre_presolve_primal_mode_replaces_early_gpufj(int mode)
-{
-  return mode >= 3 && mode <= 6;
-}
-
-/**
- * @brief Accounts for long-running tasks inside the existing MIP OpenMP team.
- *
- * This deliberately does not account for PaPILO's TBB workers. It only prevents the new
- * pre-presolve experiments from reserving more OpenMP task slots than the MIP team has left.
- */
+// Accounts only for long-running tasks in the existing MIP OpenMP team. PaPILO's TBB workers are
+// intentionally outside this budget.
 class pre_presolve_thread_budget_t {
  public:
   explicit pre_presolve_thread_budget_t(int available_slots);
@@ -52,29 +27,20 @@ class pre_presolve_thread_budget_t {
   bool try_reserve(int slots);
   void release(int slots);
 
-  int capacity() const { return capacity_; }
-  int reserved() const { return capacity_ - available_.load(std::memory_order_relaxed); }
-  int available() const { return available_.load(std::memory_order_relaxed); }
-
  private:
   const int capacity_;
   std::atomic<int> available_;
 };
 
-/**
- * @brief Shared lifecycle for independent pre-PaPILO primal experiments.
- *
- * Experiment branches install one work function in the constructor. The scaffold owns the stop
- * flag, exception propagation, dependency join, and task-slot release so each arm only implements
- * its solver sequence.
- */
+// Runs the fixed, default-on selective pre-B&B treatment while PaPILO is active.
 template <typename i_t, typename f_t>
 class pre_presolve_primal_t {
  public:
   pre_presolve_primal_t(const optimization_problem_t<i_t, f_t>& op_problem,
                         const mip_solver_settings_t<i_t, f_t>& settings,
                         early_incumbent_callback_t<f_t> incumbent_callback,
-                        pre_presolve_thread_budget_t& thread_budget);
+                        pre_presolve_thread_budget_t& thread_budget,
+                        int task_slots);
   ~pre_presolve_primal_t();
 
   pre_presolve_primal_t(const pre_presolve_primal_t&)            = delete;
@@ -83,27 +49,19 @@ class pre_presolve_primal_t {
   bool start();
   void stop();
 
-  // Only the GPU experiment branches override the normal early GPUFJ task.
-  bool replaces_early_gpufj() const { return replaces_early_gpufj_; }
-
  private:
   struct task_state_t {
     std::atomic<bool> stop_requested{false};
     std::exception_ptr exception;
   };
+  struct work_t;
 
-  using work_t = std::function<void(std::atomic<bool>&)>;
-
-  void configure_work(const optimization_problem_t<i_t, f_t>& op_problem,
-                      const mip_solver_settings_t<i_t, f_t>& settings,
-                      early_incumbent_callback_t<f_t> incumbent_callback);
   void stop_no_throw() noexcept;
 
-  const i_t mode_;
   pre_presolve_thread_budget_t& thread_budget_;
   std::unique_ptr<task_state_t> task_state_;
-  work_t work_;
-  bool replaces_early_gpufj_{false};
+  std::unique_ptr<work_t> work_;
+  int task_slots_;
   bool started_{false};
 };
 

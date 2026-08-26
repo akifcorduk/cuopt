@@ -34,6 +34,7 @@
 #include <raft/core/nvtx.hpp>
 #include <utilities/circular_deque.hpp>
 #include <utilities/hashing.hpp>
+#include <utilities/scope_guard.hpp>
 
 #include <omp.h>
 
@@ -1787,9 +1788,12 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(bfs_worker_t<i_t, f_t>* worker,
          rel_gap > settings_.relative_mip_gap_tol && abs_gap > settings_.absolute_mip_gap_tol) {
     if (worker->worker_id == 0) { repair_heuristic_solutions(); }
 
-    if (worker->active_diving_workers < worker->max_diving_workers &&
-        worker->node_queue.diving_queue_size() > 0) {
-      launch_diving_worker(worker);
+    while (worker->active_diving_workers < worker->max_diving_workers &&
+           worker->node_queue.diving_queue_size() > 0) {
+      if (!launch_diving_worker(worker)) { break; }
+      // The default scheduler launches at most one dive per BFS iteration. An explicit
+      // best-first worker count allows its associated dive workers to start together.
+      if (settings_.num_best_first_workers <= 0) { break; }
     }
 
     if (bfs_worker_pool_.num_idle() > 0 && worker->node_queue.best_first_queue_size() > 0) {
@@ -2234,6 +2238,13 @@ bool branch_and_bound_t<i_t, f_t>::launch_diving_worker(bfs_worker_t<i_t, f_t>* 
 {
   if (!bfs_worker->is_diving_enabled()) return false;
 
+  search_strategy_t strategy;
+  if (!bfs_worker->reserve_next_diving_heuristic(strategy)) { return false; }
+  bool strategy_transferred = false;
+  scope_guard release_strategy([&] {
+    if (!strategy_transferred) { bfs_worker->release_diving_heuristic(strategy); }
+  });
+
   // Get an idle worker.
   diving_worker_t<i_t, f_t>* diving_worker = diving_worker_pool_.pop_idle_worker();
   if (diving_worker == nullptr) { return false; }
@@ -2266,11 +2277,11 @@ bool branch_and_bound_t<i_t, f_t>::launch_diving_worker(bfs_worker_t<i_t, f_t>* 
     return false;
   }
 
-  auto strategy                  = bfs_worker->next_diving_heuristic();
   diving_worker->search_strategy = strategy;
   diving_worker->bfs_worker      = bfs_worker;
   diving_worker->set_active();
   ++bfs_worker->active_diving_workers;
+  strategy_transferred = true;
 
   assert(bfs_worker->active_diving_workers.load() <= bfs_worker->max_diving_workers);
 
@@ -3931,9 +3942,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       run_deterministic_coordinator(Arow_);
     } else {
       const i_t num_workers        = settings_.num_threads;
-      const i_t num_bfs_workers    = std::max(num_workers / 2, 1);
+      const i_t num_bfs_workers    = settings_.num_best_first_workers > 0
+                                       ? std::min(settings_.num_best_first_workers, num_workers)
+                                       : std::max(num_workers / 2, 1);
       const i_t num_submip_workers = std::max(num_workers / 8, 1);
-      const i_t num_diving_workers = std::max(num_workers - num_bfs_workers, 1);
+      const i_t num_diving_workers = settings_.num_best_first_workers > 0
+                                       ? num_workers - num_bfs_workers
+                                       : std::max(num_workers - num_bfs_workers, 1);
       bfs_worker_pool_.init(num_bfs_workers, original_lp_, Arow_, var_types_, symmetry_, settings_);
       rins_worker_pool_.init(
         num_submip_workers, original_lp_, Arow_, var_types_, symmetry_, settings_, num_bfs_workers);
