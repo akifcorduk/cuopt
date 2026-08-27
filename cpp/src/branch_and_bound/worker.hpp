@@ -236,8 +236,7 @@ class bfs_worker_t : public branch_and_bound_worker_t<i_t, f_t> {
   i_t max_diving_workers;
 
  private:
-  static constexpr size_t num_search_strategies =
-    static_cast<size_t>(search_strategy_t::SUBMIP) + 1;
+  static constexpr size_t num_search_strategies = static_cast<size_t>(search_strategy_t::RENS) + 1;
 
   static constexpr size_t strategy_index(search_strategy_t strategy)
   {
