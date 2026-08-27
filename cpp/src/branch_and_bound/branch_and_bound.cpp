@@ -33,6 +33,7 @@
 #include <raft/core/nvtx.hpp>
 #include <utilities/circular_deque.hpp>
 #include <utilities/hashing.hpp>
+#include <utilities/scope_guard.hpp>
 
 #include <omp.h>
 
@@ -1703,7 +1704,14 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(bfs_worker_t<i_t, f_t>* worker,
 
     if (worker->active_diving_workers < worker->max_diving_workers &&
         worker->node_queue.diving_queue_size() > 0) {
-      launch_diving_worker(worker);
+      if (settings_.num_best_first_workers > 0) {
+        do {
+          if (!launch_diving_worker(worker)) { break; }
+        } while (worker->active_diving_workers < worker->max_diving_workers &&
+                 worker->node_queue.diving_queue_size() > 0);
+      } else {
+        launch_diving_worker(worker);
+      }
     }
 
     if (bfs_worker_pool_.num_idle() > 0 && worker->node_queue.best_first_queue_size() > 0) {
@@ -2148,6 +2156,18 @@ bool branch_and_bound_t<i_t, f_t>::launch_diving_worker(bfs_worker_t<i_t, f_t>* 
 {
   if (!bfs_worker->is_diving_enabled()) return false;
 
+  const bool parallel_diving = settings_.num_best_first_workers > 0;
+  search_strategy_t strategy{search_strategy_t::BEST_FIRST};
+  bool parallel_lease_transferred = false;
+  if (parallel_diving && !bfs_worker->reserve_next_parallel_diving_heuristic(strategy)) {
+    return false;
+  }
+  scope_guard release_parallel_lease([&] {
+    if (parallel_diving && !parallel_lease_transferred) {
+      bfs_worker->release_parallel_diving_heuristic(strategy);
+    }
+  });
+
   // Get an idle worker.
   diving_worker_t<i_t, f_t>* diving_worker = diving_worker_pool_.pop_idle_worker();
   if (diving_worker == nullptr) { return false; }
@@ -2180,9 +2200,11 @@ bool branch_and_bound_t<i_t, f_t>::launch_diving_worker(bfs_worker_t<i_t, f_t>* 
     return false;
   }
 
-  auto strategy                  = bfs_worker->next_diving_heuristic();
-  diving_worker->search_strategy = strategy;
-  diving_worker->bfs_worker      = bfs_worker;
+  if (!parallel_diving) { strategy = bfs_worker->next_diving_heuristic(); }
+  diving_worker->search_strategy                     = strategy;
+  diving_worker->bfs_worker                          = bfs_worker;
+  diving_worker->has_parallel_diving_heuristic_lease = parallel_diving;
+  parallel_lease_transferred                         = parallel_diving;
   diving_worker->set_active();
   ++bfs_worker->active_diving_workers;
 
@@ -3610,7 +3632,86 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                              method_to_string(root_relax_solved_by));
   settings_.log.printf("Root relaxation objective %+.8e\n\n", root_relax_soln_.user_objective);
 
-  assert(root_vstatus_.size() == original_lp_.num_cols);
+  if (settings_.preserve_advanced_basis_dimensions) {
+    const auto expected_num_cols         = static_cast<std::size_t>(original_lp_.num_cols);
+    const auto expected_num_rows         = static_cast<std::size_t>(original_lp_.num_rows);
+    const bool dimensions_can_form_basis = expected_num_cols >= expected_num_rows;
+    const auto expected_num_nonbasic =
+      dimensions_can_form_basis ? expected_num_cols - expected_num_rows : std::size_t{0};
+    const bool dimensions_match =
+      dimensions_can_form_basis && root_vstatus_.size() == expected_num_cols &&
+      basic_list.size() == expected_num_rows && nonbasic_list.size() == expected_num_nonbasic &&
+      basis_update.row_permutation().size() == expected_num_rows &&
+      edge_norms_.size() == expected_num_cols && root_relax_soln_.x.size() == expected_num_cols &&
+      root_relax_soln_.y.size() == expected_num_rows &&
+      root_relax_soln_.z.size() == expected_num_cols;
+
+    bool basis_partition_is_valid = dimensions_match;
+    std::vector<bool> listed(expected_num_cols, false);
+    if (basis_partition_is_valid) {
+      for (const i_t j : basic_list) {
+        if (j < i_t{0} || static_cast<std::size_t>(j) >= expected_num_cols ||
+            listed[static_cast<std::size_t>(j)] ||
+            root_vstatus_[static_cast<std::size_t>(j)] != variable_status_t::BASIC) {
+          basis_partition_is_valid = false;
+          break;
+        }
+        listed[static_cast<std::size_t>(j)] = true;
+      }
+    }
+    if (basis_partition_is_valid) {
+      for (const i_t j : nonbasic_list) {
+        const bool valid_index = j >= i_t{0} && static_cast<std::size_t>(j) < expected_num_cols;
+        const auto status =
+          valid_index ? root_vstatus_[static_cast<std::size_t>(j)] : variable_status_t::BASIC;
+        const bool valid_nonbasic_status = status == variable_status_t::NONBASIC_LOWER ||
+                                           status == variable_status_t::NONBASIC_UPPER ||
+                                           status == variable_status_t::NONBASIC_FREE ||
+                                           status == variable_status_t::NONBASIC_FIXED;
+        if (!valid_index || listed[static_cast<std::size_t>(j)] || !valid_nonbasic_status) {
+          basis_partition_is_valid = false;
+          break;
+        }
+        listed[static_cast<std::size_t>(j)] = true;
+      }
+    }
+    basis_partition_is_valid =
+      basis_partition_is_valid &&
+      std::all_of(listed.begin(), listed.end(), [](bool value) { return value; });
+
+    if (!basis_partition_is_valid) {
+      settings_.log.printf(
+        "Root advanced basis contract mismatch: vstatus=%zu (expected %zu), basic=%zu "
+        "(expected %zu), nonbasic=%zu (expected %zu), basis_rows=%zu (expected %zu), "
+        "edge_norms=%zu (expected %zu), x=%zu (expected %zu), y=%zu (expected %zu), "
+        "z=%zu (expected %zu), dimensions_valid=%d, partition_valid=%d\n",
+        root_vstatus_.size(),
+        expected_num_cols,
+        basic_list.size(),
+        expected_num_rows,
+        nonbasic_list.size(),
+        expected_num_nonbasic,
+        basis_update.row_permutation().size(),
+        expected_num_rows,
+        edge_norms_.size(),
+        expected_num_cols,
+        root_relax_soln_.x.size(),
+        expected_num_cols,
+        root_relax_soln_.y.size(),
+        expected_num_rows,
+        root_relax_soln_.z.size(),
+        expected_num_cols,
+        static_cast<int>(dimensions_match),
+        static_cast<int>(basis_partition_is_valid));
+      solver_status_ = mip_status_t::NUMERICAL;
+      set_final_solution(solution, -inf);
+      signal_extend_cliques_.store(true, std::memory_order_release);
+#pragma omp taskwait depend(in : *clique_signal)
+      return solver_status_;
+    }
+  } else {
+    assert(root_vstatus_.size() == original_lp_.num_cols);
+  }
   set_uninitialized_steepest_edge_norms<i_t, f_t>(original_lp_, basic_list, edge_norms_);
 
   root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
@@ -3902,9 +4003,13 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       run_deterministic_coordinator(Arow_);
     } else {
       const i_t num_workers        = settings_.num_threads;
-      const i_t num_bfs_workers    = std::max(num_workers / 2, 1);
+      const i_t num_bfs_workers    = settings_.num_best_first_workers > 0
+                                       ? std::min(settings_.num_best_first_workers, num_workers)
+                                       : std::max(num_workers / 2, 1);
       const i_t num_submip_workers = std::max(num_workers / 8, 1);
-      const i_t num_diving_workers = std::max(num_workers - num_bfs_workers, 1);
+      const i_t num_diving_workers = settings_.num_best_first_workers > 0
+                                       ? num_workers - num_bfs_workers
+                                       : std::max(num_workers - num_bfs_workers, 1);
       bfs_worker_pool_.init(num_bfs_workers,
                             original_lp_,
                             Arow_,
