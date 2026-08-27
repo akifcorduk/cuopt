@@ -420,6 +420,14 @@ struct single_node_flow_candidate_t {
   bool absorbs_binary_coeff;
 };
 
+template <typename i_t>
+struct flow_cover_bound_order_t {
+  std::vector<i_t> zero_positions;
+  std::unordered_map<i_t, std::vector<i_t>> positions_by_controller;
+  bool use_reference_scan{false};
+  bool controller_index_built{false};
+};
+
 template <typename i_t, typename f_t>
 struct flow_cover_arc_spec_t {
   f_t u;
@@ -474,6 +482,19 @@ class flow_cover_generation_t {
     return flow_cover_constraints_;
   }
 
+  // Candidate caches are valid for one LP relaxation only because distances and synthetic flow
+  // values depend on xstar. The caller starts a new cache epoch before separating a new cut pass.
+  void begin_separation_pass()
+  {
+    upper_bound_orders_.clear();
+    lower_bound_orders_.clear();
+  }
+
+  void use_reference_bound_scan_for_test(bool use_reference)
+  {
+    use_reference_bound_scan_ = use_reference;
+  }
+
  private:
   bool normalize_row_side(const flow_cover_context_t<i_t, f_t>& context,
                           const flow_cover_row_t<i_t>& flow_cover_row,
@@ -484,6 +505,24 @@ class flow_cover_generation_t {
   bool build_single_node_flow_relaxation(const flow_cover_context_t<i_t, f_t>& context,
                                          f_t b,
                                          f_t& single_node_flow_b);
+
+  bool make_variable_bound_candidate(const flow_cover_context_t<i_t, f_t>& context,
+                                     i_t variable,
+                                     f_t coefficient,
+                                     bool upper,
+                                     i_t bound_position,
+                                     f_t direct_coefficient,
+                                     single_node_flow_candidate_t<i_t, f_t>& candidate);
+
+  bool best_bound_candidate(const flow_cover_context_t<i_t, f_t>& context,
+                            i_t variable,
+                            f_t coefficient,
+                            bool upper,
+                            single_node_flow_candidate_t<i_t, f_t>& candidate);
+
+  flow_cover_bound_order_t<i_t>& bound_position_order(const flow_cover_context_t<i_t, f_t>& context,
+                                                      i_t variable,
+                                                      bool upper);
 
   bool separate_single_node_flow_cover(const flow_cover_context_t<i_t, f_t>& context,
                                        f_t single_node_flow_b,
@@ -572,6 +611,9 @@ class flow_cover_generation_t {
   std::vector<f_t> lhs_coefficients;
   std::vector<uint8_t> lhs_coefficients_touched;
   std::vector<i_t> touched_lhs_coefficients;
+  std::unordered_map<i_t, flow_cover_bound_order_t<i_t>> upper_bound_orders_;
+  std::unordered_map<i_t, flow_cover_bound_order_t<i_t>> lower_bound_orders_;
+  bool use_reference_bound_scan_{false};
 };
 
 template <typename i_t, typename f_t>
