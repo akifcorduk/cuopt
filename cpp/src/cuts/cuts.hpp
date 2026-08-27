@@ -56,6 +56,10 @@ struct cut_pool_prune_stats_t {
   i_t age_pruned{0};
   i_t capacity_pruned{0};
   i_t retained{0};
+  // Candidates rejected by the stricter threshold along the hybrid selector's trajectory. This is
+  // not a net difference from rerunning the baseline selector because later choices can change.
+  i_t hybrid_orthogonality_pruned{0};
+  i_t selected_nnz{0};
   std::array<i_t, MAX_CUT_TYPE> selected_by_type{0};
   std::array<i_t, MAX_CUT_TYPE> retained_by_type{0};
 };
@@ -373,6 +377,9 @@ class cut_pool_t {
   std::vector<i_t> best_cuts_;
   cut_pool_prune_stats_t<i_t> last_prune_stats_;
   const f_t min_cut_distance_{1e-4};
+  static constexpr f_t near_best_distance_fraction_{0.9};
+  static constexpr f_t hybrid_near_best_min_orthogonality_{0.5};
+  static constexpr f_t ordinary_min_orthogonality_{0.9};
   static constexpr i_t max_selected_cuts_{2000};
   static constexpr i_t max_cut_age_{2};
   static constexpr i_t max_cut_pool_size_{(max_cut_age_ + 1) * max_selected_cuts_};
