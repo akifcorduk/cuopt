@@ -1371,14 +1371,19 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
   best_score_last_permutation(cut_distances_, sorted_indices);
 
   const f_t min_orthogonality = settings_.cut_min_orthogonality;
+  // Keep explicit non-default settings backward compatible. The hybrid thresholds are a
+  // deterministic default-policy refinement rather than a reinterpretation of this parameter.
+  const bool use_hybrid_orthogonality = min_orthogonality == hybrid_near_best_min_orthogonality_;
   best_cuts_.reserve(std::min(max_selected_cuts_, cut_storage_.m));
   best_cuts_.clear();
-  scored_cuts_ = 0;
+  scored_cuts_               = 0;
+  f_t strongest_cut_distance = 0.0;
 
   if (!sorted_indices.empty()) {
     const i_t i = sorted_indices.back();
     sorted_indices.pop_back();
     best_cuts_.push_back(i);
+    strongest_cut_distance = cut_distances_[i];
     scored_cuts_++;
   }
 
@@ -1394,9 +1399,21 @@ void cut_pool_t<i_t, f_t>::score_cuts(std::vector<f_t>& x_relax)
       const i_t j = best_cuts_[k];
       cut_ortho   = std::min(cut_ortho, cut_orthogonality(i, j));
     }
-    if (cut_ortho >= min_orthogonality) {
+    const bool near_best =
+      !use_hybrid_orthogonality ||
+      cut_distances_[i] >= near_best_distance_fraction_ * strongest_cut_distance;
+    const f_t required_orthogonality = near_best ? min_orthogonality : ordinary_min_orthogonality_;
+    if (cut_ortho >= required_orthogonality) {
       best_cuts_.push_back(i);
       scored_cuts_++;
+    } else if (use_hybrid_orthogonality && !near_best && cut_ortho >= min_orthogonality) {
+      last_prune_stats_.hybrid_orthogonality_pruned++;
+    }
+  }
+  for (const i_t cut : best_cuts_) {
+    if (cut_distances_[cut] > min_cut_distance_) {
+      last_prune_stats_.selected_nnz +=
+        cut_storage_.row_start[cut + 1] - cut_storage_.row_start[cut];
     }
   }
 }

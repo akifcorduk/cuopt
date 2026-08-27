@@ -1212,6 +1212,72 @@ TEST(cuts, cut_pool_deduplicates_regenerated_selected_cut)
   }
 }
 
+TEST(cuts, cut_pool_uses_stricter_diversity_for_lower_efficacy_cuts)
+{
+  simplex::simplex_solver_settings_t<int, double> settings;
+  settings.cut_min_orthogonality = 0.5;
+  mip::cut_pool_t<int, double> cut_pool(4, settings);
+
+  auto add_cut = [&](mip::cut_type_t type,
+                     std::initializer_list<std::pair<int, double>> coefficients,
+                     double rhs) {
+    mip::inequality_t<int, double> cut;
+    for (const auto& [column, coefficient] : coefficients) {
+      cut.push_back(column, coefficient);
+    }
+    cut.rhs = rhs;
+    cut_pool.add_cut(type, cut);
+  };
+
+  add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, {{0, 1.0}}, 2.0);
+  // This cut is within 90% of the best efficacy, so the configured 0.5 orthogonality applies.
+  add_cut(mip::cut_type_t::MIXED_INTEGER_ROUNDING, {{0, 1.0}, {1, 2.0}}, 4.25);
+  // This lower-efficacy cut passes 0.5 but not the stricter 0.9 ordinary-cut threshold.
+  add_cut(mip::cut_type_t::KNAPSACK, {{0, 1.0}, {2, 2.0}}, 3.35);
+  // A lower-efficacy cut that is genuinely orthogonal remains eligible.
+  add_cut(mip::cut_type_t::CHVATAL_GOMORY, {{3, 1.0}}, 1.0);
+
+  std::vector<double> relaxation(4, 0.0);
+  csr_matrix_t<int, double> cuts(0, 4, 0);
+  std::vector<double> rhs;
+  std::vector<mip::cut_type_t> types;
+  cut_pool.score_cuts(relaxation);
+  EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 3);
+  EXPECT_EQ(types[0], mip::cut_type_t::MIXED_INTEGER_GOMORY);
+  EXPECT_EQ(types[1], mip::cut_type_t::MIXED_INTEGER_ROUNDING);
+  EXPECT_EQ(types[2], mip::cut_type_t::CHVATAL_GOMORY);
+  EXPECT_EQ(cut_pool.last_prune_stats().hybrid_orthogonality_pruned, 1);
+  EXPECT_EQ(cut_pool.last_prune_stats().selected_nnz, 4);
+  EXPECT_EQ(cuts.row_start.back(), cut_pool.last_prune_stats().selected_nnz);
+  EXPECT_EQ(cut_pool.pool_size(), 4);
+}
+
+TEST(cuts, cut_pool_preserves_custom_orthogonality_setting)
+{
+  simplex::simplex_solver_settings_t<int, double> settings;
+  settings.cut_min_orthogonality = 0.0;
+  mip::cut_pool_t<int, double> cut_pool(2, settings);
+
+  mip::inequality_t<int, double> best_cut;
+  best_cut.push_back(0, 1.0);
+  best_cut.rhs = 2.0;
+  cut_pool.add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, best_cut);
+
+  mip::inequality_t<int, double> lower_efficacy_cut;
+  lower_efficacy_cut.push_back(0, 1.0);
+  lower_efficacy_cut.push_back(1, 2.0);
+  lower_efficacy_cut.rhs = 3.0;
+  cut_pool.add_cut(mip::cut_type_t::KNAPSACK, lower_efficacy_cut);
+
+  std::vector<double> relaxation(2, 0.0);
+  csr_matrix_t<int, double> cuts(0, 2, 0);
+  std::vector<double> rhs;
+  std::vector<mip::cut_type_t> types;
+  cut_pool.score_cuts(relaxation);
+  EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 2);
+  EXPECT_EQ(cut_pool.last_prune_stats().hybrid_orthogonality_pruned, 0);
+}
+
 TEST(cuts, clique_phase1_smoke_conflict_graph_edges)
 {
   const raft::handle_t handle{};
