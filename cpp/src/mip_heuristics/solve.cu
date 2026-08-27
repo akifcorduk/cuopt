@@ -14,6 +14,7 @@
 #include <mip_heuristics/feasibility_jump/early_gpufj.cuh>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
+#include <mip_heuristics/pre_presolve_primal.cuh>
 #include <mip_heuristics/presolve/presolve_budget_policy.hpp>
 #include <mip_heuristics/presolve/semi_continuous.cuh>
 #include <mip_heuristics/presolve/third_party_presolve.hpp>
@@ -64,6 +65,7 @@
 #include <cuda_profiler_api.h>
 #include <omp.h>
 
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 
@@ -499,6 +501,12 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
     std::unique_ptr<mip::early_cpufj_t<i_t, f_t>> early_cpufj;
     std::unique_ptr<mip::early_gpufj_t<i_t, f_t>> early_gpufj;
 
+    const int mip_omp_threads = omp_get_num_threads();
+    mip::pre_presolve_thread_budget_t pre_presolve_thread_budget(std::max(mip_omp_threads - 1, 0));
+    bool early_cpufj_slot_reserved = false;
+    bool early_gpufj_slot_reserved = false;
+    std::unique_ptr<mip::pre_presolve_primal_t<i_t, f_t>> pre_presolve_primal;
+
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                         op_problem.get_n_integers() > 0 && op_problem.get_n_constraints() > 0;
     f_t no_bound = problem.presolve_data.objective_scaling_factor >= 0 ? (f_t)-1e20 : (f_t)1e20;
@@ -545,17 +553,43 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
                                     no_bound);
         };
 
+      bool pre_presolve_started = false;
+      if (mip_omp_threads >= 4) {
+        constexpr int max_pre_bnb_task_slots = 1 + mip::pre_bnb_max_diving_workers;
+        const int pre_bnb_task_slots =
+          std::min(max_pre_bnb_task_slots, std::max(2, mip_omp_threads - 3));
+        pre_presolve_primal = std::make_unique<mip::pre_presolve_primal_t<i_t, f_t>>(
+          op_problem, settings, early_fj_callback, pre_presolve_thread_budget, pre_bnb_task_slots);
+        pre_presolve_started = pre_presolve_primal->start();
+      }
+
+      if (pre_presolve_started) {
+        // At four total threads, retain GPUFJ alongside the CPU-only pre-B&B treatment. With at
+        // least five threads, preserve the stock CPUFJ-then-GPUFJ launch order.
+        if (mip_omp_threads == 4) {
+          early_gpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+          early_cpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+        } else {
+          early_cpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+          early_gpufj_slot_reserved = pre_presolve_thread_budget.try_reserve(1);
+        }
+      }
+
       // Start early CPUFJ on original problem (will restart on presolved problem after Papilo)
-      early_cpufj = std::make_unique<mip::early_cpufj_t<i_t, f_t>>(
-        op_problem, settings.get_tolerances(), early_fj_callback);
-      early_cpufj->start();
-      CUOPT_LOG_DEBUG("Started early CPUFJ on original problem");
+      if (!pre_presolve_started || early_cpufj_slot_reserved) {
+        early_cpufj = std::make_unique<mip::early_cpufj_t<i_t, f_t>>(
+          op_problem, settings.get_tolerances(), early_fj_callback);
+        early_cpufj->start();
+        CUOPT_LOG_DEBUG("Started early CPUFJ on original problem");
+      }
 
       // Start early GPU FJ (uses GPU while CPU is busy with Papilo)
-      early_gpufj =
-        std::make_unique<mip::early_gpufj_t<i_t, f_t>>(op_problem, settings, early_fj_callback);
-      early_gpufj->start();
-      CUOPT_LOG_DEBUG("Started early GPUFJ during presolve");
+      if (!pre_presolve_started || early_gpufj_slot_reserved) {
+        early_gpufj =
+          std::make_unique<mip::early_gpufj_t<i_t, f_t>>(op_problem, settings, early_fj_callback);
+        early_gpufj->start();
+        CUOPT_LOG_DEBUG("Started early GPUFJ during presolve");
+      }
     }
 
     auto constexpr const dual_postsolve = false;
@@ -582,6 +616,10 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
         settings.num_cpu_threads,
         papilo_budget.papilo_max_rounds,
         papilo_budget.papilo_max_badgesize);
+
+      // The treatment window ends exactly when PaPILO returns, before the original problem is
+      // replaced by its reduced form or a terminal presolve status returns from this function.
+      if (pre_presolve_primal) { pre_presolve_primal->stop(); }
 
       if (result.status == mip::third_party_presolve_status_t::INFEASIBLE) {
         return mip_solution_t<i_t, f_t>(mip_termination_status_t::Infeasible,
@@ -638,6 +676,10 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
                         early_gpufj->get_best_objective());
       }
       early_gpufj.reset();  // Free GPU memory
+      if (early_gpufj_slot_reserved) {
+        pre_presolve_thread_budget.release(1);
+        early_gpufj_slot_reserved = false;
+      }
     }
 
     if (early_cpufj && run_presolve && presolve_result_opt.has_value()) {
@@ -648,6 +690,10 @@ mip_solution_t<i_t, f_t> solve_mip_helper(optimization_problem_t<i_t, f_t>& op_p
           early_cpufj->get_best_objective());
       }
       early_cpufj.reset();
+      if (early_cpufj_slot_reserved) {
+        pre_presolve_thread_budget.release(1);
+        early_cpufj_slot_reserved = false;
+      }
     }
 
     // Add early-heuristic incumbents (original-space) to initial_solutions.
