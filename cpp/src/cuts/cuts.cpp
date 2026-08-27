@@ -1480,16 +1480,18 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
   retained.reserve(pool_size);
   std::vector<i_t> cuts_to_remove(pool_size, 0);
   for (i_t i = 0; i < pool_size; i++) {
-    if (consumed[i]) {
-      // The caller has copied this cut into the LP. It cannot be violated while that row remains
-      // active, and a separator can regenerate it if LP-row aging later makes it useful again.
-      cuts_to_remove[i] = 1;
-      last_prune_stats_.selected_retired++;
+    if (cut_distances_[i] > min_cut_distance_) {
+      // Violation is the cut-pool equivalent of activity. Keep every currently useful candidate
+      // young even when diversity filtering selected a parallel alternative this pass. A selected
+      // LP row can also be removed immediately after reoptimization, so retain its pool copy for
+      // later relaxations instead of relying on the separator to regenerate it.
+      cut_age_[i] = 0;
+      retained.push_back(i);
       continue;
     }
-    // Unselected candidates age even while violated. They remain available for several passes,
-    // which lets the relaxation move enough for a previously parallel cut to become useful, but
-    // prevents permanently excluded cuts from occupying the pool indefinitely.
+    // Age only cuts that are consecutively nonviolated. This matches the useful-cut lifecycle in
+    // HiGHS and SCIP and avoids discarding a strong candidate merely because it was parallel to a
+    // stronger cut at earlier LP solutions.
     cut_age_[i]++;
     if (cut_age_[i] <= max_cut_age_) {
       retained.push_back(i);
@@ -1500,9 +1502,9 @@ void cut_pool_t<i_t, f_t>::age_and_prune_cuts()
   }
 
   if (retained.size() > static_cast<size_t>(max_cut_pool_size_)) {
-    // The capacity covers one full selection budget for every retained age cohort. Favor selected,
-    // recent, and efficacious alternatives when a separator produces more candidates than those
-    // cohorts can represent.
+    // The capacity covers one full selection budget for every retained age cohort. Protect cuts
+    // copied into the LP, then favor recent and efficacious alternatives when a separator produces
+    // more candidates than those cohorts can represent.
     std::sort(retained.begin(), retained.end(), [&](i_t lhs, i_t rhs) {
       if (consumed[lhs] != consumed[rhs]) { return consumed[lhs] > consumed[rhs]; }
       if (cut_age_[lhs] != cut_age_[rhs]) { return cut_age_[lhs] < cut_age_[rhs]; }
