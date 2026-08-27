@@ -1601,18 +1601,17 @@ single_node_flow_arc_t<i_t, f_t> flow_cover_build_arc(const flow_cover_context_t
 }
 
 template <typename i_t, typename f_t>
-void flow_cover_try_add_candidate(const flow_cover_context_t<i_t, f_t>& context,
-                                  const flow_cover_arc_spec_t<i_t, f_t>& spec,
-                                  f_t y_star,
-                                  std::vector<single_node_flow_candidate_t<i_t, f_t>>& candidates)
+bool flow_cover_make_candidate(const flow_cover_context_t<i_t, f_t>& context,
+                               const flow_cover_arc_spec_t<i_t, f_t>& spec,
+                               f_t y_star,
+                               single_node_flow_candidate_t<i_t, f_t>& candidate)
 {
   const f_t bound_tol       = context.settings.primal_tol;
   const f_t feasibility_tol = context.settings.primal_tol;
-  if (spec.u < -bound_tol) { return; }
+  if (spec.u < -bound_tol) { return false; }
   const f_t capacity = std::max<f_t>(0.0, spec.u);
-  if (capacity <= feasibility_tol) { return; }
+  if (capacity <= feasibility_tol) { return false; }
 
-  single_node_flow_candidate_t<i_t, f_t> candidate;
   candidate.arc                  = flow_cover_build_arc(context,
                                        capacity,
                                        spec.in_n2,
@@ -1625,6 +1624,17 @@ void flow_cover_try_add_candidate(const flow_cover_context_t<i_t, f_t>& context,
   candidate.b_shift              = spec.b_shift;
   candidate.distance             = std::abs(spec.active_bound - y_star);
   candidate.absorbs_binary_coeff = spec.absorbs_binary_coeff;
+  return true;
+}
+
+template <typename i_t, typename f_t>
+void flow_cover_try_add_candidate(const flow_cover_context_t<i_t, f_t>& context,
+                                  const flow_cover_arc_spec_t<i_t, f_t>& spec,
+                                  f_t y_star,
+                                  std::vector<single_node_flow_candidate_t<i_t, f_t>>& candidates)
+{
+  single_node_flow_candidate_t<i_t, f_t> candidate;
+  if (!flow_cover_make_candidate(context, spec, y_star, candidate)) { return; }
   candidates.push_back(candidate);
 }
 
@@ -1759,6 +1769,228 @@ flow_cover_generation_t<i_t, f_t>::flow_cover_generation_t(
     if (sigma_slack_lower > -inf) { flow_cover_constraints_.push_back({i, false}); }
     if (sigma_slack_upper < inf) { flow_cover_constraints_.push_back({i, true}); }
   }
+}
+
+template <typename i_t, typename f_t>
+bool flow_cover_generation_t<i_t, f_t>::make_variable_bound_candidate(
+  const flow_cover_context_t<i_t, f_t>& context,
+  i_t variable,
+  f_t coefficient,
+  bool upper,
+  i_t bound_position,
+  f_t direct_coefficient,
+  single_node_flow_candidate_t<i_t, f_t>& candidate)
+{
+  constexpr f_t coefficient_tol = static_cast<f_t>(1e-6);
+  const f_t bound_tol           = context.settings.primal_tol;
+  const auto& bound_variables =
+    upper ? context.variable_bounds.upper_variables : context.variable_bounds.lower_variables;
+  const auto& bound_weights =
+    upper ? context.variable_bounds.upper_weights : context.variable_bounds.lower_weights;
+  const auto& bound_biases =
+    upper ? context.variable_bounds.upper_biases : context.variable_bounds.lower_biases;
+
+  const i_t controller = bound_variables[bound_position];
+  if (!flow_cover_is_zero_one_integer_variable(context, controller)) { return false; }
+  const f_t gamma = bound_weights[bound_position];
+  const f_t alpha = bound_biases[bound_position];
+  if (!std::isfinite(gamma) || !std::isfinite(alpha)) { return false; }
+
+  const f_t endpoint        = upper ? context.lp.lower[variable] : context.lp.upper[variable];
+  const bool in_n2          = upper ? coefficient < 0.0 : coefficient > 0.0;
+  const f_t signed_capacity = coefficient * gamma + direct_coefficient;
+  const f_t endpoint_term   = coefficient * (endpoint - alpha);
+  const bool valid_endpoint =
+    in_n2 ? (endpoint_term <= bound_tol && endpoint_term + direct_coefficient <= bound_tol &&
+             signed_capacity <= bound_tol)
+          : (endpoint_term >= -bound_tol && endpoint_term + direct_coefficient >= -bound_tol &&
+             signed_capacity >= -bound_tol);
+  if (!valid_endpoint) { return false; }
+
+  flow_cover_arc_spec_t<i_t, f_t> spec;
+  spec.u                    = in_n2 ? -signed_capacity : signed_capacity;
+  spec.in_n2                = in_n2;
+  spec.x_col                = controller;
+  spec.fixed_x              = 0.0;
+  spec.y_const              = in_n2 ? coefficient * alpha : -coefficient * alpha;
+  spec.y_col                = variable;
+  spec.y_coeff              = in_n2 ? -coefficient : coefficient;
+  spec.y_x_coeff            = in_n2 ? -direct_coefficient : direct_coefficient;
+  spec.b_shift              = coefficient * alpha;
+  spec.active_bound         = gamma * context.xstar[controller] + alpha;
+  spec.absorbs_binary_coeff = std::abs(direct_coefficient) > coefficient_tol;
+  return flow_cover_make_candidate(context, spec, context.xstar[variable], candidate);
+}
+
+template <typename i_t, typename f_t>
+flow_cover_bound_order_t<i_t>& flow_cover_generation_t<i_t, f_t>::bound_position_order(
+  const flow_cover_context_t<i_t, f_t>& context, i_t variable, bool upper)
+{
+  auto& orders              = upper ? upper_bound_orders_ : lower_bound_orders_;
+  auto [order_it, inserted] = orders.try_emplace(variable);
+  if (!inserted) { return order_it->second; }
+
+  const auto& offsets =
+    upper ? context.variable_bounds.upper_offsets : context.variable_bounds.lower_offsets;
+  const auto& bound_variables =
+    upper ? context.variable_bounds.upper_variables : context.variable_bounds.lower_variables;
+  const auto& bound_weights =
+    upper ? context.variable_bounds.upper_weights : context.variable_bounds.lower_weights;
+  const auto& bound_biases =
+    upper ? context.variable_bounds.upper_biases : context.variable_bounds.lower_biases;
+
+  auto& order                  = order_it->second;
+  constexpr i_t min_index_size = 32;
+  if (offsets[variable + 1] - offsets[variable] < min_index_size) {
+    // A short exhaustive scan is cheaper than allocating and sorting an index, particularly on
+    // models whose continuous variables are touched only once.
+    order.use_reference_scan = true;
+    return order;
+  }
+  std::vector<std::pair<f_t, i_t>> ranked_positions;
+  ranked_positions.reserve(offsets[variable + 1] - offsets[variable]);
+  constexpr f_t coefficient_tol = static_cast<f_t>(1e-6);
+  const f_t max_endpoint_slack  = context.settings.primal_tol / coefficient_tol;
+  const f_t endpoint            = upper ? context.lp.lower[variable] : context.lp.upper[variable];
+  for (i_t position = offsets[variable]; position < offsets[variable + 1]; position++) {
+    const i_t controller = bound_variables[position];
+    if (!flow_cover_is_zero_one_integer_variable(context, controller)) { continue; }
+    const f_t gamma = bound_weights[position];
+    const f_t alpha = bound_biases[position];
+    if (!std::isfinite(gamma) || !std::isfinite(alpha)) { continue; }
+    const f_t distance =
+      std::abs(gamma * context.xstar[controller] + alpha - context.xstar[variable]);
+    if (!std::isfinite(distance)) {
+      // Sorting a NaN would not preserve std::min_element's original-order behavior.
+      order.use_reference_scan = true;
+      order.zero_positions.clear();
+      order.positions_by_controller.clear();
+      return order;
+    }
+    const bool can_be_zero_candidate = upper
+                                         ? gamma > 0.0 && alpha <= endpoint + max_endpoint_slack
+                                         : gamma < 0.0 && alpha >= endpoint - max_endpoint_slack;
+    if (can_be_zero_candidate) { ranked_positions.emplace_back(distance, position); }
+  }
+  std::sort(ranked_positions.begin(), ranked_positions.end());
+  order.zero_positions.reserve(ranked_positions.size());
+  for (const auto& [distance, position] : ranked_positions) {
+    static_cast<void>(distance);
+    order.zero_positions.push_back(position);
+  }
+  return order;
+}
+
+template <typename i_t, typename f_t>
+bool flow_cover_generation_t<i_t, f_t>::best_bound_candidate(
+  const flow_cover_context_t<i_t, f_t>& context,
+  i_t variable,
+  f_t coefficient,
+  bool upper,
+  single_node_flow_candidate_t<i_t, f_t>& candidate)
+{
+  constexpr f_t coefficient_tol = static_cast<f_t>(1e-6);
+  const auto& offsets =
+    upper ? context.variable_bounds.upper_offsets : context.variable_bounds.lower_offsets;
+  const auto& bound_variables =
+    upper ? context.variable_bounds.upper_variables : context.variable_bounds.lower_variables;
+  auto& order = bound_position_order(context, variable, upper);
+  auto try_variant =
+    [&](i_t position, f_t direct_coefficient, single_node_flow_candidate_t<i_t, f_t>& output) {
+      return make_variable_bound_candidate(
+        context, variable, coefficient, upper, position, direct_coefficient, output);
+    };
+
+  if (!order.use_reference_scan) {
+    bool found        = false;
+    i_t best_position = -1;
+    bool best_direct  = false;
+    auto consider =
+      [&](const single_node_flow_candidate_t<i_t, f_t>& current, i_t position, bool direct) {
+        const bool earlier =
+          position < best_position || (position == best_position && direct && !best_direct);
+        if (!found || current.distance < candidate.distance ||
+            (current.distance == candidate.distance && earlier)) {
+          candidate     = current;
+          best_position = position;
+          best_direct   = direct;
+          found         = true;
+        }
+      };
+
+    // A zero-direct candidate can only use a positive-slope upper bound or negative-slope lower
+    // bound near the corresponding finite endpoint. Those coefficient-independent filters are
+    // applied while building the order; the remaining row-dependent predicates stay exact here.
+    for (const i_t position : order.zero_positions) {
+      const i_t controller      = bound_variables[position];
+      const f_t row_coefficient = binary_coefficients_touched[controller]
+                                    ? binary_coefficients[controller]
+                                    : static_cast<f_t>(0.0);
+      if (row_coefficient != 0.0 && !(std::abs(row_coefficient) > coefficient_tol)) { continue; }
+      single_node_flow_candidate_t<i_t, f_t> current;
+      if (try_variant(position, 0.0, current)) {
+        consider(current, position, false);
+        break;
+      }
+    }
+
+    // Only controllers present in this row have a nonzero direct variant. Look up their bound
+    // entries instead of rescanning every implied bound for the continuous variable.
+    bool needs_controller_index = false;
+    for (const i_t controller : binary_columns) {
+      if (binary_coefficients[controller] != 0.0) {
+        needs_controller_index = true;
+        break;
+      }
+    }
+    if (needs_controller_index && !order.controller_index_built) {
+      const auto& bound_weights =
+        upper ? context.variable_bounds.upper_weights : context.variable_bounds.lower_weights;
+      const auto& bound_biases =
+        upper ? context.variable_bounds.upper_biases : context.variable_bounds.lower_biases;
+      for (i_t position = offsets[variable]; position < offsets[variable + 1]; position++) {
+        const i_t controller = bound_variables[position];
+        if (!flow_cover_is_zero_one_integer_variable(context, controller) ||
+            !std::isfinite(bound_weights[position]) || !std::isfinite(bound_biases[position])) {
+          continue;
+        }
+        order.positions_by_controller[controller].push_back(position);
+      }
+      order.controller_index_built = true;
+    }
+    for (const i_t controller : binary_columns) {
+      const f_t direct_coefficient = binary_coefficients[controller];
+      if (direct_coefficient == 0.0) { continue; }
+      const auto positions_it = order.positions_by_controller.find(controller);
+      if (positions_it == order.positions_by_controller.end()) { continue; }
+      for (const i_t position : positions_it->second) {
+        single_node_flow_candidate_t<i_t, f_t> current;
+        if (try_variant(position, direct_coefficient, current)) {
+          consider(current, position, true);
+        }
+      }
+    }
+    return found;
+  }
+
+  auto try_position = [&](i_t position, single_node_flow_candidate_t<i_t, f_t>& output) {
+    const i_t controller         = bound_variables[position];
+    const f_t direct_coefficient = binary_coefficients_touched[controller]
+                                     ? binary_coefficients[controller]
+                                     : static_cast<f_t>(0.0);
+    if (try_variant(position, direct_coefficient, output)) { return true; }
+    return std::abs(direct_coefficient) > coefficient_tol && try_variant(position, 0.0, output);
+  };
+
+  // Nonfinite LP values are not expected, but preserve the exhaustive scan's ordering exactly.
+  bool found = false;
+  for (i_t position = offsets[variable]; position < offsets[variable + 1]; position++) {
+    single_node_flow_candidate_t<i_t, f_t> current;
+    if (!try_position(position, current)) { continue; }
+    if (!found || current.distance < candidate.distance) { candidate = current; }
+    found = true;
+  }
+  return found;
 }
 
 template <typename i_t, typename f_t>
@@ -1952,16 +2184,40 @@ bool flow_cover_generation_t<i_t, f_t>::build_single_node_flow_relaxation(
 
   for (const auto& [j, c] : scratch.continuous_terms) {
     scratch.candidates.clear();
-    add_variable_bound_candidates(j, c, flow_cover_bound_side_t::UPPER);
-    add_variable_bound_candidates(j, c, flow_cover_bound_side_t::LOWER);
-    add_simple_bound_candidates(j, c);
+    single_node_flow_candidate_t<i_t, f_t> selected_candidate;
+    if (use_reference_bound_scan_) {
+      add_variable_bound_candidates(j, c, flow_cover_bound_side_t::UPPER);
+      add_variable_bound_candidates(j, c, flow_cover_bound_side_t::LOWER);
+      add_simple_bound_candidates(j, c);
+      if (scratch.candidates.empty()) { return false; }
+      selected_candidate = *std::min_element(
+        scratch.candidates.begin(),
+        scratch.candidates.end(),
+        [](const single_node_flow_candidate_t<i_t, f_t>& a,
+           const single_node_flow_candidate_t<i_t, f_t>& b) { return a.distance < b.distance; });
+    } else {
+      auto add_best_bound_candidate = [&](bool upper) {
+        if ((upper && context.lp.lower[j] <= -inf) || (!upper && context.lp.upper[j] >= inf)) {
+          return;
+        }
+        single_node_flow_candidate_t<i_t, f_t> candidate;
+        if (best_bound_candidate(context, j, c, upper, candidate)) {
+          scratch.candidates.push_back(candidate);
+        }
+      };
 
-    if (scratch.candidates.empty()) { return false; }
-    auto best = std::min_element(
-      scratch.candidates.begin(),
-      scratch.candidates.end(),
-      [](const single_node_flow_candidate_t<i_t, f_t>& a,
-         const single_node_flow_candidate_t<i_t, f_t>& b) { return a.distance < b.distance; });
+      add_best_bound_candidate(true);
+      add_best_bound_candidate(false);
+      add_simple_bound_candidates(j, c);
+      if (scratch.candidates.empty()) { return false; }
+      selected_candidate = *std::min_element(
+        scratch.candidates.begin(),
+        scratch.candidates.end(),
+        [](const single_node_flow_candidate_t<i_t, f_t>& a,
+           const single_node_flow_candidate_t<i_t, f_t>& b) { return a.distance < b.distance; });
+    }
+
+    auto* best              = &selected_candidate;
     const f_t arc_lower_tol = flow_cover_arc_lower_tol(context);
     const f_t arc_upper_tol = flow_cover_arc_upper_tol(context, best->arc.u);
     if (best->arc.y_value < -arc_lower_tol ||
@@ -3751,6 +4007,7 @@ void cut_generation_t<i_t, f_t>::generate_flow_cover_cuts(
   f_t start_time)
 {
   if (flow_cover_generation_.num_constraints() > 0) {
+    flow_cover_generation_.begin_separation_pass();
     for (const auto& flow_cover_row : flow_cover_generation_.get_constraints()) {
       if (toc(start_time) >= settings.time_limit) { return; }
       inequality_t<i_t, f_t> cut(lp.num_cols);
