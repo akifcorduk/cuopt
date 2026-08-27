@@ -29,9 +29,14 @@
 #include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <algorithm>
 #include <argparse/argparse.hpp>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <limits>
+#include <mutex>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -85,6 +90,83 @@ void write_to_output_file(const std::string& out_dir,
 }
 
 inline auto make_async() { return rmm::mr::cuda_async_memory_resource(); }
+
+class benchmark_primal_integral_callback_t : public cuopt::internals::get_solution_callback_t {
+ public:
+  benchmark_primal_integral_callback_t(std::optional<double> reference_objective,
+                                       double time_limit,
+                                       bool maximize)
+    : reference_objective_(reference_objective),
+      time_limit_(time_limit == 0.0 || !std::isfinite(time_limit) ||
+                      time_limit == std::numeric_limits<double>::max()
+                    ? std::numeric_limits<double>::infinity()
+                    : time_limit),
+      maximize_(maximize),
+      best_objective_(maximize ? -std::numeric_limits<double>::infinity()
+                               : std::numeric_limits<double>::infinity())
+  {
+  }
+
+  void start(std::chrono::steady_clock::time_point start_time) { start_time_ = start_time; }
+
+  void get_solution(void*, void* objective_value, void*, void*) override
+  {
+    if (!reference_objective_.has_value()) { return; }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double objective = *static_cast<const double*>(objective_value);
+    const bool improves    = maximize_ ? objective > best_objective_ : objective < best_objective_;
+    if (!improves) { return; }
+
+    const double elapsed_time =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count();
+    const double integration_time = bounded_time(elapsed_time);
+    area_ += current_error_ * (integration_time - last_time_);
+    last_time_      = integration_time;
+    best_objective_ = objective;
+    current_error_  = primal_error(objective);
+    has_incumbent_  = true;
+  }
+
+  double finalize(double elapsed_time)
+  {
+    if (!reference_objective_.has_value()) { return std::numeric_limits<double>::quiet_NaN(); }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const double integration_time = std::isfinite(time_limit_) ? time_limit_ : elapsed_time;
+    area_ += current_error_ * (integration_time - last_time_);
+    return has_incumbent_ ? area_ / integration_time : 2.0;
+  }
+
+ private:
+  double bounded_time(double elapsed_time) const
+  {
+    return std::isfinite(time_limit_) ? std::min(elapsed_time, time_limit_) : elapsed_time;
+  }
+
+  double primal_error(double objective) const
+  {
+    const double reference_objective = *reference_objective_;
+    if (!std::isfinite(objective)) { return 2.0; }
+    if ((objective < 0.0 && reference_objective > 0.0) ||
+        (objective > 0.0 && reference_objective < 0.0)) {
+      return 1.0;
+    }
+    return std::abs(objective - reference_objective) /
+           std::max({std::abs(objective), std::abs(reference_objective), 1.0});
+  }
+
+  std::optional<double> reference_objective_;
+  double time_limit_;
+  bool maximize_;
+  double area_           = 0.0;
+  double last_time_      = 0.0;
+  double current_error_  = 1.0;
+  double best_objective_ = 0.0;
+  bool has_incumbent_    = false;
+  std::chrono::steady_clock::time_point start_time_;
+  std::mutex mutex_;
+};
 
 void read_single_solution_from_path(const std::string& path,
                                     const std::vector<std::string>& var_names,
@@ -217,16 +299,25 @@ int run_single_file(std::string file_path,
   settings.seed                          = 42;
   cuopt::mathematical_optimization::benchmark_info_t benchmark_info;
   settings.benchmark_info_ptr = &benchmark_info;
-  auto start_run_solver       = std::chrono::high_resolution_clock::now();
+  benchmark_primal_integral_callback_t primal_integral_callback(
+    cuopt_bench::lookup_miplib_bks(base_filename), time_limit, mps_data_model.get_sense());
+  settings.set_mip_callback(&primal_integral_callback);
+  auto start_run_solver = std::chrono::steady_clock::now();
+  primal_integral_callback.start(start_run_solver);
   auto solution = cuopt::mathematical_optimization::solve_mip(&handle_, mps_data_model, settings);
+  const double solve_elapsed_seconds =
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - start_run_solver).count();
+  const double primal_integral = primal_integral_callback.finalize(solve_elapsed_seconds);
   CUOPT_LOG_INFO(
-    "first obj: %f last improvement of best feasible: %f last improvement after recombination: %f",
+    "first obj: %f last improvement of best feasible: %f last improvement after recombination: %f "
+    "primal integral: %f",
     benchmark_info.objective_of_initial_population,
     benchmark_info.last_improvement_of_best_feasible,
-    benchmark_info.last_improvement_after_recombination);
+    benchmark_info.last_improvement_after_recombination,
+    primal_integral);
   // solution.write_to_sol_file(base_filename + ".sol", handle_.get_stream());
   std::chrono::milliseconds duration;
-  auto end = std::chrono::high_resolution_clock::now();
+  auto end = std::chrono::steady_clock::now();
   duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start_run_solver);
   CUOPT_LOG_INFO("run_solver %d", duration.count());
   handle_.sync_stream();
@@ -248,10 +339,8 @@ int run_single_file(std::string file_path,
   // table (miplib2017_bks.hpp); unknown instances emit "opt=TBD"
   // and infeasibility-flagged instances emit "opt=Infeasible".
   {
-    const double _gap_seconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  std::chrono::high_resolution_clock::now() - start_run_solver)
-                                  .count() /
-                                1000.0;
+    const double _gap_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start_run_solver).count();
     std::string _status_str;
     switch (solution.get_termination_status()) {
       case cuopt::mathematical_optimization::mip_termination_status_t::Optimal:
@@ -274,11 +363,12 @@ int run_single_file(std::string file_path,
                                        _status_str,
                                        benchmark_info.root_lp_no_cuts,
                                        benchmark_info.root_lp_with_cuts,
-                                       benchmark_info.cut_generation_time_sec);
+                                       benchmark_info.cut_generation_time_sec,
+                                       primal_integral);
   }
 
   std::stringstream ss;
-  int decimal_places = 2;
+  int decimal_places = 5;
   double mip_gap     = solution.get_mip_gap();
   int is_optimal     = solution.get_termination_status() ==
                        cuopt::mathematical_optimization::mip_termination_status_t::Optimal
@@ -288,7 +378,7 @@ int run_single_file(std::string file_path,
      << obj_val << "," << benchmark_info.objective_of_initial_population << ","
      << benchmark_info.last_improvement_of_best_feasible << ","
      << benchmark_info.last_improvement_after_recombination << "," << mip_gap << "," << is_optimal
-     << "\n";
+     << "," << primal_integral << "\n";
   write_to_output_file(out_dir, base_filename, device, n_gpus, batch_id, ss.str());
   CUOPT_LOG_INFO("Results written to the file %s", base_filename.c_str());
   return sol_found;
