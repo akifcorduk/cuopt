@@ -148,6 +148,17 @@ class branch_and_bound_t {
 
   void set_concurrent_lp_root_solve(bool enable) { enable_concurrent_lp_root_solve_ = enable; }
 
+  // Internal cooperative cancellation used by the pre-presolve root-diving arm. Root and node
+  // simplex use separate halt words because simplex may set either word on normal completion.
+  void set_external_halt(std::atomic<int>* cancel_requested,
+                         std::atomic<int>* root_halt,
+                         std::atomic<int>* node_halt)
+  {
+    external_cancel_requested_ = cancel_requested;
+    external_root_halt_        = root_halt;
+    external_node_halt_        = node_halt;
+  }
+
   // Seed the global upper bound from an external source (e.g., early FJ during presolve).
   // `bound` must be in B&B's internal objective space.
   void set_initial_upper_bound(f_t bound);
@@ -259,6 +270,9 @@ class branch_and_bound_t {
   bool enable_concurrent_lp_root_solve_{false};
   std::atomic<int> root_concurrent_halt_{0};
   std::atomic<int> node_concurrent_halt_{0};
+  std::atomic<int>* external_cancel_requested_{nullptr};
+  std::atomic<int>* external_root_halt_{nullptr};
+  std::atomic<int>* external_node_halt_{nullptr};
   bool is_root_solution_set{false};
   bool has_initial_pseudocost_{false};
 
@@ -305,8 +319,9 @@ class branch_and_bound_t {
 
   bool received_halt_signal()
   {
-    return settings_.concurrent_halt ? settings_.concurrent_halt->load(std::memory_order_acquire)
-                                     : false;
+    const bool run_halt = settings_.concurrent_halt != nullptr &&
+                          settings_.concurrent_halt->load(std::memory_order_acquire) != 0;
+    return run_halt || external_cancel_requested();
   }
 
   enum class cut_pass_action_t { CONTINUE, BREAK, RETURN };
@@ -350,6 +365,18 @@ class branch_and_bound_t {
 
   // Launch a new diving worker from a given best-first worker.
   bool launch_diving_worker(bfs_worker_t<i_t, f_t>* bfs_worker);
+
+  // Launch each currently usable diving method directly from the solved root relaxation. This
+  // specialized pre-presolve path has no best-first worker or global search tree.
+  void run_root_diving_workers(const std::vector<i_t>& fractional);
+  bool launch_root_diving_worker(search_strategy_t strategy, const std::vector<i_t>& fractional);
+  std::vector<search_strategy_t> get_available_root_diving_heuristics();
+  bool has_solver_space_incumbent_synchronized();
+  bool external_cancel_requested() const
+  {
+    return external_cancel_requested_ != nullptr &&
+           external_cancel_requested_->load(std::memory_order_acquire) != 0;
+  }
 
   void snap_to_lattice(mip_node_t<i_t, f_t>* node_ptr, f_t leaf_obj);
 

@@ -56,7 +56,7 @@ struct mip_solver_context_t {
   mip::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
-  const mip_solver_settings_t<i_t, f_t> settings;
+  mip_solver_settings_t<i_t, f_t> settings;
   solver_stats_t<i_t, f_t> stats;
   // Work limit context for tracking work units in deterministic mode (shared across all timers in
   // GPU heuristic loop)

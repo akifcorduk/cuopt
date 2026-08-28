@@ -11,6 +11,8 @@
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/solver_context.cuh>
 #include <utilities/timer.hpp>
+
+#include <functional>
 #pragma once
 
 namespace cuopt::mathematical_optimization::mip {
@@ -22,7 +24,8 @@ class mip_solver_t {
                         const mip_solver_settings_t<i_t, f_t>& solver_settings,
                         timer_t timer);
 
-  solution_t<i_t, f_t> run_solver();
+  solution_t<i_t, f_t> run_solver(
+    std::function<void(mip_solver_context_t<i_t, f_t>&)> presolve_finished_callback = {});
   solver_stats_t<i_t, f_t>& get_solver_stats() { return context.stats; }
 
   mip_solver_context_t<i_t, f_t> context;

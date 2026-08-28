@@ -37,6 +37,7 @@
 #include <omp.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1026,8 +1027,8 @@ branch_variable_t<i_t> branch_and_bound_t<i_t, f_t>::variable_selection(
       return pseudocost_diving(pc_, fractional, solution, worker->root_solution, log);
 
     case search_strategy_t::GUIDED_DIVING:
-      assert(incumbent_.has_incumbent);
       mutex_upper_.lock();
+      assert(incumbent_.has_incumbent);
       current_incumbent = incumbent_.x;
       mutex_upper_.unlock();
       return guided_diving(pc_, fractional, solution, current_incumbent, log);
@@ -1569,7 +1570,8 @@ dual_status_t branch_and_bound_t<i_t, f_t>::solve_node_lp(
 #endif
 
   simplex_solver_settings_t lp_settings = settings_;
-  lp_settings.concurrent_halt           = &node_concurrent_halt_;
+  lp_settings.concurrent_halt =
+    external_node_halt_ != nullptr ? external_node_halt_ : &node_concurrent_halt_;
   lp_settings.set_log(false);
   f_t cutoff = upper_bound_.load();
   if (original_lp_.objective_step.has_step()) {
@@ -2051,6 +2053,156 @@ void branch_and_bound_t<i_t, f_t>::best_first_search_with(bfs_worker_t<i_t, f_t>
 }
 
 template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::has_solver_space_incumbent_synchronized()
+{
+  mutex_upper_.lock();
+  const bool has_incumbent = incumbent_.has_incumbent;
+  mutex_upper_.unlock();
+  return has_incumbent;
+}
+
+template <typename i_t, typename f_t>
+std::vector<search_strategy_t> branch_and_bound_t<i_t, f_t>::get_available_root_diving_heuristics()
+{
+  auto diving_settings = settings_.diving_settings;
+  if (!has_solver_space_incumbent_synchronized()) { diving_settings.guided_diving = 0; }
+
+  if (diving_settings.farkas_diving != 0) {
+    f_t obj_dynamism;
+    if (std::abs(original_lp_.min_abs_obj_coeff) < settings_.zero_tol) {
+      obj_dynamism = std::abs(original_lp_.max_abs_obj_coeff) < settings_.zero_tol
+                       ? f_t{0}
+                       : std::numeric_limits<f_t>::infinity();
+    } else {
+      obj_dynamism = std::log10(original_lp_.max_abs_obj_coeff / original_lp_.min_abs_obj_coeff);
+    }
+    if (obj_dynamism < diving_settings.farkas_obj_dynamism_tol) {
+      diving_settings.farkas_diving = 0;
+    }
+  }
+
+  std::vector<search_strategy_t> heuristics;
+  get_diving_heuristic_list(diving_settings, heuristics);
+  return heuristics;
+}
+
+template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::launch_root_diving_worker(search_strategy_t strategy,
+                                                             const std::vector<i_t>& fractional)
+{
+  if (external_cancel_requested()) { return false; }
+
+  auto* worker = diving_worker_pool_.pop_idle_worker();
+  if (worker == nullptr) { return false; }
+
+  worker->bfs_worker       = nullptr;
+  worker->search_strategy  = strategy;
+  worker->leaf_solution.x  = root_relax_soln_.x;
+  worker->start_lower      = original_lp_.lower;
+  worker->start_upper      = original_lp_.upper;
+  worker->recompute_basis  = true;
+  worker->recompute_bounds = true;
+
+  mip_node_t<i_t, f_t> root(root_objective_, root_vstatus_);
+  const auto [branch_var, direction] = variable_selection(&root, fractional, worker);
+  if (branch_var < 0 || direction == branch_direction_t::NONE) {
+    diving_worker_pool_.return_worker_to_pool(worker);
+    return false;
+  }
+
+  mip_node_t<i_t, f_t> preferred_child(original_lp_,
+                                       &root,
+                                       static_cast<i_t>(strategy) + 1,
+                                       branch_var,
+                                       direction,
+                                       root_relax_soln_.x[branch_var],
+                                       static_cast<i_t>(fractional.size()),
+                                       root_vstatus_);
+  std::fill(worker->bounds_changed.begin(), worker->bounds_changed.end(), false);
+  preferred_child.get_variable_bounds(
+    worker->start_lower, worker->start_upper, worker->bounds_changed);
+  worker->start_node = preferred_child.detach_copy();
+
+  if (!worker->presolve_start_bounds(settings_) || external_cancel_requested()) {
+    diving_worker_pool_.return_worker_to_pool(worker);
+    return false;
+  }
+
+  worker->set_active();
+
+#pragma omp task affinity(*worker) priority(CUOPT_DEFAULT_TASK_PRIORITY) default(none) \
+  firstprivate(worker)
+  {
+    try {
+      dive_with(worker, settings_.diving_settings.backtrack_limit);
+    } catch (const std::exception& e) {
+      CUOPT_LOG_ERROR("Root-diving worker failed: %s", e.what());
+      if (worker->is_active.load()) { diving_worker_pool_.return_worker_to_pool(worker); }
+    } catch (...) {
+      CUOPT_LOG_ERROR("Root-diving worker failed with an unknown exception");
+      if (worker->is_active.load()) { diving_worker_pool_.return_worker_to_pool(worker); }
+    }
+  }
+  return true;
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::run_root_diving_workers(const std::vector<i_t>& fractional)
+{
+  const i_t num_workers = std::max(settings_.num_threads - 1, i_t{0});
+  if (num_workers == 0 || fractional.empty()) { return; }
+
+  if (settings_.diving_settings.coefficient_diving != 0) {
+    calculate_variable_locks(original_lp_, var_up_locks_, var_down_locks_);
+  }
+
+  diving_worker_pool_.init(num_workers,
+                           original_lp_,
+                           Arow_,
+                           var_types_,
+                           symmetry_,
+                           settings_,
+                           root_relax_soln_.x,
+                           edge_norms_);
+
+  constexpr std::size_t num_diving_strategies =
+    static_cast<std::size_t>(search_strategy_t::VECTOR_LENGTH_DIVING) + 1;
+  std::array<bool, num_diving_strategies> attempted{};
+
+  settings_.log.printf("Running root-seeded diving with up to %d workers\n", num_workers);
+
+#pragma omp taskgroup
+  {
+    while (!external_cancel_requested()) {
+      bool attempted_new_method = false;
+      const auto available      = get_available_root_diving_heuristics();
+
+      for (const auto strategy : available) {
+        const auto index = static_cast<std::size_t>(strategy);
+        if (attempted[index] || diving_worker_pool_.num_idle() == 0) { continue; }
+        attempted[index]     = true;
+        attempted_new_method = true;
+        launch_root_diving_worker(strategy, fractional);
+      }
+
+      const bool workers_active = diving_worker_pool_.num_idle() < diving_worker_pool_.size();
+      const bool guided_may_become_available =
+        settings_.diving_settings.guided_diving != 0 &&
+        !attempted[static_cast<std::size_t>(search_strategy_t::GUIDED_DIVING)] && workers_active;
+      const bool available_method_remaining =
+        std::any_of(available.begin(), available.end(), [&](search_strategy_t strategy) {
+          return !attempted[static_cast<std::size_t>(strategy)];
+        });
+
+      if (!workers_active && !available_method_remaining && !guided_may_become_available) { break; }
+      if (!attempted_new_method) {
+#pragma omp taskyield
+      }
+    }
+  }
+}
+
+template <typename i_t, typename f_t>
 void branch_and_bound_t<i_t, f_t>::dive_with(diving_worker_t<i_t, f_t>* worker, i_t backtrack_limit)
 {
   raft::common::nvtx::range scope("BB::diving_thread");
@@ -2091,18 +2243,26 @@ void branch_and_bound_t<i_t, f_t>::dive_with(diving_worker_t<i_t, f_t>* worker, 
       continue;
     }
 
-    if (toc(exploration_stats_.start_time) > settings_.time_limit) {
+    if (external_cancel_requested_ != nullptr &&
+        external_cancel_requested_->load(std::memory_order_acquire) != 0) {
+      break;
+    }
+
+    if (!settings_.root_diving_only && toc(exploration_stats_.start_time) > settings_.time_limit) {
       node_concurrent_halt_ = 1;
       solver_status_        = mip_status_t::TIME_LIMIT;
       break;
     }
-    if (dive_stats.nodes_explored >= diving_node_limit) { break; }
+    if (!settings_.root_diving_only && dive_stats.nodes_explored >= diving_node_limit) { break; }
 
-    int64_t bnb_lp_iters = exploration_stats_.total_simplex_iters;
-    f_t factor           = settings_.diving_settings.iteration_limit_factor;
-    i_t max_iter         = std::min<int64_t>(factor * bnb_lp_iters - dive_stats.total_simplex_iters,
-                                     std::numeric_limits<i_t>::max());
-    if (max_iter <= 0) { break; }
+    i_t max_iter = std::numeric_limits<i_t>::max();
+    if (!settings_.root_diving_only) {
+      int64_t bnb_lp_iters = exploration_stats_.total_simplex_iters;
+      f_t factor           = settings_.diving_settings.iteration_limit_factor;
+      max_iter = std::min<int64_t>(factor * bnb_lp_iters - dive_stats.total_simplex_iters,
+                                   std::numeric_limits<i_t>::max());
+      if (max_iter <= 0) { break; }
+    }
 
     decompress_vstatus(
       node_ptr->packed_vstatus, worker->leaf_problem.num_cols, worker->leaf_vstatus);
@@ -3565,12 +3725,22 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     }
   }
 
-  i_t original_rows                           = original_lp_.num_rows;
-  simplex_solver_settings_t lp_settings       = settings_;
-  lp_settings.inside_mip                      = 1;
-  lp_settings.scale_columns                   = false;
-  lp_settings.inside_root_node                = true;
-  lp_settings.concurrent_halt                 = get_root_concurrent_halt();
+  if (external_cancel_requested_ != nullptr &&
+      external_cancel_requested_->load(std::memory_order_acquire) != 0) {
+    solver_status_ = mip_status_t::HALT;
+    set_final_solution(solution, -inf);
+    signal_extend_cliques_.store(true, std::memory_order_release);
+#pragma omp taskwait depend(in : *clique_signal)
+    return solver_status_;
+  }
+
+  i_t original_rows                     = original_lp_.num_rows;
+  simplex_solver_settings_t lp_settings = settings_;
+  lp_settings.inside_mip                = 1;
+  lp_settings.scale_columns             = false;
+  lp_settings.inside_root_node          = true;
+  lp_settings.concurrent_halt =
+    external_root_halt_ != nullptr ? external_root_halt_ : get_root_concurrent_halt();
   lp_settings.dual_simplex_objective_callback = [this](f_t user_obj) {
     root_lp_current_lower_bound_.store(user_obj);
   };
@@ -3586,7 +3756,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     // RINS/SUBMIP path
     settings_.log.printf("\n");
     settings_.log.printf("Solving LP root relaxation with dual simplex\n");
-    lp_settings.concurrent_halt            = settings_.concurrent_halt;
+    lp_settings.concurrent_halt =
+      external_root_halt_ != nullptr ? external_root_halt_ : settings_.concurrent_halt;
     lp_settings.inside_mip                 = 2;
     root_status                            = solve_linear_program_with_advanced_basis(original_lp_,
                                                            exploration_stats_.start_time,
@@ -3663,6 +3834,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     return solver_status_;
   }
 
+  if (external_cancel_requested()) {
+    solver_status_ = mip_status_t::HALT;
+    set_final_solution(solution, -inf);
+    return solver_status_;
+  }
+
   assert(root_status == lp_status_t::OPTIMAL);
   settings_.log.print_format("Root relaxation solution found in {} iterations and {:.2f}s by {}\n",
                              root_relax_soln_.iterations,
@@ -3670,7 +3847,84 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                              method_to_string(root_relax_solved_by));
   settings_.log.printf("Root relaxation objective %+.8e\n\n", root_relax_soln_.user_objective);
 
-  assert(root_vstatus_.size() == original_lp_.num_cols);
+  if (settings_.preserve_advanced_basis_dimensions) {
+    const auto expected_num_cols         = static_cast<std::size_t>(original_lp_.num_cols);
+    const auto expected_num_rows         = static_cast<std::size_t>(original_lp_.num_rows);
+    const bool dimensions_can_form_basis = expected_num_cols >= expected_num_rows;
+    const auto expected_num_nonbasic =
+      dimensions_can_form_basis ? expected_num_cols - expected_num_rows : std::size_t{0};
+    const bool dimensions_match =
+      dimensions_can_form_basis && root_vstatus_.size() == expected_num_cols &&
+      basic_list.size() == expected_num_rows && nonbasic_list.size() == expected_num_nonbasic &&
+      basis_update.row_permutation().size() == expected_num_rows &&
+      edge_norms_.size() == expected_num_cols && root_relax_soln_.x.size() == expected_num_cols &&
+      root_relax_soln_.y.size() == expected_num_rows &&
+      root_relax_soln_.z.size() == expected_num_cols;
+
+    bool basis_partition_is_valid = dimensions_match;
+    std::vector<bool> listed(expected_num_cols, false);
+    if (basis_partition_is_valid) {
+      for (const i_t j : basic_list) {
+        if (j < i_t{0} || static_cast<std::size_t>(j) >= expected_num_cols ||
+            listed[static_cast<std::size_t>(j)] ||
+            root_vstatus_[static_cast<std::size_t>(j)] != variable_status_t::BASIC) {
+          basis_partition_is_valid = false;
+          break;
+        }
+        listed[static_cast<std::size_t>(j)] = true;
+      }
+    }
+    if (basis_partition_is_valid) {
+      for (const i_t j : nonbasic_list) {
+        const bool valid_index = j >= i_t{0} && static_cast<std::size_t>(j) < expected_num_cols;
+        const auto status =
+          valid_index ? root_vstatus_[static_cast<std::size_t>(j)] : variable_status_t::BASIC;
+        const bool valid_nonbasic_status = status == variable_status_t::NONBASIC_LOWER ||
+                                           status == variable_status_t::NONBASIC_UPPER ||
+                                           status == variable_status_t::NONBASIC_FREE ||
+                                           status == variable_status_t::NONBASIC_FIXED;
+        if (!valid_index || listed[static_cast<std::size_t>(j)] || !valid_nonbasic_status) {
+          basis_partition_is_valid = false;
+          break;
+        }
+        listed[static_cast<std::size_t>(j)] = true;
+      }
+    }
+    basis_partition_is_valid =
+      basis_partition_is_valid &&
+      std::all_of(listed.begin(), listed.end(), [](bool value) { return value; });
+
+    if (!basis_partition_is_valid) {
+      settings_.log.printf(
+        "Root advanced basis contract mismatch: vstatus=%zu (expected %zu), basic=%zu "
+        "(expected %zu), nonbasic=%zu (expected %zu), basis_rows=%zu (expected %zu), "
+        "edge_norms=%zu (expected %zu), x=%zu (expected %zu), y=%zu (expected %zu), "
+        "z=%zu (expected %zu), dimensions_valid=%d, partition_valid=%d\n",
+        root_vstatus_.size(),
+        expected_num_cols,
+        basic_list.size(),
+        expected_num_rows,
+        nonbasic_list.size(),
+        expected_num_nonbasic,
+        basis_update.row_permutation().size(),
+        expected_num_rows,
+        edge_norms_.size(),
+        expected_num_cols,
+        root_relax_soln_.x.size(),
+        expected_num_cols,
+        root_relax_soln_.y.size(),
+        expected_num_rows,
+        root_relax_soln_.z.size(),
+        expected_num_cols,
+        static_cast<int>(dimensions_match),
+        static_cast<int>(basis_partition_is_valid));
+      solver_status_ = mip_status_t::NUMERICAL;
+      set_final_solution(solution, -inf);
+      return solver_status_;
+    }
+  } else {
+    assert(root_vstatus_.size() == original_lp_.num_cols);
+  }
   set_uninitialized_steepest_edge_norms<i_t, f_t>(original_lp_, basic_list, edge_norms_);
 
   root_objective_ = compute_objective(original_lp_, root_relax_soln_.x);
@@ -3915,6 +4169,19 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         num_fractional = fractional.size();
       }
     }
+  }
+
+  if (settings_.root_diving_only) {
+    node_concurrent_halt_                   = 0;
+    exploration_stats_.nodes_explored       = 0;
+    exploration_stats_.nodes_unexplored     = 0;
+    exploration_stats_.nodes_since_last_log = 0;
+    run_root_diving_workers(fractional);
+    is_running_ = false;
+
+    if (external_cancel_requested()) { solver_status_ = mip_status_t::HALT; }
+    set_final_solution(solution, root_objective_);
+    return solver_status_;
   }
 
   // Choose variable to branch on
