@@ -1212,72 +1212,6 @@ TEST(cuts, cut_pool_deduplicates_regenerated_selected_cut)
   }
 }
 
-TEST(cuts, cut_pool_uses_stricter_diversity_for_lower_efficacy_cuts)
-{
-  simplex::simplex_solver_settings_t<int, double> settings;
-  settings.cut_min_orthogonality = 0.5;
-  mip::cut_pool_t<int, double> cut_pool(4, settings);
-
-  auto add_cut = [&](mip::cut_type_t type,
-                     std::initializer_list<std::pair<int, double>> coefficients,
-                     double rhs) {
-    mip::inequality_t<int, double> cut;
-    for (const auto& [column, coefficient] : coefficients) {
-      cut.push_back(column, coefficient);
-    }
-    cut.rhs = rhs;
-    cut_pool.add_cut(type, cut);
-  };
-
-  add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, {{0, 1.0}}, 2.0);
-  // This cut is within 90% of the best efficacy, so the configured 0.5 orthogonality applies.
-  add_cut(mip::cut_type_t::MIXED_INTEGER_ROUNDING, {{0, 1.0}, {1, 2.0}}, 4.25);
-  // This lower-efficacy cut passes 0.5 but not the stricter 0.9 ordinary-cut threshold.
-  add_cut(mip::cut_type_t::KNAPSACK, {{0, 1.0}, {2, 2.0}}, 3.35);
-  // A lower-efficacy cut that is genuinely orthogonal remains eligible.
-  add_cut(mip::cut_type_t::CHVATAL_GOMORY, {{3, 1.0}}, 1.0);
-
-  std::vector<double> relaxation(4, 0.0);
-  csr_matrix_t<int, double> cuts(0, 4, 0);
-  std::vector<double> rhs;
-  std::vector<mip::cut_type_t> types;
-  cut_pool.score_cuts(relaxation);
-  EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 3);
-  EXPECT_EQ(types[0], mip::cut_type_t::MIXED_INTEGER_GOMORY);
-  EXPECT_EQ(types[1], mip::cut_type_t::MIXED_INTEGER_ROUNDING);
-  EXPECT_EQ(types[2], mip::cut_type_t::CHVATAL_GOMORY);
-  EXPECT_EQ(cut_pool.last_prune_stats().hybrid_orthogonality_pruned, 1);
-  EXPECT_EQ(cut_pool.last_prune_stats().selected_nnz, 4);
-  EXPECT_EQ(cuts.row_start.back(), cut_pool.last_prune_stats().selected_nnz);
-  EXPECT_EQ(cut_pool.pool_size(), 4);
-}
-
-TEST(cuts, cut_pool_preserves_custom_orthogonality_setting)
-{
-  simplex::simplex_solver_settings_t<int, double> settings;
-  settings.cut_min_orthogonality = 0.0;
-  mip::cut_pool_t<int, double> cut_pool(2, settings);
-
-  mip::inequality_t<int, double> best_cut;
-  best_cut.push_back(0, 1.0);
-  best_cut.rhs = 2.0;
-  cut_pool.add_cut(mip::cut_type_t::MIXED_INTEGER_GOMORY, best_cut);
-
-  mip::inequality_t<int, double> lower_efficacy_cut;
-  lower_efficacy_cut.push_back(0, 1.0);
-  lower_efficacy_cut.push_back(1, 2.0);
-  lower_efficacy_cut.rhs = 3.0;
-  cut_pool.add_cut(mip::cut_type_t::KNAPSACK, lower_efficacy_cut);
-
-  std::vector<double> relaxation(2, 0.0);
-  csr_matrix_t<int, double> cuts(0, 2, 0);
-  std::vector<double> rhs;
-  std::vector<mip::cut_type_t> types;
-  cut_pool.score_cuts(relaxation);
-  EXPECT_EQ(cut_pool.get_best_cuts(cuts, rhs, types), 2);
-  EXPECT_EQ(cut_pool.last_prune_stats().hybrid_orthogonality_pruned, 0);
-}
-
 TEST(cuts, clique_phase1_smoke_conflict_graph_edges)
 {
   const raft::handle_t handle{};
@@ -2089,19 +2023,19 @@ void set_flow_cover_bound_entries(
   weights.clear();
   biases.clear();
   for (int j = 0; j < num_cols; j++) {
-    offsets[j] = static_cast<int>(variables.size());
     for (const auto& [controller, weight, bias] : entries[j]) {
       variables.push_back(controller);
       weights.push_back(weight);
       biases.push_back(bias);
     }
+    offsets[j + 1] = static_cast<int>(variables.size());
   }
-  offsets[num_cols] = static_cast<int>(variables.size());
 }
 
 void install_flow_cover_bound_index_test_entries(mip::variable_bounds_t<int, double>& bounds,
                                                  double primal_tol,
-                                                 int num_cols)
+                                                 int num_cols,
+                                                 int pattern_repetitions)
 {
   using bound_entry_t = std::tuple<int, double, double>;
   std::vector<std::vector<bound_entry_t>> upper(num_cols);
@@ -2130,15 +2064,17 @@ void install_flow_cover_bound_index_test_entries(mip::variable_bounds_t<int, dou
   const std::array<double, 3> flow_values       = {3.0, 4.0, 3.0};
   const std::array<double, 3> flow_upper        = {3.0, 6.0, 3.0};
   for (int flow = 0; flow < 3; flow++) {
-    for (int k = 0; k < 36; k++) {
-      const int controller       = k % 3;
-      const double active_offset = 0.1 * (k % 4);
-      upper[3 + flow].push_back(
-        {controller, (flow_values[flow] + active_offset) / controller_values[controller], 0.0});
-      lower[3 + flow].push_back(
-        {controller,
-         (flow_values[flow] - active_offset - flow_upper[flow]) / controller_values[controller],
-         flow_upper[flow]});
+    for (int repetition = 0; repetition < pattern_repetitions; repetition++) {
+      for (int k = 0; k < 12; k++) {
+        const int controller       = k % 3;
+        const double active_offset = 0.1 * (k % 4);
+        upper[3 + flow].push_back(
+          {controller, (flow_values[flow] + active_offset) / controller_values[controller], 0.0});
+        lower[3 + flow].push_back(
+          {controller,
+           (flow_values[flow] - active_offset - flow_upper[flow]) / controller_values[controller],
+           flow_upper[flow]});
+      }
     }
   }
 
@@ -2258,23 +2194,17 @@ TEST(cuts, flow_cover_generates_valid_single_node_flow_cut)
 
   mip::flow_cover_generation_t<int, double> generator(
     test_problem.lp, test_problem.settings, test_problem.Arow, test_problem.new_slacks);
-  mip::flow_cover_generation_t<int, double> reference_generator(
-    test_problem.lp, test_problem.settings, test_problem.Arow, test_problem.new_slacks);
-  reference_generator.use_reference_bound_scan_for_test(true);
   mip::variable_bounds_t<int, double> variable_bounds(test_problem.lp,
                                                       test_problem.settings,
                                                       test_problem.var_types,
                                                       test_problem.Arow,
                                                       test_problem.new_slacks);
   ASSERT_GT(generator.num_constraints(), 0);
-  generator.begin_separation_pass();
-  reference_generator.begin_separation_pass();
 
   int generated_cuts = 0;
   for (const auto& flow_cover_row : generator.get_constraints()) {
     mip::inequality_t<int, double> cut(test_problem.lp.num_cols);
-    mip::inequality_t<int, double> reference_cut(test_problem.lp.num_cols);
-    const int status           = generator.generate_cut(test_problem.lp,
+    const int status = generator.generate_cut(test_problem.lp,
                                               test_problem.settings,
                                               test_problem.Arow,
                                               variable_bounds,
@@ -2282,24 +2212,7 @@ TEST(cuts, flow_cover_generates_valid_single_node_flow_cut)
                                               xstar,
                                               flow_cover_row,
                                               cut);
-    const int reference_status = reference_generator.generate_cut(test_problem.lp,
-                                                                  test_problem.settings,
-                                                                  test_problem.Arow,
-                                                                  variable_bounds,
-                                                                  test_problem.var_types,
-                                                                  xstar,
-                                                                  flow_cover_row,
-                                                                  reference_cut);
-    ASSERT_EQ(status, reference_status)
-      << "row=" << flow_cover_row.row << " reverse=" << flow_cover_row.reverse;
     if (status != 0) { continue; }
-
-    ASSERT_EQ(cut.size(), reference_cut.size());
-    EXPECT_DOUBLE_EQ(cut.rhs, reference_cut.rhs);
-    for (size_t p = 0; p < cut.size(); p++) {
-      EXPECT_EQ(cut.index(p), reference_cut.index(p));
-      EXPECT_DOUBLE_EQ(cut.coeff(p), reference_cut.coeff(p));
-    }
 
     EXPECT_LT(cut.vector.dot(xstar), cut.rhs - 1e-6)
       << "row=" << flow_cover_row.row << " reverse=" << flow_cover_row.reverse;
@@ -2314,21 +2227,25 @@ TEST(cuts, flow_cover_bound_index_matches_exhaustive_scan)
 {
   auto test_problem = build_flow_cover_test_problem(create_small_single_node_flow_problem());
   const std::vector<double> xstar = single_node_flow_fractional_solution(test_problem.lp.num_cols);
-  mip::variable_bounds_t<int, double> variable_bounds(test_problem.lp,
-                                                      test_problem.settings,
-                                                      test_problem.var_types,
-                                                      test_problem.Arow,
-                                                      test_problem.new_slacks);
+  mip::variable_bounds_t<int, double> indexed_bounds(test_problem.lp,
+                                                     test_problem.settings,
+                                                     test_problem.var_types,
+                                                     test_problem.Arow,
+                                                     test_problem.new_slacks);
+  mip::variable_bounds_t<int, double> exhaustive_bounds(test_problem.lp,
+                                                        test_problem.settings,
+                                                        test_problem.var_types,
+                                                        test_problem.Arow,
+                                                        test_problem.new_slacks);
   install_flow_cover_bound_index_test_entries(
-    variable_bounds, test_problem.settings.primal_tol, test_problem.lp.num_cols);
+    indexed_bounds, test_problem.settings.primal_tol, test_problem.lp.num_cols, 3);
+  install_flow_cover_bound_index_test_entries(
+    exhaustive_bounds, test_problem.settings.primal_tol, test_problem.lp.num_cols, 1);
 
   mip::flow_cover_generation_t<int, double> generator(
     test_problem.lp, test_problem.settings, test_problem.Arow, test_problem.new_slacks);
   mip::flow_cover_generation_t<int, double> reference_generator(
     test_problem.lp, test_problem.settings, test_problem.Arow, test_problem.new_slacks);
-  reference_generator.use_reference_bound_scan_for_test(true);
-  generator.begin_separation_pass();
-  reference_generator.begin_separation_pass();
 
   int matched_cuts = 0;
   for (const auto& flow_cover_row : generator.get_constraints()) {
@@ -2337,7 +2254,7 @@ TEST(cuts, flow_cover_bound_index_matches_exhaustive_scan)
     const int status           = generator.generate_cut(test_problem.lp,
                                               test_problem.settings,
                                               test_problem.Arow,
-                                              variable_bounds,
+                                              indexed_bounds,
                                               test_problem.var_types,
                                               xstar,
                                               flow_cover_row,
@@ -2345,7 +2262,7 @@ TEST(cuts, flow_cover_bound_index_matches_exhaustive_scan)
     const int reference_status = reference_generator.generate_cut(test_problem.lp,
                                                                   test_problem.settings,
                                                                   test_problem.Arow,
-                                                                  variable_bounds,
+                                                                  exhaustive_bounds,
                                                                   test_problem.var_types,
                                                                   xstar,
                                                                   flow_cover_row,
@@ -2354,10 +2271,10 @@ TEST(cuts, flow_cover_bound_index_matches_exhaustive_scan)
       << "row=" << flow_cover_row.row << " reverse=" << flow_cover_row.reverse;
     if (status != 0) { continue; }
     ASSERT_EQ(cut.size(), reference_cut.size());
-    EXPECT_DOUBLE_EQ(cut.rhs, reference_cut.rhs);
+    EXPECT_EQ(cut.rhs, reference_cut.rhs);
     for (size_t p = 0; p < cut.size(); p++) {
       EXPECT_EQ(cut.index(p), reference_cut.index(p));
-      EXPECT_DOUBLE_EQ(cut.coeff(p), reference_cut.coeff(p));
+      EXPECT_EQ(cut.coeff(p), reference_cut.coeff(p));
     }
     matched_cuts++;
   }

@@ -3229,7 +3229,7 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
     settings_.log.printf(
       "CutPoolPass pass=%d pool_before_dedup=%d duplicates_pruned=%d "
       "pool_before_aging=%d selected=%d selected_retired=%d age_pruned=%d "
-      "capacity_pruned=%d retained=%d hybrid_orthogonality_pruned=%d selected_nnz=%d "
+      "capacity_pruned=%d retained=%d "
       "selected_by_type=%d,%d,%d,%d,%d,%d,%d,%d "
       "retained_by_type=%d,%d,%d,%d,%d,%d,%d,%d\n",
       cut_pass,
@@ -3241,8 +3241,6 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
       stats.age_pruned,
       stats.capacity_pruned,
       stats.retained,
-      stats.hybrid_orthogonality_pruned,
-      stats.selected_nnz,
       stats.selected_by_type[0],
       stats.selected_by_type[1],
       stats.selected_by_type[2],

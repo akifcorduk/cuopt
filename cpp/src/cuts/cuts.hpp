@@ -56,10 +56,6 @@ struct cut_pool_prune_stats_t {
   i_t age_pruned{0};
   i_t capacity_pruned{0};
   i_t retained{0};
-  // Candidates rejected by the stricter threshold along the hybrid selector's trajectory. This is
-  // not a net difference from rerunning the baseline selector because later choices can change.
-  i_t hybrid_orthogonality_pruned{0};
-  i_t selected_nnz{0};
   std::array<i_t, MAX_CUT_TYPE> selected_by_type{0};
   std::array<i_t, MAX_CUT_TYPE> retained_by_type{0};
 };
@@ -377,9 +373,6 @@ class cut_pool_t {
   std::vector<i_t> best_cuts_;
   cut_pool_prune_stats_t<i_t> last_prune_stats_;
   const f_t min_cut_distance_{1e-4};
-  static constexpr f_t near_best_distance_fraction_{0.9};
-  static constexpr f_t hybrid_near_best_min_orthogonality_{0.5};
-  static constexpr f_t ordinary_min_orthogonality_{0.9};
   static constexpr i_t max_selected_cuts_{2000};
   static constexpr i_t max_cut_age_{2};
   static constexpr i_t max_cut_pool_size_{(max_cut_age_ + 1) * max_selected_cuts_};
@@ -431,7 +424,7 @@ template <typename i_t>
 struct flow_cover_bound_order_t {
   std::vector<i_t> zero_positions;
   std::unordered_map<i_t, std::vector<i_t>> positions_by_controller;
-  bool use_reference_scan{false};
+  bool use_exhaustive_scan{false};
   bool controller_index_built{false};
 };
 
@@ -495,11 +488,6 @@ class flow_cover_generation_t {
   {
     upper_bound_orders_.clear();
     lower_bound_orders_.clear();
-  }
-
-  void use_reference_bound_scan_for_test(bool use_reference)
-  {
-    use_reference_bound_scan_ = use_reference;
   }
 
  private:
@@ -620,7 +608,6 @@ class flow_cover_generation_t {
   std::vector<i_t> touched_lhs_coefficients;
   std::unordered_map<i_t, flow_cover_bound_order_t<i_t>> upper_bound_orders_;
   std::unordered_map<i_t, flow_cover_bound_order_t<i_t>> lower_bound_orders_;
-  bool use_reference_bound_scan_{false};
 };
 
 template <typename i_t, typename f_t>
