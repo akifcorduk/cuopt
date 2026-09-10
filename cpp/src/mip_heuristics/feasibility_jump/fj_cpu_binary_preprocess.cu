@@ -387,13 +387,14 @@ void fj_bin_narrow(const fj_cpu_climber_t<i_t, f_t>& c,
       }
       std::sort(row_terms.begin(), row_terms.end());
       for (size_t i = 0; i < row_terms.size();) {
-        size_t j = i + 1;
+        size_t j       = i + 1;
         const double a = row_terms[i].first;
         while (j < row_terms.size() &&
                std::fabs(row_terms[j].first - a) <= tol * std::max(1.0, std::fabs(a)))
           ++j;
         if (j - i >= 2) {
-          for (size_t q = i; q < j; ++q) pb.selector_vars.push_back(row_terms[q].second);
+          for (size_t q = i; q < j; ++q)
+            pb.selector_vars.push_back(row_terms[q].second);
           pb.selector_offsets.push_back((int32_t)pb.selector_vars.size());
         }
         i = j;
@@ -420,8 +421,8 @@ void fj_bin_narrow(const fj_cpu_climber_t<i_t, f_t>& c,
     cuopt_assert(pb.selector_reverse_offsets[n_engine] == (int32_t)pb.selector_vars.size(),
                  "selector transpose lost a membership");
 
-    // Every variable here is binary, so an equality row whose members share one coefficient reads as
-    // a cardinality constraint. Counted on the unscaled row: the row scale multiplies bound and
+    // Every variable here is binary, so an equality row whose members share one coefficient reads
+    // as a cardinality constraint. Counted on the unscaled row: the row scale multiplies bound and
     // coefficients alike and leaves the ratio alone.
     pb.card_offsets.assign(1, 0);
     pb.card_vars.clear();

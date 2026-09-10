@@ -791,12 +791,14 @@ struct fj_bin_engine_t {
   }
 
   // look for objective-improving 2opt flips on the current assignment
-  // for some reason GCC doesn't want to inline this function, despite bringin a 1.5x speedup on some instances
-  inline __attribute__((always_inline)) void add_two_opt_partner(const fj_cpu_climber_t<i_t, f_t>& climber,
-                           int32_t first,
-                           int32_t original,
-                           f_t target,
-                           size_t max_partners)
+  // for some reason GCC doesn't want to inline this function, despite bringin a 1.5x speedup on
+  // some instances
+  inline __attribute__((always_inline)) void add_two_opt_partner(
+    const fj_cpu_climber_t<i_t, f_t>& climber,
+    int32_t first,
+    int32_t original,
+    f_t target,
+    size_t max_partners)
   {
     if (two_opt_partners.size() >= max_partners || original < 0) return;
     cuopt_assert(original < pb.n_original, "2-opt partner outside original variable space");
@@ -808,7 +810,7 @@ struct fj_bin_engine_t {
     cuopt_assert(target == std::trunc(target), "2-opt partner target must be integral");
     if (!(target >= 0 && target <= 1)) return;
     const int32_t target_value = (int32_t)target;
-    const int8_t delta = (int8_t)(target_value - assign[second]);
+    const int8_t delta         = (int8_t)(target_value - assign[second]);
     if (delta == 0 || tabu_blocked(second, true)) return;
     two_opt_partners.emplace_back(second, delta);
   }
@@ -817,8 +819,8 @@ struct fj_bin_engine_t {
     const fj_cpu_climber_t<i_t, f_t>& climber)
   {
     const std::pair<int32_t, int32_t> none{-1, -1};
-    const bool probing_exists =
-      climber.problem->probing_cache != nullptr && !climber.problem->probing_cache->probing_cache.empty();
+    const bool probing_exists = climber.problem->probing_cache != nullptr &&
+                                !climber.problem->probing_cache->probing_cache.empty();
     const bool related_exists =
       climber.problem->h_related_variables_offsets.size() == (size_t)pb.n_original + 1;
     if (violated_list.empty() || (!probing_exists && !related_exists))
@@ -828,22 +830,21 @@ struct fj_bin_engine_t {
                  "2-opt owner map does not cover the binary engine");
     cuopt_assert(pb.original_to_bin_mapping.size() == (size_t)pb.n_original,
                  "2-opt reverse mapping does not cover original variables");
-    cuopt_assert(!probing_exists ||
-                   climber.problem->h_original_ids.size() == (size_t)pb.n_original,
+    cuopt_assert(!probing_exists || climber.problem->h_original_ids.size() == (size_t)pb.n_original,
                  "original id map does not cover every variable");
-    cuopt_assert(!probing_exists ||
-                   climber.problem->h_reverse_original_ids.size() >= climber.problem->h_original_ids.size(),
+    cuopt_assert(!probing_exists || climber.problem->h_reverse_original_ids.size() >=
+                                      climber.problem->h_original_ids.size(),
                  "reverse original id map smaller than the problem");
 
     constexpr size_t max_partners_per_var = 16;
-    const auto& params = climber.settings.parameters;
+    const auto& params                    = climber.settings.parameters;
     if (params.two_opt_max_rows <= 0 || params.two_opt_max_row_vars <= 0 ||
         params.two_opt_max_pairs <= 0)
       return {none, fj_bin_score_invalid};
 
     sample_buf.clear();
-    const int32_t n_viol = (int32_t)violated_list.size();
-    const int32_t n_rows = std::min(n_viol, params.two_opt_max_rows);
+    const int32_t n_viol    = (int32_t)violated_list.size();
+    const int32_t n_rows    = std::min(n_viol, params.two_opt_max_rows);
     const int32_t first_row = (int32_t)(rng.next_u32() % (uint32_t)n_viol);
     for (int32_t t = 0; t < n_rows; ++t)
       sample_buf.push_back(violated_list[(first_row + t) % n_viol]);
@@ -851,11 +852,11 @@ struct fj_bin_engine_t {
     two_opt_first_vars.clear();
     for (int32_t r : sample_buf) {
       const int32_t begin = pb.offsets[r];
-      const int32_t end = pb.offsets[r + 1];
+      const int32_t end   = pb.offsets[r + 1];
       for (int32_t k = begin;
            k < end && (int32_t)two_opt_first_vars.size() < params.two_opt_max_row_vars;
            ++k) {
-        const int32_t first = pb.variables[k];
+        const int32_t first    = pb.variables[k];
         const int32_t original = pb.bit_owner[first];
         if (climber.h_is_binary_variable[original]) two_opt_first_vars.push_back(first);
       }
@@ -866,10 +867,10 @@ struct fj_bin_engine_t {
     }
 
     std::pair<int32_t, int32_t> best_pair = none;
-    int64_t best_score = fj_bin_score_invalid;
-    int32_t best_age = INT32_MAX;
-    int32_t pairs_scored = 0;
-    int64_t nnz_scored = 0;
+    int64_t best_score                    = fj_bin_score_invalid;
+    int32_t best_age                      = INT32_MAX;
+    int32_t pairs_scored                  = 0;
+    int64_t nnz_scored                    = 0;
     for (int32_t first : two_opt_first_vars) {
       if (pairs_scored >= params.two_opt_max_pairs || nnz_scored > climber.nnz_samples) break;
       const int8_t first_delta = (int8_t)(1 - 2 * assign[first]);
@@ -880,12 +881,12 @@ struct fj_bin_engine_t {
 
       two_opt_partners.clear();
       if (probing_exists) {
-        const auto& cache = climber.problem->probing_cache->probing_cache;
+        const auto& cache       = climber.problem->probing_cache->probing_cache;
         const auto cached_probe = cache.find(climber.problem->h_original_ids[first_original]);
         if (cached_probe != cache.end()) {
           const f_t new_value = assign[first] + first_delta;
-          i_t hit_interval = -1;
-          i_t unused_hit = -1;
+          i_t hit_interval    = -1;
+          i_t unused_hit      = -1;
           for (i_t interval = 0; interval < 2; ++interval) {
             const auto& entry = cached_probe->second[interval];
             if (entry.var_to_cached_bound_map.empty()) continue;
@@ -893,8 +894,7 @@ struct fj_bin_engine_t {
               interval, new_value, new_value, hit_interval, unused_hit);
           }
           if (hit_interval != -1) {
-            const auto& implications =
-              cached_probe->second[hit_interval].var_to_cached_bound_map;
+            const auto& implications = cached_probe->second[hit_interval].var_to_cached_bound_map;
             for (const auto& [probed_id, implied] : implications) {
               if (two_opt_partners.size() >= max_partners_per_var) break;
               const i_t original = climber.problem->h_reverse_original_ids[probed_id];
@@ -911,28 +911,24 @@ struct fj_bin_engine_t {
 
       if (related_exists) {
         const i_t begin = climber.problem->h_related_variables_offsets[first_original];
-        const i_t end = climber.problem->h_related_variables_offsets[first_original + 1];
+        const i_t end   = climber.problem->h_related_variables_offsets[first_original + 1];
         for (i_t k = begin; k < end && two_opt_partners.size() < max_partners_per_var; ++k) {
           const i_t original = climber.problem->h_related_variables[k];
-          add_two_opt_partner(
-            climber, first, original, (f_t)assign[first], max_partners_per_var);
+          add_two_opt_partner(climber, first, original, (f_t)assign[first], max_partners_per_var);
         }
       }
 
       for (const auto& [second, second_delta] : two_opt_partners) {
-        const int64_t score =
-          paired_flip_score(first, first_delta, second, second_delta);
-        const int32_t age =
-          std::max(tabu.last_flip[first], tabu.last_flip[second]);
+        const int64_t score = paired_flip_score(first, first_delta, second, second_delta);
+        const int32_t age   = std::max(tabu.last_flip[first], tabu.last_flip[second]);
         if (score > best_score ||
             (score == best_score &&
              (age < best_age ||
-              (age == best_age &&
-               (first < best_pair.first ||
-                (first == best_pair.first && second < best_pair.second)))))) {
+              (age == best_age && (first < best_pair.first ||
+                                   (first == best_pair.first && second < best_pair.second)))))) {
           best_score = score;
-          best_age = age;
-          best_pair = {first, second};
+          best_age   = age;
+          best_pair  = {first, second};
         }
         ++pairs_scored;
         nnz_scored += pb.reverse_offsets[first + 1] - pb.reverse_offsets[first] +
@@ -947,16 +943,18 @@ struct fj_bin_engine_t {
   // Exact pair score, evaluating shared rows once with their combined delta.
   int64_t paired_flip_score(int32_t var1, int8_t delta1, int32_t var2, int8_t delta2) const
   {
-    cuopt_assert(var1 >= 0 && var1 < pb.n_variables, "paired score on a column outside engine space");
-    cuopt_assert(var2 >= 0 && var2 < pb.n_variables, "paired score on a column outside engine space");
+    cuopt_assert(var1 >= 0 && var1 < pb.n_variables,
+                 "paired score on a column outside engine space");
+    cuopt_assert(var2 >= 0 && var2 < pb.n_variables,
+                 "paired score on a column outside engine space");
     int32_t i = pb.reverse_offsets[var1], ie = pb.reverse_offsets[var1 + 1];
     int32_t j = pb.reverse_offsets[var2], je = pb.reverse_offsets[var2 + 1];
     int64_t score = 0;
     while (i < ie || j < je) {
-      const int32_t r1 = i < ie ? pb.reverse_constraints[i] : INT32_MAX;
-      const int32_t r2 = j < je ? pb.reverse_constraints[j] : INT32_MAX;
+      const int32_t r1  = i < ie ? pb.reverse_constraints[i] : INT32_MAX;
+      const int32_t r2  = j < je ? pb.reverse_constraints[j] : INT32_MAX;
       const int32_t row = std::min(r1, r2);
-      int32_t change = 0;
+      int32_t change    = 0;
       if (r1 == row) change += (int32_t)pb.reverse_coefficients[i++] * delta1;
       if (r2 == row) change += (int32_t)pb.reverse_coefficients[j++] * delta2;
       score += fj_bin_packed_score_delta(row_slack[row], row_slack[row] - change, row_weight[row]);
@@ -999,7 +997,8 @@ struct fj_bin_engine_t {
       const int32_t start = (int32_t)(rng.next_u32() % (uint32_t)width);
       for (int32_t q = 0; q < std::min(width, 24) && n_selected < fj_bin_selector_max_groups; ++q) {
         const int32_t v = pb.variables[begin + (start + q) % width];
-        for (int32_t p = pb.selector_reverse_offsets[v]; p < pb.selector_reverse_offsets[v + 1]; ++p)
+        for (int32_t p = pb.selector_reverse_offsets[v]; p < pb.selector_reverse_offsets[v + 1];
+             ++p)
           add_group(pb.selector_reverse_groups[p]);
       }
     }
@@ -1014,17 +1013,19 @@ struct fj_bin_engine_t {
       const int32_t begin = pb.selector_offsets[groups[gi]];
       const int32_t width = pb.selector_offsets[groups[gi] + 1] - begin;
       cuopt_assert(width >= 2, "a selector group must hold at least two members");
-      const int32_t on_start  = (int32_t)(rng.next_u32() % (uint32_t)width);
-      const int32_t off_start = (int32_t)(rng.next_u32() % (uint32_t)width);
+      const int32_t on_start          = (int32_t)(rng.next_u32() % (uint32_t)width);
+      const int32_t off_start         = (int32_t)(rng.next_u32() % (uint32_t)width);
       constexpr int32_t per_group_cap = 32;
       int32_t group_scored            = 0;
-      for (int32_t a = 0; a < width && scored < fj_bin_selector_candidates &&
-                          group_scored < per_group_cap; ++a) {
+      for (int32_t a = 0;
+           a < width && scored < fj_bin_selector_candidates && group_scored < per_group_cap;
+           ++a) {
         const int32_t on = pb.selector_vars[begin + (on_start + a) % width];
         cuopt_assert(on >= 0 && on < pb.n_variables, "selector member outside engine space");
         if (!assign[on] || tabu_blocked(on, true)) continue;
-        for (int32_t b = 0; b < width && scored < fj_bin_selector_candidates &&
-                            group_scored < per_group_cap; ++b) {
+        for (int32_t b = 0;
+             b < width && scored < fj_bin_selector_candidates && group_scored < per_group_cap;
+             ++b) {
           const int32_t off = pb.selector_vars[begin + (off_start + b) % width];
           cuopt_assert(off >= 0 && off < pb.n_variables, "selector member outside engine space");
           if (assign[off] || off == on || tabu_blocked(off, true)) continue;
@@ -1048,20 +1049,20 @@ struct fj_bin_engine_t {
     if (!climber.use_cardinality_exchange || pb.card_offsets.size() <= 1)
       return {none, fj_bin_score_invalid};
 
-    const auto& offsets = pb.card_offsets;
-    const auto& vars = pb.card_vars;
-    const int32_t n_rows = (int32_t)offsets.size() - 1;
-    const int32_t draws = std::min(n_rows, 4);
-    const int32_t start = (int32_t)(rng.next_u32() % (uint32_t)n_rows);
+    const auto& offsets              = pb.card_offsets;
+    const auto& vars                 = pb.card_vars;
+    const int32_t n_rows             = (int32_t)offsets.size() - 1;
+    const int32_t draws              = std::min(n_rows, 4);
+    const int32_t start              = (int32_t)(rng.next_u32() % (uint32_t)n_rows);
     std::pair<int32_t, int32_t> best = none;
-    int64_t best_score = 0;
-    int32_t scored = 0;
+    int64_t best_score               = 0;
+    int32_t scored                   = 0;
 
     for (int32_t d = 0; d < draws && scored < fj_bin_2opt_candidates; ++d) {
-      const int32_t row = (start + d) % n_rows;
+      const int32_t row   = (start + d) % n_rows;
       const int32_t begin = offsets[row], width = offsets[row + 1] - begin;
       if (width <= 1) continue;
-      const int32_t first_start = (int32_t)(rng.next_u32() % (uint32_t)width);
+      const int32_t first_start  = (int32_t)(rng.next_u32() % (uint32_t)width);
       const int32_t second_start = (int32_t)(rng.next_u32() % (uint32_t)width);
       for (int32_t pi = 0; pi < width && scored < fj_bin_2opt_candidates; ++pi) {
         const int32_t first = vars[begin + (first_start + pi) % width];
@@ -1074,7 +1075,10 @@ struct fj_bin_engine_t {
                        "cardinality member outside engine space");
           if (first == second || assign[second] || tabu_blocked(second, true)) continue;
           const int64_t score = paired_flip_score(first, -1, second, 1);
-          if (score > best_score) { best_score = score; best = {first, second}; }
+          if (score > best_score) {
+            best_score = score;
+            best       = {first, second};
+          }
           ++scored;
         }
       }
@@ -1176,7 +1180,7 @@ struct fj_bin_engine_t {
     int32_t n_flipped = 0;
 
     for (int32_t i = 0; i < fj_bin_kick_rows; ++i) {
-      const int32_t r        = violated_list[rng.next_u32() % (uint32_t)n_viol];
+      const int32_t r         = violated_list[rng.next_u32() % (uint32_t)n_viol];
       const int32_t row_begin = pb.offsets[r];
       const int32_t row_end   = pb.offsets[r + 1];
       if (row_begin >= row_end) continue;
@@ -1235,10 +1239,11 @@ struct fj_bin_engine_t {
         for (int32_t v = 0; v < pb.n_variables; ++v)
           assign[v] = (int8_t)(adopt_buffer[pb.bit_owner[v]] >= 0.5 ? 1 : 0);
       }
-      for (int32_t v = 0; v < pb.n_variables; ++v) assign_i32[v] = assign[v];
+      for (int32_t v = 0; v < pb.n_variables; ++v)
+        assign_i32[v] = assign[v];
     }
     for (int32_t v : pb.objective_vars) {
-      assign[v] = (int8_t)(pb.objective[v] > 0 ? 0 : 1);
+      assign[v]     = (int8_t)(pb.objective[v] > 0 ? 0 : 1);
       assign_i32[v] = assign[v];
     }
     recompute_slack();
