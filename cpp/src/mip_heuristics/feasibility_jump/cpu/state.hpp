@@ -381,6 +381,8 @@ struct fj_lane_policy_t {
   bool use_cardinality_exchange{false};
   bool use_directed_infeasible_kick{false};
   bool use_compound_repair{false};
+  bool use_equality_substitution{false};
+  bool suppress_incumbent_log{false};
   bool use_multiplicative_weights{false};
   f_t saps_multiplier{(f_t)1.3};
   i_t infeasible_kick_interval{0};
@@ -585,3 +587,4 @@ void complete_climber_portfolio(std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> firs
                                 bool low_latency = false);
 
 }  // namespace cuopt::mathematical_optimization::mip
+

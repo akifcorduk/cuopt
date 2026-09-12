@@ -6,7 +6,9 @@
 
 #include "structure.hpp"
 #include "../internal.hpp"
+#include "../climber.hpp"
 #include <utilities/integer_scaling.hpp>
+#include <numeric>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -370,6 +372,7 @@ void build_one_sided_rows(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
       }
     }
 
+
     for (i_t side = 0; side < 2; ++side) {
       const f_t bound = side == 0 ? lb : ub;
       if (!std::isfinite(bound)) continue;
@@ -446,4 +449,277 @@ void build_one_sided_rows(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 }
 
 
+// An eliminated coordinate, recorded in original variable indices. Records are lifted in reverse.
+template <typename i_t, typename f_t>
+struct fj_equality_substitution_t {
+  i_t variable;
+  f_t constant;
+  std::vector<std::pair<i_t, f_t>> terms;
+};
+
+// Eliminate coordinates through exact equalities while retaining each pivot's domain as a row.
+// Integer pivots are accepted only when divisibility proves that every lifted value stays integral.
+template <typename i_t, typename f_t>
+std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> make_equality_reduced_climber(
+  fj_cpu_climber_t<i_t, f_t>& c,
+  double budget,
+  std::vector<fj_equality_substitution_t<i_t, f_t>>& substitutions,
+  std::vector<i_t>& retained)
+{
+  using term_t = std::pair<i_t, f_t>;
+  const auto started = std::chrono::steady_clock::now();
+  auto expired = [&] {
+    return c.preemption_flag.load(std::memory_order_relaxed) ||
+           std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >= budget;
+  };
+  const auto& p = *c.problem;
+  std::vector<i_t> equalities;
+  for (i_t r = 0; r < p.n_constraints; ++r)
+    if (std::isfinite(p.cstr_lb[r]) && p.cstr_lb[r] == p.cstr_ub[r]) equalities.push_back(r);
+  if (equalities.empty() || budget <= 0) return nullptr;
+
+  std::vector<std::vector<term_t>> rows(p.n_constraints);
+  std::vector<std::vector<i_t>> incidence(p.n_variables);
+  std::vector<f_t> lower = p.cstr_lb, upper = p.cstr_ub, objective = p.h_obj_coeffs;
+  f_t objective_offset = 0;
+  std::vector<uint8_t> eliminated(p.n_variables, 0);
+  int64_t nnz = 0;
+  for (i_t r = 0; r < p.n_constraints; ++r) {
+    auto& row = rows[r];
+    for (i_t k = p.offsets[r]; k < p.offsets[r + 1]; ++k)
+      row.emplace_back(p.variables[k], p.coefficients[k]);
+    std::sort(row.begin(), row.end());
+    size_t out = 0;
+    for (size_t k = 0; k < row.size();) {
+      const i_t v = row[k].first;
+      f_t a = 0;
+      do { a += row[k++].second; } while (k < row.size() && row[k].first == v);
+      if (a != 0) {
+        row[out++] = {v, a};
+        incidence[v].push_back(r);
+      }
+    }
+    row.resize(out);
+    nnz += out;
+  }
+  std::stable_sort(equalities.begin(), equalities.end(),
+                   [&](i_t a, i_t b) { return rows[a].size() < rows[b].size(); });
+
+  struct staged_row_t {
+    i_t index;
+    std::vector<term_t> terms;
+    f_t lower;
+    f_t upper;
+  };
+  const int64_t fill_limit = 2 * std::max<int64_t>(1, nnz);
+  for (i_t r : equalities) {
+    if (expired()) break;
+    const auto& equation = rows[r];
+    bool integer_row = std::isfinite(lower[r]) && lower[r] == std::round(lower[r]) &&
+                       std::fabs(lower[r]) <= f_t{1e12};
+    int64_t row_gcd = integer_row ? (int64_t)std::fabs(lower[r]) : 0;
+    if (integer_row) {
+      for (const auto& [v, a] : equation) {
+        if (p.h_var_types[v] != var_t::INTEGER || !std::isfinite(a) ||
+            a != std::round(a) || std::fabs(a) > f_t{1e12}) {
+          integer_row = false;
+          break;
+        }
+        row_gcd = std::gcd(row_gcd, (int64_t)std::fabs(a));
+      }
+    }
+
+    i_t pivot = -1;
+    f_t divisor = 0;
+    uint64_t best_work = std::numeric_limits<uint64_t>::max();
+    for (const auto& [v, a] : equation) {
+      const auto bounds = c.h_var_bounds[v].get();
+      if (eliminated[v] || c.h_is_binary_variable[v] || get_lower(bounds) == get_upper(bounds))
+        continue;
+      bool admissible = std::fabs(a) == f_t{1};
+      if (p.h_var_types[v] == var_t::INTEGER)
+        admissible = integer_row && row_gcd > 0 && std::fabs(a) == (f_t)row_gcd;
+      if (!admissible) continue;
+      const uint64_t work = (uint64_t)incidence[v].size() * (equation.size() - 1);
+      if (work < best_work) {
+        pivot = v;
+        divisor = a;
+        best_work = work;
+      }
+    }
+    if (pivot < 0) continue;
+
+    fj_equality_substitution_t<i_t, f_t> sub{pivot, lower[r] / divisor, {}};
+    if (!std::isfinite(sub.constant)) continue;
+    for (const auto& [v, a] : equation)
+      if (v != pivot) sub.terms.emplace_back(v, -a / divisor);
+    const auto domain = c.h_var_bounds[pivot].get();
+    const f_t bound_lower = get_lower(domain) - sub.constant;
+    const f_t bound_upper = get_upper(domain) - sub.constant;
+    if ((std::isfinite(get_lower(domain)) && !std::isfinite(bound_lower)) ||
+        (std::isfinite(get_upper(domain)) && !std::isfinite(bound_upper)))
+      continue;
+
+    auto affected = incidence[pivot];
+    std::sort(affected.begin(), affected.end());
+    affected.erase(std::unique(affected.begin(), affected.end()), affected.end());
+    std::vector<staged_row_t> staged;
+    int64_t next_nnz = nnz - (int64_t)equation.size() + (int64_t)sub.terms.size();
+    bool rejected = false;
+    for (i_t row_index : affected) {
+      if (row_index == r) continue;
+      if (expired()) {
+        rejected = true;
+        break;
+      }
+      const auto& old = rows[row_index];
+      auto entry = std::lower_bound(
+        old.begin(), old.end(), pivot, [](const term_t& t, i_t v) { return t.first < v; });
+      if (entry == old.end() || entry->first != pivot) continue;
+      const f_t factor = entry->second;
+      staged_row_t replacement{row_index,
+                               {},
+                               std::fma(-factor, sub.constant, lower[row_index]),
+                               std::fma(-factor, sub.constant, upper[row_index])};
+      if ((std::isfinite(lower[row_index]) && !std::isfinite(replacement.lower)) ||
+          (std::isfinite(upper[row_index]) && !std::isfinite(replacement.upper))) {
+        rejected = true;
+        break;
+      }
+      size_t i = 0, j = 0;
+      replacement.terms.reserve(old.size() + sub.terms.size());
+      while (i < old.size() || j < sub.terms.size()) {
+        if (i < old.size() && old[i].first == pivot) {
+          ++i;
+          continue;
+        }
+        const i_t v = std::min(i < old.size() ? old[i].first : p.n_variables,
+                               j < sub.terms.size() ? sub.terms[j].first : p.n_variables);
+        f_t a = 0;
+        if (i < old.size() && old[i].first == v) a = old[i++].second;
+        if (j < sub.terms.size() && sub.terms[j].first == v)
+          a = std::fma(factor, sub.terms[j++].second, a);
+        if (!std::isfinite(a) || std::fabs(a) > f_t{1e12}) {
+          rejected = true;
+          break;
+        }
+        if (a != 0) replacement.terms.emplace_back(v, a);
+      }
+      if (rejected) break;
+      next_nnz += (int64_t)replacement.terms.size() - (int64_t)old.size();
+      if (next_nnz > fill_limit) {
+        rejected = true;
+        break;
+      }
+      staged.push_back(std::move(replacement));
+    }
+    if (rejected) continue;
+
+    for (auto& replacement : staged) {
+      auto& old = rows[replacement.index];
+      size_t k = 0;
+      for (const auto& [v, a] : replacement.terms) {
+        while (k < old.size() && old[k].first < v) ++k;
+        if (k == old.size() || old[k].first != v) incidence[v].push_back(replacement.index);
+      }
+      old = std::move(replacement.terms);
+      lower[replacement.index] = replacement.lower;
+      upper[replacement.index] = replacement.upper;
+    }
+    rows[r] = sub.terms;
+    lower[r] = bound_lower;
+    upper[r] = bound_upper;
+    for (const auto& [v, a] : sub.terms) {
+      objective[v] = std::fma(objective[pivot], a, objective[v]);
+      if (!std::isfinite(objective[v])) return nullptr;
+    }
+    objective_offset = std::fma(objective[pivot], sub.constant, objective_offset);
+    if (!std::isfinite(objective_offset)) return nullptr;
+    objective[pivot] = 0;
+    eliminated[pivot] = 1;
+    incidence[pivot].clear();
+    substitutions.push_back(std::move(sub));
+    nnz = next_nnz;
+  }
+  if (substitutions.empty()) return nullptr;
+
+  std::vector<i_t> mapping(p.n_variables, -1), offsets{0}, variables;
+  std::vector<f_t> coefficients, row_lower, row_upper, var_lower, var_upper, costs;
+  std::vector<var_t> types;
+  for (i_t v = 0; v < p.n_variables; ++v) {
+    if (eliminated[v]) continue;
+    mapping[v] = retained.size();
+    retained.push_back(v);
+    const auto bounds = c.h_var_bounds[v].get();
+    var_lower.push_back(get_lower(bounds));
+    var_upper.push_back(get_upper(bounds));
+    costs.push_back(objective[v]);
+    types.push_back(p.h_var_types[v]);
+  }
+  for (i_t r = 0; r < p.n_constraints; ++r) {
+    if (!std::isfinite(lower[r]) && !std::isfinite(upper[r])) continue;
+    if (rows[r].empty()) {
+      if (lower[r] > 0 || upper[r] < 0) return nullptr;
+      continue;
+    }
+    for (const auto& [v, a] : rows[r]) {
+      cuopt_assert(mapping[v] >= 0, "eliminated column survived substitution");
+      variables.push_back(mapping[v]);
+      coefficients.push_back(a);
+    }
+    offsets.push_back(variables.size());
+    row_lower.push_back(lower[r]);
+    row_upper.push_back(upper[r]);
+  }
+  if (retained.empty() || row_lower.empty() || coefficients.size() > (size_t)INT32_MAX)
+    return nullptr;
+
+  const i_t reduced_nnz = coefficients.size();
+  const i_t reduced_rows = row_lower.size();
+  auto child = init_fj_cpu_from_host_model<i_t, f_t>(
+    (i_t)retained.size(),
+    reduced_rows,
+    reduced_nnz,
+    false,
+    f_t{1},
+    objective_offset,
+    std::move(coefficients),
+    std::move(variables),
+    std::move(offsets),
+    std::move(costs),
+    std::move(var_lower),
+    std::move(var_upper),
+    std::move(row_lower),
+    std::move(row_upper),
+    {},
+    {},
+    std::move(types),
+    p.tolerances,
+    c.preemption_flag,
+    c.settings);
+  static_cast<fj_lane_policy_t<i_t, f_t>&>(*child) = static_cast<fj_lane_policy_t<i_t, f_t>&>(c);
+  child->use_equality_substitution = false;
+  child->use_lp_seed = child->use_lp_feasibility_dive = child->use_lp_polish = false;
+  child->use_bound_prop = true;
+  child->use_move_batching &= child->n_colors > 0;
+  child->log_prefix = c.log_prefix;
+  child->suppress_incumbent_log = true;
+  for (i_t j = 0; j < (i_t)retained.size(); ++j) {
+    const auto bounds = child->h_var_bounds[j].get();
+    f_t value = c.h_assignment[retained[j]];
+    if (is_integer_var(*child, j)) value = std::round(value);
+    child->h_assignment[j] = std::clamp(value, get_lower(bounds), get_upper(bounds));
+  }
+  child->h_best_assignment = child->h_assignment;
+  recompute_lhs(*child);
+  CUOPT_LOG_DEBUG("%sCPUFJ equality substitution: %zu pivots, %d columns, %d rows, %d nonzeros",
+                  c.log_prefix.c_str(),
+                  substitutions.size(),
+                  (int)retained.size(),
+                  (int)reduced_rows,
+                  (int)reduced_nnz);
+  return child;
+}
+
 }  // namespace cuopt::mathematical_optimization::mip
+

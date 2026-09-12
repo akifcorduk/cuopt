@@ -9,9 +9,13 @@
 
 #include <mip_heuristics/feasibility_jump/cpu/tuning.hpp>
 #include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
+#include <mip_heuristics/presolve/bounds_presolve.cuh>
+#include <mip_heuristics/presolve/presolve_budget_policy.hpp>
+#include <mip_heuristics/presolve/probing_cache.cuh>
 #include <mip_heuristics/presolve/trivial_presolve.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/solution/solution.cuh>
+#include <mip_heuristics/solver_context.cuh>
 #include <mip_heuristics/utils.cuh>
 
 #include <math_optimization/solution_writer.hpp>
@@ -26,6 +30,7 @@
 #include <raft/core/handle.hpp>
 #include <rmm/device_uvector.hpp>
 
+#include <omp.h>
 #include <pthread.h>
 #include <sched.h>
 
@@ -38,6 +43,7 @@
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <utilities/seed_generator.hpp>
@@ -297,6 +303,15 @@ int main(int argc, char** argv)
     .help("skip bound propagation and the binary fast path scan")
     .flag();
 
+  program.add_argument("--probing")
+    .help("compute the probing cache before the solve window and hand it to the portfolio")
+    .flag();
+
+  program.add_argument("--probing-time-limit")
+    .help("wall clock cap for the probing cache, in seconds; not charged to the solve window")
+    .scan<'g', double>()
+    .default_value(60.0);
+
   try {
     program.parse_args(argc, argv);
   } catch (const std::exception& err) {
@@ -315,6 +330,8 @@ int main(int argc, char** argv)
   const int sample_interval     = program.get<int>("--sample-interval");
   const std::string sol_dir     = program.get<std::string>("--sol-dir");
   const bool low_latency        = program.get<bool>("--low-latency");
+  const bool run_probing        = program.get<bool>("--probing");
+  const double probing_time     = program.get<double>("--probing-time-limit");
 
   // Console sink so the engine's end-of-solve incumbent audit is visible, as solve_MIP does it.
   cuopt::init_logger_t log_guard("", true);
@@ -356,6 +373,54 @@ int main(int argc, char** argv)
   problem.preprocess_problem();
   mip::trivial_presolve(
     problem, /*remap_cache_ids=*/true, /*compute_related_vars=*/!no_related_vars);
+
+  std::unique_ptr<mip::mip_solver_context_t<i_t, f_t>> probing_context;
+  std::unique_ptr<mip::bound_presolve_t<i_t, f_t>> probing_presolve;
+  if (run_probing) {
+    cuopt::mathematical_optimization::mip_solver_settings_t<i_t, f_t> probing_settings;
+    probing_settings.seed = (i_t)base_seed;
+    probing_context =
+      std::make_unique<mip::mip_solver_context_t<i_t, f_t>>(&handle, &problem, probing_settings);
+    probing_presolve = std::make_unique<mip::bound_presolve_t<i_t, f_t>>(*probing_context);
+
+    const auto probing_features = mip::probing_presolve_features(problem);
+    const auto probing_budget =
+      mip::evaluate_presolve_budget(probing_settings.heuristic_params, probing_features);
+    const int probing_threads            = std::max(1, (int)allowed_cpus().size());
+    probing_presolve->settings.num_tasks = std::max(1, probing_threads - 1);
+
+    const auto probing_t0 = clk::now();
+    bool infeasible       = false;
+    const int saved_max_active_levels = omp_get_max_active_levels();
+    if (saved_max_active_levels < 2) { omp_set_max_active_levels(2); }
+#pragma omp parallel num_threads(probing_threads)
+    {
+#pragma omp masked
+      {
+        infeasible = mip::compute_probing_cache(*probing_presolve,
+                                                problem,
+                                                cuopt::timer_t{probing_time},
+                                                probing_budget.probing_work_limit,
+                                                (size_t)probing_budget.probing_step_size);
+      }
+    }
+    if (saved_max_active_levels < 2) { omp_set_max_active_levels(saved_max_active_levels); }
+    handle.sync_stream();
+
+    if (infeasible) {
+      std::printf("probing: problem proved infeasible\n");
+      return 1;
+    }
+    mip::trivial_presolve(
+      problem, /*remap_cache_ids=*/true, /*compute_related_vars=*/!no_related_vars);
+    std::printf(
+      "probing: %zu cached vars  %.3fs  threads=%d  work_limit=%.3f  step=%d\n",
+      probing_presolve->probing_cache.probing_cache.size(),
+      since(probing_t0),
+      probing_threads,
+      probing_budget.probing_work_limit,
+      probing_budget.probing_step_size);
+  }
 
   std::printf("instance: %s  n_vars=%d n_cstrs=%d nnz=%d\n",
               path.c_str(),
@@ -443,6 +508,11 @@ int main(int argc, char** argv)
   // The command-line seed controls lane RNG streams as well as persona tuning.
   mip::build_climber_portfolio<i_t, f_t>(
     problem, preemption_flags, climbers, base_seed, low_latency);
+  if (probing_presolve != nullptr) {
+    for (int k = 0; k < n_climbers; ++k)
+      const_cast<mip::fj_cpu_problem_t<i_t, f_t>*>(climbers[k]->problem.get())->probing_cache =
+        &probing_presolve->probing_cache;
+  }
   std::vector<lane_reservoir_t> reservoirs(sample_path.empty() ? 0 : (size_t)n_climbers);
   for (int k = 0; k < n_climbers; ++k) {
     climbers[k]->log_prefix = "[climber " + std::to_string(k) + "] ";
@@ -498,7 +568,7 @@ int main(int argc, char** argv)
                 k,
                 r.crossed ? "YES" : "no",
                 r.crossed ? std::to_string(r.t_first).c_str() : "-",
-                r.crossed ? (double)r.best_objective : 0.0,
+                r.crossed ? (double)problem.get_user_obj_from_solver_obj(r.best_objective) : 0.0,
                 r.iterations,
                 r.seconds > 0 ? r.iterations / r.seconds : 0.0);
   }
@@ -838,7 +908,10 @@ int main(int argc, char** argv)
               wall,
               sum_iters,
               wall > 0 ? sum_iters / wall : 0.0);
-  if (crossed > 0) { std::printf("BEST OBJECTIVE: %.10g\n", (double)best_overall); }
+  if (crossed > 0) {
+    std::printf("BEST OBJECTIVE: %.10g\n",
+                (double)problem.get_user_obj_from_solver_obj(best_overall));
+  }
 
   if (!sol_dir.empty()) {
     int written   = 0;

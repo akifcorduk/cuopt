@@ -13,6 +13,11 @@ namespace cuopt::mathematical_optimization::mip {
 template <typename i_t, typename f_t>
 void report_cpu_incumbent(fj_cpu_climber_t<i_t, f_t>& c)
 {
+  // Constructive seeds and lifted solves report through this same point as ordinary moves.
+  if (!c.suppress_incumbent_log)
+    CUOPT_LOG_DEBUG("%sCPUFJ new incumbent: objective %.17g",
+                    c.log_prefix.c_str(),
+                    c.get_user_objective(c.h_incumbent_objective));
   if (!c.improvement_callback) return;
   c.improvement_callback(c.h_incumbent_objective,
                          c.h_assignment,
@@ -181,11 +186,6 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
     fj_cpu.h_best_assignment     = fj_cpu.h_assignment;
     fj_cpu.iterations_since_best = 0;
     fj_cpu.perturb_streak        = 0;
-    // DEBUG, and reporting the stored best rather than the pre-epsilon incumbent,
-    // so it matches the binary path and the end-of-solve incumbent audit.
-    CUOPT_LOG_DEBUG("%sCPUFJ new incumbent: objective %.17g",
-                    fj_cpu.log_prefix.c_str(),
-                    fj_cpu.get_user_objective(fj_cpu.h_best_objective));
     report_cpu_incumbent(fj_cpu);
     fj_cpu.feasible_found = true;
     // The true objective of the assignment, not the epsilon-reduced threshold stored above, so
@@ -370,3 +370,4 @@ void invalidate_mtm_cache(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
 
 }  // namespace cuopt::mathematical_optimization::mip
+

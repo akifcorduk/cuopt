@@ -10,6 +10,127 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
+// Solve a lane in equality-reduced coordinates, then lift and audit every candidate in the
+// unchanged parent model before publishing it.
+template <typename i_t, typename f_t>
+bool try_equality_substituted_solve(fj_cpu_climber_t<i_t, f_t>& c,
+                                    double time_limit,
+                                    double work_unit_limit)
+{
+  if (!c.use_equality_substitution || c.feasible_found ||
+      c.producer_sync || time_limit <= 0)
+    return false;
+  const auto started = std::chrono::high_resolution_clock::now();
+  std::vector<fj_equality_substitution_t<i_t, f_t>> substitutions;
+  std::vector<i_t> retained;
+  std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> child;
+  {
+    phase_timer_t timer(c.t_seed);
+    child = make_equality_reduced_climber(
+      c, std::min(0.75, 0.15 * time_limit), substitutions, retained);
+  }
+  if (!child) return false;
+  const double remaining = time_limit -
+    std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - started).count();
+  if (remaining <= 0) return false;
+
+  bool rejected_lift = false;
+  child->work_unit_bias = c.work_unit_bias;
+  child->improvement_callback = [&](f_t, const std::vector<f_t>& assignment, double work) {
+    auto reject = [&] {
+      rejected_lift = true;
+      child->halted = true;
+    };
+    if (assignment.size() != retained.size()) {
+      reject();
+      return;
+    }
+    std::vector<f_t> lifted(c.problem->n_variables, 0);
+    for (size_t j = 0; j < retained.size(); ++j) lifted[retained[j]] = assignment[j];
+    for (auto it = substitutions.rbegin(); it != substitutions.rend(); ++it) {
+      long double value = it->constant;
+      for (const auto& [v, a] : it->terms) value += (long double)a * lifted[v];
+      lifted[it->variable] = (f_t)value;
+    }
+
+    const long double row_tol = 0.25L * c.problem->tolerances.absolute_tolerance;
+    const long double int_tol = 0.25L * c.problem->tolerances.integrality_tolerance;
+    for (i_t v = 0; v < c.problem->n_variables; ++v) {
+      const auto bounds = c.h_var_bounds[v].get();
+      if (!std::isfinite(lifted[v]) || lifted[v] < (long double)get_lower(bounds) - row_tol ||
+          lifted[v] > (long double)get_upper(bounds) + row_tol) {
+        reject();
+        return;
+      }
+      lifted[v] = std::clamp(lifted[v], get_lower(bounds), get_upper(bounds));
+      if (is_integer_var(c, v)) {
+        if (std::fabs((long double)lifted[v] - std::round(lifted[v])) > int_tol) {
+          reject();
+          return;
+        }
+        lifted[v] = std::round(lifted[v]);
+        if (!check_variable_within_bounds(c, v, lifted[v])) {
+          reject();
+          return;
+        }
+      }
+    }
+    for (i_t r = 0; r < c.problem->n_constraints; ++r) {
+      long double activity = 0;
+      for (i_t k = c.problem->offsets[r]; k < c.problem->offsets[r + 1]; ++k)
+        activity += (long double)c.problem->coefficients[k] * lifted[c.problem->variables[k]];
+      if (!std::isfinite(activity) || activity < (long double)c.problem->cstr_lb[r] - row_tol ||
+          activity > (long double)c.problem->cstr_ub[r] + row_tol) {
+        reject();
+        return;
+      }
+    }
+    long double objective = 0;
+    for (i_t v = 0; v < c.problem->n_variables; ++v)
+      objective += (long double)c.problem->h_obj_coeffs[v] * lifted[v];
+    if (!std::isfinite((f_t)objective)) {
+      reject();
+      return;
+    }
+    if (!((f_t)objective < c.h_best_objective)) return;
+
+    const auto saved = c.h_assignment;
+    c.h_assignment = lifted;
+    recompute_lhs(c);
+    if (!c.violated_constraints.empty() || !check_variable_feasibility<i_t, f_t>(c)) {
+      c.h_assignment = saved;
+      recompute_lhs(c);
+      reject();
+      return;
+    }
+    c.h_incumbent_objective = (f_t)objective;
+    c.h_objective_sumcomp = 0;
+    c.h_best_objective = (f_t)objective - c.settings.parameters.breakthrough_move_epsilon;
+    c.h_best_assignment = c.h_assignment;
+    c.feasible_found = true;
+    c.work_units_elapsed.store(work, std::memory_order_relaxed);
+    report_cpu_incumbent(c);
+    if (c.shared_incumbent)
+      c.shared_incumbent->publish(c.h_incumbent_objective,
+                                  c.get_user_objective(c.h_incumbent_objective),
+                                  lifted);
+  };
+
+  const auto setup_stats = static_cast<const fj_stats_t<i_t>&>(c);
+  cpufj_solve(child.get(), (f_t)remaining, work_unit_limit);
+  static_cast<fj_stats_t<i_t>&>(c) = static_cast<const fj_stats_t<i_t>&>(*child);
+  c.t_seed += setup_stats.t_seed;
+  c.t_bound_prop += setup_stats.t_bound_prop;
+  c.t_lp_seed += setup_stats.t_lp_seed;
+  c.t_coloring += setup_stats.t_coloring;
+  c.t_features += setup_stats.t_features;
+  c.t_init_lhs += setup_stats.t_init_lhs;
+  c.iterations = child->iterations;
+  c.work_units_elapsed.store(child->work_units_elapsed.load(std::memory_order_relaxed),
+                             std::memory_order_relaxed);
+  return !rejected_lift || c.feasible_found;
+}
+
 template <typename i_t, typename f_t>
 void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double work_unit_limit)
 {
@@ -17,17 +138,36 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   // On this lane's own worker rather than during portfolio construction, where it would delay the
   // launch of every other lane.
   if (fj_cpu->use_precedence_seed) apply_precedence_completion_seed(*fj_cpu);
-  if (fj_cpu->use_affine_equality_seed) apply_affine_equality_seed(*fj_cpu);
-  // Precedes the dispatch below because a variable it squeezes to [0,1] can bring the whole model
-  // into the binary engine's shape.
+  // Bound propagation supplies the tight domains used by coordinated equality moves.
   apply_bound_propagation(*fj_cpu);
-  // Also ahead of the dispatch, so an all-binary model gets the same LP-derived start.
-  apply_lp_rounded_seed(*fj_cpu, in_time_limit);
-  apply_lp_feasibility_dive(*fj_cpu, in_time_limit);
+  if (fj_cpu->use_affine_equality_seed) {
+    const double elapsed = std::chrono::duration<double>(
+      std::chrono::high_resolution_clock::now() - solve_start).count();
+    apply_affine_equality_seed(
+      *fj_cpu, std::max(0.0, std::min(3.0, 0.3 * ((double)in_time_limit - elapsed))));
+  }
+  if (fj_cpu->use_equality_substitution) {
+    const double elapsed = std::chrono::duration<double>(
+      std::chrono::high_resolution_clock::now() - solve_start).count();
+    if (try_equality_substituted_solve(*fj_cpu, (double)in_time_limit - elapsed, work_unit_limit))
+      return;
+  }
+  // A rejected lifted point may return late; subsequent setup only receives the remaining budget.
+  auto setup_time_left = [&] {
+    return fj_cpu->use_equality_substitution
+             ? std::max(f_t{0},
+                        in_time_limit - std::chrono::duration<f_t>(
+                                          std::chrono::high_resolution_clock::now() - solve_start)
+                                          .count())
+             : in_time_limit;
+  };
+  if (!fj_cpu->feasible_found) {
+    apply_lp_rounded_seed(*fj_cpu, setup_time_left());
+  }
 
   const bool paid_setup = fj_cpu->use_bound_prop || fj_cpu->use_lp_seed ||
                           fj_cpu->use_precedence_seed || fj_cpu->use_affine_equality_seed ||
-                          fj_cpu->use_lp_feasibility_dive;
+                                                    fj_cpu->use_equality_substitution;
   const f_t setup_seconds =
     paid_setup
       ? std::chrono::duration<f_t>(std::chrono::high_resolution_clock::now() - solve_start).count()
@@ -67,7 +207,7 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   // The LP comes out of this lane's own budget; every other lane's clock starts where it did.
   auto loop_start =
     (fj_cpu->use_lp_seed || fj_cpu->use_bound_prop || fj_cpu->use_precedence_seed ||
-     fj_cpu->use_affine_equality_seed || fj_cpu->use_lp_feasibility_dive)
+     fj_cpu->use_affine_equality_seed || fj_cpu->use_equality_substitution)
       ? solve_start
       : std::chrono::high_resolution_clock::now();
   auto time_limit = std::chrono::milliseconds(static_cast<i_t>(std::floor(in_time_limit * 1000.0)));
@@ -389,3 +529,4 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
 
 
 }  // namespace cuopt::mathematical_optimization::mip
+
