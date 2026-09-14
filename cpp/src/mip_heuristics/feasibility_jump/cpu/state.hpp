@@ -315,6 +315,7 @@ struct fj_search_state_t {
   f_t h_incumbent_objective;
   f_t h_objective_sumcomp{0};
   f_t h_best_objective;
+  f_t h_last_reported_objective{std::numeric_limits<f_t>::max()};
   i_t iterations{0};
   host_contiguous_set_t<i_t> violated_constraints;
   host_contiguous_set_t<i_t> satisfied_constraints;

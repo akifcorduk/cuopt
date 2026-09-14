@@ -10,8 +10,31 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
-// Solve a lane in equality-reduced coordinates, then lift and audit every candidate in the
-// unchanged parent model before publishing it.
+template <typename i_t, typename f_t>
+static std::vector<f_t> lift_equality_substituted_assignment(
+  fj_cpu_climber_t<i_t, f_t>& c,
+  const std::vector<f_t>& assignment,
+  const std::vector<i_t>& retained,
+  const std::vector<fj_equality_substitution_t<i_t, f_t>>& substitutions)
+{
+  std::vector<f_t> lifted(c.problem->n_variables, 0);
+  for (size_t j = 0; j < retained.size(); ++j) lifted[retained[j]] = assignment[j];
+  for (auto it = substitutions.rbegin(); it != substitutions.rend(); ++it) {
+    long double value = it->constant;
+    for (const auto& [v, a] : it->terms) value += (long double)a * lifted[v];
+    lifted[it->variable] = (f_t)value;
+  }
+  for (const auto& sub : substitutions) {
+    const auto bounds = c.h_var_bounds[sub.variable].get();
+    f_t value         = std::clamp(lifted[sub.variable], get_lower(bounds), get_upper(bounds));
+    if (is_integer_var(c, sub.variable)) value = std::round(value);
+    lifted[sub.variable] = value;
+  }
+  return lifted;
+}
+
+// Solve a lane in equality-reduced coordinates, then lift every candidate back into the unchanged
+// parent model before reporting it.
 template <typename i_t, typename f_t>
 bool try_equality_substituted_solve(fj_cpu_climber_t<i_t, f_t>& c,
                                     double time_limit,
@@ -36,85 +59,20 @@ bool try_equality_substituted_solve(fj_cpu_climber_t<i_t, f_t>& c,
 
   bool rejected_lift = false;
   child->work_unit_bias = c.work_unit_bias;
-  child->improvement_callback = [&](f_t, const std::vector<f_t>& assignment, double work) {
-    auto reject = [&] {
-      rejected_lift = true;
-      child->halted = true;
+  child->improvement_callback =
+    [&](f_t child_objective, const std::vector<f_t>& assignment, double work) {
+      if (assignment.size() != retained.size()) {
+        rejected_lift = true;
+        child->halted = true;
+        return;
+      }
+      const std::vector<f_t> lifted =
+        lift_equality_substituted_assignment(c, assignment, retained, substitutions);
+      const f_t objective = child_objective + child->problem->objective_offset;
+      report_cpu_incumbent(c, objective, lifted, work);
+      if (c.shared_incumbent)
+        c.shared_incumbent->publish(objective, c.get_user_objective(objective), lifted);
     };
-    if (assignment.size() != retained.size()) {
-      reject();
-      return;
-    }
-    std::vector<f_t> lifted(c.problem->n_variables, 0);
-    for (size_t j = 0; j < retained.size(); ++j) lifted[retained[j]] = assignment[j];
-    for (auto it = substitutions.rbegin(); it != substitutions.rend(); ++it) {
-      long double value = it->constant;
-      for (const auto& [v, a] : it->terms) value += (long double)a * lifted[v];
-      lifted[it->variable] = (f_t)value;
-    }
-
-    const long double row_tol = 0.25L * c.problem->tolerances.absolute_tolerance;
-    const long double int_tol = 0.25L * c.problem->tolerances.integrality_tolerance;
-    for (i_t v = 0; v < c.problem->n_variables; ++v) {
-      const auto bounds = c.h_var_bounds[v].get();
-      if (!std::isfinite(lifted[v]) || lifted[v] < (long double)get_lower(bounds) - row_tol ||
-          lifted[v] > (long double)get_upper(bounds) + row_tol) {
-        reject();
-        return;
-      }
-      lifted[v] = std::clamp(lifted[v], get_lower(bounds), get_upper(bounds));
-      if (is_integer_var(c, v)) {
-        if (std::fabs((long double)lifted[v] - std::round(lifted[v])) > int_tol) {
-          reject();
-          return;
-        }
-        lifted[v] = std::round(lifted[v]);
-        if (!check_variable_within_bounds(c, v, lifted[v])) {
-          reject();
-          return;
-        }
-      }
-    }
-    for (i_t r = 0; r < c.problem->n_constraints; ++r) {
-      long double activity = 0;
-      for (i_t k = c.problem->offsets[r]; k < c.problem->offsets[r + 1]; ++k)
-        activity += (long double)c.problem->coefficients[k] * lifted[c.problem->variables[k]];
-      if (!std::isfinite(activity) || activity < (long double)c.problem->cstr_lb[r] - row_tol ||
-          activity > (long double)c.problem->cstr_ub[r] + row_tol) {
-        reject();
-        return;
-      }
-    }
-    long double objective = 0;
-    for (i_t v = 0; v < c.problem->n_variables; ++v)
-      objective += (long double)c.problem->h_obj_coeffs[v] * lifted[v];
-    if (!std::isfinite((f_t)objective)) {
-      reject();
-      return;
-    }
-    if (!((f_t)objective < c.h_best_objective)) return;
-
-    const auto saved = c.h_assignment;
-    c.h_assignment = lifted;
-    recompute_lhs(c);
-    if (!c.violated_constraints.empty() || !check_variable_feasibility<i_t, f_t>(c)) {
-      c.h_assignment = saved;
-      recompute_lhs(c);
-      reject();
-      return;
-    }
-    c.h_incumbent_objective = (f_t)objective;
-    c.h_objective_sumcomp = 0;
-    c.h_best_objective = (f_t)objective - c.settings.parameters.breakthrough_move_epsilon;
-    c.h_best_assignment = c.h_assignment;
-    c.feasible_found = true;
-    c.work_units_elapsed.store(work, std::memory_order_relaxed);
-    report_cpu_incumbent(c);
-    if (c.shared_incumbent)
-      c.shared_incumbent->publish(c.h_incumbent_objective,
-                                  c.get_user_objective(c.h_incumbent_objective),
-                                  lifted);
-  };
 
   const auto setup_stats = static_cast<const fj_stats_t<i_t>&>(c);
   cpufj_solve(child.get(), (f_t)remaining, work_unit_limit);
@@ -128,6 +86,19 @@ bool try_equality_substituted_solve(fj_cpu_climber_t<i_t, f_t>& c,
   c.iterations = child->iterations;
   c.work_units_elapsed.store(child->work_units_elapsed.load(std::memory_order_relaxed),
                              std::memory_order_relaxed);
+
+  if (child->feasible_found && child->h_best_assignment.size() == retained.size()) {
+    std::vector<f_t> lifted = lift_equality_substituted_assignment(
+      c, child->h_best_assignment.underlying(), retained, substitutions);
+    f_t objective = 0;
+    for (i_t v : c.problem->h_objective_vars)
+      objective = std::fma(c.problem->h_obj_coeffs[v], lifted[v], objective);
+    if (!c.feasible_found || objective < c.h_best_objective) {
+      c.h_best_assignment = std::move(lifted);
+      c.h_best_objective  = objective;
+      c.feasible_found    = true;
+    }
+  }
   return !rejected_lift || c.feasible_found;
 }
 

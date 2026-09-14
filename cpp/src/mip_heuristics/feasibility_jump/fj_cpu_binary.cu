@@ -511,15 +511,20 @@ struct fj_bin_engine_t {
     if (shared_incumbent)
       shared_incumbent->publish(reported, climber.get_user_objective(reported), h_best);
 
-    if (!climber.suppress_incumbent_log)
-      CUOPT_LOG_DEBUG("%sCPUFJ[bin%d] new incumbent: objective %.17g",
-                      climber.log_prefix.c_str(),
-                      coefficient_bits(),
-                      climber.get_user_objective(climber.h_incumbent_objective));
-    if (climber.improvement_callback) {
-      const double work_units = climber.work_units_elapsed;
-      climber.improvement_callback(climber.h_incumbent_objective, h_best, work_units);
-    }
+      const f_t last_reported = climber.h_last_reported_objective;
+      if (last_reported - climber.h_incumbent_objective >
+          f_t{1e-6} * std::max(f_t{1}, std::fabs(last_reported))) {
+        climber.h_last_reported_objective = climber.h_incumbent_objective;
+        if (!climber.suppress_incumbent_log)
+          CUOPT_LOG_DEBUG("%sCPUFJ[bin%d] new incumbent: objective %.17g",
+                          climber.log_prefix.c_str(),
+                          coefficient_bits(),
+                          climber.get_user_objective(climber.h_incumbent_objective));
+        if (climber.improvement_callback) {
+          const double work_units = climber.work_units_elapsed;
+          climber.improvement_callback(climber.h_incumbent_objective, h_best, work_units);
+        }
+      }
   }
 
   void reweight_constraint(int32_t r, int32_t new_weight)

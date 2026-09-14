@@ -11,17 +11,30 @@
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
-void report_cpu_incumbent(fj_cpu_climber_t<i_t, f_t>& c)
+void report_cpu_incumbent(fj_cpu_climber_t<i_t, f_t>& c,
+                          f_t objective,
+                          const std::vector<f_t>& assignment,
+                          double work_units)
 {
   // Constructive seeds and lifted solves report through this same point as ordinary moves.
+  const f_t last_reported = c.h_last_reported_objective;
+  if (!(last_reported - objective > f_t{1e-6} * std::max(f_t{1}, std::fabs(last_reported)))) return;
+  c.h_last_reported_objective = objective;
   if (!c.suppress_incumbent_log)
     CUOPT_LOG_DEBUG("%sCPUFJ new incumbent: objective %.17g",
                     c.log_prefix.c_str(),
-                    c.get_user_objective(c.h_incumbent_objective));
+                    c.get_user_objective(objective));
   if (!c.improvement_callback) return;
-  c.improvement_callback(c.h_incumbent_objective,
-                         c.h_assignment,
-                         c.work_units_elapsed.load(std::memory_order_acquire));
+  c.improvement_callback(objective, assignment, work_units);
+}
+
+template <typename i_t, typename f_t>
+void report_cpu_incumbent(fj_cpu_climber_t<i_t, f_t>& c)
+{
+  report_cpu_incumbent(c,
+                       c.h_incumbent_objective,
+                       c.h_assignment.underlying(),
+                       c.work_units_elapsed.load(std::memory_order_acquire));
 }
 
 template <typename i_t, typename f_t>
