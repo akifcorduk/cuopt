@@ -300,6 +300,10 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
              : p.h_var_types[v] == var_t::CONTINUOUS;
   };
   auto is_binary = [&](i_t v) { return c.h_is_binary_variable[v] && !is_continuous(v); };
+  auto is_pinned_integer = [&](i_t v) {
+    const auto b = c.h_var_bounds[v].get();
+    return p.h_var_types[v] == var_t::INTEGER && get_lower(b) == get_upper(b);
+  };
 
   const auto started = std::chrono::steady_clock::now();
   auto expired       = [&] {
@@ -545,7 +549,7 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
   i_t duration_rows = 0;
 
   for (i_t r = 0; r < n_rows; ++r) {
-    i_t first_commitment = -1, n_commitment = 0, n_other = 0;
+    i_t first_commitment = -1, n_commitment = 0, n_other = 0, n_pinned = 0;
     i_t positive = -1, negative = -1;
     double positive_coef = 0, negative_coef = 0;
     i_t period = -1, n_production = 0;
@@ -559,6 +563,9 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
       if (is_commitment[v]) {
         if (first_commitment < 0) first_commitment = v;
         ++n_commitment;
+      } else if (is_pinned_integer(v)) {
+        if (!is_repair_slack[v]) only_slack_besides_commitment = false;
+        ++n_pinned;
       } else {
         if (!is_repair_slack[v]) only_slack_besides_commitment = false;
         ++n_other;
@@ -592,11 +599,11 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
     }
     // Startup/shutdown pair: an equality tying a +a/-a continuous pair to a commitment
     // difference, so the pair is the positive and negative part of that difference.
-    if (n_commitment && n_other == 2 && balanced_pair && std::isfinite(p.cstr_lb[r]) &&
-        p.cstr_lb[r] == p.cstr_ub[r]) {
+    if ((n_commitment || n_pinned) && n_other == 2 && balanced_pair &&
+        std::isfinite(p.cstr_lb[r]) && p.cstr_lb[r] == p.cstr_ub[r]) {
       transitions.push_back({r, positive, negative, positive_coef});
     }
-    if (!n_commitment && n_other == 2 && balanced_pair && p.cstr_lb[r] == 0 &&
+    if (!n_commitment && !n_pinned && n_other == 2 && balanced_pair && p.cstr_lb[r] == 0 &&
         p.cstr_ub[r] == 0) {
       aliases.emplace_back(positive, negative);
     }
