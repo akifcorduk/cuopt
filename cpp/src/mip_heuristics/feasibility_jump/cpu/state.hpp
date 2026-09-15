@@ -375,6 +375,7 @@ struct fj_lane_policy_t {
   bool use_lp_polish{false};
   bool use_precedence_seed{false};
   bool use_affine_equality_seed{false};
+  bool use_unit_commitment_seed{false};
   bool use_bound_prop{false};
   bool low_latency{false};
   bool use_weight_donation{false};
@@ -588,4 +589,5 @@ void complete_climber_portfolio(std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> firs
                                 bool low_latency = false);
 
 }  // namespace cuopt::mathematical_optimization::mip
+
 

@@ -111,6 +111,7 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   if (fj_cpu->use_precedence_seed) apply_precedence_completion_seed(*fj_cpu);
   // Bound propagation supplies the tight domains used by coordinated equality moves.
   apply_bound_propagation(*fj_cpu);
+  if (fj_cpu->use_unit_commitment_seed) apply_unit_commitment_seed(*fj_cpu);
   if (fj_cpu->use_affine_equality_seed) {
     const double elapsed = std::chrono::duration<double>(
       std::chrono::high_resolution_clock::now() - solve_start).count();
@@ -138,7 +139,7 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
 
   const bool paid_setup = fj_cpu->use_bound_prop || fj_cpu->use_lp_seed ||
                           fj_cpu->use_precedence_seed || fj_cpu->use_affine_equality_seed ||
-                                                    fj_cpu->use_equality_substitution;
+                          fj_cpu->use_unit_commitment_seed || fj_cpu->use_equality_substitution;
   const f_t setup_seconds =
     paid_setup
       ? std::chrono::duration<f_t>(std::chrono::high_resolution_clock::now() - solve_start).count()
@@ -178,7 +179,8 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   // The LP comes out of this lane's own budget; every other lane's clock starts where it did.
   auto loop_start =
     (fj_cpu->use_lp_seed || fj_cpu->use_bound_prop || fj_cpu->use_precedence_seed ||
-     fj_cpu->use_affine_equality_seed || fj_cpu->use_equality_substitution)
+     fj_cpu->use_affine_equality_seed || fj_cpu->use_unit_commitment_seed ||
+     fj_cpu->use_equality_substitution)
       ? solve_start
       : std::chrono::high_resolution_clock::now();
   auto time_limit = std::chrono::milliseconds(static_cast<i_t>(std::floor(in_time_limit * 1000.0)));
@@ -500,4 +502,5 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
 
 
 }  // namespace cuopt::mathematical_optimization::mip
+
 
