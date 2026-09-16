@@ -39,6 +39,35 @@ TEST(FeasibilityPumpTest, ExternalSolutionImprovementMargin)
                                                        std::numeric_limits<double>::infinity()));
 }
 
+TEST(PrimalIntegralTest, TracksImprovingMinimizationIncumbents)
+{
+  benchmark_info_t benchmark_info;
+  benchmark_info.initialize_primal_integral(100.0, 10.0, false);
+
+  benchmark_info.update_primal_integral(200.0, 2.0);
+  benchmark_info.update_primal_integral(150.0, 6.0);
+  benchmark_info.update_primal_integral(175.0, 7.0);
+  benchmark_info.update_primal_integral(100.0, 8.0);
+  benchmark_info.finalize_primal_integral(9.0);
+
+  EXPECT_NEAR(benchmark_info.primal_integral, 7.0 / 15.0, 1e-12);
+}
+
+TEST(PrimalIntegralTest, HandlesMaximizationAndMissingIncumbents)
+{
+  benchmark_info_t maximization_info;
+  maximization_info.initialize_primal_integral(100.0, 10.0, true);
+  maximization_info.update_primal_integral(0.0, 1.0);
+  maximization_info.update_primal_integral(50.0, 4.0);
+  maximization_info.finalize_primal_integral(10.0);
+  EXPECT_NEAR(maximization_info.primal_integral, 0.7, 1e-12);
+
+  benchmark_info_t no_incumbent_info;
+  no_incumbent_info.initialize_primal_integral(100.0, 10.0, false);
+  no_incumbent_info.finalize_primal_integral(10.0);
+  EXPECT_EQ(no_incumbent_info.primal_integral, 2.0);
+}
+
 io::mps_data_model_t<int, double> create_std_lp_problem()
 {
   return cuopt::test::parse_inline_lp(R"LP(
