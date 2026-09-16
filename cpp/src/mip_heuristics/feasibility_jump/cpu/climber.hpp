@@ -5,7 +5,29 @@
 #pragma once
 #include "state.hpp"
 
+namespace cuopt::mathematical_optimization::simplex {
+
+template <typename i_t, typename f_t>
+struct lp_problem_t;
+
+template <typename i_t, typename f_t>
+struct simplex_solver_settings_t;
+
+enum class variable_type_t : int8_t;
+
+}  // namespace cuopt::mathematical_optimization::simplex
+
 namespace cuopt::mathematical_optimization::mip {
+
+template <typename i_t, typename f_t>
+std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_lp(
+  const simplex::lp_problem_t<i_t, f_t>& problem,
+  const std::vector<simplex::variable_type_t>& variable_types,
+  i_t n_structural,
+  const std::vector<f_t>& seed_assignment,
+  const simplex::simplex_solver_settings_t<i_t, f_t>& settings,
+  std::atomic<bool>& preemption_flag,
+  int64_t seed);
 
 template <typename i_t, typename f_t>
 std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_model(

@@ -6,6 +6,11 @@
 
 #include "climber.hpp"
 #include "internal.hpp"
+#include "problem.hpp"
+#include "search/api.hpp"
+#include "setup/bounds.hpp"
+#include "setup/lp.hpp"
+#include "setup/structure.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -554,5 +559,88 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_clone(
   return fj_cpu;
 }
 
+#if MIP_INSTANTIATE_FLOAT
+template std::unique_ptr<fj_cpu_climber_t<int, float>> init_fj_cpu_from_host_lp(
+  const lp_problem_t<int, float>&,
+  const std::vector<variable_type_t>&,
+  int,
+  const std::vector<float>&,
+  const simplex_solver_settings_t<int, float>&,
+  std::atomic<bool>&,
+  int64_t);
+template std::unique_ptr<fj_cpu_climber_t<int, float>> init_fj_cpu_from_host_model(
+  int,
+  int,
+  int,
+  bool,
+  float,
+  float,
+  std::vector<float>,
+  std::vector<int>,
+  std::vector<int>,
+  std::vector<float>,
+  std::vector<float>,
+  std::vector<float>,
+  std::vector<float>,
+  std::vector<float>,
+  std::vector<float>,
+  std::vector<char>,
+  std::vector<var_t>,
+  const typename mip_solver_settings_t<int, float>::tolerances_t&,
+  std::atomic<bool>&,
+  fj_settings_t);
+template void finalize_fj_cpu_host_initialization(
+  fj_cpu_climber_t<int, float>&,
+  fj_cpu_problem_t<int, float>&,
+  int,
+  int,
+  int,
+  int,
+  const typename mip_solver_settings_t<int, float>::tolerances_t&);
+template std::unique_ptr<fj_cpu_climber_t<int, float>> init_fj_cpu_clone(
+  const fj_cpu_climber_t<int, float>&, std::atomic<bool>&, fj_settings_t);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template std::unique_ptr<fj_cpu_climber_t<int, double>> init_fj_cpu_from_host_lp(
+  const lp_problem_t<int, double>&,
+  const std::vector<variable_type_t>&,
+  int,
+  const std::vector<double>&,
+  const simplex_solver_settings_t<int, double>&,
+  std::atomic<bool>&,
+  int64_t);
+template std::unique_ptr<fj_cpu_climber_t<int, double>> init_fj_cpu_from_host_model(
+  int,
+  int,
+  int,
+  bool,
+  double,
+  double,
+  std::vector<double>,
+  std::vector<int>,
+  std::vector<int>,
+  std::vector<double>,
+  std::vector<double>,
+  std::vector<double>,
+  std::vector<double>,
+  std::vector<double>,
+  std::vector<double>,
+  std::vector<char>,
+  std::vector<var_t>,
+  const typename mip_solver_settings_t<int, double>::tolerances_t&,
+  std::atomic<bool>&,
+  fj_settings_t);
+template void finalize_fj_cpu_host_initialization(
+  fj_cpu_climber_t<int, double>&,
+  fj_cpu_problem_t<int, double>&,
+  int,
+  int,
+  int,
+  int,
+  const typename mip_solver_settings_t<int, double>::tolerances_t&);
+template std::unique_ptr<fj_cpu_climber_t<int, double>> init_fj_cpu_clone(
+  const fj_cpu_climber_t<int, double>&, std::atomic<bool>&, fj_settings_t);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip

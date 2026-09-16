@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include "batching.hpp"
+#include "score.hpp"
 #include "../internal.hpp"
 
 namespace cuopt::mathematical_optimization::mip {

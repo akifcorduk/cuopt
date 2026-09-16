@@ -5,7 +5,10 @@
  */
 
 #include "bounds.hpp"
+#include "../audit.hpp"
 #include "../internal.hpp"
+#include "../problem.hpp"
+#include "../search/api.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -288,5 +291,20 @@ void apply_ambiguous_lock_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   fj_cpu.h_best_assignment = fj_cpu.h_assignment;
 }
 
+#if MIP_INSTANTIATE_FLOAT
+template void cap_integer_domains<int, float>(fj_cpu_climber_t<int, float>&, int);
+template void clamp_seed_magnitude<int, float>(fj_cpu_climber_t<int, float>&, int);
+template void apply_bound_propagation<int, float>(fj_cpu_climber_t<int, float>&);
+template void apply_lock_weighted_seed<int, float>(fj_cpu_climber_t<int, float>&);
+template void apply_ambiguous_lock_seed<int, float>(fj_cpu_climber_t<int, float>&);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void cap_integer_domains<int, double>(fj_cpu_climber_t<int, double>&, int);
+template void clamp_seed_magnitude<int, double>(fj_cpu_climber_t<int, double>&, int);
+template void apply_bound_propagation<int, double>(fj_cpu_climber_t<int, double>&);
+template void apply_lock_weighted_seed<int, double>(fj_cpu_climber_t<int, double>&);
+template void apply_ambiguous_lock_seed<int, double>(fj_cpu_climber_t<int, double>&);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip

@@ -45,7 +45,20 @@ set(MIP_NON_LP_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/presolve/trivial_presolve.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/feasibility_jump.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/feasibility_jump_kernels.cu
-  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/engine.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/audit.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/climber.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/loop.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/portfolio.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/search/escape.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/affine.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/cardinality.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/chain.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/covering.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/matching.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/network.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/setup/bounds.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/setup/lp.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/setup/structure.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/fj_cpu_bridge.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/fj_cpu_binary.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/fj_cpu_binary_preprocess.cu

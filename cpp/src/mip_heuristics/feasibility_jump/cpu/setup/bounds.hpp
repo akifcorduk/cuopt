@@ -8,7 +8,11 @@ namespace cuopt::mathematical_optimization::mip {
 template <typename i_t, typename f_t>
 void cap_integer_domains(fj_cpu_climber_t<i_t, f_t>&, i_t);
 template <typename i_t, typename f_t>
+void clamp_seed_magnitude(fj_cpu_climber_t<i_t, f_t>&, i_t);
+template <typename i_t, typename f_t>
 void apply_bound_propagation(fj_cpu_climber_t<i_t, f_t>&);
 template <typename i_t, typename f_t>
 void apply_lock_weighted_seed(fj_cpu_climber_t<i_t, f_t>&);
+template <typename i_t, typename f_t>
+void apply_ambiguous_lock_seed(fj_cpu_climber_t<i_t, f_t>&);
 }  // namespace cuopt::mathematical_optimization::mip

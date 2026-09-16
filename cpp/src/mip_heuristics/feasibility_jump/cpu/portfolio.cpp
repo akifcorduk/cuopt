@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "climber.hpp"
 #include "internal.hpp"
+#include "problem.hpp"
+#include "seeds/seeds.hpp"
+#include "setup/bounds.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -398,6 +402,34 @@ void complete_climber_portfolio(
     climbers[k]->shared_incumbent = shared;
 }
 
+
+#if MIP_INSTANTIATE_FLOAT
+template struct fj_cpu_worker_t<int, float>;
+template std::shared_ptr<fj_cpu_shared_incumbent_t<int, float>>
+make_fj_cpu_shared_incumbent<int, float>();
+template void apply_lane_diversification<int, float>(fj_cpu_climber_t<int, float>&, int, int64_t);
+template void complete_climber_portfolio<int, float>(
+  std::unique_ptr<fj_cpu_climber_t<int, float>>,
+  const std::vector<int64_t>&,
+  std::vector<std::atomic<bool>>&,
+  std::vector<std::unique_ptr<fj_cpu_climber_t<int, float>>>&,
+  int64_t,
+  bool);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template struct fj_cpu_worker_t<int, double>;
+template std::shared_ptr<fj_cpu_shared_incumbent_t<int, double>>
+make_fj_cpu_shared_incumbent<int, double>();
+template void apply_lane_diversification<int, double>(fj_cpu_climber_t<int, double>&, int, int64_t);
+template void complete_climber_portfolio<int, double>(
+  std::unique_ptr<fj_cpu_climber_t<int, double>>,
+  const std::vector<int64_t>&,
+  std::vector<std::atomic<bool>>&,
+  std::vector<std::unique_ptr<fj_cpu_climber_t<int, double>>>&,
+  int64_t,
+  bool);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip
 

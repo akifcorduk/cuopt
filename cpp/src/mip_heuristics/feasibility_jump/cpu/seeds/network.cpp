@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "seeds.hpp"
+#include "../audit.hpp"
 #include "../internal.hpp"
+#include "../problem.hpp"
+#include "../search/api.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -279,5 +283,15 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
                                 c.get_user_objective(c.h_incumbent_objective), c.h_assignment);
   return true;
 }
+
+#if MIP_INSTANTIATE_FLOAT
+template bool apply_fixed_charge_network_seed<int, float>(
+  fj_cpu_climber_t<int, float>&, double);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template bool apply_fixed_charge_network_seed<int, double>(
+  fj_cpu_climber_t<int, double>&, double);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip

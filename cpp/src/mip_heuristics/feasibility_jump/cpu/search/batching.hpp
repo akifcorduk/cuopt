@@ -118,7 +118,7 @@ inline void record_var_best_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 }
 
 template <typename i_t, typename f_t>
-inline void retire_var_best_moves(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
+void retire_var_best_moves(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 {
   if (!fj_cpu.use_move_batching) return;
   ++fj_cpu.var_best_epoch;

@@ -4,7 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "seeds.hpp"
+#include "../audit.hpp"
 #include "../internal.hpp"
+#include "../problem.hpp"
+#include "../search/api.hpp"
+#include "../setup/bounds.hpp"
+
+#include <numeric>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -912,6 +919,18 @@ void apply_structural_completion_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   apply_greedy_covering_seed<i_t, f_t>(fj_cpu);
   repair_difficult_anchor<i_t, f_t>(fj_cpu);
 }
+
+#if MIP_INSTANTIATE_FLOAT
+template void apply_affine_equality_seed<int, float>(fj_cpu_climber_t<int, float>&, double);
+template void apply_unit_commitment_seed<int, float>(fj_cpu_climber_t<int, float>&);
+template void apply_structural_completion_seed<int, float>(fj_cpu_climber_t<int, float>&);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void apply_affine_equality_seed<int, double>(fj_cpu_climber_t<int, double>&, double);
+template void apply_unit_commitment_seed<int, double>(fj_cpu_climber_t<int, double>&);
+template void apply_structural_completion_seed<int, double>(fj_cpu_climber_t<int, double>&);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip
 

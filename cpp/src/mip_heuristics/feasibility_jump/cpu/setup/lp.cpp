@@ -5,7 +5,10 @@
  */
 
 #include "lp.hpp"
+#include "../audit.hpp"
 #include "../internal.hpp"
+#include "../problem.hpp"
+#include "../search/api.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -480,5 +483,26 @@ void apply_lp_feasibility_dive(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time
   recompute_lhs(fj_cpu);
 }
 
+#if MIP_INSTANTIATE_FLOAT
+template void eliminate_slacks<int, float>(const lp_problem_t<int, float>&,
+                                           int,
+                                           csr_matrix_t<int, float>&,
+                                           std::vector<float>&,
+                                           std::vector<float>&);
+template void apply_lp_rounded_seed<int, float>(fj_cpu_climber_t<int, float>&, float);
+template bool apply_lp_polish<int, float>(fj_cpu_climber_t<int, float>&, double);
+template void apply_lp_feasibility_dive<int, float>(fj_cpu_climber_t<int, float>&, float);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void eliminate_slacks<int, double>(const lp_problem_t<int, double>&,
+                                            int,
+                                            csr_matrix_t<int, double>&,
+                                            std::vector<double>&,
+                                            std::vector<double>&);
+template void apply_lp_rounded_seed<int, double>(fj_cpu_climber_t<int, double>&, double);
+template bool apply_lp_polish<int, double>(fj_cpu_climber_t<int, double>&, double);
+template void apply_lp_feasibility_dive<int, double>(fj_cpu_climber_t<int, double>&, double);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip

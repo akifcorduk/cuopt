@@ -5,7 +5,10 @@
  */
 
 #include "escape.hpp"
+#include "api.hpp"
+#include "../audit.hpp"
 #include "../internal.hpp"
+#include "../problem.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -255,5 +258,18 @@ void apply_objective_corner_jump(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   retire_var_best_moves<i_t, f_t>(fj_cpu);
 }
 
+#if MIP_INSTANTIATE_FLOAT
+template void perturb<int, float>(fj_cpu_climber_t<int, float>&);
+template void reset_infeasible_checkpoint<int, float>(fj_cpu_climber_t<int, float>&);
+template void track_infeasible_checkpoint<int, float>(fj_cpu_climber_t<int, float>&);
+template void apply_objective_corner_jump<int, float>(fj_cpu_climber_t<int, float>&);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void perturb<int, double>(fj_cpu_climber_t<int, double>&);
+template void reset_infeasible_checkpoint<int, double>(fj_cpu_climber_t<int, double>&);
+template void track_infeasible_checkpoint<int, double>(fj_cpu_climber_t<int, double>&);
+template void apply_objective_corner_jump<int, double>(fj_cpu_climber_t<int, double>&);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip

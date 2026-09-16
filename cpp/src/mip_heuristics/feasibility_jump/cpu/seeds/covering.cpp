@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "seeds.hpp"
 #include "../internal.hpp"
+#include "../problem.hpp"
+#include "../search/api.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -194,5 +197,26 @@ void apply_aggressive_constraint_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   fj_cpu.h_best_assignment = fj_cpu.h_assignment;
 }
 
+#if MIP_INSTANTIATE_FLOAT
+template void collect_row_repair_moves<int, float>(fj_cpu_climber_t<int, float>&,
+                                                   int,
+                                                   int,
+                                                   float,
+                                                   float,
+                                                   std::vector<row_repair_move_t<int, float>>&);
+template void apply_greedy_covering_seed<int, float>(fj_cpu_climber_t<int, float>&);
+template void apply_aggressive_constraint_seed<int, float>(fj_cpu_climber_t<int, float>&);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void collect_row_repair_moves<int, double>(fj_cpu_climber_t<int, double>&,
+                                                    int,
+                                                    int,
+                                                    double,
+                                                    double,
+                                                    std::vector<row_repair_move_t<int, double>>&);
+template void apply_greedy_covering_seed<int, double>(fj_cpu_climber_t<int, double>&);
+template void apply_aggressive_constraint_seed<int, double>(fj_cpu_climber_t<int, double>&);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip

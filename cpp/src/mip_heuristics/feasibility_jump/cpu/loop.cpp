@@ -4,7 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "audit.hpp"
 #include "internal.hpp"
+#include "problem.hpp"
+#include "search/api.hpp"
+#include "search/score.hpp"
+#include "search/batching.hpp"
+#include "search/moves.hpp"
+#include "search/update.hpp"
+#include "search/escape.hpp"
+#include "seeds/seeds.hpp"
+#include "setup/bounds.hpp"
+#include "setup/lp.hpp"
+#include "setup/structure.hpp"
 
 #include <mip_heuristics/feasibility_jump/fj_cpu_binary.cuh>
 
@@ -507,6 +519,29 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
 
 }
 
+#if MIP_INSTANTIATE_FLOAT
+template void cpufj_solve(fj_cpu_climber_t<int, float>*, float, double);
+template void report_cpu_incumbent<int, float>(
+  fj_cpu_climber_t<int, float>&, float, const std::vector<float>&, double);
+template void report_cpu_incumbent<int, float>(fj_cpu_climber_t<int, float>&);
+template void recompute_lhs<int, float>(fj_cpu_climber_t<int, float>&);
+template void recompute_slack<int, float>(fj_cpu_climber_t<int, float>&);
+template void invalidate_mtm_cache<int, float>(fj_cpu_climber_t<int, float>&);
+template void compute_variable_coloring<int, float>(fj_cpu_climber_t<int, float>&);
+template void retire_var_best_moves<int, float>(fj_cpu_climber_t<int, float>&);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void cpufj_solve(fj_cpu_climber_t<int, double>*, double, double);
+template void report_cpu_incumbent<int, double>(
+  fj_cpu_climber_t<int, double>&, double, const std::vector<double>&, double);
+template void report_cpu_incumbent<int, double>(fj_cpu_climber_t<int, double>&);
+template void recompute_lhs<int, double>(fj_cpu_climber_t<int, double>&);
+template void recompute_slack<int, double>(fj_cpu_climber_t<int, double>&);
+template void invalidate_mtm_cache<int, double>(fj_cpu_climber_t<int, double>&);
+template void compute_variable_coloring<int, double>(fj_cpu_climber_t<int, double>&);
+template void retire_var_best_moves<int, double>(fj_cpu_climber_t<int, double>&);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip
 

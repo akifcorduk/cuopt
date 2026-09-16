@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "api.hpp"
 #include "../internal.hpp"
 
 namespace cuopt::mathematical_optimization::mip {

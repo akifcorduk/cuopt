@@ -6,6 +6,7 @@
 
 #include "audit.hpp"
 #include "internal.hpp"
+#include "problem.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -13,7 +14,6 @@ namespace {
 constexpr double fj_audit_rel_slack       = 1e-9;
 constexpr double fj_audit_abs_floor       = 1e-6;
 constexpr int32_t fj_audit_row_terms_printed = 64;
-constexpr bool fj_audit_every_iteration       = false;
 constexpr bool fj_audit_each_row_update       = false;
 constexpr bool fj_audit_each_objective_update = false;
 }  // namespace
@@ -311,7 +311,7 @@ void audit_incremental_state(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* sit
 
 template <typename i_t, typename f_t>
 bool check_variable_feasibility(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                       bool check_integer = true)
+                                bool check_integer)
 {
   for (i_t var_idx = 0; var_idx < fj_cpu.problem->n_variables; var_idx += 1) {
     auto val      = fj_cpu.h_assignment[var_idx];
@@ -373,5 +373,32 @@ void sanity_checks(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
                "Objective weight floor should be positive or zero");
 }
 
+#if MIP_INSTANTIATE_FLOAT
+template void audit_assignment_bounds<int, float>(fj_cpu_climber_t<int, float>&, const char*);
+template float fresh_row_slack<int, float>(
+  fj_cpu_climber_t<int, float>&, int, const float*);
+template void audit_objective_update<int, float>(
+  fj_cpu_climber_t<int, float>&, int, float, float, float, float);
+template void audit_row_updates<int, float>(
+  fj_cpu_climber_t<int, float>&, int, float, float, int, int);
+template void audit_incremental_state<int, float>(
+  fj_cpu_climber_t<int, float>&, const char*);
+template bool check_variable_feasibility<int, float>(fj_cpu_climber_t<int, float>&, bool);
+template void sanity_checks<int, float>(fj_cpu_climber_t<int, float>&);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void audit_assignment_bounds<int, double>(fj_cpu_climber_t<int, double>&, const char*);
+template double fresh_row_slack<int, double>(
+  fj_cpu_climber_t<int, double>&, int, const double*);
+template void audit_objective_update<int, double>(
+  fj_cpu_climber_t<int, double>&, int, double, double, double, double);
+template void audit_row_updates<int, double>(
+  fj_cpu_climber_t<int, double>&, int, double, double, int, int);
+template void audit_incremental_state<int, double>(
+  fj_cpu_climber_t<int, double>&, const char*);
+template bool check_variable_feasibility<int, double>(fj_cpu_climber_t<int, double>&, bool);
+template void sanity_checks<int, double>(fj_cpu_climber_t<int, double>&);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip

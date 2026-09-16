@@ -7,6 +7,8 @@
 #include "structure.hpp"
 #include "../internal.hpp"
 #include "../climber.hpp"
+#include "../problem.hpp"
+#include "../search/api.hpp"
 #include <utilities/integer_scaling.hpp>
 #include <numeric>
 
@@ -449,14 +451,6 @@ void build_one_sided_rows(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 }
 
 
-// An eliminated coordinate, recorded in original variable indices. Records are lifted in reverse.
-template <typename i_t, typename f_t>
-struct fj_equality_substitution_t {
-  i_t variable;
-  f_t constant;
-  std::vector<std::pair<i_t, f_t>> terms;
-};
-
 // Eliminate coordinates through exact equalities while retaining each pivot's domain as a row.
 // Integer pivots are accepted only when divisibility proves that every lifted value stays integral.
 // FJ usually struggles with equality-heavy models since every move may result in equality rows being violated 
@@ -723,6 +717,42 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> make_equality_reduced_climber(
                   (int)reduced_nnz);
   return child;
 }
+
+#if MIP_INSTANTIATE_FLOAT
+template void detect_implied_integers<int, float>(
+  fj_cpu_climber_t<int, float>&, fj_cpu_problem_t<int, float>&);
+template void detect_free_equality_singletons<int, float>(fj_cpu_climber_t<int, float>&);
+template void precompute_problem_features<int, float>(
+  fj_cpu_climber_t<int, float>&, fj_cpu_problem_t<int, float>&);
+template void build_cardinality_index<int, float>(
+  fj_cpu_climber_t<int, float>&, fj_cpu_problem_t<int, float>&);
+template void certify_epigraph_variables<int, float>(fj_cpu_climber_t<int, float>&, int);
+template void build_one_sided_rows<int, float>(fj_cpu_climber_t<int, float>&);
+template std::unique_ptr<fj_cpu_climber_t<int, float>>
+make_equality_reduced_climber<int, float>(
+  fj_cpu_climber_t<int, float>&,
+  double,
+  std::vector<fj_equality_substitution_t<int, float>>&,
+  std::vector<int>&);
+#endif
+
+#if MIP_INSTANTIATE_DOUBLE
+template void detect_implied_integers<int, double>(
+  fj_cpu_climber_t<int, double>&, fj_cpu_problem_t<int, double>&);
+template void detect_free_equality_singletons<int, double>(fj_cpu_climber_t<int, double>&);
+template void precompute_problem_features<int, double>(
+  fj_cpu_climber_t<int, double>&, fj_cpu_problem_t<int, double>&);
+template void build_cardinality_index<int, double>(
+  fj_cpu_climber_t<int, double>&, fj_cpu_problem_t<int, double>&);
+template void certify_epigraph_variables<int, double>(fj_cpu_climber_t<int, double>&, int);
+template void build_one_sided_rows<int, double>(fj_cpu_climber_t<int, double>&);
+template std::unique_ptr<fj_cpu_climber_t<int, double>>
+make_equality_reduced_climber<int, double>(
+  fj_cpu_climber_t<int, double>&,
+  double,
+  std::vector<fj_equality_substitution_t<int, double>>&,
+  std::vector<int>&);
+#endif
 
 }  // namespace cuopt::mathematical_optimization::mip
 
