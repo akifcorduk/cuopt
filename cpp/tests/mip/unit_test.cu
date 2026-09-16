@@ -27,10 +27,12 @@ TEST(FeasibilityPumpTest, ExternalSolutionImprovementMargin)
 {
   using mip::external_solution_improves_fp_incumbent;
 
-  EXPECT_TRUE(external_solution_improves_fp_incumbent(99.8, 100.0));
-  EXPECT_FALSE(external_solution_improves_fp_incumbent(99.95, 100.0));
-  EXPECT_TRUE(external_solution_improves_fp_incumbent(-100.2, -100.0));
-  EXPECT_FALSE(external_solution_improves_fp_incumbent(-100.05, -100.0));
+  EXPECT_TRUE(external_solution_improves_fp_incumbent(98.9, 100.0));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(99.0, 100.0));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(99.1, 100.0));
+  EXPECT_TRUE(external_solution_improves_fp_incumbent(-101.1, -100.0));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(-101.0, -100.0));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(-100.9, -100.0));
   EXPECT_TRUE(external_solution_improves_fp_incumbent(-2. * mip::OBJECTIVE_EPSILON, 0.0));
   EXPECT_FALSE(external_solution_improves_fp_incumbent(-0.5 * mip::OBJECTIVE_EPSILON, 0.0));
   EXPECT_TRUE(

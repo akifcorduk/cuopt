@@ -25,7 +25,7 @@ namespace cuopt::mathematical_optimization::mip {
 
 constexpr double default_alpha                          = 0.99;
 constexpr double distance_to_check_for_feasible         = 0.01;
-constexpr double fp_external_solution_improvement_ratio = 0.001;
+constexpr double fp_external_solution_improvement_ratio = 0.01;
 
 template <typename f_t>
 bool external_solution_improves_fp_incumbent(f_t candidate_objective, f_t incumbent_objective)
