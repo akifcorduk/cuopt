@@ -468,7 +468,8 @@ void feasibility_pump_t<i_t, f_t>::revert_relaxation(solution_t<i_t, f_t>& solut
 }
 
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& solution)
+bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(
+  solution_t<i_t, f_t>& solution, std::optional<f_t> incumbent_objective_for_external_restart)
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
   // start by doing nearest rounding
@@ -481,6 +482,14 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     if (context.diversity_manager_ptr->check_b_b_preemption() || timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");
       round(solution);
+      return false;
+    }
+    auto& population = context.diversity_manager_ptr->population;
+    if (incumbent_objective_for_external_restart.has_value() && population.is_feasible() &&
+        external_solution_improves_fp_incumbent(population.best_feasible().get_objective(),
+                                                *incumbent_objective_for_external_restart)) {
+      CUOPT_LOG_DEBUG("Interrupting FP descent for external incumbent %g",
+                      population.best_feasible().get_user_objective());
       return false;
     }
     proj_begin = timer.remaining_time();

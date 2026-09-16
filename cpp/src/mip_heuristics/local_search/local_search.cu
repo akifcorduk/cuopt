@@ -676,6 +676,54 @@ void local_search_t<i_t, f_t>::resize_to_old_problem(problem_t<i_t, f_t>* old_pr
 }
 
 template <typename i_t, typename f_t>
+bool local_search_t<i_t, f_t>::restart_fp_from_external_solution(
+  solution_t<i_t, f_t>& solution,
+  population_t<i_t, f_t>* population_ptr,
+  rmm::device_uvector<f_t>& best_solution,
+  f_t& best_objective)
+{
+  population_ptr->add_external_solutions_to_population();
+  if (!population_ptr->is_feasible() ||
+      !external_solution_improves_fp_incumbent(population_ptr->best_feasible().get_objective(),
+                                               best_objective)) {
+    return false;
+  }
+
+  solution_t<i_t, f_t> external_solution(population_ptr->best_feasible());
+  const f_t external_objective = external_solution.get_objective();
+  CUOPT_LOG_INFO(
+    "FP received external incumbent %g, improving %g by more than %.3f%%; running "
+    "recombiners",
+    external_solution.get_user_objective(),
+    solution.problem_ptr->get_user_obj_from_solver_obj(best_objective),
+    100. * fp_external_solution_improvement_ratio);
+  population_ptr->run_all_recombiners(external_solution);
+  population_ptr->update_weights();
+
+  save_solution_and_add_cutting_plane(
+    population_ptr->best_feasible(), best_solution, best_objective);
+  if (!cutting_plane_added_for_active_run) {
+    solution.problem_ptr = &problem_with_objective_cut;
+    solution.resize_to_problem();
+    resize_to_new_problem();
+    cutting_plane_added_for_active_run = true;
+    fj.copy_weights(
+      population_ptr->weights, solution.handle_ptr, problem_with_objective_cut.n_constraints);
+  }
+  raft::copy(solution.assignment.data(),
+             best_solution.data(),
+             solution.assignment.size(),
+             solution.handle_ptr->get_stream());
+  fp.reset();
+  fp.cycle_queue.reset(solution);
+  CUOPT_LOG_INFO("Restarting FP from incumbent %g with alpha %g after external improvement %g",
+                 population_ptr->best_feasible().get_user_objective(),
+                 fp.config.alpha,
+                 solution.problem_ptr->get_user_obj_from_solver_obj(external_objective));
+  return true;
+}
+
+template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
   solution_t<i_t, f_t>& solution,
   problem_t<i_t, f_t>* old_problem_ptr,
@@ -780,13 +828,21 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       break;
     }
     CUOPT_LOG_DEBUG("fp_loop it %d last_improved_iteration %d", i, last_improved_iteration);
-    population_ptr->add_external_solutions_to_population();
+    if (restart_fp_from_external_solution(
+          solution, population_ptr, best_solution, best_objective)) {
+      last_improved_iteration = i;
+      continue;
+    }
     if (context.preempt_heuristic_solver_.load()) {
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
       break;
     }
-    is_feasible = fp.run_single_fp_descent(solution);
-    population_ptr->add_external_solutions_to_population();
+    is_feasible = fp.run_single_fp_descent(solution, best_objective);
+    if (restart_fp_from_external_solution(
+          solution, population_ptr, best_solution, best_objective)) {
+      last_improved_iteration = i;
+      continue;
+    }
     CUOPT_LOG_DEBUG("Population size at iteration %d: %d", i, population_ptr->current_size());
     if (context.preempt_heuristic_solver_.load()) {
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
@@ -811,7 +867,11 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
         break;
       }
       is_feasible = fp.restart_fp(solution);
-      population_ptr->add_external_solutions_to_population();
+      if (restart_fp_from_external_solution(
+            solution, population_ptr, best_solution, best_objective)) {
+        last_improved_iteration = i;
+        continue;
+      }
       if (context.preempt_heuristic_solver_.load()) {
         CUOPT_LOG_DEBUG("Preempting heuristic solver!");
         break;

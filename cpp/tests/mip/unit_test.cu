@@ -10,6 +10,7 @@
 
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 #include <cuopt/mathematical_optimization/solve.hpp>
+#include <mip_heuristics/local_search/feasibility_pump/feasibility_pump.cuh>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
 #include <pdlp/utilities/problem_checking.cuh>
 #include <utilities/common_utils.hpp>
@@ -21,6 +22,22 @@
 #include <gtest/gtest.h>
 
 namespace cuopt::mathematical_optimization::test {
+
+TEST(FeasibilityPumpTest, ExternalSolutionImprovementMargin)
+{
+  using mip::external_solution_improves_fp_incumbent;
+
+  EXPECT_TRUE(external_solution_improves_fp_incumbent(99.8, 100.0));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(99.95, 100.0));
+  EXPECT_TRUE(external_solution_improves_fp_incumbent(-100.2, -100.0));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(-100.05, -100.0));
+  EXPECT_TRUE(external_solution_improves_fp_incumbent(-2. * mip::OBJECTIVE_EPSILON, 0.0));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(-0.5 * mip::OBJECTIVE_EPSILON, 0.0));
+  EXPECT_TRUE(
+    external_solution_improves_fp_incumbent(1.0, std::numeric_limits<double>::infinity()));
+  EXPECT_FALSE(external_solution_improves_fp_incumbent(std::numeric_limits<double>::infinity(),
+                                                       std::numeric_limits<double>::infinity()));
+}
 
 io::mps_data_model_t<int, double> create_std_lp_problem()
 {

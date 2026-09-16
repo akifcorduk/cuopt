@@ -15,12 +15,28 @@
 
 #include <thrust/count.h>
 
+#include <algorithm>
+#include <cmath>
 #include <deque>
+#include <limits>
+#include <optional>
 
 namespace cuopt::mathematical_optimization::mip {
 
-constexpr double default_alpha                  = 0.99;
-constexpr double distance_to_check_for_feasible = 0.01;
+constexpr double default_alpha                          = 0.99;
+constexpr double distance_to_check_for_feasible         = 0.01;
+constexpr double fp_external_solution_improvement_ratio = 0.001;
+
+template <typename f_t>
+bool external_solution_improves_fp_incumbent(f_t candidate_objective, f_t incumbent_objective)
+{
+  if (!std::isfinite(candidate_objective)) { return false; }
+  if (!std::isfinite(incumbent_objective)) { return true; }
+  const f_t improvement_margin = std::max(
+    static_cast<f_t>(std::abs(incumbent_objective) * fp_external_solution_improvement_ratio),
+    static_cast<f_t>(OBJECTIVE_EPSILON));
+  return candidate_objective < incumbent_objective - improvement_margin;
+}
 
 template <typename i_t, typename f_t>
 struct cycle_queue_t {
@@ -120,7 +136,9 @@ class feasibility_pump_t {
 
   void perturbate(solution_t<i_t, f_t>& solution);
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
-  bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
+  bool run_single_fp_descent(
+    solution_t<i_t, f_t>& solution,
+    std::optional<f_t> incumbent_objective_for_external_restart = std::nullopt);
   bool round(solution_t<i_t, f_t>& solution);
   bool handle_cycle(solution_t<i_t, f_t>& solution);
   bool restart_fp(solution_t<i_t, f_t>& solution);
