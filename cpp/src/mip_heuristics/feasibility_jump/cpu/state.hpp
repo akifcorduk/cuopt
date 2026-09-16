@@ -376,6 +376,7 @@ struct fj_lane_policy_t {
   bool use_precedence_seed{false};
   bool use_affine_equality_seed{false};
   bool use_unit_commitment_seed{false};
+  bool use_fixed_charge_network_seed{false};
   bool use_bound_prop{false};
   bool low_latency{false};
   bool use_weight_donation{false};

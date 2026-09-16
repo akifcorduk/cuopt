@@ -20,5 +20,8 @@ struct row_repair_move_t {
 template <typename i_t, typename f_t>
 void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c);
 
+template <typename i_t, typename f_t>
+bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget);
+
 }  // namespace cuopt::mathematical_optimization::mip
 

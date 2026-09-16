@@ -25,6 +25,7 @@
 #include "seeds/matching.cpp"
 #include "seeds/chain.cpp"
 #include "seeds/affine.cpp"
+#include "seeds/network.cpp"
 #include "climber.cpp"
 #include "loop.cpp"
 #include "portfolio.cpp"

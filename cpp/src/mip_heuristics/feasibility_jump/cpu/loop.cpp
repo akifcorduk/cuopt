@@ -112,6 +112,12 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   // Bound propagation supplies the tight domains used by coordinated equality moves.
   apply_bound_propagation(*fj_cpu);
   if (fj_cpu->use_unit_commitment_seed) apply_unit_commitment_seed(*fj_cpu);
+  if (fj_cpu->use_fixed_charge_network_seed) {
+    const double elapsed = std::chrono::duration<double>(
+      std::chrono::high_resolution_clock::now() - solve_start).count();
+    apply_fixed_charge_network_seed(
+      *fj_cpu, std::max(0.0, std::min(0.5, 0.1 * ((double)in_time_limit - elapsed))));
+  }
   if (fj_cpu->use_affine_equality_seed) {
     const double elapsed = std::chrono::duration<double>(
       std::chrono::high_resolution_clock::now() - solve_start).count();
@@ -139,7 +145,8 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
 
   const bool paid_setup = fj_cpu->use_bound_prop || fj_cpu->use_lp_seed ||
                           fj_cpu->use_precedence_seed || fj_cpu->use_affine_equality_seed ||
-                          fj_cpu->use_unit_commitment_seed || fj_cpu->use_equality_substitution;
+                          fj_cpu->use_unit_commitment_seed || fj_cpu->use_equality_substitution ||
+                          fj_cpu->use_fixed_charge_network_seed;
   const f_t setup_seconds =
     paid_setup
       ? std::chrono::duration<f_t>(std::chrono::high_resolution_clock::now() - solve_start).count()
