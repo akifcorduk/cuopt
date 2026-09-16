@@ -56,6 +56,7 @@ set(MIP_NON_LP_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/covering.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/matching.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/network.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/seeds/pmedian.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/setup/bounds.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/setup/lp.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/cpu/setup/structure.cpp

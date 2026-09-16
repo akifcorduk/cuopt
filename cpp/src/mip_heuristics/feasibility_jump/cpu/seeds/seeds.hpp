@@ -62,6 +62,9 @@ template <typename i_t, typename f_t>
 bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget);
 
 template <typename i_t, typename f_t>
+bool apply_pmedian_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget);
+
+template <typename i_t, typename f_t>
 void apply_structural_completion_seed(fj_cpu_climber_t<i_t, f_t>& c);
 
 }  // namespace cuopt::mathematical_optimization::mip

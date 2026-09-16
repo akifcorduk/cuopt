@@ -118,6 +118,7 @@ void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& c, int lane, int64_t
   c.use_affine_equality_seed = lane == 2 || lane == 4 || lane == 11;
   c.use_unit_commitment_seed = lane == 6;
   c.use_fixed_charge_network_seed = lane == 3;
+  c.use_pmedian_seed = lane == 5;
   c.use_equality_substitution = lane % 4 == 0;
   c.use_bound_prop = lane % 2 == 0 && !c.low_latency;
   c.use_weight_donation = lane % 8 == 5 || lane % 8 == 6;
