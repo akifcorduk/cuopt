@@ -372,14 +372,14 @@ inline bool is_known_infeasible(const std::string& filename)
 // can join lines on (instance, field) without dropping rows. "NaN" is
 // emitted for root_lp_* when the value is unavailable.
 template <typename Solution>
-inline void print_miplib_gap_stat(
-  const std::string& filename,
-  const Solution& solution,
-  double solve_time_seconds,
-  const std::string& termination_status,
-  double root_lp_no_cuts,
-  double root_lp_with_cuts,
-  double cut_gen_time_sec = std::numeric_limits<double>::quiet_NaN())
+inline void print_miplib_gap_stat(const std::string& filename,
+                                  const Solution& solution,
+                                  double solve_time_seconds,
+                                  const std::string& termination_status,
+                                  double root_lp_no_cuts,
+                                  double root_lp_with_cuts,
+                                  double cut_gen_time_sec,
+                                  double primal_integral)
 {
   const std::string norm   = normalize_instance_name(filename);
   const bool infeasible    = is_known_infeasible(filename);
@@ -451,11 +451,14 @@ inline void print_miplib_gap_stat(
       na);
   }
 
-  line += std::format(" mip_gap_reported={:.6g} time_s={:.3f} cut_gen_time_s={:.3f} status={}",
-                      mip_gap,
-                      solve_time_seconds,
-                      cut_gen_time_sec,
-                      termination_status);
+  line += std::format(
+    " mip_gap_reported={:.6g} primal_integral={:.10g} time_s={:.3f} cut_gen_time_s={:.3f} "
+    "status={}",
+    mip_gap,
+    primal_integral,
+    solve_time_seconds,
+    cut_gen_time_sec,
+    termination_status);
 
   std::printf("%s\n", line.c_str());
   std::fflush(stdout);
