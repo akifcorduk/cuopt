@@ -185,12 +185,10 @@ void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& c, int lane, int64_t
     c.infeasible_restart_degrade_ratio = 1.04;  // Reduced from 1.05 for more tolerance
   }
 
-  bool cumulative = false;
   {
     phase_timer_t timer(c.t_seed);
     switch (lane % 8) {
       case 1: apply_structural_completion_seed<i_t, f_t>(c); break;
-      case 2: apply_aggressive_constraint_seed<i_t, f_t>(c); break;
       case 3: apply_greedy_covering_seed<i_t, f_t>(c); break;
       // Not where the LP pump runs: it rewrites the assignment wholesale and would discard this.
       case 4:
@@ -199,7 +197,6 @@ void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& c, int lane, int64_t
           apply_greedy_covering_seed<i_t, f_t>(c);
         }
         break;
-      case 5: apply_bipartite_matching_seed<i_t, f_t>(c); break;
       case 6: break;  // preserve the shared exact-cardinality anchor
       case 0:
         if (lane == 8) {
@@ -209,26 +206,15 @@ void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& c, int lane, int64_t
         break;
       default: break;
     }
-    if (lane == 10) {
-      apply_greedy_covering_seed<i_t, f_t>(c);
-      cumulative = apply_cumulative_chain_seed<i_t, f_t>(
-        c, (uint32_t)(base_seed + 2246822519u));
-    }
+    if (lane == 10) { apply_greedy_covering_seed<i_t, f_t>(c); }
     if (lane == 12 || lane == 15) apply_structural_completion_seed<i_t, f_t>(c);
     // Keep this as a single, structurally gated portfolio persona. Other lanes retain the
     // low-degree exact-k anchor, which is preferable when one-hot member order is not ordinal.
-    if (lane == 15) {
-      apply_exact_one_repair_seed<i_t, f_t>(c);
-      apply_ordinal_midpoint_seed<i_t, f_t>(c);
-    }
+    if (lane == 15) { apply_ordinal_midpoint_seed<i_t, f_t>(c); }
     // Lane 11 targets hard instances with LP seeding and additional structure recognition
     if (lane == 11) {
       apply_structural_completion_seed<i_t, f_t>(c);
       apply_greedy_covering_seed<i_t, f_t>(c);
-    }
-    if (lane == 2) {
-      cumulative = apply_cumulative_chain_seed<i_t, f_t>(
-        c, (uint32_t)(base_seed + 3141592653u));
     }
   }
 
@@ -300,7 +286,7 @@ void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& c, int lane, int64_t
     c.mtm_viol_samples = 8; c.mtm_sat_samples = 3; c.nnz_samples = 2000;
   }
 
-  // Two dynamic-weight trajectories; lane 10 yields to the cumulative or LP seed when available.
+  // Two dynamic-weight trajectories; lane 10 yields to the LP seed.
   if (lane == 6) {
     c.use_multiplicative_weights = true;
     c.saps_multiplier = (f_t)1.3;
@@ -308,10 +294,10 @@ void apply_lane_diversification(fj_cpu_climber_t<i_t, f_t>& c, int lane, int64_t
     c.settings.seed += 104729;
   }
   if (lane == 10) {
-    c.use_affine_equality_seed = cumulative;
+    c.use_affine_equality_seed = false;
     c.use_bound_prop = false;
-    c.use_lp_seed = !cumulative;
-    c.lp_seed_feasibility_objective = !cumulative;
+    c.use_lp_seed = true;
+    c.lp_seed_feasibility_objective = true;
     c.settings.seed += 224737;
   }
 

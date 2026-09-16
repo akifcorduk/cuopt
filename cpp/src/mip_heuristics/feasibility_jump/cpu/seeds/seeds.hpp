@@ -29,25 +29,13 @@ template <typename i_t, typename f_t>
 void apply_greedy_covering_seed(fj_cpu_climber_t<i_t, f_t>& c);
 
 template <typename i_t, typename f_t>
-void apply_aggressive_constraint_seed(fj_cpu_climber_t<i_t, f_t>& c);
-
-template <typename i_t, typename f_t>
 void apply_exact_k_seed(fj_cpu_climber_t<i_t, f_t>& c);
-
-template <typename i_t, typename f_t>
-void apply_exact_one_repair_seed(fj_cpu_climber_t<i_t, f_t>& c);
 
 template <typename i_t, typename f_t>
 void apply_ordinal_midpoint_seed(fj_cpu_climber_t<i_t, f_t>& c);
 
 template <typename i_t, typename f_t>
 void repair_difficult_anchor(fj_cpu_climber_t<i_t, f_t>& c);
-
-template <typename i_t, typename f_t>
-void apply_bipartite_matching_seed(fj_cpu_climber_t<i_t, f_t>& c);
-
-template <typename i_t, typename f_t>
-bool apply_cumulative_chain_seed(fj_cpu_climber_t<i_t, f_t>& c, uint32_t seed);
 
 template <typename i_t, typename f_t>
 void apply_precedence_completion_seed(fj_cpu_climber_t<i_t, f_t>& c);

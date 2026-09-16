@@ -13,122 +13,6 @@
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
-bool apply_cumulative_chain_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, uint32_t seed)
-{
-  if (fj_cpu.problem->equality_fraction <= 0.5 || fj_cpu.problem->nnz > fj_seed_nnz_limit) return false;
-  const i_t n = fj_cpu.problem->n_variables;
-  std::vector<std::vector<i_t>> groups;
-  std::vector<uint8_t> grouped(n, 0);
-  for (i_t row = 0; row < fj_cpu.problem->n_constraints; ++row) {
-    const f_t lb = fj_cpu.problem->cstr_lb[row], ub = fj_cpu.problem->cstr_ub[row];
-    const i_t begin = fj_cpu.problem->offsets[row], end = fj_cpu.problem->offsets[row + 1];
-    if (!std::isfinite(lb) || !std::isfinite(ub) || std::fabs(lb - ub) > fj_exact_k_tol ||
-        end - begin < 4 || end - begin > fj_exact_k_max_width) continue;
-    const f_t scale = fj_cpu.problem->coefficients[begin];
-    if (!(scale > 0) || std::fabs(lb / scale - 1) > fj_exact_k_tol) continue;
-    bool valid = true;
-    for (i_t p = begin; p < end; ++p) {
-      const i_t var = fj_cpu.problem->variables[p];
-      valid &= fj_cpu.h_is_binary_variable[var] && !grouped[var] &&
-               std::fabs(fj_cpu.problem->coefficients[p] - scale) <=
-                 fj_exact_k_tol * std::max((f_t)1, std::fabs(scale));
-    }
-    if (!valid) continue;
-    groups.emplace_back();
-    for (i_t p = begin; p < end; ++p) {
-      const i_t var = fj_cpu.problem->variables[p];
-      groups.back().push_back(var); grouped[var] = 1;
-    }
-  }
-  if (groups.size() < 8) return false;
-
-  struct edge_t { i_t row, a, b; };
-  std::vector<edge_t> edges;
-  std::vector<std::pair<i_t, i_t>> anchors;
-  std::vector<std::vector<i_t>> incident(n);
-  for (i_t row = 0; row < fj_cpu.problem->n_constraints; ++row) {
-    const f_t lb = fj_cpu.problem->cstr_lb[row], ub = fj_cpu.problem->cstr_ub[row];
-    if (!std::isfinite(lb) || !std::isfinite(ub) || std::fabs(lb - ub) > fj_exact_k_tol) continue;
-    i_t cont[2] = {-1, -1}, count = 0;
-    f_t coeff[2] = {0, 0};
-    bool valid = true;
-    for (i_t p = fj_cpu.problem->offsets[row]; p < fj_cpu.problem->offsets[row + 1]; ++p) {
-      const i_t var = fj_cpu.problem->variables[p];
-      if (!is_integer_var<i_t, f_t>(fj_cpu, var)) {
-        if (count == 2) { valid = false; break; }
-        cont[count] = var; coeff[count++] = fj_cpu.problem->coefficients[p];
-      } else if (!fj_cpu.h_is_binary_variable[var]) { valid = false; break; }
-    }
-    if (!valid || !count) continue;
-    if (count == 1) anchors.emplace_back(row, cont[0]);
-    else if (std::fabs(coeff[0] + coeff[1]) <= fj_exact_k_tol * std::max((f_t)1, std::fabs(coeff[0]))) {
-      const i_t e = edges.size(); edges.push_back({row, cont[0], cont[1]});
-      incident[cont[0]].push_back(e); incident[cont[1]].push_back(e);
-    }
-  }
-  std::vector<i_t> chain, chain_rows;
-  for (auto [anchor_row, anchor_var] : anchors) {
-    std::vector<uint8_t> used(edges.size(), 0);
-    std::vector<i_t> states{anchor_var}, rows{anchor_row};
-    i_t current = anchor_var;
-    while (true) {
-      i_t e = -1;
-      for (i_t candidate : incident[current]) if (!used[candidate]) { e = candidate; break; }
-      if (e < 0) break;
-      used[e] = 1; current = edges[e].a == current ? edges[e].b : edges[e].a;
-      states.push_back(current); rows.push_back(edges[e].row);
-    }
-    if (states.size() > chain.size()) { chain = std::move(states); chain_rows = std::move(rows); }
-  }
-  if (chain.size() < 16) return false;
-
-  auto propagate = [&] {
-    f_t excess = 0;
-    for (size_t k = 0; k < chain.size(); ++k) {
-      const i_t row = chain_rows[k], target = chain[k];
-      f_t rhs = fj_cpu.problem->cstr_lb[row], target_coeff = 0;
-      for (i_t p = fj_cpu.problem->offsets[row]; p < fj_cpu.problem->offsets[row + 1]; ++p) {
-        const i_t var = fj_cpu.problem->variables[p]; const f_t c = fj_cpu.problem->coefficients[p];
-        if (var == target) target_coeff = c; else rhs -= c * fj_cpu.h_assignment[var];
-      }
-      if (target_coeff == 0) return std::numeric_limits<f_t>::infinity();
-      const f_t value = rhs / target_coeff;
-      const auto bounds = fj_cpu.h_var_bounds[target].get();
-      excess += std::max((f_t)0, get_lower(bounds) - value) +
-                std::max((f_t)0, value - get_upper(bounds));
-      fj_cpu.h_assignment[target] = value;
-    }
-    return excess;
-  };
-  std::mt19937 rng(seed);
-  std::vector<i_t> choice(groups.size());
-  auto install = [&] {
-    for (size_t g = 0; g < groups.size(); ++g) {
-      for (i_t var : groups[g]) fj_cpu.h_assignment[var] = 0;
-      fj_cpu.h_assignment[groups[g][choice[g]]] = 1;
-    }
-  };
-  for (size_t g = 0; g < groups.size(); ++g)
-    choice[g] = std::uniform_int_distribution<i_t>(0, groups[g].size() - 1)(rng);
-  install(); f_t current = propagate(), best = current; auto best_choice = choice;
-  const auto started = std::chrono::steady_clock::now();
-  for (i_t iteration = 0; iteration < 30000 && best > fj_exact_k_tol; ++iteration) {
-    if (!(iteration & 255) && std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - started).count() > 0.15) break;
-    const i_t g = std::uniform_int_distribution<i_t>(0, groups.size() - 1)(rng);
-    const i_t old = choice[g];
-    choice[g] = std::uniform_int_distribution<i_t>(0, groups[g].size() - 1)(rng);
-    install(); const f_t candidate = propagate();
-    if (candidate <= current) { current = candidate; if (candidate < best) { best = candidate; best_choice = choice; } }
-    else choice[g] = old;
-  }
-  if (best > fj_exact_k_tol) return false;
-  choice = best_choice; install(); propagate(); recompute_lhs(fj_cpu);
-  fj_cpu.h_best_assignment = fj_cpu.h_assignment;
-  return true;
-}
-
-template <typename i_t, typename f_t>
 void apply_precedence_completion_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 {
   phase_timer_t timer(fj_cpu.t_seed);
@@ -229,12 +113,10 @@ void apply_precedence_completion_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 }
 
 #if MIP_INSTANTIATE_FLOAT
-template bool apply_cumulative_chain_seed<int, float>(fj_cpu_climber_t<int, float>&, uint32_t);
 template void apply_precedence_completion_seed<int, float>(fj_cpu_climber_t<int, float>&);
 #endif
 
 #if MIP_INSTANTIATE_DOUBLE
-template bool apply_cumulative_chain_seed<int, double>(fj_cpu_climber_t<int, double>&, uint32_t);
 template void apply_precedence_completion_seed<int, double>(fj_cpu_climber_t<int, double>&);
 #endif
 

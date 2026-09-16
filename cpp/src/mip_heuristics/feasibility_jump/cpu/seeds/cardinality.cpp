@@ -104,50 +104,6 @@ void apply_exact_k_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 }
 
 template <typename i_t, typename f_t>
-void apply_exact_one_repair_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
-{
-  const auto& offsets      = fj_cpu.problem->card_row_offsets;
-  const auto& members      = fj_cpu.problem->card_variables;
-  const auto& cardinalities = fj_cpu.problem->card_cardinalities;
-  const auto& owner        = fj_cpu.problem->card_group_of_variable;
-  if (offsets.size() <= 1 || cardinalities.size() + 1 != offsets.size() ||
-      owner.size() != fj_cpu.h_assignment.size())
-    return;
-
-  std::vector<i_t> groups;
-  i_t categorical_coverage = 0;
-  for (i_t group = 0; group < (i_t)cardinalities.size(); ++group) {
-    if (cardinalities[group] != 1) continue;
-    const i_t begin = offsets[group], end = offsets[group + 1];
-    bool disjoint = true;
-    for (i_t p = begin; p < end; ++p)
-      disjoint = disjoint && owner[members[p]] == group;
-    if (!disjoint) continue;
-    groups.push_back(group);
-    categorical_coverage += end - begin;
-  }
-
-  if (fj_cpu.epigraph_vars.empty() || fj_cpu.n_binary_vars <= 0 ||
-      2 * categorical_coverage < fj_cpu.n_binary_vars)
-    return;
-
-  for (i_t group : groups) {
-    const i_t begin = offsets[group], end = offsets[group + 1];
-    i_t chosen = members[begin];
-    for (i_t p = begin + 1; p < end; ++p) {
-      const i_t candidate = members[p];
-      if (fj_cpu.problem->h_obj_coeffs[candidate] < fj_cpu.problem->h_obj_coeffs[chosen] ||
-          (fj_cpu.problem->h_obj_coeffs[candidate] == fj_cpu.problem->h_obj_coeffs[chosen] && candidate < chosen))
-        chosen = candidate;
-    }
-    for (i_t p = begin; p < end; ++p)
-      fj_cpu.h_assignment[members[p]] = members[p] == chosen ? f_t{1} : f_t{0};
-  }
-  recompute_lhs(fj_cpu);
-  fj_cpu.h_best_assignment = fj_cpu.h_assignment;
-}
-
-template <typename i_t, typename f_t>
 void apply_ordinal_midpoint_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 {
   const auto& offsets = fj_cpu.problem->card_row_offsets;
@@ -246,14 +202,12 @@ void repair_difficult_anchor(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
 #if MIP_INSTANTIATE_FLOAT
 template void apply_exact_k_seed<int, float>(fj_cpu_climber_t<int, float>&);
-template void apply_exact_one_repair_seed<int, float>(fj_cpu_climber_t<int, float>&);
 template void apply_ordinal_midpoint_seed<int, float>(fj_cpu_climber_t<int, float>&);
 template void repair_difficult_anchor<int, float>(fj_cpu_climber_t<int, float>&);
 #endif
 
 #if MIP_INSTANTIATE_DOUBLE
 template void apply_exact_k_seed<int, double>(fj_cpu_climber_t<int, double>&);
-template void apply_exact_one_repair_seed<int, double>(fj_cpu_climber_t<int, double>&);
 template void apply_ordinal_midpoint_seed<int, double>(fj_cpu_climber_t<int, double>&);
 template void repair_difficult_anchor<int, double>(fj_cpu_climber_t<int, double>&);
 #endif

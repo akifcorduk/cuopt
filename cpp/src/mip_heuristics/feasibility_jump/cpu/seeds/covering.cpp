@@ -129,74 +129,6 @@ void apply_greedy_covering_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   fj_cpu.h_best_assignment = fj_cpu.h_assignment;
 }
 
-template <typename i_t, typename f_t>
-void apply_aggressive_constraint_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
-{
-  if (fj_cpu.problem->nnz > fj_seed_nnz_limit) return;
-
-  const auto started = std::chrono::steady_clock::now();
-  auto timed_out     = [&] {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >
-           fj_aggressive_budget_s;
-  };
-
-  recompute_lhs(fj_cpu);
-  const i_t baseline = fj_cpu.violated_constraints.size();
-  const auto anchor  = fj_cpu.h_assignment;
-  const f_t tol      = 1e-6;
-  std::vector<row_repair_move_t<i_t, f_t>> candidates;
-
-  for (i_t pass = 0; pass < fj_aggressive_passes && !timed_out(); ++pass) {
-    i_t moves = 0;
-    for (i_t row = 0; row < fj_cpu.problem->n_constraints; ++row) {
-      if ((row & 0xFF) == 0 && timed_out()) break;
-
-      const i_t begin = fj_cpu.problem->offsets[row];
-      const i_t end   = fj_cpu.problem->offsets[row + 1];
-      if (begin == end) continue;
-
-      const f_t lb      = fj_cpu.problem->cstr_lb[row];
-      const f_t ub      = fj_cpu.problem->cstr_ub[row];
-      const bool has_lb = std::isfinite(lb);
-      const bool has_ub = std::isfinite(ub);
-      if (!has_lb && !has_ub) continue;
-
-      f_t sum = 0;
-      for (i_t p = begin; p < end; ++p)
-        sum += (f_t)fj_cpu.problem->coefficients[p] * (f_t)fj_cpu.h_assignment[fj_cpu.problem->variables[p]];
-
-      f_t direction = 0;
-      f_t target    = 0;
-      if (has_lb && sum < lb - tol) {
-        direction = 1;
-        target    = lb;
-      } else if (has_ub && sum > ub + tol) {
-        direction = -1;
-        target    = ub;
-      } else {
-        continue;
-      }
-
-      collect_row_repair_moves<i_t, f_t>(fj_cpu, begin, end, direction, tol, candidates);
-      for (const auto& move : candidates) {
-        if (direction > 0 ? sum >= target - tol : sum <= target + tol) break;
-        const f_t delta = move.new_val - (f_t)fj_cpu.h_assignment[move.var];
-        sum += move.coeff * delta;
-        fj_cpu.h_assignment[move.var] = move.new_val;
-        ++moves;
-      }
-    }
-    if (moves == 0) break;
-  }
-
-  recompute_lhs(fj_cpu);
-  if ((i_t)fj_cpu.violated_constraints.size() >= baseline) {
-    fj_cpu.h_assignment = anchor;
-    recompute_lhs(fj_cpu);
-  }
-  fj_cpu.h_best_assignment = fj_cpu.h_assignment;
-}
-
 #if MIP_INSTANTIATE_FLOAT
 template void collect_row_repair_moves<int, float>(fj_cpu_climber_t<int, float>&,
                                                    int,
@@ -205,7 +137,6 @@ template void collect_row_repair_moves<int, float>(fj_cpu_climber_t<int, float>&
                                                    float,
                                                    std::vector<row_repair_move_t<int, float>>&);
 template void apply_greedy_covering_seed<int, float>(fj_cpu_climber_t<int, float>&);
-template void apply_aggressive_constraint_seed<int, float>(fj_cpu_climber_t<int, float>&);
 #endif
 
 #if MIP_INSTANTIATE_DOUBLE
@@ -216,7 +147,6 @@ template void collect_row_repair_moves<int, double>(fj_cpu_climber_t<int, double
                                                     double,
                                                     std::vector<row_repair_move_t<int, double>>&);
 template void apply_greedy_covering_seed<int, double>(fj_cpu_climber_t<int, double>&);
-template void apply_aggressive_constraint_seed<int, double>(fj_cpu_climber_t<int, double>&);
 #endif
 
 }  // namespace cuopt::mathematical_optimization::mip
