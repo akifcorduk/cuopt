@@ -385,4 +385,3 @@ void invalidate_mtm_cache(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
 
 }  // namespace cuopt::mathematical_optimization::mip
-

@@ -8,10 +8,10 @@
 #pragma once
 
 #include <cuda/stream>
-#include <utilities/type_2.hpp>
 #include <raft/core/device_span.hpp>
 #include <raft/core/handle.hpp>
 #include <raft/util/cudart_utils.hpp>
+#include <utilities/type_2.hpp>
 
 #include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>

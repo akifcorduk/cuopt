@@ -389,8 +389,8 @@ int main(int argc, char** argv)
     const int probing_threads            = std::max(1, (int)allowed_cpus().size());
     probing_presolve->settings.num_tasks = std::max(1, probing_threads - 1);
 
-    const auto probing_t0 = clk::now();
-    bool infeasible       = false;
+    const auto probing_t0             = clk::now();
+    bool infeasible                   = false;
     const int saved_max_active_levels = omp_get_max_active_levels();
     if (saved_max_active_levels < 2) { omp_set_max_active_levels(2); }
 #pragma omp parallel num_threads(probing_threads)
@@ -413,13 +413,12 @@ int main(int argc, char** argv)
     }
     mip::trivial_presolve(
       problem, /*remap_cache_ids=*/true, /*compute_related_vars=*/!no_related_vars);
-    std::printf(
-      "probing: %zu cached vars  %.3fs  threads=%d  work_limit=%.3f  step=%d\n",
-      probing_presolve->probing_cache.probing_cache.size(),
-      since(probing_t0),
-      probing_threads,
-      probing_budget.probing_work_limit,
-      probing_budget.probing_step_size);
+    std::printf("probing: %zu cached vars  %.3fs  threads=%d  work_limit=%.3f  step=%d\n",
+                probing_presolve->probing_cache.probing_cache.size(),
+                since(probing_t0),
+                probing_threads,
+                probing_budget.probing_work_limit,
+                probing_budget.probing_step_size);
   }
 
   std::printf("instance: %s  n_vars=%d n_cstrs=%d nnz=%d\n",
@@ -740,15 +739,13 @@ int main(int argc, char** argv)
         const double ub = (double)row_ub[r];
         const auto verdict =
           check_row(A_val.data(),
-                                 A_idx.data(),
-                                 (int64_t)A_off[r],
-                                 (int64_t)A_off[r + 1],
-                                 user.data(),
-                                 lb,
-                                 ub,
-                                 [&](double positive) {
-                                   return scaled_row_limits(abs_tol, positive, lb, ub);
-                                 });
+                    A_idx.data(),
+                    (int64_t)A_off[r],
+                    (int64_t)A_off[r + 1],
+                    user.data(),
+                    lb,
+                    ub,
+                    [&](double positive) { return scaled_row_limits(abs_tol, positive, lb, ub); });
         if (verdict.excess > 0.0) {
           ++bad_rows;
           if (verdict.excess > worst_row) {
@@ -759,8 +756,7 @@ int main(int argc, char** argv)
       }
       for (i_t v = 0; v < (i_t)user.size(); ++v) {
         const double x = (double)user[v];
-        if (bound_excess(x, (double)col_lb[v], (double)col_ub[v], abs_tol) > 0.0)
-          ++bad_bnd;
+        if (bound_excess(x, (double)col_lb[v], (double)col_ub[v], abs_tol) > 0.0) ++bad_bnd;
         if ((v_type[v] == 'I' || v_type[v] == 'B') && std::fabs(x - std::round(x)) > int_tol)
           ++bad_int;
       }

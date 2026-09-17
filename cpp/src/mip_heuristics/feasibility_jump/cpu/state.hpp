@@ -591,5 +591,3 @@ void complete_climber_portfolio(std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> firs
                                 bool low_latency = false);
 
 }  // namespace cuopt::mathematical_optimization::mip
-
-

@@ -933,5 +933,3 @@ template void apply_structural_completion_seed<int, double>(fj_cpu_climber_t<int
 #endif
 
 }  // namespace cuopt::mathematical_optimization::mip
-
-

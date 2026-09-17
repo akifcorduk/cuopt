@@ -419,4 +419,3 @@ template void complete_climber_portfolio<int, double>(
 #endif
 
 }  // namespace cuopt::mathematical_optimization::mip
-

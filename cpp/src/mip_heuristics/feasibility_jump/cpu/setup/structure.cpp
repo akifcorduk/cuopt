@@ -453,7 +453,7 @@ void build_one_sided_rows(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
 // Eliminate coordinates through exact equalities while retaining each pivot's domain as a row.
 // Integer pivots are accepted only when divisibility proves that every lifted value stays integral.
-// FJ usually struggles with equality-heavy models since every move may result in equality rows being violated 
+// FJ usually struggles with equality-heavy models since every move may result in equality rows being violated
 // and repair having to be applied to many other variables to "compensate".
 // Rewriting the problem may help in some cases.
 template <typename i_t, typename f_t>
@@ -755,4 +755,3 @@ make_equality_reduced_climber<int, double>(
 #endif
 
 }  // namespace cuopt::mathematical_optimization::mip
-

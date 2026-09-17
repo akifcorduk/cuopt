@@ -550,5 +550,3 @@ template void retire_var_best_moves<int, double>(fj_cpu_climber_t<int, double>&)
 #endif
 
 }  // namespace cuopt::mathematical_optimization::mip
-
-
