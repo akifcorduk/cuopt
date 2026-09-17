@@ -259,8 +259,7 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
   // bounded and feasible while selecting independent vertices for the portfolio. This is gated by
   // the certificate above; ordinary objective-bearing and mixed-sign models are unchanged.
   if (monotone_integer_equalities) {
-    cuopt::pcgenerator_t objective_rng((uint64_t)(uint32_t)fj_cpu.settings.seed ^
-                                       0xd1b54a32d192ed03ULL);
+    cuopt::pcgenerator_t objective_rng(fj_cpu.settings.seed ^ 0xd1b54a32d192ed03ULL);
     for (i_t var = 0; var < fj_cpu.problem->n_variables; ++var)
       base.objective[var] = f_t{1} + (f_t)objective_rng.next_double();
   }
@@ -271,8 +270,8 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
   std::vector<f_t> rounded;
   std::vector<f_t> selected;
   // Keep the least-infeasible rounded LP projection as the FJ starting point.
-  // total_violations is an excess measure, so larger values are worse.
-  f_t selected_violation = std::numeric_limits<f_t>::infinity();
+  // total_violations sums negative excesses, so the greatest value is the least infeasible.
+  f_t selected_violation = -std::numeric_limits<f_t>::infinity();
 
   const int32_t projections = fj_cpu.use_deep_lp_pump ? 100 : fj_lp_pump_projections;
   for (int32_t projection = 0; projection < projections; ++projection) {
@@ -291,8 +290,7 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
     if ((i_t)x.size() < n_variables) break;
 
     rounded.resize(n_variables);
-    cuopt::pcgenerator_t rng((uint64_t)(uint32_t)fj_cpu.settings.seed +
-                             0x9e3779b9ULL * (uint64_t)projection);
+    cuopt::pcgenerator_t rng(fj_cpu.settings.seed + 0x9e3779b9ULL * (uint64_t)projection);
     bool valid = true;
     for (i_t var = 0; var < n_variables && valid; ++var) {
       const auto bounds = fj_cpu.h_var_bounds[var].get();
@@ -338,7 +336,8 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
     }
     std::copy(candidate.begin(), candidate.end(), fj_cpu.h_assignment.begin());
     recompute_lhs(fj_cpu);
-    if (fj_cpu.total_violations < selected_violation) {
+    cuopt_assert(fj_cpu.total_violations <= f_t{0}, "total_violations should be nonpositive");
+    if (fj_cpu.total_violations > selected_violation) {
       selected_violation = fj_cpu.total_violations;
       selected           = candidate;
     }
