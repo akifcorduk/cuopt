@@ -14,8 +14,6 @@ inline constexpr double fj_bigval_threshold     = 1e20;
 inline constexpr double fj_seed_magnitude_limit = 1e7;
 inline constexpr double fj_integer_domain_limit = 1e7;
 
-// Deliberate FJ feasibility margin inherited from the original implementation. Despite the old
-// MACHINE_EPSILON name, this is an algorithmic tolerance rather than floating-point epsilon.
 inline constexpr double fj_row_tolerance_margin = 1e-7;
 
 // Incremental-state refresh cadence.
