@@ -583,8 +583,8 @@ endif ()
 # x86-64-v3 also implies hardware FMA support
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
         CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
-    set_property(SOURCE ${MPS_FAST_SRC_FILES} DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-            APPEND PROPERTY COMPILE_OPTIONS "-mbmi2;-mavx2;-msse4.2;-mfma")
+    list(APPEND CUOPT_CXX_FLAGS -march=x86-64-v3)
+    list(APPEND CUOPT_CUDA_FLAGS -Xcompiler=-march=x86-64-v3)
 endif ()
 
 # TODO: figure out a set of flags for ARM that fits the range of CPUs we wish to support (neoverse?)
