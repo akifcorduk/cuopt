@@ -15,7 +15,6 @@
 
 #include <mip_heuristics/mip_constants.hpp>
 
-#include <utilities/copy_helpers.hpp>
 #include <utilities/device_scalar_init.hpp>
 #include <utilities/unique_pinned_ptr.hpp>
 

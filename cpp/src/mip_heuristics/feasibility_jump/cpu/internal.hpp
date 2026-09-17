@@ -20,7 +20,7 @@
 #include <mip_heuristics/utils.hpp>
 
 #include <utilities/pcgenerator.hpp>
-#include <utilities/seed_generator.hpp>
+#include <utilities/seed_generator.cuh>
 
 #include <raft/core/nvtx.hpp>
 

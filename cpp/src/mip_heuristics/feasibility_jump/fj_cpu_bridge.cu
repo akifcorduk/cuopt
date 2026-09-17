@@ -12,7 +12,7 @@
 #include <dual_simplex/user_problem.hpp>
 #include <math_optimization/tic_toc.hpp>
 #include <mip_heuristics/mip_constants.hpp>
-#include <utilities/seed_generator.hpp>
+#include <utilities/seed_generator.cuh>
 
 #include <algorithm>
 #include <cmath>

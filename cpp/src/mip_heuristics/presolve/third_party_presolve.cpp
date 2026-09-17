@@ -820,8 +820,7 @@ third_party_presolve_status_t third_party_presolve_t<i_t, f_t>::apply_pslp(
     assert(presolver != nullptr && "Presolver initialization failed");
     const PresolveStatus pslp_status = run_presolver(presolver);
     auto end_time                    = std::chrono::high_resolution_clock::now();
-    [[maybe_unused]] auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     CUOPT_LOG_DEBUG("PSLP presolver time: %d milliseconds", duration.count());
     CUOPT_LOG_INFO("PSLP Presolved problem: %d constraints, %d variables, %d non-zeros",
                    presolver->stats->n_rows_reduced,
@@ -891,7 +890,7 @@ third_party_presolve_status_t third_party_presolve_t<i_t, f_t>::apply_papilo(
 
   const auto papilo_t0 = std::chrono::steady_clock::now();
   auto result          = papilo_presolver.apply(papilo_problem);
-  [[maybe_unused]] const double papilo_wall =
+  const double papilo_wall =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - papilo_t0).count();
   // The effective badge is what set_presolve_parameters actually installed; the cap alone is
   // misleading because it only binds once ncols/2 exceeds it.

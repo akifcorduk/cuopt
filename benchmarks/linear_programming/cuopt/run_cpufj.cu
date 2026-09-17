@@ -46,7 +46,7 @@
 #include <memory>
 #include <string>
 #include <system_error>
-#include <utilities/seed_generator.hpp>
+#include <utilities/seed_generator.cuh>
 #include <vector>
 
 #include "initial_problem_check.hpp"
