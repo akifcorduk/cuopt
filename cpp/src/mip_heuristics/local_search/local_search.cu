@@ -801,7 +801,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
   bool is_feasible                   = solution.compute_feasibility();
   cutting_plane_added_for_active_run = is_feasible;
   double best_objective =
-    is_feasible ? solution.get_objective() : std::numeric_limits<double>::max();
+    is_feasible ? solution.get_objective() : std::numeric_limits<double>::infinity();
   rmm::device_uvector<f_t> best_solution(solution.assignment, solution.handle_ptr->get_stream());
   problem_t<i_t, f_t>* old_problem_ptr = solution.problem_ptr;
   fp.timer                             = timer_t(timer.remaining_time());

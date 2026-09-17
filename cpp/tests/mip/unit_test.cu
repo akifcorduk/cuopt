@@ -10,8 +10,10 @@
 
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 #include <cuopt/mathematical_optimization/solve.hpp>
+#include <mip_heuristics/diversity/diversity_manager.cuh>
 #include <mip_heuristics/local_search/feasibility_pump/feasibility_pump.cuh>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
+#include <mip_heuristics/solver.cuh>
 #include <pdlp/utilities/problem_checking.cuh>
 #include <utilities/common_utils.hpp>
 #include <utilities/copy_helpers.hpp>
@@ -37,6 +39,7 @@ TEST(FeasibilityPumpTest, ExternalSolutionImprovementMargin)
   EXPECT_FALSE(external_solution_improves_fp_incumbent(-0.5 * mip::OBJECTIVE_EPSILON, 0.0));
   EXPECT_TRUE(
     external_solution_improves_fp_incumbent(1.0, std::numeric_limits<double>::infinity()));
+  EXPECT_TRUE(external_solution_improves_fp_incumbent(1.0, std::numeric_limits<double>::max()));
   EXPECT_FALSE(external_solution_improves_fp_incumbent(std::numeric_limits<double>::infinity(),
                                                        std::numeric_limits<double>::infinity()));
 }
@@ -114,6 +117,37 @@ io::mps_data_model_t<int, double> create_single_var_milp_problem(bool maximize)
   std::vector<char> var_types = {'I'};
   problem.set_variable_types(var_types);
   return problem;
+}
+
+TEST(FeasibilityPumpTest, ConsumesQueuedFeasibleSolutionWhenPopulationIsInfeasible)
+{
+  raft::handle_t handle;
+  auto model      = create_std_milp_problem(false);
+  auto op_problem = mps_data_model_to_optimization_problem(&handle, model);
+
+  mip_solver_settings_t<int, double> settings{};
+  mip::problem_t<int, double> problem(op_problem, settings.get_tolerances());
+  problem.preprocess_problem();
+  mip::mip_solver_t<int, double> solver(problem, settings, timer_t(5.0));
+  mip::diversity_manager_t<int, double> diversity_manager(solver.context);
+  solver.context.diversity_manager_ptr = &diversity_manager;
+  diversity_manager.population.initialize_population();
+  diversity_manager.population.allocate_solutions();
+
+  ASSERT_FALSE(diversity_manager.population.is_feasible());
+  diversity_manager.population.add_external_solution(
+    {0.0, 0.0}, 0.0, mip::solution_origin_t::BRANCH_AND_BOUND);
+  ASSERT_TRUE(diversity_manager.population.solutions_in_external_queue_.load());
+  ASSERT_FALSE(diversity_manager.population.is_feasible());
+
+  mip::solution_t<int, double> fp_solution(problem);
+  fp_solution.copy_new_assignment(std::vector<double>{1.0, 0.0});
+  diversity_manager.ls.fp.timer = timer_t(1.0);
+
+  EXPECT_FALSE(diversity_manager.ls.fp.run_single_fp_descent(fp_solution, 100.0));
+  EXPECT_FALSE(diversity_manager.population.solutions_in_external_queue_.load());
+  ASSERT_TRUE(diversity_manager.population.is_feasible());
+  EXPECT_NEAR(diversity_manager.population.best_feasible().get_objective(), 0.0, 1e-12);
 }
 
 TEST(LPTest, TestSampleLP2)

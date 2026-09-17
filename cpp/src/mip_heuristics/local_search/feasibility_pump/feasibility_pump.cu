@@ -485,12 +485,17 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(
       return false;
     }
     auto& population = context.diversity_manager_ptr->population;
-    if (incumbent_objective_for_external_restart.has_value() && population.is_feasible() &&
-        external_solution_improves_fp_incumbent(population.best_feasible().get_objective(),
-                                                *incumbent_objective_for_external_restart)) {
-      CUOPT_LOG_DEBUG("Interrupting FP descent for external incumbent %g",
-                      population.best_feasible().get_user_objective());
-      return false;
+    if (incumbent_objective_for_external_restart.has_value()) {
+      if (population.solutions_in_external_queue_.load()) {
+        population.add_external_solutions_to_population();
+      }
+      if (population.is_feasible() &&
+          external_solution_improves_fp_incumbent(population.best_feasible().get_objective(),
+                                                  *incumbent_objective_for_external_restart)) {
+        CUOPT_LOG_DEBUG("Interrupting FP descent for external incumbent %g",
+                        population.best_feasible().get_user_objective());
+        return false;
+      }
     }
     proj_begin = timer.remaining_time();
     // pass n_assigned_integers from the previous iteration
