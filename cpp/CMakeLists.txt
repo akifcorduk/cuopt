@@ -583,8 +583,12 @@ endif ()
 # x86-64-v3 also implies hardware FMA support
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
         CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
-    list(APPEND CUOPT_CXX_FLAGS -march=x86-64-v3)
-    list(APPEND CUOPT_CUDA_FLAGS -Xcompiler=-march=x86-64-v3)
+    list(APPEND CUOPT_CXX_FLAGS -march=x86-64-v3 -fno-math-errno)
+    list(APPEND CUOPT_CUDA_FLAGS -Xcompiler=-march=x86-64-v3 -Xcompiler=-fno-math-errno)
+    if (NOT DEFINE_ASSERT)
+        list(APPEND CUOPT_CXX_FLAGS -fno-trapping-math)
+        list(APPEND CUOPT_CUDA_FLAGS -Xcompiler=-fno-trapping-math)
+    endif ()
 endif ()
 
 # TODO: figure out a set of flags for ARM that fits the range of CPUs we wish to support (neoverse?)
