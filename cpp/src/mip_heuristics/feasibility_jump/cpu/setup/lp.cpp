@@ -3,6 +3,7 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #include "lp.hpp"
 #include "../audit.hpp"
@@ -14,10 +15,10 @@ namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
 void eliminate_slacks(const lp_problem_t<i_t, f_t>& problem,
-                             i_t n_structural,
-                             csr_matrix_t<i_t, f_t>& csr_A,
-                             std::vector<f_t>& row_lower,
-                             std::vector<f_t>& row_upper)
+                      i_t n_structural,
+                      csr_matrix_t<i_t, f_t>& csr_A,
+                      std::vector<f_t>& row_lower,
+                      std::vector<f_t>& row_upper)
 {
   cuopt_assert(csr_A.m == problem.num_rows, "row count mismatch");
   cuopt_assert(csr_A.n == problem.num_cols, "column count mismatch");
@@ -60,9 +61,8 @@ void eliminate_slacks(const lp_problem_t<i_t, f_t>& problem,
       ++out;
     }
   }
-  cuopt_assert(
-    out == csr_A.row_start[csr_A.m] - static_cast<i_t>(problem.num_cols - n_structural),
-    "slack elimination removed the wrong number of entries");
+  cuopt_assert(out == csr_A.row_start[csr_A.m] - static_cast<i_t>(problem.num_cols - n_structural),
+               "slack elimination removed the wrong number of entries");
 
   csr_A.row_start[csr_A.m] = out;
   csr_A.j.resize(out);
@@ -73,9 +73,9 @@ void eliminate_slacks(const lp_problem_t<i_t, f_t>& problem,
 
 template <typename i_t, typename f_t>
 bool solve_lp_relaxation(const simplex::user_problem_t<i_t, f_t>& relaxation,
-                                double time_limit,
-                                std::vector<f_t>& x,
-                                double& lp_seconds)
+                         double time_limit,
+                         std::vector<f_t>& x,
+                         double& lp_seconds)
 {
   simplex::lp_status_t status = simplex::lp_status_t::UNSET;
   double seconds              = 0;
@@ -93,17 +93,16 @@ bool solve_lp_relaxation(const simplex::user_problem_t<i_t, f_t>& relaxation,
 
     const f_t lp_start = tic();
     simplex::lp_solution_t<i_t, f_t> lp_solution(relaxation.num_rows, relaxation.num_cols);
-    status = simplex::solve_linear_program(relaxation, lp_settings, lp_start, lp_solution);
+    status  = simplex::solve_linear_program(relaxation, lp_settings, lp_start, lp_solution);
     x       = std::move(lp_solution.x);
     seconds = toc(lp_start);
   }
   lp_seconds += seconds;
 
-  const bool usable = status == simplex::lp_status_t::OPTIMAL ||
-                      status == simplex::lp_status_t::TIME_LIMIT ||
-                      status == simplex::lp_status_t::ITERATION_LIMIT ||
-                      status == simplex::lp_status_t::CONCURRENT_LIMIT ||
-                      status == simplex::lp_status_t::WORK_LIMIT;
+  const bool usable =
+    status == simplex::lp_status_t::OPTIMAL || status == simplex::lp_status_t::TIME_LIMIT ||
+    status == simplex::lp_status_t::ITERATION_LIMIT ||
+    status == simplex::lp_status_t::CONCURRENT_LIMIT || status == simplex::lp_status_t::WORK_LIMIT;
   CUOPT_LOG_DEBUG("CPUFJ LP relaxation: %s after %.3fs of %.3fs%s",
                   simplex::lp_status_to_string(status).c_str(),
                   seconds,
@@ -129,7 +128,8 @@ static simplex::user_problem_t<i_t, f_t> make_lp_distance_problem(
 
   // The model's own objective is dropped: this LP measures distance alone.
   result.objective.assign(result.num_cols, f_t{0});
-  for (i_t k = 0; k < n_distance; ++k) result.objective[base.num_cols + k] = f_t{1};
+  for (i_t k = 0; k < n_distance; ++k)
+    result.objective[base.num_cols + k] = f_t{1};
 
   result.lower = base.lower;
   result.upper = base.upper;
@@ -192,14 +192,14 @@ static simplex::user_problem_t<i_t, f_t> make_fixed_integer_lp(
   fixed.num_rows = base.num_rows;
   fixed.num_cols = base.num_cols;
   fixed.objective.assign(base.num_cols, f_t{0});
-  fixed.rhs = base.rhs;
-  fixed.row_sense = base.row_sense;
-  fixed.range_rows = base.range_rows;
-  fixed.range_value = base.range_value;
+  fixed.rhs            = base.rhs;
+  fixed.row_sense      = base.row_sense;
+  fixed.range_rows     = base.range_rows;
+  fixed.range_value    = base.range_value;
   fixed.num_range_rows = base.num_range_rows;
-  fixed.A = base.A;
-  fixed.lower = base.lower;
-  fixed.upper = base.upper;
+  fixed.A              = base.A;
+  fixed.lower          = base.lower;
+  fixed.upper          = base.upper;
   for (i_t var = 0; var < (i_t)rounded.size(); ++var) {
     if (!is_integer_var<i_t, f_t>(fj_cpu, var)) continue;
     fixed.lower[var] = fixed.upper[var] = rounded[var];
@@ -218,10 +218,9 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
   // deficits instead of simultaneously undoing stochastic round-ups.  Give one feasibility-LP
   // persona enough time to obtain a real basic solution on this broad structural class.  The
   // ordinary LP personas retain their tiny opportunistic budget, and deep pumps retain theirs.
-  bool monotone_integer_equalities = fj_cpu.lp_seed_feasibility_objective &&
-                                     fj_cpu.problem->equality_fraction == 1.0 &&
-                                     fj_cpu.n_integer_vars + fj_cpu.n_binary_vars ==
-                                       fj_cpu.problem->n_variables;
+  bool monotone_integer_equalities =
+    fj_cpu.lp_seed_feasibility_objective && fj_cpu.problem->equality_fraction == 1.0 &&
+    fj_cpu.n_integer_vars + fj_cpu.n_binary_vars == fj_cpu.problem->n_variables;
   if (monotone_integer_equalities) {
     for (i_t var = 0; var < fj_cpu.problem->n_variables; ++var) {
       const auto bounds = fj_cpu.h_var_bounds[var].get();
@@ -240,12 +239,11 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
     }
   }
 
-  const double budget = fj_cpu.use_deep_lp_pump
-                          ? std::min(3.5, 0.7 * (double)lane_time_limit)
-                          : monotone_integer_equalities
-                              ? std::min(2.0, 0.45 * (double)lane_time_limit)
-                              : std::min(fj_lp_pump_max_budget_s,
-                                         fj_lp_pump_budget_share * (double)lane_time_limit);
+  const double budget =
+    fj_cpu.use_deep_lp_pump ? std::min(3.5, 0.7 * (double)lane_time_limit)
+    : monotone_integer_equalities
+      ? std::min(2.0, 0.45 * (double)lane_time_limit)
+      : std::min(fj_lp_pump_max_budget_s, fj_lp_pump_budget_share * (double)lane_time_limit);
   if (budget <= 0) return;
 
   CPUFJ_NVTX_RANGE("CPUFJ::apply_lp_rounded_seed");
@@ -283,8 +281,8 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
     if (remaining <= 0) break;
 
     // Projection 0 is the plain relaxation; the rest chase the previous rounding.
-    const auto distance = projection == 0 ? simplex::user_problem_t<i_t, f_t>(base.handle_ptr)
-                                          : make_lp_distance_problem(base, fj_cpu, rounded);
+    const auto distance    = projection == 0 ? simplex::user_problem_t<i_t, f_t>(base.handle_ptr)
+                                             : make_lp_distance_problem(base, fj_cpu, rounded);
     const auto& relaxation = projection == 0 ? base : distance;
 
     std::vector<f_t> x;
@@ -294,7 +292,7 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
 
     rounded.resize(n_variables);
     cuopt::pcgenerator_t rng((uint64_t)(uint32_t)fj_cpu.settings.seed +
-                              0x9e3779b9ULL * (uint64_t)projection);
+                             0x9e3779b9ULL * (uint64_t)projection);
     bool valid = true;
     for (i_t var = 0; var < n_variables && valid; ++var) {
       const auto bounds = fj_cpu.h_var_bounds[var].get();
@@ -326,8 +324,8 @@ void apply_lp_rounded_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_lim
 
     std::vector<f_t> candidate = rounded;
     if (fj_cpu.use_deep_lp_pump) {
-      const double repair_budget = budget -
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+      const double repair_budget =
+        budget - std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
       if (repair_budget > 0.01) {
         auto fixed = make_fixed_integer_lp(base, fj_cpu, rounded);
         std::vector<f_t> repaired;
@@ -403,7 +401,7 @@ bool apply_lp_polish(fj_cpu_climber_t<i_t, f_t>& fj_cpu, double budget_s)
   std::vector<f_t> completion(n);
   for (i_t var = 0; var < n; ++var) {
     const auto bounds = fj_cpu.h_var_bounds[var].get();
-    const f_t value = is_integer_var<i_t, f_t>(fj_cpu, var) ? std::round(incumbent[var]) : x[var];
+    const f_t value   = is_integer_var<i_t, f_t>(fj_cpu, var) ? std::round(incumbent[var]) : x[var];
     if (!std::isfinite(value)) return false;
     completion[var] = std::clamp(value, get_lower(bounds), get_upper(bounds));
   }
@@ -414,7 +412,8 @@ bool apply_lp_polish(fj_cpu_climber_t<i_t, f_t>& fj_cpu, double budget_s)
                         fj_cpu.violated_constraints.empty() &&
                         check_variable_feasibility<i_t, f_t>(fj_cpu);
   if (!improved) {
-    std::copy(fj_cpu.h_best_assignment.begin(), fj_cpu.h_best_assignment.begin() + n,
+    std::copy(fj_cpu.h_best_assignment.begin(),
+              fj_cpu.h_best_assignment.begin() + n,
               fj_cpu.h_assignment.begin());
     recompute_slack(fj_cpu);
     return false;
@@ -438,38 +437,43 @@ template <typename i_t, typename f_t>
 void apply_lp_feasibility_dive(fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t lane_time_limit)
 {
   if (!fj_cpu.use_lp_feasibility_dive || !fj_cpu.problem->host_lp ||
-      fj_cpu.problem->nnz > fj_lp_seed_nnz_limit ||
-      fj_cpu.n_integer_vars == 0 || fj_cpu.problem->equality_fraction < 0.3) return;
-  const double budget = std::min(0.8, 0.5 * (double)lane_time_limit);
+      fj_cpu.problem->nnz > fj_lp_seed_nnz_limit || fj_cpu.n_integer_vars == 0 ||
+      fj_cpu.problem->equality_fraction < 0.3)
+    return;
+  const double budget                    = std::min(0.8, 0.5 * (double)lane_time_limit);
   simplex::user_problem_t<i_t, f_t> base = *fj_cpu.problem->host_lp;
   std::fill(base.objective.begin(), base.objective.end(), f_t{0});
   const auto started = std::chrono::steady_clock::now();
   std::vector<f_t> current(fj_cpu.h_assignment.begin(), fj_cpu.h_assignment.end());
   for (i_t depth = 0; depth < 4; ++depth) {
-    const double remaining = budget -
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    const double remaining =
+      budget - std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     if (remaining <= 0.01) break;
     std::vector<f_t> x;
     if (!solve_lp_relaxation(base, remaining, x, fj_cpu.t_lp_relaxation) ||
-        (i_t)x.size() < fj_cpu.problem->n_variables) break;
-    i_t best = -1;
+        (i_t)x.size() < fj_cpu.problem->n_variables)
+      break;
+    i_t best     = -1;
     f_t fraction = 0;
     for (i_t var = 0; var < fj_cpu.problem->n_variables; ++var) {
       if (!is_integer_var<i_t, f_t>(fj_cpu, var)) continue;
       const f_t candidate = std::fabs(x[var] - std::round(x[var]));
-      if (candidate >= 0.1 && candidate > fraction) { best = var; fraction = candidate; }
+      if (candidate >= 0.1 && candidate > fraction) {
+        best     = var;
+        fraction = candidate;
+      }
     }
     if (best < 0) break;
     const auto bounds = fj_cpu.h_var_bounds[best].get();
-    current[best] = std::clamp(std::floor(x[best]), get_lower(bounds), get_upper(bounds));
+    current[best]     = std::clamp(std::floor(x[best]), get_lower(bounds), get_upper(bounds));
     std::copy(current.begin(), current.end(), fj_cpu.h_assignment.begin());
     // The one-sided rows do not exist yet at setup, so recompute_slack would walk zero rows and
     // leave the violated set empty, making the test below vacuously true.
     recompute_lhs(fj_cpu);
     if (fj_cpu.violated_constraints.empty() && check_variable_feasibility<i_t, f_t>(fj_cpu)) {
       fj_cpu.h_best_assignment = fj_cpu.h_assignment;
-      fj_cpu.h_best_objective = fj_cpu.h_incumbent_objective -
-                                fj_cpu.settings.parameters.breakthrough_move_epsilon;
+      fj_cpu.h_best_objective =
+        fj_cpu.h_incumbent_objective - fj_cpu.settings.parameters.breakthrough_move_epsilon;
       fj_cpu.feasible_found = true;
       report_cpu_incumbent(fj_cpu);
       if (fj_cpu.shared_incumbent)

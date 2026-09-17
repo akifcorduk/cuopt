@@ -3,11 +3,12 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
-#include "seeds.hpp"
 #include "../internal.hpp"
 #include "../problem.hpp"
 #include "../search/api.hpp"
+#include "seeds.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -116,7 +117,7 @@ void apply_ordinal_midpoint_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   for (i_t group = 0; group + 1 < (i_t)offsets.size(); ++group) {
     const i_t begin = offsets[group], end = offsets[group + 1];
     if (end - begin < 3) continue;
-    i_t selected = 0;
+    i_t selected  = 0;
     bool disjoint = true;
     for (i_t p = begin; p < end; ++p) {
       const i_t var = members[p];
@@ -163,10 +164,10 @@ void repair_difficult_anchor(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
         fj_anchor_repair_budget_s)
       break;
 
-    const f_t lb = fj_cpu.problem->cstr_lb[row];
-    const f_t ub = fj_cpu.problem->cstr_ub[row];
-    f_t sum      = fj_cpu.h_lhs[row];
-    f_t target   = 0;
+    const f_t lb  = fj_cpu.problem->cstr_lb[row];
+    const f_t ub  = fj_cpu.problem->cstr_ub[row];
+    f_t sum       = fj_cpu.h_lhs[row];
+    f_t target    = 0;
     f_t direction = 0;
     if (sum < lb) {
       direction = 1;

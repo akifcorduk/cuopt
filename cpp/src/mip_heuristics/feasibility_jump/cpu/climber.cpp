@@ -3,6 +3,7 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #include "climber.hpp"
 #include "internal.hpp"
@@ -16,10 +17,10 @@ namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
 void init_fj_cpu_from_template(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                      const fj_cpu_climber_t<i_t, f_t>& tmpl,
-                                      const std::vector<f_t>& left_weights,
-                                      const std::vector<f_t>& right_weights,
-                                      f_t objective_weight)
+                               const fj_cpu_climber_t<i_t, f_t>& tmpl,
+                               const std::vector<f_t>& left_weights,
+                               const std::vector<f_t>& right_weights,
+                               f_t objective_weight)
 {
   const i_t n_variables   = (i_t)tmpl.problem->reverse_offsets.size() - 1;
   const i_t n_constraints = (i_t)tmpl.problem->offsets.size() - 1;
@@ -55,30 +56,23 @@ void init_fj_cpu_from_template(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   fj_cpu.h_tabu_lastinc.resize(n_variables, 0);
   fj_cpu.iterations = 0;
 
-  finalize_fj_cpu_host_initialization_from_template(fj_cpu,
-                                                    tmpl,
-                                                    n_variables,
-                                                    n_constraints,
-                                                    tmpl.n_integer_vars,
-                                                    nnz,
-                                                    tmpl.problem->tolerances);
+  finalize_fj_cpu_host_initialization_from_template(
+    fj_cpu, tmpl, n_variables, n_constraints, tmpl.n_integer_vars, nnz, tmpl.problem->tolerances);
 }
 
 template <typename i_t, typename f_t>
-void set_host_data_view(
-  fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-  i_t n_variables,
-  i_t n_constraints,
-  i_t n_integer_vars,
-  i_t nnz,
-  const typename mip_solver_settings_t<i_t, f_t>::tolerances_t& tolerances)
+void set_host_data_view(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
+                        i_t n_variables,
+                        i_t n_constraints,
+                        i_t n_integer_vars,
+                        i_t nnz,
+                        const typename mip_solver_settings_t<i_t, f_t>::tolerances_t& tolerances)
 {
   cuopt_assert(fj_cpu.problem->n_variables == n_variables, "problem variable count mismatch");
-  cuopt_assert(fj_cpu.problem->n_constraints == n_constraints,
-               "problem constraint count mismatch");
+  cuopt_assert(fj_cpu.problem->n_constraints == n_constraints, "problem constraint count mismatch");
   cuopt_assert(fj_cpu.problem->nnz == nnz, "problem nonzero count mismatch");
-  fj_cpu.row_tolerance = tolerances.absolute_tolerance - (f_t)fj_row_tolerance_margin;
-  fj_cpu.n_integer_vars          = n_integer_vars;
+  fj_cpu.row_tolerance  = tolerances.absolute_tolerance - (f_t)fj_row_tolerance_margin;
+  fj_cpu.n_integer_vars = n_integer_vars;
 }
 
 template <typename i_t, typename f_t>
@@ -144,7 +138,8 @@ void finalize_fj_cpu_host_initialization(
   // get_breakthrough_move divides by the coefficient of every variable in here.
   for ([[maybe_unused]] auto var_idx : problem.h_objective_vars) {
     cuopt_assert(problem.h_obj_coeffs[var_idx] != f_t{0}, "null coefficient in the objective vars");
-    cuopt_assert(std::isfinite((f_t)problem.h_obj_coeffs[var_idx]), "non-finite objective coefficient");
+    cuopt_assert(std::isfinite((f_t)problem.h_obj_coeffs[var_idx]),
+                 "non-finite objective coefficient");
   }
 
   f_t abs_obj_sum = 0;
@@ -229,9 +224,9 @@ void finalize_fj_cpu_host_initialization_from_template(
   }
 
   fj_cpu.bin_eliminated_rows = tmpl.bin_eliminated_rows;
-  fj_cpu.bin_singletons = tmpl.bin_singletons;
-  fj_cpu.bin_ignore_row = tmpl.bin_ignore_row;
-  fj_cpu.bin_ignore_var = tmpl.bin_ignore_var;
+  fj_cpu.bin_singletons      = tmpl.bin_singletons;
+  fj_cpu.bin_ignore_row      = tmpl.bin_ignore_row;
+  fj_cpu.bin_ignore_var      = tmpl.bin_ignore_var;
   fj_cpu.has_bin_elimination = tmpl.has_bin_elimination;
 
   wire_fj_cpu_host_views(fj_cpu, n_variables, n_constraints, n_integer_vars, nnz, tolerances);
@@ -268,7 +263,8 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_lp(
   std::vector<f_t> constraint_upper_bounds;
   i_t n_variables;
   if (n_structural > 0 && n_structural < problem.num_cols) {
-    eliminate_slacks(problem, n_structural, csr_A, constraint_lower_bounds, constraint_upper_bounds);
+    eliminate_slacks(
+      problem, n_structural, csr_A, constraint_lower_bounds, constraint_upper_bounds);
     n_variables = n_structural;
   } else {
     n_variables = problem.num_cols;
@@ -292,9 +288,9 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_lp(
       var_type == variable_type_t::CONTINUOUS ? var_t::CONTINUOUS : var_t::INTEGER;
 
     const bool is_integer = cpufj_variable_types[j] == var_t::INTEGER;
-    const bool is_binary =
-      is_integer && std::abs(problem.lower[j] - f_t{0}) <= settings.integer_tol &&
-      std::abs(problem.upper[j] - f_t{1}) <= settings.integer_tol;
+    const bool is_binary  = is_integer &&
+                           std::abs(problem.lower[j] - f_t{0}) <= settings.integer_tol &&
+                           std::abs(problem.upper[j] - f_t{1}) <= settings.integer_tol;
     if (is_integer) { ++n_integer_vars; }
     if (is_binary) { is_binary_variable[j] = 1; }
   }
@@ -325,14 +321,14 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_lp(
   fj_settings.feasibility_run        = false;
   fj_settings.seed                   = seed >= 0 ? seed : cuopt::seed_generator::get_seed();
 
-  auto fj_cpu      = std::make_unique<fj_cpu_climber_t<i_t, f_t>>(preemption_flag);
-  fj_cpu->settings = fj_settings;
-  auto problem_data = std::make_shared<fj_cpu_problem_t<i_t, f_t>>();
-  fj_cpu->problem   = problem_data;
-  problem_data->tolerances              = tolerances;
-  problem_data->n_variables             = n_variables;
-  problem_data->n_constraints           = n_constraints;
-  problem_data->nnz                     = nnz;
+  auto fj_cpu                 = std::make_unique<fj_cpu_climber_t<i_t, f_t>>(preemption_flag);
+  fj_cpu->settings            = fj_settings;
+  auto problem_data           = std::make_shared<fj_cpu_problem_t<i_t, f_t>>();
+  fj_cpu->problem             = problem_data;
+  problem_data->tolerances    = tolerances;
+  problem_data->n_variables   = n_variables;
+  problem_data->n_constraints = n_constraints;
+  problem_data->nnz           = nnz;
   problem_data->objective_scaling_factor = problem.obj_scale;
   problem_data->objective_offset         = problem.obj_constant;
 
@@ -344,11 +340,11 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_lp(
   problem_data->variables            = std::move(variables);
   problem_data->h_obj_coeffs =
     std::vector<f_t>(problem.objective.begin(), problem.objective.begin() + n_variables);
-  fj_cpu->h_var_bounds = std::move(variable_bounds);
-  problem_data->cstr_lb                 = std::move(constraint_lower_bounds);
-  problem_data->cstr_ub                 = std::move(constraint_upper_bounds);
-  problem_data->h_var_types             = std::move(cpufj_variable_types);
-  fj_cpu->h_is_binary_variable            = std::move(is_binary_variable);
+  fj_cpu->h_var_bounds         = std::move(variable_bounds);
+  problem_data->cstr_lb        = std::move(constraint_lower_bounds);
+  problem_data->cstr_ub        = std::move(constraint_upper_bounds);
+  problem_data->h_var_types    = std::move(cpufj_variable_types);
+  fj_cpu->h_is_binary_variable = std::move(is_binary_variable);
 
   fj_cpu->h_cstr_left_weights.resize(n_constraints, 1.0);
   fj_cpu->h_cstr_right_weights.resize(n_constraints, 1.0);
@@ -398,8 +394,7 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_model(
 
   cuopt_assert(coefficients.size() == (size_t)nnz, "coefficient size mismatch");
   cuopt_assert(variables.size() == (size_t)nnz, "variable index size mismatch");
-  cuopt_assert(offsets.size() == (size_t)(n_constraints + 1),
-               "constraint offset size mismatch");
+  cuopt_assert(offsets.size() == (size_t)(n_constraints + 1), "constraint offset size mismatch");
   cuopt_assert(!offsets.empty() && offsets.front() == 0, "invalid first constraint offset");
   cuopt_assert(offsets.back() == nnz, "invalid final constraint offset");
   cuopt_assert(std::is_sorted(offsets.begin(), offsets.end()), "unsorted constraint offsets");
@@ -408,13 +403,10 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_model(
                 variables.end(),
                 [n_variables](i_t variable) { return variable >= 0 && variable < n_variables; }),
     "variable index out of range");
-  cuopt_assert(objective_coefficients.size() == (size_t)n_variables,
-               "objective size mismatch");
-  cuopt_assert(variable_lower_bounds.empty() ||
-                 variable_lower_bounds.size() == (size_t)n_variables,
+  cuopt_assert(objective_coefficients.size() == (size_t)n_variables, "objective size mismatch");
+  cuopt_assert(variable_lower_bounds.empty() || variable_lower_bounds.size() == (size_t)n_variables,
                "variable lower bound size mismatch");
-  cuopt_assert(variable_upper_bounds.empty() ||
-                 variable_upper_bounds.size() == (size_t)n_variables,
+  cuopt_assert(variable_upper_bounds.empty() || variable_upper_bounds.size() == (size_t)n_variables,
                "variable upper bound size mismatch");
 
   if (constraint_lower_bounds.empty() && constraint_upper_bounds.empty()) {
@@ -449,8 +441,7 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_model(
     variable_upper_bounds.assign(n_variables, std::numeric_limits<f_t>::infinity());
   }
   if (variable_types.empty()) { variable_types.assign(n_variables, var_t::CONTINUOUS); }
-  cuopt_assert(variable_types.size() == (size_t)n_variables,
-               "variable type size mismatch");
+  cuopt_assert(variable_types.size() == (size_t)n_variables, "variable type size mismatch");
 
   if (maximize) {
     std::transform(objective_coefficients.begin(),
@@ -496,14 +487,14 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_model(
     assignment[variable] = value;
   }
 
-  auto fj_cpu      = std::make_unique<fj_cpu_climber_t<i_t, f_t>>(preemption_flag);
-  fj_cpu->settings = settings;
-  auto problem_data = std::make_shared<fj_cpu_problem_t<i_t, f_t>>();
-  fj_cpu->problem   = problem_data;
-  problem_data->tolerances              = tolerances;
-  problem_data->n_variables             = n_variables;
-  problem_data->n_constraints           = n_constraints;
-  problem_data->nnz                     = nnz;
+  auto fj_cpu                 = std::make_unique<fj_cpu_climber_t<i_t, f_t>>(preemption_flag);
+  fj_cpu->settings            = settings;
+  auto problem_data           = std::make_shared<fj_cpu_problem_t<i_t, f_t>>();
+  fj_cpu->problem             = problem_data;
+  problem_data->tolerances    = tolerances;
+  problem_data->n_variables   = n_variables;
+  problem_data->n_constraints = n_constraints;
+  problem_data->nnz           = nnz;
   problem_data->objective_scaling_factor =
     maximize ? -objective_scaling_factor : objective_scaling_factor;
   problem_data->objective_offset = maximize ? -objective_offset : objective_offset;
@@ -519,8 +510,8 @@ std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> init_fj_cpu_from_host_model(
   problem_data->cstr_lb              = std::move(constraint_lower_bounds);
   problem_data->cstr_ub              = std::move(constraint_upper_bounds);
   problem_data->h_var_types          = std::move(variable_types);
-  fj_cpu->h_is_binary_variable            = std::move(is_binary_variable);
-  fj_cpu->h_binary_indices                = std::move(binary_indices);
+  fj_cpu->h_is_binary_variable       = std::move(is_binary_variable);
+  fj_cpu->h_binary_indices           = std::move(binary_indices);
   fj_cpu->h_cstr_left_weights.resize(n_constraints, f_t{1});
   fj_cpu->h_cstr_right_weights.resize(n_constraints, f_t{1});
   fj_cpu->max_weight         = f_t{1};

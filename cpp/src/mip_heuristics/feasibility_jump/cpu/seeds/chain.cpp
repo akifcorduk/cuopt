@@ -3,12 +3,13 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
-#include "seeds.hpp"
 #include "../audit.hpp"
 #include "../internal.hpp"
 #include "../problem.hpp"
 #include "../search/api.hpp"
+#include "seeds.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -75,15 +76,15 @@ void apply_precedence_completion_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
       fj_cpu.h_assignment[head]       = value;
       const auto [col_begin, col_end] = model_range_for_var<i_t, f_t>(fj_cpu, head);
       for (i_t q = col_begin; q < col_end; ++q) {
-        const i_t touched   = fj_cpu.problem->reverse_constraints[q];
-        const f_t patched   = fj_cpu.h_lhs[touched];
+        const i_t touched     = fj_cpu.problem->reverse_constraints[q];
+        const f_t patched     = fj_cpu.h_lhs[touched];
         fj_cpu.h_lhs[touched] = patched + fj_cpu.problem->reverse_coefficients[q] * delta;
       }
       changed = true;
 
-      cuopt_assert((f_t)fj_cpu.h_lhs[row] >= lb - fj_cpu.row_tolerance ||
-                     value >= get_upper(bounds),
-                   "precedence step neither repaired the row nor saturated its head");
+      cuopt_assert(
+        (f_t)fj_cpu.h_lhs[row] >= lb - fj_cpu.row_tolerance || value >= get_upper(bounds),
+        "precedence step neither repaired the row nor saturated its head");
     }
 
     recompute_lhs(fj_cpu);
@@ -100,8 +101,8 @@ void apply_precedence_completion_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
   cuopt_assert(fj_cpu.h_assignment.size() == anchor.size(),
                "incumbent_assignment span would be invalidated");
-  const bool keep = best_count < anchor_count ||
-                    (best_count == anchor_count && best_severity < anchor_severity);
+  const bool keep =
+    best_count < anchor_count || (best_count == anchor_count && best_severity < anchor_severity);
   if (keep) {
     fj_cpu.h_assignment = best;
   } else {

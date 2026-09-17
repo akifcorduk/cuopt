@@ -3,12 +3,13 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #pragma once
 
+#include "../internal.hpp"
 #include "batching.hpp"
 #include "score.hpp"
-#include "../internal.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -68,8 +69,8 @@ static fj_staged_score_t two_opt_compute_pair_score(
     bonus_robust_sum += cstr_bonus_robust;
   }
 
-  const f_t obj_diff =
-    fj_cpu.problem->h_obj_coeffs[first] * first_delta + fj_cpu.problem->h_obj_coeffs[second] * second_delta;
+  const f_t obj_diff = fj_cpu.problem->h_obj_coeffs[first] * first_delta +
+                       fj_cpu.problem->h_obj_coeffs[second] * second_delta;
   f_t base_obj = 0;
   if (obj_diff < 0)
     base_obj = fj_cpu.h_objective_weight;
@@ -91,10 +92,7 @@ static fj_staged_score_t two_opt_compute_pair_score(
 }
 
 template <typename i_t, typename f_t>
-void two_opt_add_partner(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                i_t first,
-                                i_t var_idx,
-                                f_t target)
+void two_opt_add_partner(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t first, i_t var_idx, f_t target)
 {
   if (var_idx == first) return;
   const f_t val = fj_cpu.h_assignment[var_idx].get();
@@ -110,20 +108,21 @@ void two_opt_add_partner(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 
 template <typename i_t, typename f_t>
 void two_opt_collect_partners(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                     i_t first,
-                                     f_t first_delta,
-                                     size_t max_partners)
+                              i_t first,
+                              f_t first_delta,
+                              size_t max_partners)
 {
   auto& partners        = fj_cpu.two_opt_partners;
   const i_t n_variables = fj_cpu.problem->n_variables;
   partners.clear();
   cuopt_assert(fj_cpu.h_is_binary_variable[first], "2-opt is only defined for binaries");
-  cuopt_assert(
-    fj_cpu.problem->probing_cache == nullptr || fj_cpu.problem->h_original_ids.size() == (size_t)n_variables,
-    "original id map does not cover every variable");
   cuopt_assert(fj_cpu.problem->probing_cache == nullptr ||
-                 fj_cpu.problem->h_reverse_original_ids.size() >= fj_cpu.problem->h_original_ids.size(),
-               "reverse original id map smaller than the problem");
+                 fj_cpu.problem->h_original_ids.size() == (size_t)n_variables,
+               "original id map does not cover every variable");
+  cuopt_assert(
+    fj_cpu.problem->probing_cache == nullptr ||
+      fj_cpu.problem->h_reverse_original_ids.size() >= fj_cpu.problem->h_original_ids.size(),
+    "reverse original id map smaller than the problem");
 
   if (fj_cpu.problem->probing_cache != nullptr) {
     const auto& cache       = fj_cpu.problem->probing_cache->probing_cache;
@@ -180,7 +179,8 @@ two_opt_move_t find_two_opt_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   two_opt_move_t best;
 
   const bool partner_source_exists =
-    (fj_cpu.problem->probing_cache != nullptr && !fj_cpu.problem->probing_cache->probing_cache.empty()) ||
+    (fj_cpu.problem->probing_cache != nullptr &&
+     !fj_cpu.problem->probing_cache->probing_cache.empty()) ||
     (int64_t)fj_cpu.problem->h_related_variables_offsets.size() == fj_cpu.problem->n_variables + 1;
 
   if (fj_cpu.n_binary_vars == 0 || !partner_source_exists) return best;
@@ -265,8 +265,8 @@ two_opt_move_t find_cardinality_exchange(fj_cpu_climber_t<i_t, f_t>& c)
   if (!c.use_cardinality_exchange || c.problem->card_row_offsets.size() <= 1) return best;
 
   const auto& offsets = c.problem->card_row_offsets;
-  const auto& vars = c.problem->card_variables;
-  const i_t n_rows = (i_t)offsets.size() - 1;
+  const auto& vars    = c.problem->card_variables;
+  const i_t n_rows    = (i_t)offsets.size() - 1;
   const i_t draws = std::min<i_t>(n_rows, std::max<i_t>(4, c.settings.parameters.two_opt_max_rows));
   const size_t limit = c.settings.parameters.two_opt_max_pairs;
 
@@ -276,15 +276,15 @@ two_opt_move_t find_cardinality_exchange(fj_cpu_climber_t<i_t, f_t>& c)
   if (!c.violated_constraints.empty() &&
       c.problem->card_group_of_variable.size() == c.h_assignment.size()) {
     const auto& violated = c.violated_constraints.contents;
-    const i_t first = c.rng() % (i_t)violated.size();
+    const i_t first      = c.rng() % (i_t)violated.size();
     for (i_t r = 0; r < std::min<i_t>(4, (i_t)violated.size()); ++r) {
-      const i_t row = violated[(first + r) % violated.size()];
+      const i_t row           = violated[(first + r) % violated.size()];
       const auto [begin, end] = c.range_for_row(row);
-      const i_t width = end - begin;
+      const i_t width         = end - begin;
       if (!width) continue;
       const i_t start = begin + c.rng() % width;
       for (i_t q = 0, p = start; q < std::min<i_t>(128, width);
-           ++q, p = p + 1 == end ? begin : p + 1) {
+           ++q, p       = p + 1 == end ? begin : p + 1) {
         const i_t group = c.problem->card_group_of_variable[c.h_variables[p]];
         if (group >= 0 && !seen[group]) {
           seen[group] = 1;
@@ -318,17 +318,18 @@ two_opt_move_t find_cardinality_exchange(fj_cpu_climber_t<i_t, f_t>& c)
           continue;
 
         two_opt_move_t candidate;
-        candidate.first = {first, -1};
+        candidate.first  = {first, -1};
         candidate.second = {second, 1};
-        candidate.score = two_opt_compute_pair_score(c, first, f_t{-1}, second, f_t{1});
+        candidate.score  = two_opt_compute_pair_score(c, first, f_t{-1}, second, f_t{1});
         // Before the first incumbent objective pressure is zero, so retain the historical age/index
         // ordering exactly. After crossing, break equal staged scores by true objective magnitude.
         if (c.h_objective_weight > f_t{0}) {
           candidate.objective_delta = -static_cast<double>(c.problem->h_obj_coeffs[first]) +
-                                       static_cast<double>(c.problem->h_obj_coeffs[second]);
+                                      static_cast<double>(c.problem->h_obj_coeffs[second]);
         }
-        candidate.age = std::max(std::max((i_t)c.h_tabu_lastinc[first], (i_t)c.h_tabu_lastdec[first]),
-                                 std::max((i_t)c.h_tabu_lastinc[second], (i_t)c.h_tabu_lastdec[second]));
+        candidate.age =
+          std::max(std::max((i_t)c.h_tabu_lastinc[first], (i_t)c.h_tabu_lastdec[first]),
+                   std::max((i_t)c.h_tabu_lastinc[second], (i_t)c.h_tabu_lastdec[second]));
         if (candidate > best) best = candidate;
         ++scored;
       }
@@ -341,9 +342,7 @@ template <typename i_t, typename f_t>
 two_opt_move_t find_tight_row_exchange(fj_cpu_climber_t<i_t, f_t>& c)
 {
   two_opt_move_t best;
-  if (!c.violated_constraints.empty() ||
-      c.h_objective_weight <= 0 || c.n_rows == 0)
-    return best;
+  if (!c.violated_constraints.empty() || c.h_objective_weight <= 0 || c.n_rows == 0) return best;
 
   cuopt::pcgenerator_t rng(c.settings.seed + 3628273133u * c.iterations, 0, 0);
   const i_t row_samples     = 4;
@@ -353,17 +352,19 @@ two_opt_move_t find_tight_row_exchange(fj_cpu_climber_t<i_t, f_t>& c)
 
   for (i_t ri = 0; ri < row_samples; ++ri) {
     const i_t target = (first_row + ri) % c.n_rows;
-    if (std::fabs(c.row_state()[target].slack) > c.row_tolerance) continue;  // only exactly-tight rows
+    if (std::fabs(c.row_state()[target].slack) > c.row_tolerance)
+      continue;  // only exactly-tight rows
 
     const auto [begin, end] = c.range_for_row(target);
-    const i_t width = end - begin;
+    const i_t width         = end - begin;
     if (width < 2) continue;
     const i_t start = begin + rng.next_u32() % (uint32_t)width;
     for (i_t q = 0, p = start; q < std::min<i_t>(primary_samples, width);
-         ++q, p = p + 1 == end ? begin : p + 1) {
+         ++q, p       = p + 1 == end ? begin : p + 1) {
       const i_t primary = c.h_variables[p];
-      const f_t a        = c.h_coefficients[p];
-      if (!a || c.problem->h_obj_coeffs[primary] == 0 || !is_integer_var<i_t, f_t>(c, primary)) continue;
+      const f_t a       = c.h_coefficients[p];
+      if (!a || c.problem->h_obj_coeffs[primary] == 0 || !is_integer_var<i_t, f_t>(c, primary))
+        continue;
 
       const f_t old   = c.h_assignment[primary];
       const f_t delta = c.problem->h_obj_coeffs[primary] > 0 ? f_t{-1} : f_t{1};
@@ -372,7 +373,7 @@ two_opt_move_t find_tight_row_exchange(fj_cpu_climber_t<i_t, f_t>& c)
 
       const i_t helper_start = begin + rng.next_u32() % (uint32_t)width;
       for (i_t hq = 0, hp = helper_start; hq < std::min<i_t>(helper_samples, width);
-           ++hq, hp = hp + 1 == end ? begin : hp + 1) {
+           ++hq, hp       = hp + 1 == end ? begin : hp + 1) {
         const i_t helper = c.h_variables[hp];
         if (helper == primary) continue;
         const f_t b = c.h_coefficients[hp];
@@ -380,10 +381,11 @@ two_opt_move_t find_tight_row_exchange(fj_cpu_climber_t<i_t, f_t>& c)
 
         const f_t helper_old = c.h_assignment[helper];
         // Keeps this row's own contribution exactly unchanged: a*delta + b*helper_delta == 0.
-        f_t helper_value = helper_old - (a * delta) / b;
+        f_t helper_value         = helper_old - (a * delta) / b;
         const auto helper_bounds = c.h_var_bounds[helper].get();
         if (is_integer_var<i_t, f_t>(c, helper))
-          helper_value = helper_value > helper_old ? std::ceil(helper_value) : std::floor(helper_value);
+          helper_value =
+            helper_value > helper_old ? std::ceil(helper_value) : std::floor(helper_value);
         helper_value = std::clamp(helper_value, get_lower(helper_bounds), get_upper(helper_bounds));
         const f_t helper_delta = helper_value - helper_old;
         if (!std::isfinite(helper_value) || std::fabs(helper_delta) < c.row_tolerance ||
@@ -394,12 +396,12 @@ two_opt_move_t find_tight_row_exchange(fj_cpu_climber_t<i_t, f_t>& c)
         candidate.first  = {primary, delta};
         candidate.second = {helper, helper_delta};
         candidate.score  = two_opt_compute_pair_score(c, primary, delta, helper, helper_delta);
-        candidate.objective_delta = static_cast<double>(c.problem->h_obj_coeffs[primary]) * delta +
-                                    static_cast<double>(c.problem->h_obj_coeffs[helper]) * helper_delta;
-        candidate.age = std::max(std::max((i_t)c.h_tabu_lastinc[primary],
-                                          (i_t)c.h_tabu_lastdec[primary]),
-                                 std::max((i_t)c.h_tabu_lastinc[helper],
-                                          (i_t)c.h_tabu_lastdec[helper]));
+        candidate.objective_delta =
+          static_cast<double>(c.problem->h_obj_coeffs[primary]) * delta +
+          static_cast<double>(c.problem->h_obj_coeffs[helper]) * helper_delta;
+        candidate.age =
+          std::max(std::max((i_t)c.h_tabu_lastinc[primary], (i_t)c.h_tabu_lastdec[primary]),
+                   std::max((i_t)c.h_tabu_lastinc[helper], (i_t)c.h_tabu_lastdec[helper]));
         if (candidate > best) best = candidate;
       }
     }
@@ -417,63 +419,71 @@ two_opt_move_t find_compound_repair(fj_cpu_climber_t<i_t, f_t>& c)
   const i_t row_samples     = 4;
   const i_t primary_samples = 12;
   const i_t helper_samples  = 16;
-  const i_t first_row = rng.next_u32() % (uint32_t)violated.size();
+  const i_t first_row       = rng.next_u32() % (uint32_t)violated.size();
   for (i_t ri = 0; ri < std::min<i_t>(row_samples, violated.size()); ++ri) {
-    const i_t target = violated[(first_row + ri) % violated.size()];
+    const i_t target        = violated[(first_row + ri) % violated.size()];
     const auto [begin, end] = c.range_for_row(target);
-    const i_t width = end - begin;
+    const i_t width         = end - begin;
     if (!width) continue;
     const i_t start = begin + rng.next_u32() % (uint32_t)width;
     for (i_t q = 0, p = start; q < std::min<i_t>(primary_samples, width);
-         ++q, p = p + 1 == end ? begin : p + 1) {
-      const i_t primary = c.h_variables[p]; const f_t a = c.h_coefficients[p];
+         ++q, p       = p + 1 == end ? begin : p + 1) {
+      const i_t primary = c.h_variables[p];
+      const f_t a       = c.h_coefficients[p];
       if (!a) continue;
       const f_t old = c.h_assignment[primary];
-      f_t value = c.h_is_binary_variable[primary] ? 1 - old
-                                                   : old + c.row_state()[target].slack / a;
+      f_t value = c.h_is_binary_variable[primary] ? 1 - old : old + c.row_state()[target].slack / a;
       const auto bounds = c.h_var_bounds[primary].get();
-      if (is_integer_var<i_t, f_t>(c, primary)) value = value > old ? std::ceil(value) : std::floor(value);
-      value = std::clamp(value, get_lower(bounds), get_upper(bounds));
+      if (is_integer_var<i_t, f_t>(c, primary))
+        value = value > old ? std::ceil(value) : std::floor(value);
+      value           = std::clamp(value, get_lower(bounds), get_upper(bounds));
       const f_t delta = value - old;
       if (!std::isfinite(value) || std::fabs(delta) < c.row_tolerance ||
-          tabu_check<i_t, f_t>(c, primary, delta, true)) continue;
+          tabu_check<i_t, f_t>(c, primary, delta, true))
+        continue;
 
-      i_t blocker = -1; f_t blocker_slack = 0;
+      i_t blocker         = -1;
+      f_t blocker_slack   = 0;
       const auto [cb, ce] = c.range_for_variable(primary);
       for (i_t z = cb; z < ce; ++z) {
         const i_t row = c.h_reverse_constraints[z];
         if (row == target) continue;
         const f_t after = c.row_state()[row].slack - c.h_reverse_coefficients[z] * delta;
         if (after < -c.row_tolerance && (blocker < 0 || after < blocker_slack)) {
-          blocker = row; blocker_slack = after;
+          blocker       = row;
+          blocker_slack = after;
         }
       }
       if (blocker < 0) continue;
-      const auto [hb, he] = c.range_for_row(blocker);
+      const auto [hb, he]    = c.range_for_row(blocker);
       const i_t helper_width = he - hb;
       if (!helper_width) continue;
       const i_t helper_start = hb + rng.next_u32() % (uint32_t)helper_width;
       for (i_t hq = 0, hp = helper_start; hq < std::min<i_t>(helper_samples, helper_width);
-           ++hq, hp = hp + 1 == he ? hb : hp + 1) {
-        const i_t helper = c.h_variables[hp]; const f_t coefficient = c.h_coefficients[hp];
+           ++hq, hp       = hp + 1 == he ? hb : hp + 1) {
+        const i_t helper      = c.h_variables[hp];
+        const f_t coefficient = c.h_coefficients[hp];
         if (helper == primary || !coefficient) continue;
-        const f_t helper_old = c.h_assignment[helper];
-        f_t helper_value = c.h_is_binary_variable[helper] ? 1 - helper_old
-                                                          : helper_old + blocker_slack / coefficient;
+        const f_t helper_old     = c.h_assignment[helper];
+        f_t helper_value         = c.h_is_binary_variable[helper]
+                                     ? 1 - helper_old
+                                     : helper_old + blocker_slack / coefficient;
         const auto helper_bounds = c.h_var_bounds[helper].get();
         if (is_integer_var<i_t, f_t>(c, helper))
-          helper_value = helper_value > helper_old ? std::ceil(helper_value) : std::floor(helper_value);
+          helper_value =
+            helper_value > helper_old ? std::ceil(helper_value) : std::floor(helper_value);
         helper_value = std::clamp(helper_value, get_lower(helper_bounds), get_upper(helper_bounds));
         const f_t helper_delta = helper_value - helper_old;
         if (!std::isfinite(helper_value) || std::fabs(helper_delta) < c.row_tolerance ||
-            tabu_check<i_t, f_t>(c, helper, helper_delta, true)) continue;
+            tabu_check<i_t, f_t>(c, helper, helper_delta, true))
+          continue;
         two_opt_move_t candidate;
-        candidate.first = {primary, delta}; candidate.second = {helper, helper_delta};
-        candidate.score = two_opt_compute_pair_score(c, primary, delta, helper, helper_delta);
-        candidate.age = std::max(std::max((i_t)c.h_tabu_lastinc[primary],
-                                          (i_t)c.h_tabu_lastdec[primary]),
-                                 std::max((i_t)c.h_tabu_lastinc[helper],
-                                          (i_t)c.h_tabu_lastdec[helper]));
+        candidate.first  = {primary, delta};
+        candidate.second = {helper, helper_delta};
+        candidate.score  = two_opt_compute_pair_score(c, primary, delta, helper, helper_delta);
+        candidate.age =
+          std::max(std::max((i_t)c.h_tabu_lastinc[primary], (i_t)c.h_tabu_lastdec[primary]),
+                   std::max((i_t)c.h_tabu_lastinc[helper], (i_t)c.h_tabu_lastdec[helper]));
         if (candidate > best) best = candidate;
       }
     }
@@ -492,7 +502,7 @@ static thrust::tuple<fj_move_t, fj_staged_score_t> find_mtm_move(
   fj_move_t best_move          = fj_move_t{-1, 0};
   fj_staged_score_t best_score = fj_staged_score_t::invalid();
   double best_objective_delta  = std::numeric_limits<double>::infinity();
-  auto improves_best = [&](fj_staged_score_t score, i_t var, f_t delta) {
+  auto improves_best           = [&](fj_staged_score_t score, i_t var, f_t delta) {
     if (score > best_score) return true;
     // Magnitude ordering paid on the dedicated objective trajectories but displaced useful neutral
     // moves on feasibility-biased lanes. Keep it behind the same high-pressure persona gate.
@@ -501,8 +511,8 @@ static thrust::tuple<fj_move_t, fj_staged_score_t> find_mtm_move(
     return objective_delta < best_objective_delta;
   };
   auto store_best = [&](fj_staged_score_t score, i_t var, f_t delta) {
-    best_score = score;
-    best_move = fj_move_t{var, delta};
+    best_score           = score;
+    best_move            = fj_move_t{var, delta};
     best_objective_delta = static_cast<double>(fj_cpu.problem->h_obj_coeffs[var]) * delta;
   };
 
@@ -536,11 +546,9 @@ static thrust::tuple<fj_move_t, fj_staged_score_t> find_mtm_move(
     auto [offset_begin, offset_end] = fj_cpu.range_for_row((i_t)cstr_idx);
     const i_t width                 = offset_end - offset_begin;
     const i_t visit                 = std::min(width, per_row_cap);
-    const i_t start                 = visit == width
-                                        ? offset_begin
-                                        : offset_begin + (i_t)(rng.next_u32() % (uint32_t)width);
-    for (i_t q = 0, i = start; q < visit;
-         ++q, i = (i + 1 == offset_end ? offset_begin : i + 1)) {
+    const i_t start =
+      visit == width ? offset_begin : offset_begin + (i_t)(rng.next_u32() % (uint32_t)width);
+    for (i_t q = 0, i = start; q < visit; ++q, i = (i + 1 == offset_end ? offset_begin : i + 1)) {
       const i_t var_idx = fj_cpu.h_variables[i];
       if (fj_cpu.degree_balance_mtm) {
         const auto [vb, ve] = fj_cpu.range_for_variable(var_idx);
@@ -615,8 +623,7 @@ static thrust::tuple<fj_move_t, fj_staged_score_t> find_mtm_move(
       fj_cpu.cached_mtm_moves_version[i] = fj_cpu.h_cstr_version[cstr_idx];
       fj_cpu.miss_count++;
       // reject this move if it would increase the target variable to a numerically unstable value
-      if (fj_cpu.move_numerically_stable(
-            val, new_val, infeasibility, fj_cpu.total_violations)) {
+      if (fj_cpu.move_numerically_stable(val, new_val, infeasibility, fj_cpu.total_violations)) {
         record_var_best_move<i_t, f_t>(fj_cpu, var_idx, score, delta);
         if (improves_best(score, move.var_idx, move.value))
           store_best(score, move.var_idx, move.value);
@@ -663,9 +670,9 @@ static thrust::tuple<fj_move_t, fj_staged_score_t> find_mtm_move(
 
 template <typename i_t>
 void sample_with_replacement(const host_contiguous_set_t<i_t>& pool,
-                                    i_t sample_size,
-                                    uint64_t seed,
-                                    std::vector<i_t>& out)
+                             i_t sample_size,
+                             uint64_t seed,
+                             std::vector<i_t>& out)
 {
   cuopt_assert(sample_size > 0, "invalid sample size");
   out.clear();
@@ -722,11 +729,9 @@ bool paired_flip_keeps_feasible(
   i_t j = range2.first, je = range2.second;
 
   while (i < ie || j < je) {
-    const i_t r1 =
-      i < ie ? (i_t)fj_cpu.h_reverse_constraints[i] : std::numeric_limits<i_t>::max();
-    const i_t r2 =
-      j < je ? (i_t)fj_cpu.h_reverse_constraints[j] : std::numeric_limits<i_t>::max();
-    const i_t r = r1 < r2 ? r1 : r2;
+    const i_t r1 = i < ie ? (i_t)fj_cpu.h_reverse_constraints[i] : std::numeric_limits<i_t>::max();
+    const i_t r2 = j < je ? (i_t)fj_cpu.h_reverse_constraints[j] : std::numeric_limits<i_t>::max();
+    const i_t r  = r1 < r2 ? r1 : r2;
 
     f_t change = 0;
     if (r1 == r) {
@@ -778,7 +783,7 @@ static thrust::tuple<fj_move_t, fj_move_t, fj_staged_score_t> find_lift_2opt_mov
     i_t broken        = -1;
     bool multiple     = false;
     for (i_t k = range1.first; k < range1.second && !multiple; ++k) {
-      const i_t r = fj_cpu.h_reverse_constraints[k];
+      const i_t r         = fj_cpu.h_reverse_constraints[k];
       const f_t new_slack = (fj_cpu.row_state()[r].slack + fj_cpu.h_slack_sumcomp[r]) -
                             (f_t)fj_cpu.h_reverse_coefficients[k] * delta1;
       if (new_slack < -fj_cpu.row_tolerance) {
@@ -860,7 +865,7 @@ static thrust::tuple<fj_move_t, fj_staged_score_t> find_lift_move(
         ++scanned;
         const i_t cstr_idx   = rev_cstr[j];
         const f_t cstr_coeff = rev_coeff[j];
-        const f_t new_slack = (state[cstr_idx].slack + row_sumcomp[cstr_idx]) - cstr_coeff * delta;
+        const f_t new_slack  = (state[cstr_idx].slack + row_sumcomp[cstr_idx]) - cstr_coeff * delta;
         if (new_slack < -fj_cpu.row_tolerance) {
           breaks_a_row = true;
           break;
@@ -953,6 +958,5 @@ static thrust::tuple<fj_move_t, fj_staged_score_t> find_lift_move(
                "move and score must agree on whether a move was found");
   return thrust::make_tuple(best_move, best_score);
 }
-
 
 }  // namespace cuopt::mathematical_optimization::mip

@@ -3,12 +3,13 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
-#include "seeds.hpp"
 #include "../audit.hpp"
 #include "../internal.hpp"
 #include "../problem.hpp"
 #include "../search/api.hpp"
+#include "seeds.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -19,13 +20,17 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
   if (budget <= 0 || !c.n_binary_vars || c.n_binary_vars == p.n_variables) return false;
   phase_timer_t timer(c.t_seed);
   const auto started = std::chrono::steady_clock::now();
-  auto expired = [&] {
+  auto expired       = [&] {
     return c.preemption_flag.load(std::memory_order_relaxed) ||
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >= budget;
+           std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >=
+             budget;
   };
   constexpr i_t max_nodes_for_reparent = 1024;
 
-  struct arc_t { i_t binary, flow, capacity_row, source, target; double capacity, fix, unit; };
+  struct arc_t {
+    i_t binary, flow, capacity_row, source, target;
+    double capacity, fix, unit;
+  };
   std::vector<arc_t> arcs;
   std::vector<uint8_t> used(p.n_variables, 0), is_capacity(p.n_constraints, 0);
   std::vector<i_t> arc_of_binary(p.n_variables, -1);
@@ -44,32 +49,36 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
           p.cstr_lb[r] == -std::numeric_limits<f_t>::infinity() && p.cstr_ub[r] == 0) {
         const i_t begin = p.offsets[r];
         const i_t other = p.variables[begin] == u ? p.variables[begin + 1] : p.variables[begin];
-        if (!is_integer_var(c, other)) { if (row >= 0) return false; row = r; continue; }
+        if (!is_integer_var(c, other)) {
+          if (row >= 0) return false;
+          row = r;
+          continue;
+        }
       }
       if (p.reverse_coefficients[q] != 1) return false;
     }
     if (row < 0 || is_capacity[row]) return false;
     const i_t begin = p.offsets[row];
-    const i_t uq = p.variables[begin] == u ? begin : begin + 1;
-    const i_t vq = uq == begin ? begin + 1 : begin;
-    const i_t v = p.variables[vq];
+    const i_t uq    = p.variables[begin] == u ? begin : begin + 1;
+    const i_t vq    = uq == begin ? begin + 1 : begin;
+    const i_t v     = p.variables[vq];
     if (used[v] || p.coefficients[uq] >= 0 || p.coefficients[vq] <= 0) return false;
     if (!std::isfinite(p.h_obj_coeffs[v]) || p.h_obj_coeffs[v] < 0) return false;
     const auto flow_bounds = c.h_var_bounds[v].get();
-    const double capacity = std::min((double)get_upper(flow_bounds),
-                                     -(double)p.coefficients[uq] / p.coefficients[vq]);
+    const double capacity =
+      std::min((double)get_upper(flow_bounds), -(double)p.coefficients[uq] / p.coefficients[vq]);
     if (get_lower(flow_bounds) != 0 || !(capacity > 0) || !std::isfinite(capacity)) return false;
     used[u] = used[v] = is_capacity[row] = 1;
-    arc_of_binary[u] = (i_t)arcs.size();
-    arcs.push_back({u, v, row, -1, -1, capacity, (double)p.h_obj_coeffs[u],
-                    (double)p.h_obj_coeffs[v]});
+    arc_of_binary[u]                     = (i_t)arcs.size();
+    arcs.push_back(
+      {u, v, row, -1, -1, capacity, (double)p.h_obj_coeffs[u], (double)p.h_obj_coeffs[v]});
   }
   if (arcs.empty()) return false;
   for (i_t v = 0; v < p.n_variables; ++v) {
     if (used[v]) continue;
     const auto bounds = c.h_var_bounds[v].get();
-    if (get_lower(bounds) != get_upper(bounds) ||
-        p.reverse_offsets[v] != p.reverse_offsets[v + 1]) return false;
+    if (get_lower(bounds) != get_upper(bounds) || p.reverse_offsets[v] != p.reverse_offsets[v + 1])
+      return false;
     x[v] = get_lower(bounds);
   }
 
@@ -81,7 +90,10 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
     bool all_binary = true;
     for (i_t q = p.offsets[row]; q < p.offsets[row + 1] && all_binary; ++q)
       all_binary = c.h_is_binary_variable[p.variables[q]] && is_integer_var(c, p.variables[q]);
-    if (all_binary && p.offsets[row + 1] > p.offsets[row]) { group_rows.push_back(row); continue; }
+    if (all_binary && p.offsets[row + 1] > p.offsets[row]) {
+      group_rows.push_back(row);
+      continue;
+    }
     if (!std::isfinite(p.cstr_lb[row]) || p.cstr_lb[row] != p.cstr_ub[row]) return false;
     node[row] = (i_t)demand.size();
     demand.push_back(p.cstr_lb[row]);
@@ -101,11 +113,17 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
       if (row == arc.capacity_row) continue;
       if (node[row] < 0) return false;
       const double coefficient = p.reverse_coefficients[q];
-      if (coefficient == -1 && arc.source < 0) arc.source = node[row];
-      else if (coefficient == 1 && arc.target < 0) arc.target = node[row];
-      else return false;
+      if (coefficient == -1 && arc.source < 0)
+        arc.source = node[row];
+      else if (coefficient == 1 && arc.target < 0)
+        arc.target = node[row];
+      else
+        return false;
     }
-    if (arc.source < 0 && arc.target < 0) { inert[e] = 1; continue; }
+    if (arc.source < 0 && arc.target < 0) {
+      inert[e] = 1;
+      continue;
+    }
     if (arc.capacity < demand_total) return false;
     if (arc.source < 0) arc.source = root;
     if (arc.target < 0) arc.target = root;
@@ -125,10 +143,15 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
       if (p.coefficients[q] != 1) return false;
       const i_t e = arc_of_binary[p.variables[q]];
       if (e < 0) return false;
-      if (upper == 0) { forbidden[e] = 1; continue; }
+      if (upper == 0) {
+        forbidden[e] = 1;
+        continue;
+      }
       if (inert[e]) continue;
-      if (head < 0) head = arcs[e].target;
-      else if (head != arcs[e].target) return false;
+      if (head < 0)
+        head = arcs[e].target;
+      else if (head != arcs[e].target)
+        return false;
     }
     if (upper == 0) continue;
     if (head < 0) return false;
@@ -147,32 +170,42 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
   std::vector<double> distance(demand.size());
   bool any_source = false;
   for (i_t v = 0; v < root; ++v)
-    if (demand[v] < 0) { in_tree[v] = 1; any_source = true; }
+    if (demand[v] < 0) {
+      in_tree[v] = 1;
+      any_source = true;
+    }
   if (!any_source) in_tree[root] = 1;
 
   auto weight = [&](i_t e) { return arcs[e].fix + arcs[e].unit; };
   while (!expired()) {
     bool complete = true;
-    for (i_t v : terminals) complete &= (bool)in_tree[v];
+    for (i_t v : terminals)
+      complete &= (bool)in_tree[v];
     if (complete) break;
     std::fill(distance.begin(), distance.end(), std::numeric_limits<double>::infinity());
     std::fill(predecessor.begin(), predecessor.end(), -1);
     using entry_t = std::pair<double, i_t>;
     std::priority_queue<entry_t, std::vector<entry_t>, std::greater<entry_t>> queue;
     for (i_t v = 0; v < (i_t)demand.size(); ++v)
-      if (in_tree[v]) { distance[v] = 0; queue.emplace(0, v); }
+      if (in_tree[v]) {
+        distance[v] = 0;
+        queue.emplace(0, v);
+      }
     i_t reached = -1;
     while (!queue.empty()) {
       const auto [dist, v] = queue.top();
       queue.pop();
       if (dist != distance[v]) continue;
-      if (!in_tree[v] && (demand[v] > 0 || needs_parent[v])) { reached = v; break; }
+      if (!in_tree[v] && (demand[v] > 0 || needs_parent[v])) {
+        reached = v;
+        break;
+      }
       if (expired()) return false;
       for (i_t e : outgoing[v]) {
         if (forbidden[e]) continue;
         const double next = dist + weight(e);
         if (next >= distance[arcs[e].target]) continue;
-        distance[arcs[e].target] = next;
+        distance[arcs[e].target]    = next;
         predecessor[arcs[e].target] = e;
         queue.emplace(next, arcs[e].target);
       }
@@ -224,17 +257,24 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
           for (i_t w = 0; w < (i_t)demand.size(); ++w)
             if (!descendant[w] && parent[w] >= 0 && descendant[arcs[parent[w]].source]) {
               descendant[w] = 1;
-              grew = true;
+              grew          = true;
             }
         }
         const i_t original = parent[v];
-        i_t choice = original;
+        i_t choice         = original;
         for (i_t e : incoming[v]) {
           if (e == original || descendant[arcs[e].source] || !in_tree[arcs[e].source]) continue;
           parent[v] = e;
-          if (!subtree_flow(flow)) { parent[v] = choice; continue; }
+          if (!subtree_flow(flow)) {
+            parent[v] = choice;
+            continue;
+          }
           const double trial = tree_cost(flow);
-          if (trial < best - 1e-9) { best = trial; choice = e; improved = true; }
+          if (trial < best - 1e-9) {
+            best     = trial;
+            choice   = e;
+            improved = true;
+          }
           parent[v] = choice;
         }
         parent[v] = choice;
@@ -246,20 +286,22 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
   for (i_t v = 0; v < (i_t)demand.size(); ++v) {
     if (parent[v] < 0) continue;
     x[arcs[parent[v]].binary] = 1;
-    x[arcs[parent[v]].flow] = (f_t)flow[v];
+    x[arcs[parent[v]].flow]   = (f_t)flow[v];
   }
 
   for (i_t v = 0; v < p.n_variables; ++v) {
     const auto bounds = c.h_var_bounds[v].get();
     if (!std::isfinite(x[v]) || x[v] < get_lower(bounds) || x[v] > get_upper(bounds) ||
-        (is_integer_var(c, v) && x[v] != std::round(x[v]))) return false;
+        (is_integer_var(c, v) && x[v] != std::round(x[v])))
+      return false;
   }
   for (i_t row = 0; row < p.n_constraints; ++row) {
     long double activity = 0;
     for (i_t q = p.offsets[row]; q < p.offsets[row + 1]; ++q)
       activity += (long double)p.coefficients[q] * x[p.variables[q]];
     if (!std::isfinite(activity) || activity < (long double)p.cstr_lb[row] - 1e-7L ||
-        activity > (long double)p.cstr_ub[row] + 1e-7L) return false;
+        activity > (long double)p.cstr_ub[row] + 1e-7L)
+      return false;
   }
   const auto anchor = c.h_assignment;
   std::copy(x.begin(), x.end(), c.h_assignment.begin());
@@ -275,23 +317,21 @@ bool apply_fixed_charge_network_seed(fj_cpu_climber_t<i_t, f_t>& c, double budge
     return false;
   }
   c.h_best_assignment = c.h_assignment;
-  c.h_best_objective = c.h_incumbent_objective - c.settings.parameters.breakthrough_move_epsilon;
-  c.feasible_found = true;
+  c.h_best_objective  = c.h_incumbent_objective - c.settings.parameters.breakthrough_move_epsilon;
+  c.feasible_found    = true;
   report_cpu_incumbent(c);
   if (c.shared_incumbent)
-    c.shared_incumbent->publish(c.h_incumbent_objective,
-                                c.get_user_objective(c.h_incumbent_objective), c.h_assignment);
+    c.shared_incumbent->publish(
+      c.h_incumbent_objective, c.get_user_objective(c.h_incumbent_objective), c.h_assignment);
   return true;
 }
 
 #if MIP_INSTANTIATE_FLOAT
-template bool apply_fixed_charge_network_seed<int, float>(
-  fj_cpu_climber_t<int, float>&, double);
+template bool apply_fixed_charge_network_seed<int, float>(fj_cpu_climber_t<int, float>&, double);
 #endif
 
 #if MIP_INSTANTIATE_DOUBLE
-template bool apply_fixed_charge_network_seed<int, double>(
-  fj_cpu_climber_t<int, double>&, double);
+template bool apply_fixed_charge_network_seed<int, double>(fj_cpu_climber_t<int, double>&, double);
 #endif
 
 }  // namespace cuopt::mathematical_optimization::mip

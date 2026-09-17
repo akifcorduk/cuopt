@@ -3,6 +3,7 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #pragma once
 
@@ -56,7 +57,8 @@ void compute_variable_coloring(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
     }
 
     i_t color = 0;
-    while (color < fj_cpu.n_colors && color_stamp[color] == var) ++color;
+    while (color < fj_cpu.n_colors && color_stamp[color] == var)
+      ++color;
     if (color == fj_cpu.n_colors) ++fj_cpu.n_colors;
     fj_cpu.h_var_color[var] = color;
   }
@@ -71,12 +73,11 @@ void compute_variable_coloring(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   fj_cpu.h_color_epoch.assign(fj_cpu.n_colors, 0);
   fj_cpu.var_best_epoch = 1;
 
-  CUOPT_LOG_DEBUG("CPUFJ move batching: %d colours over %d variables in %.3f ms",
-                  fj_cpu.n_colors,
-                  n_vars,
-                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                            started)
-                    .count());
+  CUOPT_LOG_DEBUG(
+    "CPUFJ move batching: %d colours over %d variables in %.3f ms",
+    fj_cpu.n_colors,
+    n_vars,
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
 }
 
 template <typename i_t, typename f_t>
@@ -91,9 +92,9 @@ inline int64_t incident_row_version_sum(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t 
 
 template <typename i_t, typename f_t>
 inline void record_var_best_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                        i_t var_idx,
-                                        fj_staged_score_t score,
-                                        f_t delta)
+                                 i_t var_idx,
+                                 fj_staged_score_t score,
+                                 f_t delta)
 {
   if (!fj_cpu.use_move_batching) return;
   if (!(score > fj_staged_score_t::zero())) return;
@@ -155,8 +156,8 @@ void log_batch_distribution(const fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
 template <typename i_t, typename f_t>
 void collect_move_batch(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                               fj_move_t chosen,
-                               std::vector<fj_move_t>& batch)
+                        fj_move_t chosen,
+                        std::vector<fj_move_t>& batch)
 {
   batch.clear();
   if (!fj_cpu.use_move_batching) return;
@@ -180,8 +181,7 @@ void collect_move_batch(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   ++fj_cpu.n_batch_attempts;
   fj_cpu.n_batched_moves += (int64_t)batch.size();
   ++fj_cpu.batch_size_hist[std::min<size_t>(batch.size(), fj_cpu.batch_size_hist.size() - 1)];
-  if ((int64_t)batch.size() > fj_cpu.max_batch_size)
-    fj_cpu.max_batch_size = (int64_t)batch.size();
+  if ((int64_t)batch.size() > fj_cpu.max_batch_size) fj_cpu.max_batch_size = (int64_t)batch.size();
   if (fj_cpu.n_batch_attempts == fj_batch_probe_attempts &&
       (double)fj_cpu.n_batched_moves < fj_batch_min_yield * (double)fj_batch_probe_attempts) {
     fj_cpu.use_move_batching = false;
@@ -191,6 +191,5 @@ void collect_move_batch(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
                     (long long)fj_cpu.n_batch_attempts);
   }
 }
-
 
 }  // namespace cuopt::mathematical_optimization::mip

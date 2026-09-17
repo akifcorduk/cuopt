@@ -3,6 +3,7 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #include "bounds.hpp"
 #include "../audit.hpp"
@@ -28,7 +29,7 @@ void cap_integer_domains(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t n_variables)
     if (lower == get_lower(bounds) && upper == get_upper(bounds)) continue;
 
     // Both assignments, since the from-template path inherits h_lhs instead of recomputing it.
-    fj_cpu.h_var_bounds[var]               = typename type_2<f_t>::type{lower, upper};
+    fj_cpu.h_var_bounds[var]      = typename type_2<f_t>::type{lower, upper};
     fj_cpu.h_assignment[var]      = std::clamp((f_t)fj_cpu.h_assignment[var], lower, upper);
     fj_cpu.h_best_assignment[var] = std::clamp((f_t)fj_cpu.h_best_assignment[var], lower, upper);
   }
@@ -55,11 +56,11 @@ void clamp_seed_magnitude(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t n_variables)
 
 template <typename i_t, typename f_t>
 bool tighten_lower_bound(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                std::vector<f_t>& lower,
-                                const std::vector<f_t>& upper,
-                                i_t var,
-                                f_t limit,
-                                f_t commit_threshold)
+                         std::vector<f_t>& lower,
+                         const std::vector<f_t>& upper,
+                         i_t var,
+                         f_t limit,
+                         f_t commit_threshold)
 {
   if (!std::isfinite(limit)) return false;
   if (is_integer_var<i_t, f_t>(fj_cpu, var))
@@ -72,11 +73,11 @@ bool tighten_lower_bound(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 
 template <typename i_t, typename f_t>
 bool tighten_upper_bound(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                const std::vector<f_t>& lower,
-                                std::vector<f_t>& upper,
-                                i_t var,
-                                f_t limit,
-                                f_t commit_threshold)
+                         const std::vector<f_t>& lower,
+                         std::vector<f_t>& upper,
+                         i_t var,
+                         f_t limit,
+                         f_t commit_threshold)
 {
   if (!std::isfinite(limit)) return false;
   if (is_integer_var<i_t, f_t>(fj_cpu, var))
@@ -165,10 +166,10 @@ void apply_bound_propagation(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   }
 
   fj_cpu.h_binary_indices.clear();
-  fj_cpu.n_binary_vars  = 0;
-  fj_cpu.n_integer_vars = 0;
+  fj_cpu.n_binary_vars           = 0;
+  fj_cpu.n_integer_vars          = 0;
   [[maybe_unused]] i_t tightened = 0;
-  bool clamped          = false;
+  bool clamped                   = false;
   for (i_t var = 0; var < n_variables; ++var) {
     auto bounds = fj_cpu.h_var_bounds[var].get();
     cuopt_assert(!(lower[var] < get_lower(bounds)), "propagation widened a lower bound");
@@ -227,9 +228,9 @@ void apply_lock_weighted_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
     const f_t ub = get_upper(fj_cpu.h_var_bounds[var_idx].get());
     if (!std::isfinite(lb) || !std::isfinite(ub) || lb >= ub) continue;
 
-    i_t lock_up       = 0;
-    i_t lock_down     = 0;
-    const auto range  = model_range_for_var<i_t, f_t>(fj_cpu, var_idx);
+    i_t lock_up      = 0;
+    i_t lock_down    = 0;
+    const auto range = model_range_for_var<i_t, f_t>(fj_cpu, var_idx);
     for (i_t i = range.first; i < range.second; ++i) {
       const f_t coeff    = fj_cpu.problem->reverse_coefficients[i];
       const i_t cstr_idx = fj_cpu.problem->reverse_constraints[i];

@@ -3,12 +3,13 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #pragma once
 
-#include "api.hpp"
 #include "../audit.hpp"
 #include "../internal.hpp"
+#include "api.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -40,10 +41,7 @@ void report_cpu_incumbent(fj_cpu_climber_t<i_t, f_t>& c)
 }
 
 template <typename i_t, typename f_t>
-void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                       i_t var_idx,
-                       f_t delta,
-                       bool localmin = false)
+void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t var_idx, f_t delta, bool localmin = false)
 {
   CPUFJ_NVTX_RANGE("CPUFJ::apply_move");
 
@@ -53,7 +51,8 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   f_t old_val = fj_cpu.h_assignment[var_idx];
   f_t new_val = old_val + delta;
   if (is_integer_var<i_t, f_t>(fj_cpu, var_idx)) {
-    cuopt_assert(fj_cpu.problem->integer_equal(new_val, std::round(new_val)), "new_val is not integer");
+    cuopt_assert(fj_cpu.problem->integer_equal(new_val, std::round(new_val)),
+                 "new_val is not integer");
     new_val = std::round(new_val);
   }
   // clamp to var bounds, then to the magnitude the whole assignment is held to. A per-move guard
@@ -62,11 +61,11 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   // generator is bounded here rather than each having to know; delta is recomputed below, so the
   // slack bookkeeping stays exact whatever the clamp does.
   const auto var_bounds = fj_cpu.h_var_bounds[var_idx].get();
-  new_val = std::min(std::max(new_val, get_lower(var_bounds)), get_upper(var_bounds));
-  const f_t floor_ = std::max(get_lower(var_bounds), (f_t)-fj_seed_magnitude_limit);
-  const f_t ceil_  = std::min(get_upper(var_bounds), (f_t)fj_seed_magnitude_limit);
+  new_val               = std::min(std::max(new_val, get_lower(var_bounds)), get_upper(var_bounds));
+  const f_t floor_      = std::max(get_lower(var_bounds), (f_t)-fj_seed_magnitude_limit);
+  const f_t ceil_       = std::min(get_upper(var_bounds), (f_t)fj_seed_magnitude_limit);
   if (floor_ <= ceil_) new_val = std::min(std::max(new_val, floor_), ceil_);
-  delta   = new_val - old_val;
+  delta = new_val - old_val;
   cuopt_assert(std::isfinite(new_val), "assignment is not finite");
   cuopt_assert(std::isfinite(delta), "applied delta is not finite");
   cuopt_assert(check_variable_within_bounds<i_t, f_t>(fj_cpu, var_idx, new_val),
@@ -88,11 +87,11 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   fj_cpu.h_slack_sumcomp.byte_loads += nnz_touched * sizeof(f_t);
   fj_cpu.h_slack_sumcomp.byte_stores += nnz_touched * sizeof(f_t);
 
-  const i_t* const rev_cstr    = fj_cpu.h_reverse_constraints.data();
-  const f_t* const rev_coeff   = fj_cpu.h_reverse_coefficients.data();
-  f_t* const row_sumcomp       = fj_cpu.h_slack_sumcomp.data();
-  row_state_t* const state     = fj_cpu.row_state();
-  const f_t cstr_tolerance     = fj_cpu.row_tolerance;
+  const i_t* const rev_cstr  = fj_cpu.h_reverse_constraints.data();
+  const f_t* const rev_coeff = fj_cpu.h_reverse_coefficients.data();
+  f_t* const row_sumcomp     = fj_cpu.h_slack_sumcomp.data();
+  row_state_t* const state   = fj_cpu.row_state();
+  const f_t cstr_tolerance   = fj_cpu.row_tolerance;
 
   for (auto i = offset_begin; i < offset_end; i++) {
     cuopt_assert(i < (i_t)fj_cpu.h_reverse_constraints.size(), "");
@@ -100,9 +99,9 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
     const i_t cstr_idx   = rev_cstr[i];
     const f_t cstr_coeff = rev_coeff[i];
 
-    // The row is a'x <= b holding slack b - a'x, so the move lowers the slack by its own coefficient
-    // times the delta. Dot2, as the activity was: the carry holds the correction to add to the
-    // stored slack, covering the rounding of both the product and the addition.
+    // The row is a'x <= b holding slack b - a'x, so the move lowers the slack by its own
+    // coefficient times the delta. Dot2, as the activity was: the carry holds the correction to add
+    // to the stored slack, covering the rounding of both the product and the addition.
     const f_t old_slack   = state[cstr_idx].slack;
     const f_t old_sumcomp = row_sumcomp[cstr_idx];
     const f_t h           = -cstr_coeff * delta;
@@ -123,8 +122,8 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
     row_sumcomp[cstr_idx] = new_sumcomp;
     state[cstr_idx].slack = t;
 
-    const f_t old_cost  = old_value < f_t{0} ? old_value : f_t{0};
-    const f_t new_cost  = new_value < f_t{0} ? new_value : f_t{0};
+    const f_t old_cost = old_value < f_t{0} ? old_value : f_t{0};
+    const f_t new_cost = new_value < f_t{0} ? new_value : f_t{0};
 
     // trigger early slack recomputation if the sumcomp term gets too large
     // to avoid large numerical errors
@@ -135,10 +134,9 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
     const bool now_violated = new_value < -cstr_tolerance;
 
     // total_violations sums the excess over the violated set alone, so a row crossing the boundary
-    // contributes its whole cost rather than a difference. Kahan compensated, as the slack is: this is
-    // now the only place the total is maintained between refreshes.
-    const f_t viol_delta =
-      (now_violated ? new_cost : f_t{0}) - (was_violated ? old_cost : f_t{0});
+    // contributes its whole cost rather than a difference. Kahan compensated, as the slack is: this
+    // is now the only place the total is maintained between refreshes.
+    const f_t viol_delta = (now_violated ? new_cost : f_t{0}) - (was_violated ? old_cost : f_t{0});
     if (viol_delta != f_t{0}) {
       const f_t viol_old              = fj_cpu.total_violations;
       const f_t viol_y                = viol_delta - fj_cpu.total_violations_sumcomp;
@@ -172,8 +170,8 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   // After the assignment write, which is what a fresh sum reads.
   cuopt_func_call(audit_row_updates(fj_cpu, var_idx, old_val, delta, offset_begin, offset_end));
 
-  // Kahan compensated summation, as for the slacks. The incumbent objective is reported as-is, so it
-  // cannot carry the drift of a long uncompensated chain of deltas.
+  // Kahan compensated summation, as for the slacks. The incumbent objective is reported as-is, so
+  // it cannot carry the drift of a long uncompensated chain of deltas.
   const f_t obj_old = fj_cpu.h_incumbent_objective;
   const f_t obj_y   = fj_cpu.problem->h_obj_coeffs[var_idx] * delta - fj_cpu.h_objective_sumcomp;
   const f_t obj_t   = obj_old + obj_y;
@@ -217,7 +215,7 @@ void apply_move(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
     fj_cpu.h_objective_weight = std::max(fj_cpu.h_objective_weight, fj_cpu.seed_objective_weight);
     fj_cpu.h_objective_weight =
       std::min((f_t)fj_obj_weight_incumbent_cap,
-          fj_cpu.h_objective_weight + (f_t)fj_obj_weight_incumbent_bump);
+               fj_cpu.h_objective_weight + (f_t)fj_obj_weight_incumbent_bump);
     // The weight enters every score, and row versions cannot see it move.
     retire_var_best_moves<i_t, f_t>(fj_cpu);
   }
@@ -274,9 +272,9 @@ f_t project_epigraph_variable(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t var_idx)
   target = std::min(std::max(target, get_lower(bounds)), get_upper(bounds));
 
   // An epigraph variable is unbounded in the push direction by construction, so the value its rows
-  // imply is unbounded too, and landing on it puts every row it touches at a magnitude where one ulp
-  // of the slack exceeds the row tolerance. Held to the range the seed is held to, which keeps the
-  // rows decidable at the cost of reaching the implied value over several moves instead of one.
+  // imply is unbounded too, and landing on it puts every row it touches at a magnitude where one
+  // ulp of the slack exceeds the row tolerance. Held to the range the seed is held to, which keeps
+  // the rows decidable at the cost of reaching the implied value over several moves instead of one.
   const f_t floor_ = std::max(get_lower(bounds), (f_t)-fj_seed_magnitude_limit);
   const f_t ceil_  = std::min(get_upper(bounds), (f_t)fj_seed_magnitude_limit);
   if (floor_ <= ceil_) target = std::min(std::max(target, floor_), ceil_);
@@ -290,8 +288,8 @@ void recompute_lhs(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 {
   CPUFJ_NVTX_RANGE("CPUFJ::recompute_lhs");
   cuopt_assert(fj_cpu.h_lhs.size() == fj_cpu.problem->n_constraints, "h_lhs size mismatch");
-  // Repopulates the membership sets over model rows and leaves row_state().slack untouched, so it is
-  // only correct before build_one_sided_rows. recompute_slack is the counterpart afterwards.
+  // Repopulates the membership sets over model rows and leaves row_state().slack untouched, so it
+  // is only correct before build_one_sided_rows. recompute_slack is the counterpart afterwards.
   cuopt_assert(fj_cpu.violated_constraints.max_size() == fj_cpu.problem->n_constraints,
                "recompute_lhs keys the sets over model rows");
   cuopt_assert(fj_cpu.satisfied_constraints.max_size() == fj_cpu.problem->n_constraints,
@@ -311,7 +309,7 @@ void recompute_lhs(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   fj_cpu.total_violations_sumcomp = 0;
   for (i_t cstr_idx = 0; cstr_idx < fj_cpu.problem->n_constraints; ++cstr_idx) {
     auto [offset_begin, offset_end] = model_range_for_row<i_t, f_t>(fj_cpu, cstr_idx);
-    fj_cpu.h_lhs[cstr_idx] = compensated_dot2(
+    fj_cpu.h_lhs[cstr_idx]          = compensated_dot2(
       fj_cpu.problem->coefficients.data() + offset_begin,
       thrust::make_permutation_iterator(fj_cpu.h_assignment.data(),
                                         fj_cpu.problem->variables.data() + offset_begin),
@@ -331,9 +329,11 @@ void recompute_lhs(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   }
 
   // compute incumbent objective
-  fj_cpu.h_incumbent_objective = thrust::inner_product(
-    fj_cpu.h_assignment.begin(), fj_cpu.h_assignment.end(), fj_cpu.problem->h_obj_coeffs.begin(), 0.);
-  fj_cpu.h_objective_sumcomp = 0;
+  fj_cpu.h_incumbent_objective = thrust::inner_product(fj_cpu.h_assignment.begin(),
+                                                       fj_cpu.h_assignment.end(),
+                                                       fj_cpu.problem->h_obj_coeffs.begin(),
+                                                       0.);
+  fj_cpu.h_objective_sumcomp   = 0;
 }
 
 template <typename i_t, typename f_t>
@@ -370,8 +370,7 @@ void recompute_slack(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   }
 
   fj_cpu.h_incumbent_objective =
-    compensated_dot2(
-      fj_cpu.problem->h_obj_coeffs.data(), assignment, fj_cpu.problem->n_variables);
+    compensated_dot2(fj_cpu.problem->h_obj_coeffs.data(), assignment, fj_cpu.problem->n_variables);
   fj_cpu.h_objective_sumcomp = 0;
 }
 
@@ -382,6 +381,5 @@ void invalidate_mtm_cache(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   for (size_t c = 0; c < fj_cpu.h_cstr_version.size(); ++c)
     fj_cpu.h_cstr_version[c]++;
 }
-
 
 }  // namespace cuopt::mathematical_optimization::mip

@@ -3,13 +3,14 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
-#include "seeds.hpp"
 #include "../audit.hpp"
 #include "../internal.hpp"
 #include "../problem.hpp"
 #include "../search/api.hpp"
 #include "../setup/bounds.hpp"
+#include "seeds.hpp"
 
 #include <numeric>
 
@@ -23,13 +24,14 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
 {
   phase_timer_t timer(c.t_seed);
   const auto started = std::chrono::steady_clock::now();
-  auto expired = [&] {
+  auto expired       = [&] {
     return c.preemption_flag.load(std::memory_order_relaxed) ||
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >= budget;
+           std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() >=
+             budget;
   };
   if (budget <= 0 || c.feasible_found) return;
   const auto& p = *c.problem;
-  const i_t n = p.n_variables;
+  const i_t n   = p.n_variables;
   if (n <= 0) return;
   const size_t block_size = std::min<size_t>(64, (4u << 20) / (size_t)n);
   if (!block_size) return;
@@ -51,9 +53,9 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   std::vector<uint8_t> integer(n);
   for (i_t v = 0; v < n; ++v) {
     const auto b = c.h_var_bounds[v].get();
-    integer[v] = is_integer_var(c, v);
-    lower[v] = integer[v] ? std::ceil(get_lower(b)) : get_lower(b);
-    upper[v] = integer[v] ? std::floor(get_upper(b)) : get_upper(b);
+    integer[v]   = is_integer_var(c, v);
+    lower[v]     = integer[v] ? std::ceil(get_lower(b)) : get_lower(b);
+    upper[v]     = integer[v] ? std::floor(get_upper(b)) : get_upper(b);
     if (lower[v] > upper[v] || !std::isfinite(c.h_assignment[v])) return;
     x[v] = c.h_assignment[v];
   }
@@ -76,15 +78,18 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   for (i_t v = 0; v < n; ++v) {
     if ((v & 255) == 0 && expired()) return;
     double* a = columns.data() + (size_t)v * q;
-    for (size_t r = 0; r < q; ++r) a[r] *= scale[r];
     for (size_t r = 0; r < q; ++r)
-      for (size_t s = 0; s <= r; ++s) chol[r * q + s] += a[r] * a[s];
+      a[r] *= scale[r];
+    for (size_t r = 0; r < q; ++r)
+      for (size_t s = 0; s <= r; ++s)
+        chol[r * q + s] += a[r] * a[s];
   }
   for (size_t r = 0; r < q; ++r) {
     chol[r * q + r] += 1e-9;
     for (size_t s = 0; s <= r; ++s) {
       double a = chol[r * q + s];
-      for (size_t k = 0; k < s; ++k) a -= chol[r * q + k] * chol[s * q + k];
+      for (size_t k = 0; k < s; ++k)
+        a -= chol[r * q + k] * chol[s * q + k];
       if (r == s) {
         if (!(a > 0) || !std::isfinite(a)) return;
         chol[r * q + s] = std::sqrt(a);
@@ -95,7 +100,8 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   }
   auto whiten = [&](double* a) {
     for (size_t r = 0; r < q; ++r) {
-      for (size_t s = 0; s < r; ++s) a[r] -= chol[r * q + s] * a[s];
+      for (size_t s = 0; s < r; ++s)
+        a[r] -= chol[r * q + s] * a[s];
       a[r] /= chol[r * q + r];
     }
   };
@@ -105,7 +111,8 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   for (i_t v = 0; v < n; ++v) {
     double* a = columns.data() + (size_t)v * q;
     whiten(a);
-    for (size_t r = 0; r < q; ++r) norm[v] += a[r] * a[r];
+    for (size_t r = 0; r < q; ++r)
+      norm[v] += a[r] * a[r];
     if (!std::isfinite(norm[v])) return;
     if (norm[v] > 0) {
       active.push_back(v);
@@ -121,20 +128,21 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   std::vector<i_t> cache_column(cache_size, -1), column_slot(n, -1);
   std::vector<uint64_t> age(cache_size, 0);
   uint64_t clock = 0;
-  auto gram_row = [&](i_t u) -> const double* {
+  auto gram_row  = [&](i_t u) -> const double* {
     i_t slot = column_slot[u];
     if (slot < 0) {
       slot = std::min_element(age.begin(), age.end()) - age.begin();
       if (cache_column[slot] >= 0) column_slot[cache_column[slot]] = -1;
       cache_column[slot] = u;
-      column_slot[u] = slot;
-      auto& row = cache[slot];
+      column_slot[u]     = slot;
+      auto& row          = cache[slot];
       row.assign(n, 0);
       const double* a = columns.data() + (size_t)u * q;
       for (i_t v : active) {
         const double* b = columns.data() + (size_t)v * q;
-        double cross = 0;
-        for (size_t r = 0; r < q; ++r) cross += a[r] * b[r];
+        double cross    = 0;
+        for (size_t r = 0; r < q; ++r)
+          cross += a[r] * b[r];
         row[v] = cross;
       }
       row[u] = norm[u];
@@ -145,7 +153,8 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   std::vector<double> residual_gradient(n, 0), multiplier_gradient(n, 0);
   auto update_gradient = [&](i_t u, double delta) {
     const double* gram = gram_row(u);
-    for (i_t v : active) residual_gradient[v] += delta * gram[v];
+    for (i_t v : active)
+      residual_gradient[v] += delta * gram[v];
   };
   auto refresh = [&] {
     for (size_t r = 0; r < q; ++r) {
@@ -162,15 +171,15 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
         primal += a[r] * error[r];
         dual += a[r] * multiplier[r];
       }
-      residual_gradient[v] = primal;
+      residual_gradient[v]   = primal;
       multiplier_gradient[v] = dual;
     }
   };
 
   recompute_lhs(c);
   std::vector<f_t> best(c.h_assignment.begin(), c.h_assignment.end());
-  i_t best_count = c.violated_constraints.size();
-  f_t best_severity = -c.total_violations;
+  i_t best_count     = c.violated_constraints.size();
+  f_t best_severity  = -c.total_violations;
   double best_metric = std::numeric_limits<double>::infinity();
   cuopt::pcgenerator_t rng((uint64_t)c.settings.seed);
   int stalls = 0;
@@ -178,16 +187,18 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   for (int iteration = 0; !expired(); ++iteration) {
     if (iteration && iteration % 256 == 0) refresh();
     double metric = 0;
-    for (double e : error) metric += e * e;
+    for (double e : error)
+      metric += e * e;
     if (!std::isfinite(metric)) break;
     if (metric < best_metric) {
       best_metric = metric;
-      for (i_t v = 0; v < n; ++v) c.h_assignment[v] = (f_t)x[v];
+      for (i_t v = 0; v < n; ++v)
+        c.h_assignment[v] = (f_t)x[v];
       recompute_lhs(c);
-      const i_t count = c.violated_constraints.size();
+      const i_t count    = c.violated_constraints.size();
       const f_t severity = -c.total_violations;
       if (count < best_count || (count == best_count && severity < best_severity)) {
-        best_count = count;
+        best_count    = count;
         best_severity = severity;
         best.assign(c.h_assignment.begin(), c.h_assignment.end());
       }
@@ -198,25 +209,26 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
     }
     if (metric < 1e-26) break;
 
-    i_t chosen = -1;
+    i_t chosen          = -1;
     double chosen_delta = 0, improvement = -1e-12;
     for (i_t v : active) {
       const double g = residual_gradient[v] + multiplier_gradient[v];
-      gradient[v] = g;
-      double delta = -g / norm[v];
+      gradient[v]    = g;
+      double delta   = -g / norm[v];
       if (integer[v]) delta = std::round(delta);
-      delta = std::clamp(delta, lower[v] - x[v], upper[v] - x[v]);
+      delta             = std::clamp(delta, lower[v] - x[v], upper[v] - x[v]);
       const double cost = delta * (2 * g + norm[v] * delta);
       if (std::isfinite(delta) && cost < improvement) {
-        improvement = cost;
-        chosen = v;
+        improvement  = cost;
+        chosen       = v;
         chosen_delta = delta;
       }
     }
     if (chosen >= 0) {
       x[chosen] += chosen_delta;
       const double* a = columns.data() + (size_t)chosen * q;
-      for (size_t r = 0; r < q; ++r) error[r] += chosen_delta * a[r];
+      for (size_t r = 0; r < q; ++r)
+        error[r] += chosen_delta * a[r];
       update_gradient(chosen, chosen_delta);
       continue;
     }
@@ -229,16 +241,16 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
     for (size_t k = 0; k < draws && !expired(); ++k) {
       const size_t j = k + rng.next_u32() % (donors.size() - k);
       std::swap(donors[k], donors[j]);
-      const i_t u = donors[k];
-      const double* gram = gram_row(u);
+      const i_t u          = donors[k];
+      const double* gram   = gram_row(u);
       const double removal = norm[u] - 2 * gradient[u];
       for (i_t v : active) {
         if (v == u || !integer[v] || x[v] + 1 > upper[v]) continue;
         const double cost = removal + norm[v] + 2 * (gradient[v] - gram[v]);
         if (cost < improvement) {
           improvement = cost;
-          donor = u;
-          receiver = v;
+          donor       = u;
+          receiver    = v;
         }
       }
       if (donor >= 0) break;
@@ -248,7 +260,8 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
       x[receiver] += 1;
       const double* a = columns.data() + (size_t)donor * q;
       const double* b = columns.data() + (size_t)receiver * q;
-      for (size_t r = 0; r < q; ++r) error[r] += b[r] - a[r];
+      for (size_t r = 0; r < q; ++r)
+        error[r] += b[r] - a[r];
       update_gradient(donor, -1);
       update_gradient(receiver, 1);
     } else {
@@ -269,12 +282,11 @@ void apply_affine_equality_seed(fj_cpu_climber_t<i_t, f_t>& c, double budget)
   c.h_best_assignment = c.h_assignment;
   if (c.violated_constraints.empty() && check_variable_feasibility<i_t, f_t>(c)) {
     c.h_best_objective = c.h_incumbent_objective - c.settings.parameters.breakthrough_move_epsilon;
-    c.feasible_found = true;
+    c.feasible_found   = true;
     report_cpu_incumbent(c);
     if (c.shared_incumbent)
-      c.shared_incumbent->publish(c.h_incumbent_objective,
-                                  c.get_user_objective(c.h_incumbent_objective),
-                                  c.h_assignment);
+      c.shared_incumbent->publish(
+        c.h_incumbent_objective, c.get_user_objective(c.h_incumbent_objective), c.h_assignment);
   }
 }
 
@@ -288,7 +300,7 @@ template <typename i_t, typename f_t>
 void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
 {
   phase_timer_t timer(c.t_seed);
-  const auto& p = *c.problem;
+  const auto& p    = *c.problem;
   const i_t n_vars = p.n_variables;
   const i_t n_rows = p.n_constraints;
 
@@ -306,7 +318,7 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
              ? p.host_lp->var_types[v] == simplex::variable_type_t::CONTINUOUS
              : p.h_var_types[v] == var_t::CONTINUOUS;
   };
-  auto is_binary = [&](i_t v) { return c.h_is_binary_variable[v] && !is_continuous(v); };
+  auto is_binary         = [&](i_t v) { return c.h_is_binary_variable[v] && !is_continuous(v); };
   auto is_pinned_integer = [&](i_t v) {
     const auto b = c.h_var_bounds[v].get();
     return p.h_var_types[v] == var_t::INTEGER && get_lower(b) == get_upper(b);
@@ -370,7 +382,7 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
     std::vector<i_t> modes;
 
     for (i_t q = p.offsets[r]; q < p.offsets[r + 1]; ++q) {
-      const i_t v      = p.variables[q];
+      const i_t v       = p.variables[q];
       const double coef = p.coefficients[q];
       if (coef < 0 && aggregate < 0) {
         aggregate = v;
@@ -385,15 +397,16 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
     if (!valid || aggregate < 0 || modes.empty() || group_of[aggregate] >= 0) continue;
 
     for (i_t q = p.offsets[r]; q < p.offsets[r + 1]; ++q) {
-      valid &= std::abs(std::abs(p.coefficients[q]) - scale) <= tolerance &&
-               group_of[p.variables[q]] < 0;
+      valid &=
+        std::abs(std::abs(p.coefficients[q]) - scale) <= tolerance && group_of[p.variables[q]] < 0;
     }
     if (!valid) continue;
 
-    const i_t g            = (i_t)groups.size();
-    group_of[aggregate]    = g;
+    const i_t g              = (i_t)groups.size();
+    group_of[aggregate]      = g;
     is_commitment[aggregate] = 1;
-    for (i_t v : modes) group_of[v] = g;
+    for (i_t v : modes)
+      group_of[v] = g;
     groups.push_back({aggregate, -1, -1, std::move(modes)});
   }
   if (groups.size() < min_groups) return;
@@ -462,9 +475,9 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
       group_of[cap.mode] = (i_t)groups.size();
       groups.push_back({cap.mode, -1, -1, {cap.mode}});
     }
-    capacity[v].merit       = p.h_obj_coeffs[v];
-    mode_minimum[cap.mode]  = cap.lower_limit;
-    product_of[v]           = (i_t)products.size();
+    capacity[v].merit      = p.h_obj_coeffs[v];
+    mode_minimum[cap.mode] = cap.lower_limit;
+    product_of[v]          = (i_t)products.size();
     products.push_back(capacity[v]);
   }
   if (products.size() < min_products) return;
@@ -493,8 +506,8 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
       const i_t k = product_of[p.variables[q]];
       if (k < 0) continue;
       entries.push_back(k);
-      valid &= p.coefficients[q] == 1 && (p.cstr_lb[r] == p.cstr_ub[r] ||
-                                          p.h_obj_coeffs[p.variables[q]] < 0);
+      valid &= p.coefficients[q] == 1 &&
+               (p.cstr_lb[r] == p.cstr_ub[r] || p.h_obj_coeffs[p.variables[q]] < 0);
     }
     if (!valid || entries.size() < 2) continue;
 
@@ -505,7 +518,7 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
       // straddle two. Either violation means the recognition is wrong about this model.
       if (products[k].period >= 0) return;
       products[k].period = t;
-      auto& g = groups[group_of[products[k].mode]];
+      auto& g            = groups[group_of[products[k].mode]];
       if (g.period >= 0 && g.period != t) return;
       g.period = t;
     }
@@ -537,7 +550,8 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
   };
   auto unite = [&](i_t a, i_t b) { parent[find_root(a)] = find_root(b); };
   for (const auto& g : groups) {
-    for (i_t v : g.modes) unite(v, g.aggregate);
+    for (i_t v : g.modes)
+      unite(v, g.aggregate);
   }
 
   struct transition_t {
@@ -661,9 +675,8 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
           }
         }
         if (owns_the_mode && cost_var >= 0 && cost_coef > 0) {
-          const double slope =
-            -p.reverse_coefficients[q] / cost_coef * p.h_obj_coeffs[cost_var];
-          prod.merit = std::min(prod.merit, slope);
+          const double slope = -p.reverse_coefficients[q] / cost_coef * p.h_obj_coeffs[cost_var];
+          prod.merit         = std::min(prod.merit, slope);
         }
       }
       if (!std::isfinite(prod.merit)) prod.merit = 1;
@@ -684,8 +697,9 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
   std::vector<std::vector<i_t>> dispatch_order(periods.size());
   for (i_t t = 0; t < (i_t)periods.size(); ++t) {
     dispatch_order[t] = periods[t].products;
-    std::stable_sort(dispatch_order[t].begin(), dispatch_order[t].end(),
-                     [&](i_t a, i_t b) { return products[a].merit < products[b].merit; });
+    std::stable_sort(dispatch_order[t].begin(), dispatch_order[t].end(), [&](i_t a, i_t b) {
+      return products[a].merit < products[b].merit;
+    });
   }
 
   // ---------------------------------------------------------------------------- dispatch
@@ -717,10 +731,12 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
     }
 
     double score = penalty * std::max(0.0, -need);  // overgeneration: the row is an equality
-    for (i_t k : per.products) score += products[k].merit * x[products[k].var];
+    for (i_t k : per.products)
+      score += products[k].merit * x[products[k].var];
     for (i_t g : per.groups) {
       score += p.h_obj_coeffs[groups[g].aggregate] * x[groups[g].aggregate];
-      for (i_t v : groups[g].modes) score += p.h_obj_coeffs[v] * x[v];
+      for (i_t v : groups[g].modes)
+        score += p.h_obj_coeffs[v] * x[v];
     }
     for (i_t r : per.reserves) {
       score += penalty * std::max(0.0, (double)(p.cstr_lb[r] - activity(r)));
@@ -737,8 +753,8 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
     x = base;
 
     for (const auto& g : groups) {
-      i_t chosen         = -1;
-      double lowest_min  = std::numeric_limits<double>::infinity();
+      i_t chosen        = -1;
+      double lowest_min = std::numeric_limits<double>::infinity();
       for (i_t v : g.modes) {
         x[v] = 0;
         if (!on[g.unit]) continue;
@@ -756,9 +772,9 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
     // its committed state, which silently violates the initial-condition rows.
     for (const auto& tr : transitions) {
       x[tr.positive] = x[tr.negative] = 0;
-      const double delta = (double)(p.cstr_lb[tr.row] - activity(tr.row)) / tr.scale;
-      x[tr.positive]     = std::max(0.0, delta);
-      x[tr.negative]     = std::max(0.0, -delta);
+      const double delta              = (double)(p.cstr_lb[tr.row] - activity(tr.row)) / tr.scale;
+      x[tr.positive]                  = std::max(0.0, delta);
+      x[tr.negative]                  = std::max(0.0, -delta);
     }
     for (int pass = 0; pass < 3; ++pass) {
       for (const auto& a : aliases) {
@@ -785,8 +801,8 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
 
           for (i_t v : g.modes) {
             if (v == chosen || get_upper(c.h_var_bounds[v].get()) < 1) continue;
-            x[chosen] = 0;
-            x[v]      = 1;
+            x[chosen]          = 0;
+            x[v]               = 1;
             const double trial = dispatch(t);
             if (trial < current - tolerance) {
               chosen  = v;
@@ -805,7 +821,7 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
     // demands, not the value one of them does.
     for (int pass = 0; pass < 3; ++pass) {
       for (i_t v : repair_slacks) {
-        x[v]           = base[v];
+        x[v]            = base[v];
         double required = base[v];
         for (i_t q = p.reverse_offsets[v]; q < p.reverse_offsets[v + 1]; ++q) {
           const i_t r = p.reverse_constraints[q];
@@ -828,9 +844,9 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
       objective += p.h_obj_coeffs[v] * x[v];
       const double excess = std::max(0.0, (double)get_lower(bounds) - x[v]) +
                             std::max(0.0, x[v] - (double)get_upper(bounds));
-      valid &= std::isfinite(x[v]) && excess <= tolerance &&
-               (p.h_var_types[v] != var_t::INTEGER ||
-                std::abs(x[v] - std::round(x[v])) <= tolerance);
+      valid &=
+        std::isfinite(x[v]) && excess <= tolerance &&
+        (p.h_var_types[v] != var_t::INTEGER || std::abs(x[v] - std::round(x[v])) <= tolerance);
       violation += excess;
     }
     for (i_t r = 0; r < n_rows; ++r) {
@@ -853,9 +869,8 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
         c.feasible_found = true;
         report_cpu_incumbent(c);
         if (c.shared_incumbent) {
-          c.shared_incumbent->publish(c.h_incumbent_objective,
-                                      c.get_user_objective(c.h_incumbent_objective),
-                                      c.h_assignment);
+          c.shared_incumbent->publish(
+            c.h_incumbent_objective, c.get_user_objective(c.h_incumbent_objective), c.h_assignment);
         }
       }
     }
@@ -871,8 +886,7 @@ void apply_unit_commitment_seed(fj_cpu_climber_t<i_t, f_t>& c)
 
   // Components created by uncoupled periods vary greatly in size. Sweep committed capacity rather
   // than component count so small fragments cannot crowd full-horizon units out of the trial set.
-  const double total_capacity =
-    std::accumulate(unit_capacity.begin(), unit_capacity.end(), 0.0);
+  const double total_capacity = std::accumulate(unit_capacity.begin(), unit_capacity.end(), 0.0);
 
   constexpr int sweep_steps = 16;
   for (int step = sweep_steps; step >= 0 && !expired(); --step) {

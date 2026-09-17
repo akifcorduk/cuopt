@@ -3,21 +3,22 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
-#include "seeds.hpp"
 #include "../internal.hpp"
 #include "../problem.hpp"
 #include "../search/api.hpp"
+#include "seeds.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
 void collect_row_repair_moves(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                     i_t row_begin,
-                                     i_t row_end,
-                                     f_t direction,
-                                     f_t tol,
-                                     std::vector<row_repair_move_t<i_t, f_t>>& out)
+                              i_t row_begin,
+                              i_t row_end,
+                              f_t direction,
+                              f_t tol,
+                              std::vector<row_repair_move_t<i_t, f_t>>& out)
 {
   out.clear();
   for (i_t i = row_begin; i < row_end; ++i) {
@@ -40,10 +41,11 @@ void collect_row_repair_moves(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
       if (new_val < val && new_val >= lb - tol) out.push_back({-raise, var, coeff, new_val});
     }
   }
-  std::sort(out.begin(), out.end(), [](const row_repair_move_t<i_t, f_t>& a,
-                                       const row_repair_move_t<i_t, f_t>& b) {
-    return a.effect > b.effect;
-  });
+  std::sort(out.begin(),
+            out.end(),
+            [](const row_repair_move_t<i_t, f_t>& a, const row_repair_move_t<i_t, f_t>& b) {
+              return a.effect > b.effect;
+            });
 }
 
 template <typename i_t, typename f_t>
@@ -92,7 +94,8 @@ void apply_greedy_covering_seed(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
       f_t sum = 0;
       for (i_t i = row_begin; i < row_end; ++i)
-        sum += (f_t)fj_cpu.problem->coefficients[i] * (f_t)fj_cpu.h_assignment[fj_cpu.problem->variables[i]];
+        sum += (f_t)fj_cpu.problem->coefficients[i] *
+               (f_t)fj_cpu.h_assignment[fj_cpu.problem->variables[i]];
 
       // Equality rows are driven to their bound; one-sided rows only to the side they violate.
       const bool is_equality = has_lb && has_ub && std::abs(lb - ub) < tol;

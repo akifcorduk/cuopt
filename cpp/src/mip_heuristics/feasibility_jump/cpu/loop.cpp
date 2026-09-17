@@ -3,16 +3,17 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #include "audit.hpp"
 #include "internal.hpp"
 #include "problem.hpp"
 #include "search/api.hpp"
-#include "search/score.hpp"
 #include "search/batching.hpp"
-#include "search/moves.hpp"
-#include "search/update.hpp"
 #include "search/escape.hpp"
+#include "search/moves.hpp"
+#include "search/score.hpp"
+#include "search/update.hpp"
 #include "seeds/seeds.hpp"
 #include "setup/bounds.hpp"
 #include "setup/lp.hpp"
@@ -30,10 +31,12 @@ static std::vector<f_t> lift_equality_substituted_assignment(
   const std::vector<fj_equality_substitution_t<i_t, f_t>>& substitutions)
 {
   std::vector<f_t> lifted(c.problem->n_variables, 0);
-  for (size_t j = 0; j < retained.size(); ++j) lifted[retained[j]] = assignment[j];
+  for (size_t j = 0; j < retained.size(); ++j)
+    lifted[retained[j]] = assignment[j];
   for (auto it = substitutions.rbegin(); it != substitutions.rend(); ++it) {
     long double value = it->constant;
-    for (const auto& [v, a] : it->terms) value += (long double)a * lifted[v];
+    for (const auto& [v, a] : it->terms)
+      value += (long double)a * lifted[v];
     lifted[it->variable] = (f_t)value;
   }
   for (const auto& sub : substitutions) {
@@ -52,8 +55,7 @@ bool try_equality_substituted_solve(fj_cpu_climber_t<i_t, f_t>& c,
                                     double time_limit,
                                     double work_unit_limit)
 {
-  if (!c.use_equality_substitution || c.feasible_found ||
-      c.producer_sync || time_limit <= 0)
+  if (!c.use_equality_substitution || c.feasible_found || c.producer_sync || time_limit <= 0)
     return false;
   const auto started = std::chrono::high_resolution_clock::now();
   std::vector<fj_equality_substitution_t<i_t, f_t>> substitutions;
@@ -61,15 +63,16 @@ bool try_equality_substituted_solve(fj_cpu_climber_t<i_t, f_t>& c,
   std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> child;
   {
     phase_timer_t timer(c.t_seed);
-    child = make_equality_reduced_climber(
-      c, std::min(0.75, 0.15 * time_limit), substitutions, retained);
+    child =
+      make_equality_reduced_climber(c, std::min(0.75, 0.15 * time_limit), substitutions, retained);
   }
   if (!child) return false;
-  const double remaining = time_limit -
+  const double remaining =
+    time_limit -
     std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - started).count();
   if (remaining <= 0) return false;
 
-  bool rejected_lift = false;
+  bool rejected_lift    = false;
   child->work_unit_bias = c.work_unit_bias;
   child->improvement_callback =
     [&](f_t child_objective, const std::vector<f_t>& assignment, double work) {
@@ -125,26 +128,30 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   apply_bound_propagation(*fj_cpu);
   if (fj_cpu->use_unit_commitment_seed) apply_unit_commitment_seed(*fj_cpu);
   if (fj_cpu->use_pmedian_seed) {
-    const double elapsed = std::chrono::duration<double>(
-      std::chrono::high_resolution_clock::now() - solve_start).count();
-    apply_pmedian_seed(
-      *fj_cpu, std::max(0.0, std::min(0.5, 0.1 * ((double)in_time_limit - elapsed))));
+    const double elapsed =
+      std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - solve_start)
+        .count();
+    apply_pmedian_seed(*fj_cpu,
+                       std::max(0.0, std::min(0.5, 0.1 * ((double)in_time_limit - elapsed))));
   }
   if (fj_cpu->use_fixed_charge_network_seed) {
-    const double elapsed = std::chrono::duration<double>(
-      std::chrono::high_resolution_clock::now() - solve_start).count();
+    const double elapsed =
+      std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - solve_start)
+        .count();
     apply_fixed_charge_network_seed(
       *fj_cpu, std::max(0.0, std::min(0.5, 0.1 * ((double)in_time_limit - elapsed))));
   }
   if (fj_cpu->use_affine_equality_seed) {
-    const double elapsed = std::chrono::duration<double>(
-      std::chrono::high_resolution_clock::now() - solve_start).count();
+    const double elapsed =
+      std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - solve_start)
+        .count();
     apply_affine_equality_seed(
       *fj_cpu, std::max(0.0, std::min(3.0, 0.3 * ((double)in_time_limit - elapsed))));
   }
   if (fj_cpu->use_equality_substitution) {
-    const double elapsed = std::chrono::duration<double>(
-      std::chrono::high_resolution_clock::now() - solve_start).count();
+    const double elapsed =
+      std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - solve_start)
+        .count();
     if (try_equality_substituted_solve(*fj_cpu, (double)in_time_limit - elapsed, work_unit_limit))
       return;
   }
@@ -157,9 +164,7 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
                                           .count())
              : in_time_limit;
   };
-  if (!fj_cpu->feasible_found) {
-    apply_lp_rounded_seed(*fj_cpu, setup_time_left());
-  }
+  if (!fj_cpu->feasible_found) { apply_lp_rounded_seed(*fj_cpu, setup_time_left()); }
 
   const bool paid_setup = fj_cpu->use_bound_prop || fj_cpu->use_lp_seed ||
                           fj_cpu->use_precedence_seed || fj_cpu->use_affine_equality_seed ||
@@ -186,30 +191,28 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   // Publish a feasible structural start, then keep the lane active for objective improvement.
   if (fj_cpu->violated_constraints.empty() && check_variable_feasibility<i_t, f_t>(*fj_cpu)) {
     fj_cpu->h_best_assignment = fj_cpu->h_assignment;
-    fj_cpu->h_best_objective = fj_cpu->h_incumbent_objective -
-                               fj_cpu->settings.parameters.breakthrough_move_epsilon;
+    fj_cpu->h_best_objective =
+      fj_cpu->h_incumbent_objective - fj_cpu->settings.parameters.breakthrough_move_epsilon;
     fj_cpu->feasible_found = true;
     fj_cpu->h_objective_weight =
       std::max(fj_cpu->h_objective_weight, fj_cpu->seed_objective_weight);
     report_cpu_incumbent(*fj_cpu);
     if (fj_cpu->shared_incumbent)
-      fj_cpu->shared_incumbent->publish(
-        fj_cpu->h_incumbent_objective,
-        fj_cpu->get_user_objective(fj_cpu->h_incumbent_objective),
-        fj_cpu->h_assignment);
+      fj_cpu->shared_incumbent->publish(fj_cpu->h_incumbent_objective,
+                                        fj_cpu->get_user_objective(fj_cpu->h_incumbent_objective),
+                                        fj_cpu->h_assignment);
   }
 
   [[maybe_unused]] i_t local_mins = 0;
   std::vector<fj_move_t> batch_moves;
   // The LP comes out of this lane's own budget; every other lane's clock starts where it did.
-  auto loop_start =
-    (fj_cpu->use_lp_seed || fj_cpu->use_bound_prop || fj_cpu->use_precedence_seed ||
-     fj_cpu->use_affine_equality_seed || fj_cpu->use_unit_commitment_seed ||
-     fj_cpu->use_equality_substitution)
-      ? solve_start
-      : std::chrono::high_resolution_clock::now();
+  auto loop_start = (fj_cpu->use_lp_seed || fj_cpu->use_bound_prop || fj_cpu->use_precedence_seed ||
+                     fj_cpu->use_affine_equality_seed || fj_cpu->use_unit_commitment_seed ||
+                     fj_cpu->use_equality_substitution)
+                      ? solve_start
+                      : std::chrono::high_resolution_clock::now();
   auto time_limit = std::chrono::milliseconds(static_cast<i_t>(std::floor(in_time_limit * 1000.0)));
-  auto loop_time_start = loop_start;
+  auto loop_time_start          = loop_start;
   bool first_cross_needs_polish = fj_cpu->use_lp_polish;
 
   fj_cpu->rng.seed(fj_cpu->settings.seed);
@@ -225,10 +228,10 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
   // The recompute is O(nnz), so a fixed period costs a growing share of the budget.
   cuopt_assert(fj_cpu->settings.parameters.lhs_refresh_period > 0,
                "lhs_refresh_period should be positive");
-  const i_t nnz_stretch    = std::min<i_t>(
-    fj_cpu->problem->nnz / fj_nnz_per_refresh_stretch, fj_max_refresh_stretch);
+  const i_t nnz_stretch =
+    std::min<i_t>(fj_cpu->problem->nnz / fj_nnz_per_refresh_stretch, fj_max_refresh_stretch);
   const i_t refresh_period = fj_cpu->settings.parameters.lhs_refresh_period * (1 + nnz_stretch);
-  //const i_t refresh_period = 5000 * (1 + nnz_stretch);
+  // const i_t refresh_period = 5000 * (1 + nnz_stretch);
   cuopt_assert(refresh_period > 0, "refresh period overflowed");
   fj_cpu->lhs_refresh_period_used = refresh_period;
 
@@ -268,7 +271,8 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
     if (first_cross_needs_polish && fj_cpu->feasible_found) {
       first_cross_needs_polish = false;
       const double elapsed =
-        std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - loop_start).count();
+        std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - loop_start)
+          .count();
       apply_lp_polish(*fj_cpu, fj_lp_polish_budget_share * ((double)in_time_limit - elapsed));
     }
 
@@ -320,25 +324,24 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
     }
 
     // A one-hot choice cannot change rank through scalar FJ without first breaking its defining
-    // equality.  Give the structural persona a regular opportunity to compare an equality-preserving
-    // exchange with the best scalar move, rather than waiting for a scalar local minimum.  The gate
-    // keeps this O(pair-score) work to one lane and only while it is still trying to cross.
-    // Factor-scope transitions are a compact semantic neighbourhood.  Probe it more
-    // frequently than generic 2-opt, while its smaller candidate budget below keeps
-    // its total work comparable on large guarded formulations.
-    // A certified rank move preserves an exact-one manifold that scalar moves destroy. Probe this
-    // compact neighbourhood often enough to make consecutive rank transitions before ordinary FJ
-    // drifts away, while keeping the extra work confined to the structural lane.
+    // equality.  Give the structural persona a regular opportunity to compare an
+    // equality-preserving exchange with the best scalar move, rather than waiting for a scalar
+    // local minimum.  The gate keeps this O(pair-score) work to one lane and only while it is still
+    // trying to cross. Factor-scope transitions are a compact semantic neighbourhood.  Probe it
+    // more frequently than generic 2-opt, while its smaller candidate budget below keeps its total
+    // work comparable on large guarded formulations. A certified rank move preserves an exact-one
+    // manifold that scalar moves destroy. Probe this compact neighbourhood often enough to make
+    // consecutive rank transitions before ordinary FJ drifts away, while keeping the extra work
+    // confined to the structural lane.
     const i_t exchange_period = 32;
     if (!fj_cpu->feasible_found && fj_cpu->use_cardinality_exchange &&
         fj_cpu->iterations % exchange_period == 0) {
       const two_opt_move_t exchange = find_cardinality_exchange(*fj_cpu);
       // In the certified categorical/epigraph lane, a positive exchange is a rank move with its
       // continuous completion already scored.  Prefer it to a scalar move: taking the latter can
-      // break the one-hot manifold and strand the lane before it has explored the rank neighbourhood.
-      // Other cardinality lanes retain the usual direct comparison.
-      if (exchange.score > fj_staged_score_t::zero() &&
-          (exchange.score > score)) {
+      // break the one-hot manifold and strand the lane before it has explored the rank
+      // neighbourhood. Other cardinality lanes retain the usual direct comparison.
+      if (exchange.score > fj_staged_score_t::zero() && (exchange.score > score)) {
         move           = exchange.first;
         lift_companion = exchange.second;
         score          = exchange.score;
@@ -348,8 +351,8 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
     // The scorers target one row at a time, so on an epigraph variable they climb toward the bound
     // its rows already imply. The projection lands there in one move at the same O(degree) cost.
     if (move.var_idx >= 0 && fj_cpu->epigraph_push[move.var_idx] != 0) {
-      const f_t projected = project_epigraph_variable(*fj_cpu, move.var_idx) -
-                            (f_t)fj_cpu->h_assignment[move.var_idx];
+      const f_t projected =
+        project_epigraph_variable(*fj_cpu, move.var_idx) - (f_t)fj_cpu->h_assignment[move.var_idx];
       if (projected != f_t{0}) {
         move.value = projected;
         ++fj_cpu->n_epigraph_projections;
@@ -400,9 +403,9 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
           fj_cpu->h_objective_sumcomp   = 0;
           fj_cpu->h_best_objective =
             adopted_objective - fj_cpu->settings.parameters.breakthrough_move_epsilon;
-          fj_cpu->h_best_assignment       = fj_cpu->h_assignment;
-          fj_cpu->iterations_since_best   = 0;
-          fj_cpu->perturb_streak          = 0;
+          fj_cpu->h_best_assignment     = fj_cpu->h_assignment;
+          fj_cpu->iterations_since_best = 0;
+          fj_cpu->perturb_streak        = 0;
           recompute_slack(*fj_cpu);
           retire_var_best_moves<i_t, f_t>(*fj_cpu);
           cuopt_func_call(audit_assignment_bounds(*fj_cpu, "shared local-minimum adopt"));
@@ -412,12 +415,9 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
       track_infeasible_checkpoint(*fj_cpu);
       const bool wrong_sign = fj_cpu->feasible_found && fj_cpu->violated_constraints.empty() &&
                               fj_cpu->h_best_objective > f_t{0};
-      fj_cpu->wrong_sign_feasible_streak = wrong_sign
-                                             ? fj_cpu->wrong_sign_feasible_streak + 1
-                                             : 0;
+      fj_cpu->wrong_sign_feasible_streak = wrong_sign ? fj_cpu->wrong_sign_feasible_streak + 1 : 0;
       if (should_perturb) {
-        if (wrong_sign &&
-            fj_cpu->wrong_sign_feasible_streak > fj_cpu->objective_corner_jump_gate) {
+        if (wrong_sign && fj_cpu->wrong_sign_feasible_streak > fj_cpu->objective_corner_jump_gate) {
           apply_objective_corner_jump(*fj_cpu);
           fj_cpu->wrong_sign_feasible_streak = 0;
         } else {
@@ -522,13 +522,14 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, f_t in_time_limit, double w
                   (long long)fj_cpu->n_checkpoint_snapshots,
                   fj_cpu->max_restores_since_improvement);
   log_batch_distribution(*fj_cpu);
-
 }
 
 #if MIP_INSTANTIATE_FLOAT
 template void cpufj_solve(fj_cpu_climber_t<int, float>*, float, double);
-template void report_cpu_incumbent<int, float>(
-  fj_cpu_climber_t<int, float>&, float, const std::vector<float>&, double);
+template void report_cpu_incumbent<int, float>(fj_cpu_climber_t<int, float>&,
+                                               float,
+                                               const std::vector<float>&,
+                                               double);
 template void report_cpu_incumbent<int, float>(fj_cpu_climber_t<int, float>&);
 template void recompute_lhs<int, float>(fj_cpu_climber_t<int, float>&);
 template void recompute_slack<int, float>(fj_cpu_climber_t<int, float>&);
@@ -539,8 +540,10 @@ template void retire_var_best_moves<int, float>(fj_cpu_climber_t<int, float>&);
 
 #if MIP_INSTANTIATE_DOUBLE
 template void cpufj_solve(fj_cpu_climber_t<int, double>*, double, double);
-template void report_cpu_incumbent<int, double>(
-  fj_cpu_climber_t<int, double>&, double, const std::vector<double>&, double);
+template void report_cpu_incumbent<int, double>(fj_cpu_climber_t<int, double>&,
+                                                double,
+                                                const std::vector<double>&,
+                                                double);
 template void report_cpu_incumbent<int, double>(fj_cpu_climber_t<int, double>&);
 template void recompute_lhs<int, double>(fj_cpu_climber_t<int, double>&);
 template void recompute_slack<int, double>(fj_cpu_climber_t<int, double>&);

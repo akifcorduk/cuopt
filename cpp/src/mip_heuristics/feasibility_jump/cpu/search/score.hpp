@@ -3,11 +3,12 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #pragma once
 
-#include "api.hpp"
 #include "../internal.hpp"
+#include "api.hpp"
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -33,11 +34,8 @@ f_t get_mtm_for_constraint(f_t cstr_coeff, f_t slack, f_t row_tolerance)
 }
 
 template <typename i_t, typename f_t>
-std::pair<f_t, f_t> feas_score_constraint(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                          f_t delta,
-                                          f_t cstr_coeff,
-                                          f_t old_slack,
-                                          f_t cstr_weight)
+std::pair<f_t, f_t> feas_score_constraint(
+  fj_cpu_climber_t<i_t, f_t>& fj_cpu, f_t delta, f_t cstr_coeff, f_t old_slack, f_t cstr_weight)
 {
   cuopt_assert(std::isfinite(delta), "invalid delta");
   // A model may store explicit zeros, and a zero coefficient contributes nothing to the row.
@@ -80,9 +78,9 @@ std::pair<f_t, f_t> feas_score_constraint(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 
 template <typename i_t, typename f_t>
 inline bool tabu_check(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                              i_t var_idx,
-                              f_t delta,
-                              bool localmin = false)
+                       i_t var_idx,
+                       f_t delta,
+                       bool localmin = false)
 {
   if (localmin) {
     return (delta < 0 && fj_cpu.iterations == fj_cpu.h_tabu_lastinc[var_idx] + 1) ||
@@ -95,10 +93,9 @@ inline bool tabu_check(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 
 template <typename i_t, typename f_t>
 inline std::pair<fj_staged_score_t, f_t> compute_score(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                                              i_t var_idx,
-                                                              f_t delta)
+                                                       i_t var_idx,
+                                                       f_t delta)
 {
-
   f_t obj_diff = fj_cpu.problem->h_obj_coeffs[var_idx] * delta;
 
   cuopt_assert(std::isfinite(delta), "");
@@ -124,10 +121,16 @@ inline std::pair<fj_staged_score_t, f_t> compute_score(fj_cpu_climber_t<i_t, f_t
   const typename fj_cpu_climber_t<i_t, f_t>::row_state_t* const state = fj_cpu.row_state();
 
   static_assert(std::is_same_v<i_t, int32_t>);
-  fj_simd_score_rows(rev_cstr, rev_coeff, reinterpret_cast<const f_t*>(state),
-                     offset_begin, offset_end, delta, fj_cpu.row_tolerance,
+  fj_simd_score_rows(rev_cstr,
+                     rev_coeff,
+                     reinterpret_cast<const f_t*>(state),
+                     offset_begin,
+                     offset_end,
+                     delta,
+                     fj_cpu.row_tolerance,
                      (f_t)fj_cpu.settings.parameters.excess_improvement_weight,
-                     base_feas_sum, bonus_robust_sum);
+                     base_feas_sum,
+                     bonus_robust_sum);
 
   f_t base_obj = 0;
   if (fj_cpu.h_objective_weight > 0 && obj_diff != 0) {
@@ -135,8 +138,9 @@ inline std::pair<fj_staged_score_t, f_t> compute_score(fj_cpu_climber_t<i_t, f_t
     f_t weighted = fj_cpu.h_objective_weight;
     if (base_feas_sum != 0) {
       cuopt_assert(fj_cpu.problem->obj_magnitude > 0, "objective magnitude unit must be positive");
-      weighted *= std::min((f_t)fj_obj_mult_max,
-                      std::max((f_t)fj_obj_mult_min, std::fabs(obj_diff) / fj_cpu.problem->obj_magnitude));
+      weighted *= std::min(
+        (f_t)fj_obj_mult_max,
+        std::max((f_t)fj_obj_mult_min, std::fabs(obj_diff) / fj_cpu.problem->obj_magnitude));
     }
     base_obj = obj_diff < 0 ? weighted : -weighted;
   }
@@ -164,9 +168,9 @@ void smooth_weights(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   for (i_t row = 0; row < fj_cpu.n_rows; ++row) {
     if (fj_cpu.violated_constraints.contains(row)) continue;
     f_t& weight = fj_cpu.row_state()[row].weight;
-    weight = fj_cpu.use_multiplicative_weights
-               ? std::max((f_t)1, std::round((weight - 1) * (f_t)0.8 + 1))
-               : std::max((f_t)0, weight - 1);
+    weight      = fj_cpu.use_multiplicative_weights
+                    ? std::max((f_t)1, std::round((weight - 1) * (f_t)0.8 + 1))
+                    : std::max((f_t)0, weight - 1);
   }
 
   if (fj_cpu.h_objective_weight > 0 && fj_cpu.h_incumbent_objective >= fj_cpu.h_best_objective) {
@@ -177,9 +181,9 @@ void smooth_weights(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
 template <typename i_t, typename f_t>
 void donate_row_weight(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                              i_t cstr_idx,
-                              f_t delta,
-                              cuopt::pcgenerator_t& rng)
+                       i_t cstr_idx,
+                       f_t delta,
+                       cuopt::pcgenerator_t& rng)
 {
   const auto [row_begin, row_end] = fj_cpu.range_for_row(cstr_idx);
   const uint32_t row_width        = (uint32_t)(row_end - row_begin);
@@ -192,8 +196,9 @@ void donate_row_weight(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
     const i_t var_idx = fj_cpu.h_variables[row_begin + (i_t)(rng.next_u32() % row_width)];
     const auto [col_begin, col_end] = fj_cpu.range_for_variable(var_idx);
     if (col_end <= col_begin) continue;
-    const i_t candidate = fj_cpu.h_reverse_constraints[
-      col_begin + (i_t)(rng.next_u32() % (uint32_t)(col_end - col_begin))];
+    const i_t candidate =
+      fj_cpu
+        .h_reverse_constraints[col_begin + (i_t)(rng.next_u32() % (uint32_t)(col_end - col_begin))];
     if (candidate == cstr_idx || !fj_cpu.satisfied_constraints.contains(candidate)) continue;
 
     const f_t weight = fj_cpu.row_state()[candidate].weight;
@@ -245,9 +250,10 @@ void update_weights(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
     i_t int_delta = escalated_delta;
     f_t delta     = int_delta;
 
-    f_t new_weight = fj_cpu.use_multiplicative_weights
-                       ? std::round(std::max(old_weight + (f_t)1, old_weight * fj_cpu.saps_multiplier))
-                       : std::round(old_weight + delta);
+    f_t new_weight =
+      fj_cpu.use_multiplicative_weights
+        ? std::round(std::max(old_weight + (f_t)1, old_weight * fj_cpu.saps_multiplier))
+        : std::round(old_weight + delta);
     new_weight = std::min(new_weight, (f_t)fj_weight_cap);
     delta      = new_weight - old_weight;
 
@@ -266,6 +272,5 @@ void update_weights(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
   if (fj_cpu.violated_constraints.empty()) { fj_cpu.h_objective_weight += 1; }
 }
-
 
 }  // namespace cuopt::mathematical_optimization::mip
