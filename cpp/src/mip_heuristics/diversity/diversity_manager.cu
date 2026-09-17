@@ -782,7 +782,7 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(solution_t<i_t, f_
 {
   raft::common::nvtx::range fun_scope("recombine_and_ls_with_all");
   // if (population.population_hash_map.check_skip_solution(solution, 1)) { return; }
-  auto population_vector = population.population_to_vector();
+  auto population_vector = population.get_top_solutions(2);
   for (auto& curr_sol : population_vector) {
     if (check_integer_equal_on_indices(problem_ptr->integer_indices,
                                        curr_sol.assignment,

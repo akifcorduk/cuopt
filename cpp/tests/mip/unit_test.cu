@@ -150,6 +150,70 @@ TEST(FeasibilityPumpTest, ConsumesQueuedFeasibleSolutionWhenPopulationIsInfeasib
   EXPECT_NEAR(diversity_manager.population.best_feasible().get_objective(), 0.0, 1e-12);
 }
 
+TEST(PopulationTest, TopSolutionsSnapshot)
+{
+  raft::handle_t handle;
+  auto model      = create_std_milp_problem(false);
+  auto op_problem = mps_data_model_to_optimization_problem(&handle, model);
+
+  mip_solver_settings_t<int, double> settings{};
+  mip::problem_t<int, double> problem(op_problem, settings.get_tolerances());
+  problem.preprocess_problem();
+  mip::mip_solver_t<int, double> solver(problem, settings, timer_t(5.0));
+  mip::diversity_manager_t<int, double> diversity_manager(solver.context);
+  auto& population = diversity_manager.population;
+  EXPECT_TRUE(population.get_top_solutions(2).empty());
+  population.initialize_population();
+  population.allocate_solutions();
+  population.var_threshold = 0;
+  EXPECT_TRUE(population.get_top_solutions(2).empty());
+
+  auto add_solution = [&](double value) {
+    mip::solution_t<int, double> solution(problem);
+    solution.copy_new_assignment(std::vector<double>{value, 0.0});
+    solution.compute_feasibility();
+    population.add_solution(std::move(solution));
+  };
+
+  add_solution(3.0);
+  ASSERT_TRUE(population.is_feasible());
+  ASSERT_EQ(population.get_top_solutions(2).size(), 1);
+  EXPECT_TRUE(population.get_top_solutions(0).empty());
+
+  add_solution(1.0);
+  add_solution(2.0);
+  ASSERT_EQ(population.current_size(), 3);
+  auto top_solutions = population.get_top_solutions(2);
+  ASSERT_EQ(top_solutions.size(), 2);
+  EXPECT_NEAR(top_solutions[0].get_objective(), 1.2, 1e-12);
+  EXPECT_NEAR(top_solutions[1].get_objective(), 2.4, 1e-12);
+  EXPECT_EQ(population.get_top_solutions(10).size(), 3);
+  // The full snapshot still includes the archived best feasible solution.
+  EXPECT_EQ(population.population_to_vector().size(), 4);
+
+  // Recombination may change the population while iterating over its snapshot.
+  add_solution(0.0);
+  EXPECT_NEAR(population.best().get_objective(), 0.0, 1e-12);
+  EXPECT_NEAR(top_solutions[0].get_objective(), 1.2, 1e-12);
+  EXPECT_NEAR(top_solutions[1].get_objective(), 2.4, 1e-12);
+
+  population.clear();
+  EXPECT_TRUE(population.get_top_solutions(2).empty());
+  add_solution(-3.0);
+  add_solution(-1.0);
+  add_solution(-2.0);
+  ASSERT_FALSE(population.is_feasible());
+  ASSERT_EQ(population.current_size(), 3);
+  auto infeasible_solutions = population.get_top_solutions(2);
+  ASSERT_EQ(infeasible_solutions.size(), 2);
+  EXPECT_FALSE(infeasible_solutions[0].get_feasible());
+  EXPECT_FALSE(infeasible_solutions[1].get_feasible());
+  EXPECT_DOUBLE_EQ(infeasible_solutions[0].get_objective(),
+                   population.solution_at_index(1).get_objective());
+  EXPECT_DOUBLE_EQ(infeasible_solutions[1].get_objective(),
+                   population.solution_at_index(2).get_objective());
+}
+
 TEST(LPTest, TestSampleLP2)
 {
   raft::handle_t handle;
