@@ -14,8 +14,6 @@ inline constexpr double fj_bigval_threshold     = 1e20;
 inline constexpr double fj_seed_magnitude_limit = 1e7;
 inline constexpr double fj_integer_domain_limit = 1e7;
 
-inline constexpr double fj_row_tolerance_margin = 1e-7;
-
 // Incremental-state refresh cadence.
 inline constexpr int32_t fj_nnz_per_refresh_stretch = 100000;
 inline constexpr int32_t fj_max_refresh_stretch     = 8;

@@ -619,7 +619,7 @@ int main(int argc, char** argv)
                                           ub,
                                           cpu_problem.tolerances.absolute_tolerance,
                                           cpu_problem.tolerances.relative_tolerance);
-      const double tol = std::max(row_tol - mip::fj_row_tolerance_margin, 1e-12);
+      const double tol = std::max(row_tol, 1e-12);
 
       // Naive summation over w products: each product carries eps/2 and each of the w-1 additions
       // carries eps, both against the running magnitude, so the row's error is within

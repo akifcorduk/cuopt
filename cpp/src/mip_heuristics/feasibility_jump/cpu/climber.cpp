@@ -71,7 +71,7 @@ void set_host_data_view(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
   cuopt_assert(fj_cpu.problem->n_variables == n_variables, "problem variable count mismatch");
   cuopt_assert(fj_cpu.problem->n_constraints == n_constraints, "problem constraint count mismatch");
   cuopt_assert(fj_cpu.problem->nnz == nnz, "problem nonzero count mismatch");
-  fj_cpu.row_tolerance  = tolerances.absolute_tolerance - (f_t)fj_row_tolerance_margin;
+  fj_cpu.row_tolerance  = tolerances.absolute_tolerance * (f_t)0.9;
   fj_cpu.n_integer_vars = n_integer_vars;
 }
 
