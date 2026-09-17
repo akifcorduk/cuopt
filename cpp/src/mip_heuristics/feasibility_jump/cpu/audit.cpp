@@ -3,6 +3,7 @@
  * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+/* clang-format on */
 
 #include "audit.hpp"
 #include "internal.hpp"
@@ -11,9 +12,9 @@
 namespace cuopt::mathematical_optimization::mip {
 
 namespace {
-constexpr double fj_audit_rel_slack       = 1e-9;
-constexpr double fj_audit_abs_floor       = 1e-6;
-constexpr int32_t fj_audit_row_terms_printed = 64;
+constexpr double fj_audit_rel_slack           = 1e-9;
+constexpr double fj_audit_abs_floor           = 1e-6;
+constexpr int32_t fj_audit_row_terms_printed  = 64;
 constexpr bool fj_audit_each_row_update       = false;
 constexpr bool fj_audit_each_objective_update = false;
 }  // namespace
@@ -29,16 +30,15 @@ void audit_assignment_bounds(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* sit
       var_t::INTEGER != fj_cpu.problem->h_var_types[var] || fj_cpu.problem->is_integer(val);
     if (inbox && integral) continue;
 
-    // stderr and flushed, so the abort below cannot swallow it.
     std::fprintf(stderr,
                  "%sCPUFJ %s left var %d at %.17g outside [%.17g, %.17g], integer %d\n",
                  fj_cpu.log_prefix.c_str(),
                  site,
                  (int)var,
-                 (double)val,
-                 (double)get_lower(bounds),
-                 (double)get_upper(bounds),
-                 (int)(var_t::INTEGER == fj_cpu.problem->h_var_types[var]));
+                 val,
+                 get_lower(bounds),
+                 get_upper(bounds),
+                 var_t::INTEGER == fj_cpu.problem->h_var_types[var]);
     std::fflush(stderr);
     cuopt_assert(false, "assignment left the variable bounds");
     return;
@@ -46,9 +46,7 @@ void audit_assignment_bounds(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* sit
 }
 
 template <typename i_t, typename f_t>
-f_t fresh_row_slack(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                 i_t row,
-                                 const f_t* assignment)
+f_t fresh_row_slack(fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t row, const f_t* assignment)
 {
   auto [offset_begin, offset_end] = fj_cpu.range_for_row(row);
   const f_t activity              = compensated_dot2(
@@ -60,9 +58,9 @@ f_t fresh_row_slack(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 
 template <typename i_t, typename f_t>
 void report_row_divergence(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                  i_t cstr_idx,
-                                  const f_t* assignment,
-                                  const char* site)
+                           i_t cstr_idx,
+                           const f_t* assignment,
+                           const char* site)
 {
   auto [row_begin, row_end] = fj_cpu.range_for_row(cstr_idx);
   const f_t sumcomp         = fj_cpu.h_slack_sumcomp[cstr_idx];
@@ -76,8 +74,8 @@ void report_row_divergence(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
                (int)cstr_idx,
                (int)fj_cpu.iterations,
                (int)(row_end - row_begin),
-               (double)sumcomp,
-               (double)fj_cpu.h_bound[cstr_idx],
+               sumcomp,
+               fj_cpu.h_bound[cstr_idx],
                (int)fj_cpu.lhs_refresh_period_used,
                (long long)fj_cpu.n_lhs_recompute_total,
                (long long)fj_cpu.n_lhs_recompute_periodic,
@@ -118,13 +116,13 @@ void report_row_divergence(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
                  (int)cstr_idx,
                  (int)(p - row_begin),
                  (int)var,
-                 (int)(var_t::INTEGER == fj_cpu.problem->h_var_types[var]),
+                 var_t::INTEGER == fj_cpu.problem->h_var_types[var],
                  (int)(rev_end - rev_begin),
-                 (double)coeff,
-                 (double)val,
-                 (double)(coeff * val),
-                 (int)reachable,
-                 (double)rev_coeff);
+                 coeff,
+                 val,
+                 coeff * val,
+                 reachable,
+                 rev_coeff);
   }
 
   std::fprintf(stderr,
@@ -141,19 +139,14 @@ void report_row_divergence(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
 }
 
 template <typename i_t, typename f_t>
-void audit_objective_update(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                   i_t var_idx,
-                                   f_t old_val,
-                                   f_t delta,
-                                   f_t obj_old,
-                                   f_t obj_y)
+void audit_objective_update(
+  fj_cpu_climber_t<i_t, f_t>& fj_cpu, i_t var_idx, f_t old_val, f_t delta, f_t obj_old, f_t obj_y)
 {
   if (!fj_audit_each_objective_update) return;
   const f_t* const assignment = fj_cpu.h_assignment.data();
 
   const f_t fresh =
-    compensated_dot2(
-      fj_cpu.problem->h_obj_coeffs.data(), assignment, fj_cpu.problem->n_variables);
+    compensated_dot2(fj_cpu.problem->h_obj_coeffs.data(), assignment, fj_cpu.problem->n_variables);
   const f_t gap   = std::fabs(fj_cpu.h_incumbent_objective - fresh);
   const f_t slack = (f_t)fj_audit_abs_floor + (f_t)fj_audit_rel_slack * std::fabs(fresh);
   if (!(gap > slack)) return;
@@ -166,21 +159,21 @@ void audit_objective_update(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
                "iteration %d, var %d moved %.17g -> %.17g by delta %.17g, objective coeff %.17g, "
                "product %.17g whose ulp is %.17g, obj_old %.17g, obj_y %.17g, sumcomp %.17g\n",
                fj_cpu.log_prefix.c_str(),
-               (double)fj_cpu.h_incumbent_objective,
-               (double)fresh,
-               (double)gap,
-               (double)slack,
+               fj_cpu.h_incumbent_objective,
+               fresh,
+               gap,
+               slack,
                (int)fj_cpu.iterations,
                (int)var_idx,
-               (double)old_val,
-               (double)(old_val + delta),
-               (double)delta,
-               (double)coeff,
-               (double)product,
-               (double)(std::numeric_limits<f_t>::epsilon() * std::fabs(product)),
-               (double)obj_old,
-               (double)obj_y,
-               (double)fj_cpu.h_objective_sumcomp);
+               old_val,
+               old_val + delta,
+               delta,
+               coeff,
+               product,
+               std::numeric_limits<f_t>::epsilon() * std::fabs(product),
+               obj_old,
+               obj_y,
+               fj_cpu.h_objective_sumcomp);
   std::fflush(stderr);
   cuopt_assert(false, "h_incumbent_objective disagrees with c'x after a move");
 }
@@ -193,48 +186,48 @@ void audit_row_updates(
   const f_t* const assignment = fj_cpu.h_assignment.data();
 
   for (i_t cstr_idx = 0; cstr_idx < fj_cpu.n_rows; ++cstr_idx) {
-    const f_t carried =
-      fj_cpu.row_state()[cstr_idx].slack + fj_cpu.h_slack_sumcomp[cstr_idx];
-    const f_t fresh = fresh_row_slack<i_t, f_t>(fj_cpu, cstr_idx, assignment);
-    const f_t gap   = std::fabs(carried - fresh);
+    const f_t carried = fj_cpu.row_state()[cstr_idx].slack + fj_cpu.h_slack_sumcomp[cstr_idx];
+    const f_t fresh   = fresh_row_slack<i_t, f_t>(fj_cpu, cstr_idx, assignment);
+    const f_t gap     = std::fabs(carried - fresh);
     // The verdict, not the gap. A row far from its bound may carry a value an ulp off the fresh one
-    // with no consequence, and above |slack| ~ 4e9 one ulp already exceeds the row tolerance, so any
-    // absolute threshold fires there on correct arithmetic.
+    // with no consequence, and above |slack| ~ 4e9 one ulp already exceeds the row tolerance, so
+    // any absolute threshold fires there on correct arithmetic.
     if ((carried < -fj_cpu.row_tolerance) == (fresh < -fj_cpu.row_tolerance)) continue;
 
     f_t incidence_coeff = 0;
     bool touched        = false;
     for (i_t i = begin; i < end; ++i) {
       if (fj_cpu.h_reverse_constraints[i] != cstr_idx) continue;
-      touched        = true;
+      touched         = true;
       incidence_coeff = fj_cpu.h_reverse_coefficients[i];
       break;
     }
 
     // stderr and flushed, so the abort below cannot swallow it.
-    std::fprintf(stderr,
-                 "%sCPUFJ row update row %d: carried slack %.17g says violated %d, fresh %.17g says "
-                 "%d, differ by %.17g against tol %.17g. iteration %d, var %d moved %.17g -> %.17g "
-                 "by delta %.17g, row in this move's support %d with coeff %.17g, row bound %.17g, "
-                 "slack sumcomp %.17g, width %d\n",
-                 fj_cpu.log_prefix.c_str(),
-                 (int)cstr_idx,
-                 (double)carried,
-                 (int)(carried < -fj_cpu.row_tolerance),
-                 (double)fresh,
-                 (int)(fresh < -fj_cpu.row_tolerance),
-                 (double)gap,
-                 (double)fj_cpu.row_tolerance,
-                 (int)fj_cpu.iterations,
-                 (int)var_idx,
-                 (double)old_val,
-                 (double)(old_val + delta),
-                 (double)delta,
-                 (int)touched,
-                 (double)incidence_coeff,
-                 (double)fj_cpu.h_bound[cstr_idx],
-                 (double)fj_cpu.h_slack_sumcomp[cstr_idx],
-                 (int)(fj_cpu.h_offsets[cstr_idx + 1] - fj_cpu.h_offsets[cstr_idx]));
+    std::fprintf(
+      stderr,
+      "%sCPUFJ row update row %d: carried slack %.17g says violated %d, fresh %.17g says "
+      "%d, differ by %.17g against tol %.17g. iteration %d, var %d moved %.17g -> %.17g "
+      "by delta %.17g, row in this move's support %d with coeff %.17g, row bound %.17g, "
+      "slack sumcomp %.17g, width %d\n",
+      fj_cpu.log_prefix.c_str(),
+      (int)cstr_idx,
+      carried,
+      carried < -fj_cpu.row_tolerance,
+      fresh,
+      fresh < -fj_cpu.row_tolerance,
+      gap,
+      fj_cpu.row_tolerance,
+      (int)fj_cpu.iterations,
+      (int)var_idx,
+      old_val,
+      old_val + delta,
+      delta,
+      touched,
+      incidence_coeff,
+      fj_cpu.h_bound[cstr_idx],
+      fj_cpu.h_slack_sumcomp[cstr_idx],
+      (int)(fj_cpu.h_offsets[cstr_idx + 1] - fj_cpu.h_offsets[cstr_idx]));
     std::fflush(stderr);
     report_row_divergence<i_t, f_t>(fj_cpu, cstr_idx, assignment, "row update");
     cuopt_assert(false, "carried slack disagrees with a fresh sum after a move");
@@ -254,10 +247,9 @@ void audit_incremental_state(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* sit
   f_t carried_total = 0;
 
   for (i_t cstr_idx = 0; cstr_idx < fj_cpu.n_rows; ++cstr_idx) {
-    const f_t fresh = fresh_row_slack<i_t, f_t>(fj_cpu, cstr_idx, assignment);
-    const f_t cost  = fresh < f_t{0} ? fresh : f_t{0};
-    const f_t carried =
-      fj_cpu.row_state()[cstr_idx].slack + fj_cpu.h_slack_sumcomp[cstr_idx];
+    const f_t fresh   = fresh_row_slack<i_t, f_t>(fj_cpu, cstr_idx, assignment);
+    const f_t cost    = fresh < f_t{0} ? fresh : f_t{0};
+    const f_t carried = fj_cpu.row_state()[cstr_idx].slack + fj_cpu.h_slack_sumcomp[cstr_idx];
 
     const bool truly_violated = fresh < -tol;
     if (truly_violated) { fresh_total += cost; }
@@ -273,14 +265,14 @@ void audit_incremental_state(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* sit
                  fj_cpu.log_prefix.c_str(),
                  site,
                  (int)cstr_idx,
-                 (int)fj_cpu.h_row_is_integral[cstr_idx],
-                 (int)carried_violated,
-                 (int)truly_violated,
-                 (double)carried,
-                 (double)fresh,
-                 (double)std::fabs(carried - fresh),
-                 (double)fj_cpu.h_bound[cstr_idx],
-                 (double)tol);
+                 fj_cpu.h_row_is_integral[cstr_idx],
+                 carried_violated,
+                 truly_violated,
+                 carried,
+                 fresh,
+                 std::fabs(carried - fresh),
+                 fj_cpu.h_bound[cstr_idx],
+                 tol);
     std::fflush(stderr);
     report_row_divergence<i_t, f_t>(fj_cpu, cstr_idx, assignment, site);
     cuopt_assert(false, "violated set disagrees with a fresh slack");
@@ -288,30 +280,27 @@ void audit_incremental_state(fj_cpu_climber_t<i_t, f_t>& fj_cpu, const char* sit
   }
 
   const f_t fresh_obj =
-    compensated_dot2(
-      fj_cpu.problem->h_obj_coeffs.data(), assignment, fj_cpu.problem->n_variables);
-  const f_t obj_gap = std::fabs(fj_cpu.h_incumbent_objective - fresh_obj);
-  const f_t obj_slack =
-    (f_t)fj_audit_abs_floor + (f_t)fj_audit_rel_slack * std::fabs(fresh_obj);
+    compensated_dot2(fj_cpu.problem->h_obj_coeffs.data(), assignment, fj_cpu.problem->n_variables);
+  const f_t obj_gap   = std::fabs(fj_cpu.h_incumbent_objective - fresh_obj);
+  const f_t obj_slack = (f_t)fj_audit_abs_floor + (f_t)fj_audit_rel_slack * std::fabs(fresh_obj);
   if (obj_gap > obj_slack) {
     std::fprintf(stderr,
                  "%sCPUFJ %s h_incumbent_objective %.17g vs c'x %.17g, gap %.17g over slack %.17g, "
                  "sumcomp %.17g\n",
                  fj_cpu.log_prefix.c_str(),
                  site,
-                 (double)fj_cpu.h_incumbent_objective,
-                 (double)fresh_obj,
-                 (double)obj_gap,
-                 (double)obj_slack,
-                 (double)fj_cpu.h_objective_sumcomp);
+                 fj_cpu.h_incumbent_objective,
+                 fresh_obj,
+                 obj_gap,
+                 obj_slack,
+                 fj_cpu.h_objective_sumcomp);
     std::fflush(stderr);
     cuopt_assert(false, "h_incumbent_objective left c'x behind");
   }
 }
 
 template <typename i_t, typename f_t>
-bool check_variable_feasibility(fj_cpu_climber_t<i_t, f_t>& fj_cpu,
-                                bool check_integer)
+bool check_variable_feasibility(fj_cpu_climber_t<i_t, f_t>& fj_cpu, bool check_integer)
 {
   for (i_t var_idx = 0; var_idx < fj_cpu.problem->n_variables; var_idx += 1) {
     auto val      = fj_cpu.h_assignment[var_idx];
@@ -336,8 +325,7 @@ void sanity_checks(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
   // Check that each variable is within its bounds
   for (i_t var_idx = 0; var_idx < fj_cpu.problem->n_variables; ++var_idx) {
     f_t val = fj_cpu.h_assignment[var_idx];
-    cuopt_assert(fj_cpu.check_variable_within_bounds(var_idx, val),
-                 "Variable is out of bounds");
+    cuopt_assert(fj_cpu.check_variable_within_bounds(var_idx, val), "Variable is out of bounds");
   }
 
   // Check that each violated constraint is actually violated and not present in
@@ -375,28 +363,24 @@ void sanity_checks(fj_cpu_climber_t<i_t, f_t>& fj_cpu)
 
 #if MIP_INSTANTIATE_FLOAT
 template void audit_assignment_bounds<int, float>(fj_cpu_climber_t<int, float>&, const char*);
-template float fresh_row_slack<int, float>(
-  fj_cpu_climber_t<int, float>&, int, const float*);
+template float fresh_row_slack<int, float>(fj_cpu_climber_t<int, float>&, int, const float*);
 template void audit_objective_update<int, float>(
   fj_cpu_climber_t<int, float>&, int, float, float, float, float);
 template void audit_row_updates<int, float>(
   fj_cpu_climber_t<int, float>&, int, float, float, int, int);
-template void audit_incremental_state<int, float>(
-  fj_cpu_climber_t<int, float>&, const char*);
+template void audit_incremental_state<int, float>(fj_cpu_climber_t<int, float>&, const char*);
 template bool check_variable_feasibility<int, float>(fj_cpu_climber_t<int, float>&, bool);
 template void sanity_checks<int, float>(fj_cpu_climber_t<int, float>&);
 #endif
 
 #if MIP_INSTANTIATE_DOUBLE
 template void audit_assignment_bounds<int, double>(fj_cpu_climber_t<int, double>&, const char*);
-template double fresh_row_slack<int, double>(
-  fj_cpu_climber_t<int, double>&, int, const double*);
+template double fresh_row_slack<int, double>(fj_cpu_climber_t<int, double>&, int, const double*);
 template void audit_objective_update<int, double>(
   fj_cpu_climber_t<int, double>&, int, double, double, double, double);
 template void audit_row_updates<int, double>(
   fj_cpu_climber_t<int, double>&, int, double, double, int, int);
-template void audit_incremental_state<int, double>(
-  fj_cpu_climber_t<int, double>&, const char*);
+template void audit_incremental_state<int, double>(fj_cpu_climber_t<int, double>&, const char*);
 template bool check_variable_feasibility<int, double>(fj_cpu_climber_t<int, double>&, bool);
 template void sanity_checks<int, double>(fj_cpu_climber_t<int, double>&);
 #endif
