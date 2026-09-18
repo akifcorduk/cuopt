@@ -13,6 +13,8 @@
 
 #include <utilities/macros.cuh>
 
+#include <raft/core/device_setter.hpp>
+
 #include <omp.h>
 
 #include <vector>
@@ -145,6 +147,8 @@ void early_structural_t<i_t, f_t>::run()
     return;
   }
 
+  // OpenMP workers do not inherit the CUDA device that owns the problem.
+  raft::device_setter device_guard(this->device_id_);
   f_t objective{0};
   if (!validate(*this->problem_ptr_, assignment, objective)) {
     CUOPT_LOG_DEBUG("[Early Structural] %s constructed a point that failed validation, discarding",

@@ -7,7 +7,9 @@
 
 #include <cuopt/mathematical_optimization/optimization_problem.hpp>
 #include <mip_heuristics/structural/arc_flow.cuh>
+#include <mip_heuristics/structural/early_structural.cuh>
 
+#include <raft/core/device_setter.hpp>
 #include <raft/core/handle.hpp>
 
 #include <gtest/gtest.h>
@@ -17,6 +19,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <utility>
 #include <vector>
@@ -203,9 +206,10 @@ void expect_feasible(const built_model_t& model, const std::vector<double>& assi
   }
 }
 
-run_outcome_t run_heuristic(const built_model_t& model, input_options_t options = {})
+optimization_problem_t<int, double> make_problem(const built_model_t& model,
+                                                 const raft::handle_t& handle,
+                                                 input_options_t options = {})
 {
-  const raft::handle_t handle{};
   optimization_problem_t<int, double> problem(&handle);
   problem.set_csr_constraint_matrix(model.values.data(),
                                     model.values.size(),
@@ -224,7 +228,13 @@ run_outcome_t run_heuristic(const built_model_t& model, input_options_t options 
   problem.set_constraint_lower_bounds(model.row_lb.data(), model.row_lb.size());
   problem.set_constraint_upper_bounds(model.row_ub.data(), model.row_ub.size());
   problem.set_maximize(options.maximize);
+  return problem;
+}
 
+run_outcome_t run_heuristic(const built_model_t& model, input_options_t options = {})
+{
+  const raft::handle_t handle{};
+  auto problem = make_problem(model, handle, options);
   mip_solver_settings_t<int, double> settings;
   run_outcome_t outcome;
   mip::arc_flow_t<int, double> heuristic;
@@ -248,7 +258,69 @@ run_outcome_t run_heuristic(const built_model_t& model, input_options_t options 
   return outcome;
 }
 
+run_outcome_t run_early_heuristic(const built_model_t& model, int problem_device_id)
+{
+  raft::device_setter problem_device(problem_device_id);
+  const raft::handle_t handle{};
+  auto problem = make_problem(model, handle);
+  mip_solver_settings_t<int, double> settings;
+  run_outcome_t outcome;
+
+#pragma omp parallel num_threads(2)
+  {
+    // A worker's current device need not match the device that owns the problem.
+    // Force the mismatch even if the creating thread executes its own task.
+    raft::device_setter worker_device(0);
+#pragma omp single
+    {
+      std::unique_ptr<mip::early_structural_t<int, double>> heuristic;
+      {
+        raft::device_setter allocation_device(problem_device_id);
+        heuristic =
+          mip::early_structural_t<int, double>::create(problem, settings.get_tolerances(), {});
+      }
+      outcome.prescreened = heuristic != nullptr;
+      if (heuristic) {
+        heuristic->start();
+        // Join before stop(), which would otherwise preempt this small problem.
+#pragma omp taskwait
+        raft::device_setter destruction_device(problem_device_id);
+        heuristic->stop();
+        outcome.found      = heuristic->solution_found();
+        outcome.objective  = heuristic->get_best_user_objective();
+        outcome.assignment = heuristic->get_best_assignment();
+        heuristic.reset();
+      }
+    }
+    EXPECT_EQ(raft::device_setter::get_current_device(), 0);
+  }
+  return outcome;
+}
+
 }  // namespace
+
+TEST(arc_flow, early_structural_runs_without_benchmark_callbacks)
+{
+  const auto model   = build_arc_flow();
+  const auto outcome = run_early_heuristic(model, 0);
+  ASSERT_TRUE(outcome.prescreened);
+  ASSERT_TRUE(outcome.found);
+  EXPECT_DOUBLE_EQ(outcome.objective, expected_objective);
+  expect_feasible(model, outcome.assignment);
+}
+
+TEST(arc_flow, early_structural_selects_nondefault_device)
+{
+  if (raft::device_setter::get_device_count() < 2) {
+    GTEST_SKIP() << "Requires two visible CUDA devices to exercise worker/device mismatch";
+  }
+  const auto model   = build_arc_flow();
+  const auto outcome = run_early_heuristic(model, 1);
+  ASSERT_TRUE(outcome.prescreened);
+  ASSERT_TRUE(outcome.found);
+  EXPECT_DOUBLE_EQ(outcome.objective, expected_objective);
+  expect_feasible(model, outcome.assignment);
+}
 
 TEST(arc_flow, finds_exact_optimum_on_reduced_graph)
 {
