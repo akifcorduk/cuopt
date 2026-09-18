@@ -28,13 +28,26 @@ constexpr double distance_to_check_for_feasible         = 0.01;
 constexpr double fp_external_solution_improvement_ratio = 0.1;
 
 template <typename f_t>
-bool external_solution_improves_fp_incumbent(f_t candidate_objective, f_t incumbent_objective)
+f_t fp_objective_improvement_margin(f_t incumbent_objective,
+                                    f_t objective_offset,
+                                    double relative_margin)
+{
+  // Restore the objective constant before taking a percentage. The absolute
+  // scaling factor cancels when converting the user-space margin back to solver space.
+  return std::max(
+    static_cast<f_t>(std::abs(incumbent_objective + objective_offset) * relative_margin),
+    static_cast<f_t>(OBJECTIVE_EPSILON));
+}
+
+template <typename f_t>
+bool external_solution_improves_fp_incumbent(f_t candidate_objective,
+                                             f_t incumbent_objective,
+                                             f_t objective_offset = f_t{0})
 {
   if (!std::isfinite(candidate_objective)) { return false; }
   if (!std::isfinite(incumbent_objective)) { return true; }
-  const f_t improvement_margin = std::max(
-    static_cast<f_t>(std::abs(incumbent_objective) * fp_external_solution_improvement_ratio),
-    static_cast<f_t>(OBJECTIVE_EPSILON));
+  const f_t improvement_margin = fp_objective_improvement_margin(
+    incumbent_objective, objective_offset, fp_external_solution_improvement_ratio);
   return candidate_objective < incumbent_objective - improvement_margin;
 }
 

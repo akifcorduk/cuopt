@@ -650,7 +650,9 @@ void local_search_t<i_t, f_t>::save_solution_and_add_cutting_plane(
                solution.handle_ptr->get_stream());
     best_objective = solution.get_objective();
     f_t objective_cut =
-      best_objective - std::max(std::abs(0.001 * best_objective), OBJECTIVE_EPSILON);
+      best_objective -
+      fp_objective_improvement_margin<f_t>(
+        best_objective, solution.problem_ptr->presolve_data.objective_offset, 0.001);
     problem_with_objective_cut.add_cutting_plane_at_objective(objective_cut);
   }
 }
@@ -683,9 +685,10 @@ bool local_search_t<i_t, f_t>::restart_fp_from_external_solution(
   f_t& best_objective)
 {
   population_ptr->add_external_solutions_to_population();
-  if (!population_ptr->is_feasible() ||
-      !external_solution_improves_fp_incumbent(population_ptr->best_feasible().get_objective(),
-                                               best_objective)) {
+  if (!population_ptr->is_feasible() || !external_solution_improves_fp_incumbent(
+                                          population_ptr->best_feasible().get_objective(),
+                                          best_objective,
+                                          solution.problem_ptr->presolve_data.objective_offset)) {
     return false;
   }
 
@@ -812,7 +815,9 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
   if (is_feasible) {
     CUOPT_LOG_DEBUG("FP initial solution is feasible, adding cutting plane at obj");
     f_t objective_cut =
-      best_objective - std::max(std::abs(0.001 * best_objective), OBJECTIVE_EPSILON);
+      best_objective -
+      fp_objective_improvement_margin<f_t>(
+        best_objective, solution.problem_ptr->presolve_data.objective_offset, 0.001);
     problem_with_objective_cut.add_cutting_plane_at_objective(objective_cut);
     // Do the copy here for proper handling of the added constraints weight
     fj.copy_weights(

@@ -44,6 +44,23 @@ TEST(FeasibilityPumpTest, ExternalSolutionImprovementMargin)
                                                        std::numeric_limits<double>::infinity()));
 }
 
+TEST(FeasibilityPumpTest, ImprovementMarginsAreInvariantToPresolveOffset)
+{
+  using mip::external_solution_improves_fp_incumbent;
+  using mip::fp_objective_improvement_margin;
+  for (double offset : {-1000000.0, -1000.0, 0.0, 1000.0, 1000000.0}) {
+    SCOPED_TRACE(offset);
+    EXPECT_TRUE(external_solution_improves_fp_incumbent(89.0 - offset, 100.0 - offset, offset));
+    EXPECT_FALSE(external_solution_improves_fp_incumbent(90.0 - offset, 100.0 - offset, offset));
+    EXPECT_TRUE(external_solution_improves_fp_incumbent(-111.0 - offset, -100.0 - offset, offset));
+    EXPECT_FALSE(external_solution_improves_fp_incumbent(-110.0 - offset, -100.0 - offset, offset));
+    EXPECT_DOUBLE_EQ(fp_objective_improvement_margin(100.0 - offset, offset, 0.001), 0.1);
+    EXPECT_DOUBLE_EQ(fp_objective_improvement_margin(-100.0 - offset, offset, 0.001), 0.1);
+    EXPECT_DOUBLE_EQ(fp_objective_improvement_margin(-offset, offset, 0.001),
+                     mip::OBJECTIVE_EPSILON);
+  }
+}
+
 TEST(PrimalIntegralTest, TracksImprovingMinimizationIncumbents)
 {
   benchmark_info_t benchmark_info;
@@ -148,6 +165,122 @@ TEST(FeasibilityPumpTest, ConsumesQueuedFeasibleSolutionWhenPopulationIsInfeasib
   EXPECT_FALSE(diversity_manager.population.solutions_in_external_queue_.load());
   ASSERT_TRUE(diversity_manager.population.is_feasible());
   EXPECT_NEAR(diversity_manager.population.best_feasible().get_objective(), 0.0, 1e-12);
+}
+
+TEST(FeasibilityPumpTest, ExternalRestartRefreshesState)
+{
+  raft::handle_t handle;
+  auto model      = create_std_milp_problem(false);
+  auto op_problem = mps_data_model_to_optimization_problem(&handle, model);
+  mip_solver_settings_t<int, double> settings{};
+  mip::problem_t<int, double> problem(op_problem, settings.get_tolerances());
+  problem.preprocess_problem();
+  mip::mip_solver_t<int, double> solver(problem, settings, timer_t(5.0));
+  mip::diversity_manager_t<int, double> diversity_manager(solver.context);
+  solver.context.diversity_manager_ptr = &diversity_manager;
+  auto& population                     = diversity_manager.population;
+  population.initialize_population();
+  population.allocate_solutions();
+  population.add_external_solution({0.0, 0.0}, 0.0, mip::solution_origin_t::BRANCH_AND_BOUND);
+  // Exercise the restart without spending time on the population sweep.
+  diversity_manager.timer = timer_t(0.0);
+  auto& ls                = diversity_manager.ls;
+  ls.fp.timer             = timer_t(5.0);
+  ls.fp.config.alpha      = 0.2;
+  ls.fp.best_excess       = 7.0;
+  ls.fp.max_n_of_integers = 2;
+  ls.fp.last_distances.push_back(3.0);
+  mip::solution_t<int, double> solution(problem);
+  solution.copy_new_assignment(std::vector<double>{1.0, 0.0});
+  solution.compute_feasibility();
+  rmm::device_uvector<double> best_solution(solution.assignment, handle.get_stream());
+  double best_objective = solution.get_objective();
+  ASSERT_TRUE(
+    ls.restart_fp_from_external_solution(solution, &population, best_solution, best_objective));
+  EXPECT_DOUBLE_EQ(ls.fp.config.alpha, mip::default_alpha);
+  EXPECT_TRUE(std::isinf(ls.fp.best_excess));
+  EXPECT_EQ(ls.fp.max_n_of_integers, 0);
+  EXPECT_TRUE(ls.fp.last_distances.empty());
+  EXPECT_DOUBLE_EQ(best_objective, 0.0);
+  EXPECT_TRUE(ls.cutting_plane_added_for_active_run);
+}
+
+TEST(FeasibilityPumpTest, ExternalRestartAccountsForObjectiveOffset)
+{
+  for (bool should_restart : {false, true}) {
+    SCOPED_TRACE(should_restart);
+    raft::handle_t handle;
+    auto model      = create_std_milp_problem(false);
+    auto op_problem = mps_data_model_to_optimization_problem(&handle, model);
+    mip_solver_settings_t<int, double> settings{};
+    mip::problem_t<int, double> problem(op_problem, settings.get_tolerances());
+    problem.preprocess_problem();
+    problem.presolve_data.objective_offset = should_restart ? -1000.0 : 1000.0;
+    mip::mip_solver_t<int, double> solver(problem, settings, timer_t(5.0));
+    mip::diversity_manager_t<int, double> diversity_manager(solver.context);
+    solver.context.diversity_manager_ptr = &diversity_manager;
+    auto& population                     = diversity_manager.population;
+    population.initialize_population();
+    population.allocate_solutions();
+    const double candidate = should_restart ? 950.0 : 0.0;
+    population.add_external_solution(
+      {candidate, 0.0}, 1.2 * candidate, mip::solution_origin_t::BRANCH_AND_BOUND);
+    diversity_manager.timer = timer_t(0.0);
+    auto& ls                = diversity_manager.ls;
+    ls.fp.timer             = timer_t(5.0);
+    ls.fp.config.alpha      = 0.2;
+    mip::solution_t<int, double> solution(problem);
+    const double incumbent = should_restart ? 1000.0 : 1.0;
+    solution.copy_new_assignment(std::vector<double>{incumbent, 0.0});
+    solution.compute_feasibility();
+    rmm::device_uvector<double> best_solution(solution.assignment, handle.get_stream());
+    double best_objective = solution.get_objective();
+    // User objectives: 200 -> 140 (30%) or 1001.2 -> 1000 (less than 10%).
+    EXPECT_EQ(
+      ls.restart_fp_from_external_solution(solution, &population, best_solution, best_objective),
+      should_restart);
+    EXPECT_DOUBLE_EQ(ls.fp.config.alpha, should_restart ? mip::default_alpha : 0.2);
+    EXPECT_NEAR(best_objective, 1.2 * (should_restart ? candidate : incumbent), 1e-12);
+  }
+}
+
+TEST(FeasibilityPumpTest, ObjectiveCutAccountsForObjectiveOffset)
+{
+  for (bool initial_cut : {false, true}) {
+    SCOPED_TRACE(initial_cut);
+    for (double offset : {1000.0, -1000.0}) {
+      SCOPED_TRACE(offset);
+      raft::handle_t handle;
+      auto model      = create_std_milp_problem(false);
+      auto op_problem = mps_data_model_to_optimization_problem(&handle, model);
+      mip_solver_settings_t<int, double> settings{};
+      mip::problem_t<int, double> problem(op_problem, settings.get_tolerances());
+      problem.preprocess_problem();
+      problem.presolve_data.objective_offset = offset;
+      mip::mip_solver_t<int, double> solver(problem, settings, timer_t(5.0));
+      mip::diversity_manager_t<int, double> diversity_manager(solver.context);
+      solver.context.diversity_manager_ptr = &diversity_manager;
+      mip::solution_t<int, double> solution(problem);
+      solution.copy_new_assignment(std::vector<double>{1.0, 0.0});
+      solution.compute_feasibility();
+      rmm::device_uvector<double> best_solution(solution.assignment, handle.get_stream());
+      double best_objective = std::numeric_limits<double>::infinity();
+      auto& ls              = diversity_manager.ls;
+      if (initial_cut) {
+        auto& population = diversity_manager.population;
+        population.initialize_population();
+        population.allocate_solutions();
+        ls.run_fp(solution, timer_t(0.0), &population);
+      } else {
+        ls.save_solution_and_add_cutting_plane(solution, best_solution, best_objective);
+      }
+      const auto& cut_problem = ls.problem_with_objective_cut;
+      const double rhs = cut_problem.constraint_upper_bounds.element(cut_problem.n_constraints - 1,
+                                                                     handle.get_stream());
+      const double expected_rhs = 1.2 - 0.001 * std::abs(1.2 + offset);
+      EXPECT_NEAR(rhs, expected_rhs, 1e-12);
+    }
+  }
 }
 
 TEST(PopulationTest, TopSolutionsSnapshot)

@@ -489,9 +489,10 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(
       if (population.solutions_in_external_queue_.load()) {
         population.add_external_solutions_to_population();
       }
-      if (population.is_feasible() &&
-          external_solution_improves_fp_incumbent(population.best_feasible().get_objective(),
-                                                  *incumbent_objective_for_external_restart)) {
+      if (population.is_feasible() && external_solution_improves_fp_incumbent(
+                                        population.best_feasible().get_objective(),
+                                        *incumbent_objective_for_external_restart,
+                                        solution.problem_ptr->presolve_data.objective_offset)) {
         CUOPT_LOG_DEBUG("Interrupting FP descent for external incumbent %g",
                         population.best_feasible().get_user_objective());
         return false;
