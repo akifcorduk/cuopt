@@ -271,8 +271,6 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
                                    true);
   }
 
-  auto solution_copy = solution;
-
   // Start CPU solver in background thread
 #pragma omp taskgroup
   {
@@ -339,9 +337,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
     solution.copy_from(solution_cpu);
     cpu_better[source]++;
   }
-  solution.compute_feasibility();
-
-  return cpu_feasible;
+  return solution.compute_feasibility();
 }
 
 template <typename i_t, typename f_t>
@@ -643,6 +639,8 @@ void local_search_t<i_t, f_t>::save_solution_and_add_cutting_plane(
   solution_t<i_t, f_t>& solution, rmm::device_uvector<f_t>& best_solution, f_t& best_objective)
 {
   raft::common::nvtx::range fun_scope("save_solution_and_add_cutting_plane");
+  // Diversification can finish without populating the best-feasible archive.
+  if (!solution.get_feasible()) { return; }
   if (solution.get_objective() < best_objective) {
     raft::copy(best_solution.data(),
                solution.assignment.data(),
