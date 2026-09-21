@@ -178,6 +178,17 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
 }
 
 template <typename i_t, typename f_t>
+bool population_t<i_t, f_t>::get_best_feasible_snapshot(std::vector<f_t>& out_assignment,
+                                                        f_t& out_objective)
+{
+  std::lock_guard<std::mutex> host_lock(best_feasible_host_mutex);
+  if (best_feasible_host_assignment.empty()) { return false; }
+  out_assignment = best_feasible_host_assignment;
+  out_objective  = best_feasible_host_objective;
+  return true;
+}
+
+template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::add_external_solutions_to_population()
 {
   // don't do early exit checks here. mutex needs to be acquired to prevent race conditions
@@ -423,6 +434,17 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
     solutions[0].second = std::move(temp_sol);
     indices[0].second   = sol_cost;
     best_updated        = true;
+    // Refresh the CUDA-free host snapshot used by background CPU workers (e.g. the LNS
+    // improvement thread). This device->host copy happens on the caller's own stream/thread,
+    // which already owns valid CUDA context here, so it stays consistent with the rest of
+    // add_solution's device access.
+    {
+      auto host_assignment = solutions[0].second.get_host_assignment();
+      f_t host_objective   = solutions[0].second.get_objective();
+      std::lock_guard<std::mutex> host_lock(best_feasible_host_mutex);
+      best_feasible_host_assignment = std::move(host_assignment);
+      best_feasible_host_objective  = host_objective;
+    }
   }
 
   // Fast reject
