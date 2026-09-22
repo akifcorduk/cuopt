@@ -99,6 +99,86 @@ io::mps_data_model_t<int, double> create_single_var_milp_problem(bool maximize)
   return problem;
 }
 
+void expect_gpu_only_fj_feasibility(bool start_from_zero)
+{
+  raft::handle_t handle;
+  auto model      = create_std_milp_problem(false);
+  auto op_problem = mps_data_model_to_optimization_problem(&handle, model);
+  mip_solver_settings_t<int, double> settings{};
+  settings.heuristic_params.num_cpufj_threads = 0;
+  mip::problem_t<int, double> problem(op_problem, settings.get_tolerances());
+  problem.preprocess_problem();
+  mip::mip_solver_t<int, double> solver(problem, settings, timer_t(5.0));
+  mip::diversity_manager_t<int, double> diversity_manager(solver.context);
+  solver.context.diversity_manager_ptr = &diversity_manager;
+  auto& ls                             = diversity_manager.ls;
+  ASSERT_TRUE(ls.ls_cpu_fj.empty());
+  mip::solution_t<int, double> solution(problem);
+  solution.copy_new_assignment(std::vector<double>{1.0, 0.0});
+  ls.fj.settings.mode                   = mip::fj_mode_t::EXIT_NON_IMPROVING;
+  ls.fj.settings.n_of_minimums_for_exit = 1;
+  ls.fj.settings.feasibility_run        = true;
+
+  const bool reported_feasible = start_from_zero
+                                   ? ls.run_fj_on_zero(solution, timer_t(0.1))
+                                   : ls.do_fj_solve(solution, ls.fj, 0.1, "gpu_only_test");
+
+  ASSERT_TRUE(solution.compute_feasibility());
+  EXPECT_TRUE(reported_feasible);
+}
+
+TEST(LocalSearchTest, ReportsGpuOnlyFeasibleSolution) { expect_gpu_only_fj_feasibility(false); }
+
+TEST(LocalSearchTest, ZeroStartReportsGpuOnlyFeasibleSolution)
+{
+  expect_gpu_only_fj_feasibility(true);
+}
+
+io::mps_data_model_t<int, double> create_positive_objective_milp_problem()
+{
+  return cuopt::test::parse_inline_lp(R"LP(
+Minimize
+  obj: 100 x
+Subject To
+  demand: x >= 1
+Bounds
+  0 <= x <= 2
+General
+  x
+End
+)LP");
+}
+
+TEST(FeasibilityPumpTest, DoesNotCutFromEmptyFeasibleArchive)
+{
+  raft::handle_t handle;
+  auto model      = create_positive_objective_milp_problem();
+  auto op_problem = mps_data_model_to_optimization_problem(&handle, model);
+  mip_solver_settings_t<int, double> settings{};
+  mip::problem_t<int, double> problem(op_problem, settings.get_tolerances());
+  problem.preprocess_problem();
+  problem.presolve_data.objective_offset = 1.0;
+  mip::mip_solver_t<int, double> solver(problem, settings, timer_t(5.0));
+  mip::diversity_manager_t<int, double> diversity_manager(solver.context);
+  solver.context.diversity_manager_ptr = &diversity_manager;
+  auto& population                     = diversity_manager.population;
+  population.initialize_population();
+  population.allocate_solutions();
+  ASSERT_FALSE(population.is_feasible());
+  ASSERT_FALSE(population.best_feasible().get_feasible());
+  ASSERT_DOUBLE_EQ(population.best_feasible().get_objective(), 0.0);
+  rmm::device_uvector<double> saved(1, handle.get_stream());
+  thrust::fill(handle.get_thrust_policy(), saved.begin(), saved.end(), 1.0);
+  double objective = std::numeric_limits<double>::infinity();
+
+  diversity_manager.ls.save_solution_and_add_cutting_plane(
+    population.best_feasible(), saved, objective);
+
+  EXPECT_EQ(objective, std::numeric_limits<double>::infinity());
+  EXPECT_FALSE(diversity_manager.ls.problem_with_objective_cut.cutting_plane_added);
+  EXPECT_EQ(cuopt::host_copy(saved, handle.get_stream()), std::vector<double>{1.0});
+}
+
 TEST(PopulationTest, TopSolutionsSnapshot)
 {
   raft::handle_t handle;
