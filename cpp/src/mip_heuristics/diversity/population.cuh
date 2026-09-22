@@ -150,6 +150,8 @@ class population_t {
   void find_diversity(std::vector<solution_t<i_t, f_t>>& initial_sol_vector, bool avg);
 
   std::vector<solution_t<i_t, f_t>> population_to_vector();
+  // Snapshot the best-ranked pool entries, excluding the extra best-feasible archive.
+  std::vector<solution_t<i_t, f_t>> get_top_solutions(size_t max_count);
   void halve_the_population();
 
   void run_solution_callbacks(solution_t<i_t, f_t>& sol);

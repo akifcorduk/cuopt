@@ -684,6 +684,19 @@ std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::population_to_vector()
 }
 
 template <typename i_t, typename f_t>
+std::vector<solution_t<i_t, f_t>> population_t<i_t, f_t>::get_top_solutions(size_t max_count)
+{
+  std::lock_guard<std::recursive_mutex> lock(write_mutex);
+  const size_t count = std::min(max_count, current_size());
+  std::vector<solution_t<i_t, f_t>> sol_vec;
+  sol_vec.reserve(count);
+  for (size_t i = 1; i <= count; ++i) {
+    sol_vec.emplace_back(solutions[indices[i].first].second);
+  }
+  return sol_vec;
+}
+
+template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::halve_the_population()
 {
   raft::common::nvtx::range fun_scope("halve_the_population");
