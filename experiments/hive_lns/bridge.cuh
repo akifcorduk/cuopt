@@ -4,9 +4,12 @@
 #include <atomic>
 #include <deque>
 #include <exception>
+#include <mip_heuristics/diversity/population.cuh>
+#include <mip_heuristics/solver_context.cuh>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <utilities/copy_helpers.hpp>
 #include "../../cpp/src/mip_heuristics/lns_improvement.hpp"
 #include "repair_tools.cuh"
 
