@@ -423,6 +423,7 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
     solutions[0].second = std::move(temp_sol);
     indices[0].second   = sol_cost;
     best_updated        = true;
+    notify_lns(solutions[0].second);
   }
 
   // Fast reject
@@ -454,6 +455,7 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
 
     solutions[hint].first  = true;
     solutions[hint].second = std::move(sol);
+    notify_lns(solutions[hint].second);
 
     int inserted_pos = insert_index(std::pair<size_t, double>((size_t)hint, sol_cost));
     cuopt_assert(test_invariant(), "Population invariant doesn't hold");
@@ -468,6 +470,7 @@ std::pair<i_t, bool> population_t<i_t, f_t>::add_solution(solution_t<i_t, f_t>&&
 
     solutions[free].first  = true;
     solutions[free].second = std::move(sol);
+    notify_lns(solutions[free].second);
 
     int inserted_pos = insert_index(std::pair<size_t, double>((size_t)free, sol_cost));
     cuopt_assert(test_invariant(), "Population invariant doesn't hold");

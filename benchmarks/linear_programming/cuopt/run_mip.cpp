@@ -9,13 +9,16 @@
 #include "miplib2017_bks.hpp"
 
 #include <cuopt/mathematical_optimization/cuopt_c.h>
+#include <pthread.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 #include <cuopt/mathematical_optimization/mip/solver_settings.hpp>
 #include <cuopt/mathematical_optimization/mip/solver_solution.hpp>
 #include <cuopt/mathematical_optimization/optimization_problem_interface.hpp>
 #include <cuopt/mathematical_optimization/solve.hpp>
 #include <cuopt/mathematical_optimization/utilities/internals.hpp>
+#include <mutex>
 #include <utilities/logger.hpp>
 
 #include <raft/core/handle.hpp>
@@ -201,12 +204,12 @@ struct incumbent_record_t {
   double reported_objective;
   double work_timestamp;
   double wall_time;
+  bool from_lns;
 };
 
 class incumbent_tracker_t : public cuopt::internals::get_solution_callback_t {
  public:
-  incumbent_tracker_t(std::chrono::high_resolution_clock::time_point start_time,
-                      size_t num_variables)
+  incumbent_tracker_t(std::chrono::steady_clock::time_point start_time, size_t num_variables)
     : start_time_(start_time), num_variables_(num_variables)
   {
   }
@@ -218,11 +221,16 @@ class incumbent_tracker_t : public cuopt::internals::get_solution_callback_t {
 
   void record_solution(const double* solution, double objective)
   {
-    const auto now = std::chrono::high_resolution_clock::now();
+    std::lock_guard<std::mutex> lock(records_mutex_);
+    char thread_name[16]{};
+    pthread_getname_np(pthread_self(), thread_name, sizeof(thread_name));
+    const bool from_lns = std::string(thread_name) == "cuopt-hive-lns";
+    const auto now      = std::chrono::steady_clock::now();
     records_.push_back({std::vector<double>(solution, solution + num_variables_),
                         objective,
                         0.0,
-                        std::chrono::duration<double>(now - start_time_).count()});
+                        std::chrono::duration<double>(now - start_time_).count(),
+                        from_lns});
   }
 
   void write_csv(
@@ -239,7 +247,7 @@ class incumbent_tracker_t : public cuopt::internals::get_solution_callback_t {
     }
     constexpr double bks_rounding_threshold = 0.5e-6;
     const auto bks = cuopt_bench::lookup_miplib_bks(problem.get_problem_name());
-    file << "index,objective,work_timestamp,wall_time_s,valid\n";
+    file << "index,objective,work_timestamp,wall_time_s,valid,origin\n";
     std::vector<char> valid(records_.size());
 #pragma omp parallel for schedule(static) num_threads(num_cpu_threads)
     for (size_t i = 0; i < records_.size(); ++i) {
@@ -258,17 +266,18 @@ class incumbent_tracker_t : public cuopt::internals::get_solution_callback_t {
     }
     for (size_t i = 0; i < records_.size(); ++i) {
       file << i << "," << std::setprecision(15) << records_[i].reported_objective << ","
-           << records_[i].work_timestamp << "," << std::setprecision(6) << records_[i].wall_time
-           << "," << int(valid[i]) << "\n";
+           << records_[i].work_timestamp << "," << std::setprecision(17) << records_[i].wall_time
+           << "," << int(valid[i]) << "," << (records_[i].from_lns ? "lns" : "solver") << "\n";
     }
   }
 
   size_t size() const { return records_.size(); }
 
  private:
-  std::chrono::high_resolution_clock::time_point start_time_;
+  std::chrono::steady_clock::time_point start_time_;
   size_t num_variables_;
   std::vector<incumbent_record_t> records_;
+  std::mutex records_mutex_;
 };
 
 static void c_api_incumbent_callback(const cuopt_float_t* solution,
@@ -323,7 +332,8 @@ int run_single_file(std::string file_path,
   settings.presolver                     = cuopt::mathematical_optimization::presolver_t::Default;
   settings.reliability_branching         = reliability_branching;
   settings.clique_cuts                   = -1;
-  settings.seed                          = 42;
+  settings.seed =
+    std::getenv("HIVE_EVALUATION_SEED") ? std::stoi(std::getenv("HIVE_EVALUATION_SEED")) : 42;
 
   // This benchmark and the solver library have separate loggers, both writing settings.log_file.
   // Configure the solver's first so its own initializer reuses that configuration rather than
@@ -380,7 +390,7 @@ int run_single_file(std::string file_path,
   }
   cuopt::mathematical_optimization::benchmark_info_t benchmark_info;
   if constexpr (!use_c_api) { settings.benchmark_info_ptr = &benchmark_info; }
-  std::chrono::high_resolution_clock::time_point start_run_solver;
+  std::chrono::steady_clock::time_point start_run_solver;
   std::unique_ptr<incumbent_tracker_t> incumbent_tracker;
   solve_result_t solution;
   if constexpr (use_c_api) {
@@ -402,7 +412,7 @@ int run_single_file(std::string file_path,
                              mps_data_model.get_variable_types().data(),
                              &c_api.problem);
 
-    start_run_solver = std::chrono::high_resolution_clock::now();
+    start_run_solver = std::chrono::steady_clock::now();
     incumbent_tracker =
       std::make_unique<incumbent_tracker_t>(start_run_solver, mps_data_model.get_n_variables());
     cuOptSetMIPGetSolutionCallback(
@@ -413,7 +423,7 @@ int run_single_file(std::string file_path,
     cuOptGetSolutionBound(c_api.solution, &solution.solution_bound);
     cuOptGetMIPGap(c_api.solution, &solution.mip_gap);
   } else {
-    start_run_solver = std::chrono::high_resolution_clock::now();
+    start_run_solver = std::chrono::steady_clock::now();
     incumbent_tracker =
       std::make_unique<incumbent_tracker_t>(start_run_solver, mps_data_model.get_n_variables());
     settings.set_mip_callback(incumbent_tracker.get());
@@ -431,7 +441,7 @@ int run_single_file(std::string file_path,
     benchmark_info.last_improvement_of_best_feasible,
     benchmark_info.last_improvement_after_recombination);
   std::chrono::milliseconds duration;
-  auto end = std::chrono::high_resolution_clock::now();
+  auto end = std::chrono::steady_clock::now();
   duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start_run_solver);
   CUOPT_LOG_INFO("run_solver %d", duration.count());
   if constexpr (!use_c_api) { handle->sync_stream(); }
@@ -452,7 +462,7 @@ int run_single_file(std::string file_path,
   // and infeasibility-flagged instances emit "opt=Infeasible".
   {
     const double _gap_seconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  std::chrono::high_resolution_clock::now() - start_run_solver)
+                                  std::chrono::steady_clock::now() - start_run_solver)
                                   .count() /
                                 1000.0;
     std::string _status_str;
@@ -486,10 +496,10 @@ int run_single_file(std::string file_path,
   if (out_dir != "") {
     std::string csv_path =
       out_dir + "/" + base_filename.substr(0, base_filename.find(".mps")) + "_incumbents.csv";
-    const auto csv_start = std::chrono::high_resolution_clock::now();
+    const auto csv_start = std::chrono::steady_clock::now();
     incumbent_tracker->write_csv(
       csv_path, mps_data_model, settings.get_tolerances(), num_cpu_threads);
-    const auto csv_end = std::chrono::high_resolution_clock::now();
+    const auto csv_end = std::chrono::steady_clock::now();
     std::cerr << "Incumbent csv generation took "
               << std::chrono::duration<double>(csv_end - csv_start).count() << " s ("
               << incumbent_tracker->size() << " entries) -> " << csv_path << std::endl;

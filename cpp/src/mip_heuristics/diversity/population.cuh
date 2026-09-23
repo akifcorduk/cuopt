@@ -14,6 +14,7 @@
 #include <mip_heuristics/solver.cuh>
 #include <utilities/timer.hpp>
 
+#include <functional>
 #include <mutex>
 #include <random>
 #include <string>
@@ -74,6 +75,12 @@ class population_t {
   bool is_better_than_best_feasible(solution_t<i_t, f_t>& sol);
   void run_all_recombiners(solution_t<i_t, f_t>& sol);
 
+  // Frozen observer: owning copies of stored feasible members, never a writer.
+  std::function<void(const std::vector<f_t>&)> lns_observer;
+  void notify_lns(solution_t<i_t, f_t>& sol)
+  {
+    if (lns_observer && sol.get_feasible()) lns_observer(sol.get_host_assignment());
+  }
   void allocate_solutions();
 
   void clear()

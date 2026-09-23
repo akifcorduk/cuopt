@@ -6,6 +6,7 @@
 /* clang-format on */
 
 #include <mip_heuristics/mip_constants.hpp>
+#include "../../../experiments/hive_lns/bridge.cuh"
 #include "diversity/diversity_manager.cuh"
 #include "local_search/local_search.cuh"
 #include "local_search/rounding/simple_rounding.cuh"
@@ -498,6 +499,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (!root_structural->recognized()) { root_structural.reset(); }
   }
 
+  hive_lns_bridge_t<i_t, f_t> lns_worker(context, dm.population, timer_);
+
 #pragma omp taskgroup
   {
     if (!context.settings.heuristics_only) {
@@ -519,6 +522,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     sol                           = dm.run_solver();
   }  // implicit barrier for all tasks created in B&B and heuristics
 
+  lns_worker.finish();
   dm.population.add_external_solutions_to_population();
   if (dm.population.is_feasible() &&
       (!sol.get_feasible() ||
@@ -534,6 +538,16 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (branch_and_bound_sol.get_feasible() &&
         (!sol.get_feasible() || branch_and_bound_sol.get_objective() < sol.get_objective())) {
       sol = std::move(branch_and_bound_sol);
+    }
+  }
+
+  if (!lns_worker.best_assignment().empty()) {
+    solution_t<i_t, f_t> lns_sol(*context.problem_ptr);
+    lns_sol.copy_new_assignment(lns_worker.best_assignment());
+    lns_sol.compute_feasibility();
+    if (!lns_sol.get_feasible()) throw std::runtime_error("Invalid LNS final solution");
+    if (!sol.get_feasible() || lns_sol.get_objective() < sol.get_objective()) {
+      sol = std::move(lns_sol);
     }
   }
 
