@@ -756,7 +756,7 @@ int main(int argc, char** argv)
       }
       for (i_t v = 0; v < (i_t)user.size(); ++v) {
         const double x = (double)user[v];
-        if (bound_excess(x, (double)col_lb[v], (double)col_ub[v], abs_tol) > 0.0) ++bad_bnd;
+        if (x < (double)col_lb[v] - int_tol || x > (double)col_ub[v] + int_tol) ++bad_bnd;
         if ((v_type[v] == 'I' || v_type[v] == 'B') && std::fabs(x - std::round(x)) > int_tol)
           ++bad_int;
       }
