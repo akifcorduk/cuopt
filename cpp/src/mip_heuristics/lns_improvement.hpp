@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.
+ * SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 #pragma once
@@ -114,7 +114,7 @@ inline void run_lns(const model_t& model,
     } else {
       current = best_known;
     }
-    if (!model.feasible(current)) continue;
+    if (!model.normalize_seed(current)) continue;
     double current_cost = model.cost(current);
 
     // Seed-selection scores are O(nnz) to build; recompute them only when the
@@ -363,8 +363,8 @@ inline void run_lns(const model_t& model,
                 min_activity += a * (a >= 0.0 ? lo[k] : hi[k]);
                 max_activity += a * (a >= 0.0 ? hi[k] : lo[k]);
               }
-              if (min_activity > model.row_upper[r] + model.feasibility_tolerance ||
-                  max_activity < model.row_lower[r] - model.feasibility_tolerance)
+              if (min_activity > model.row_upper[r] + model.row_tolerances[r] ||
+                  max_activity < model.row_lower[r] - model.row_tolerances[r])
                 return false;
               for (int p = model.offsets[r]; p < model.offsets[r + 1]; ++p) {
                 const int k    = model.columns[p];
@@ -376,12 +376,11 @@ inline void run_lns(const model_t& model,
                 double new_hi          = (model.row_upper[r] - other_min) / a;
                 if (a < 0.0) std::swap(new_lo, new_hi);
                 if (model.integer[k]) {
-                  new_lo = std::ceil(new_lo - model.feasibility_tolerance);
-                  new_hi = std::floor(new_hi + model.feasibility_tolerance);
+                  new_lo = std::ceil(new_lo - model.integrality_tolerance);
+                  new_hi = std::floor(new_hi + model.integrality_tolerance);
                 }
                 new_lo = std::max(lo[k], new_lo);
                 new_hi = std::min(hi[k], new_hi);
-                if (new_lo > new_hi + model.feasibility_tolerance) return false;
                 if (new_lo > new_hi) return false;
                 if (new_lo > lo[k] || new_hi < hi[k]) {
                   trail.push_back({k, lo[k], hi[k]});
@@ -568,14 +567,8 @@ inline void run_lns(const model_t& model,
             }
           }
           if (branch < 0) {
-            // Leaf node reached: all ruined variables are fixed (lo==hi).
-            // propagate() already re-validated every row touched by any
-            // ruined variable at this exact fixed point, with the same
-            // tolerances model.feasible() would use; rows untouched by the
-            // ruin set are unchanged from the (feasible) incoming solution.
-            // So the leaf is provably feasible without another O(n+nnz)
-            // full-model scan, which otherwise dominates cost on
-            // large/dense instances.
+            // Recheck improving leaves with the same tolerances as publication;
+            // propagation arithmetic alone does not certify the full assignment.
             {
               // Leaf cost: fixed part (unruined variables) plus the exact
               // contribution of the now-fixed ruined variables. O(|ruined|)
@@ -583,7 +576,7 @@ inline void run_lns(const model_t& model,
               double cost = fixed_objective;
               for (int j : ruined)
                 cost += model.objective[j] * lo[j];
-              if (cost < current_cost - 1e-9) {
+              if (cost < current_cost - 1e-9 && model.feasible(lo)) {
                 current           = lo;
                 current_cost      = cost;
                 improvement_found = true;
@@ -634,6 +627,10 @@ inline void run_lns(const model_t& model,
 
       // Update failure counter based on whether improvement was found
       if (improvement_found) {
+        // A backend can return tolerance-feasible values. Recheck its normalized
+        // copy before the next iteration uses it for exact fixings.
+        if (!model.normalize_seed(current)) break;
+        current_cost         = model.cost(current);
         consecutive_failures = 0;
         // The reference solution moved: keep the seed-selection scores fresh.
         refresh_scores();

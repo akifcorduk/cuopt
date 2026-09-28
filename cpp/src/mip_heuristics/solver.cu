@@ -545,8 +545,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     solution_t<i_t, f_t> lns_sol(*context.problem_ptr);
     lns_sol.copy_new_assignment(lns_worker.best_assignment());
     lns_sol.compute_feasibility();
-    if (!lns_sol.get_feasible()) throw std::runtime_error("Invalid LNS final solution");
-    if (!sol.get_feasible() || lns_sol.get_objective() < sol.get_objective()) {
+    if (!lns_sol.get_feasible()) {
+      CUOPT_LOG_WARN("Ignoring LNS final candidate that failed solver feasibility checks");
+    } else if (!sol.get_feasible() || lns_sol.get_objective() < sol.get_objective()) {
       sol = std::move(lns_sol);
     }
   }

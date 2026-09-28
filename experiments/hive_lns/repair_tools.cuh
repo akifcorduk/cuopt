@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 #include <omp.h>
 #include <algorithm>
@@ -36,8 +41,11 @@ inline repair_problem_t make_repair_problem(const model_t& model, const repair_r
   for (size_t j = 0; j < n; ++j) {
     double lo = request.lower[j], hi = request.upper[j];
     if (!std::isfinite(p.full[j]) || std::isnan(lo) || std::isnan(hi) || lo < model.lower[j] ||
-        hi > model.upper[j])
-      throw std::invalid_argument("Repair request has invalid or widened bounds");
+        hi > model.upper[j]) {
+      // Reject the neighborhood without widening the original model's domains.
+      p.possible = false;
+      return p;
+    }
     if (model.integer[j]) {
       lo = std::ceil(lo);
       hi = std::floor(hi);
@@ -63,6 +71,7 @@ inline repair_problem_t make_repair_problem(const model_t& model, const repair_r
   }
   p.reduced.offsets.push_back(0);
   p.reduced.feasibility_tolerance = model.feasibility_tolerance;
+  p.reduced.relative_tolerance    = model.relative_tolerance;
   p.reduced.integrality_tolerance = model.integrality_tolerance;
   for (size_t r = 0; r < model.row_lower.size(); ++r) {
     double fixed = 0, correction = 0;
@@ -85,7 +94,7 @@ inline repair_problem_t make_repair_problem(const model_t& model, const repair_r
       return p;
     }
     if (begin == p.reduced.columns.size()) {
-      if (lo > model.feasibility_tolerance || hi < -model.feasibility_tolerance) {
+      if (lo > model.row_tolerances[r] || hi < -model.row_tolerances[r]) {
         p.possible = false;
         return p;
       }
@@ -93,6 +102,7 @@ inline repair_problem_t make_repair_problem(const model_t& model, const repair_r
     }
     p.reduced.row_lower.push_back(lo);
     p.reduced.row_upper.push_back(hi);
+    p.reduced.row_tolerances.push_back(model.row_tolerances[r]);
     p.reduced.offsets.push_back(p.reduced.columns.size());
   }
   return p;
@@ -120,8 +130,8 @@ inline repair_result_t repair_neighborhood(const model_t& model,
     for (size_t j = 0; j < reduced.size(); ++j)
       full[p.free_columns[j]] = reduced[j];
     for (size_t j = 0; j < full.size(); ++j)
-      if (full[j] < request.lower[j] - model.feasibility_tolerance ||
-          full[j] > request.upper[j] + model.feasibility_tolerance)
+      if (full[j] < request.lower[j] - model.integrality_tolerance ||
+          full[j] > request.upper[j] + model.integrality_tolerance)
         return;
     if (!model.feasible(full)) return;
     const double objective = model.cost(full);
@@ -161,7 +171,7 @@ inline repair_result_t repair_neighborhood(const model_t& model,
                               : cuopt::mathematical_optimization::var_t::CONTINUOUS);
     cuopt::mathematical_optimization::mip_solver_settings_t<int, double>::tolerances_t tolerances;
     tolerances.absolute_tolerance    = model.feasibility_tolerance;
-    tolerances.relative_tolerance    = 1e-12;
+    tolerances.relative_tolerance    = model.relative_tolerance;
     tolerances.integrality_tolerance = model.integrality_tolerance;
     mip::fj_settings_t settings;
     settings.seed            = request.seed;

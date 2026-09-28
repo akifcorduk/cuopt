@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 // Frozen integration. The evolvable header receives only immutable owning CPU data.
 #include <pthread.h>
@@ -6,6 +11,7 @@
 #include <exception>
 #include <mip_heuristics/diversity/population.cuh>
 #include <mip_heuristics/solver_context.cuh>
+#include <mip_heuristics/utils.cuh>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -19,7 +25,8 @@ class hive_lns_bridge_t {
  public:
   hive_lns_bridge_t(mip_solver_context_t<i_t, f_t>& context,
                     population_t<i_t, f_t>& population,
-                    cuopt::timer_t timer)
+                    cuopt::timer_t timer,
+                    cuopt::hive_lns::run_lns_fn run = cuopt::hive_lns::run_lns)
     : context_(context), population_(population), timer_(timer)
   {
     auto& pb    = *context_.problem_ptr;
@@ -34,6 +41,16 @@ class hive_lns_bridge_t {
     copy(model_.objective, pb.objective_coefficients);
     copy(model_.row_lower, pb.constraint_lower_bounds);
     copy(model_.row_upper, pb.constraint_upper_bounds);
+    model_.feasibility_tolerance = pb.tolerances.absolute_tolerance;
+    model_.relative_tolerance    = pb.tolerances.relative_tolerance;
+    model_.integrality_tolerance = pb.tolerances.integrality_tolerance;
+    for (size_t r = 0; r < model_.row_lower.size(); ++r) {
+      model_.row_tolerances.push_back(
+        get_cstr_tolerance<i_t, f_t>(model_.row_lower[r],
+                                     model_.row_upper[r],
+                                     pb.tolerances.absolute_tolerance,
+                                     pb.tolerances.relative_tolerance));
+    }
     auto bounds = cuopt::host_copy(pb.variable_bounds, stream);
     auto types  = cuopt::host_copy(pb.variable_types, stream);
     pb.handle_ptr->sync_stream();
@@ -51,7 +68,7 @@ class hive_lns_bridge_t {
           offer(member.second.get_host_assignment());
       }
     }
-    worker_ = std::thread([this] {
+    worker_ = std::thread([this, run] {
       try {
         if (cudaSetDevice(device_) != cudaSuccess)
           throw std::runtime_error("LNS CUDA device setup failed");
@@ -80,14 +97,18 @@ class hive_lns_bridge_t {
             context_.preempt_heuristic_solver_);
         };
         CUOPT_LOG_INFO("HIVE_LNS_STARTED");
-        cuopt::hive_lns::run_lns(
+        run(
           model_,
           [this] { return snapshot(); },
           [this](const auto& x) { submit(x); },
           [this] { return stopped(); },
           context_.base_seed);
+      } catch (const std::exception& e) {
+        stop_.store(true);
+        CUOPT_LOG_WARN("LNS worker disabled after failure: %s", e.what());
       } catch (...) {
-        failure_ = std::current_exception();
+        stop_.store(true);
+        CUOPT_LOG_WARN("LNS worker disabled after unknown failure");
       }
       CUOPT_LOG_INFO("HIVE_LNS_INPUTS %lu", inputs_);
       CUOPT_LOG_INFO("HIVE_LNS_FINISHED");
@@ -104,7 +125,6 @@ class hive_lns_bridge_t {
     stop_.store(true);
     if (worker_.joinable()) worker_.join();
     population_.lns_observer = {};
-    if (failure_) std::rethrow_exception(failure_);
   }
   const std::vector<f_t>& best_assignment() const { return best_; }
 
@@ -164,7 +184,6 @@ class hive_lns_bridge_t {
   std::deque<std::vector<double>> cache_;
   std::atomic<bool> stop_{false};
   std::thread worker_;
-  std::exception_ptr failure_;
   std::vector<f_t> best_;
   double best_cost_ = std::numeric_limits<double>::infinity();
   size_t inputs_    = 0;
