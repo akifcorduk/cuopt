@@ -36,7 +36,9 @@ class early_cpufj_t : public early_heuristic_t<i_t, f_t, early_cpufj_t<i_t, f_t>
   // n_lanes is the total persistent-worker budget, including the two optional LNS
   // tasks. Callers sharing the team with other work reserve their capacity first.
   void start(int n_lanes, bool low_latency = false);
-  void stop();
+  void stop(bool keep_lns = false);
+  void set_incumbent_callback(early_incumbent_callback_t<f_t> callback, bool replay_best = false);
+  void set_lns_source(std::function<bool(std::vector<f_t>&)> source);
 
   int lane_count() const { return (int)climbers_.size() + improvement_lane_count(); }
   int improvement_lane_count() const { return lns_ ? 2 : 0; }
@@ -52,6 +54,7 @@ class early_cpufj_t : public early_heuristic_t<i_t, f_t, early_cpufj_t<i_t, f_t>
   std::unique_ptr<early_lns_t<i_t, f_t>> lns_;
   std::thread worker_;
   std::atomic<bool> preemption_flag_{false};
+  std::atomic<bool> lns_preemption_flag_{false};
   // Explicit seed for this climber's FJ RNG, resolved once from the solve's base seed (see
   // mip_solver_context_t::base_seed) since this heuristic runs before that context exists.
   uint64_t seed_;

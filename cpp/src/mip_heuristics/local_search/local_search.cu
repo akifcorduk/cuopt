@@ -22,6 +22,8 @@
 #include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
 
 #include <algorithm>
+#include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
+
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -31,6 +33,15 @@
 #include <thread>
 
 namespace cuopt::mathematical_optimization::mip {
+
+// The Papilo-model LNS pair already owns two members of this OpenMP team.
+// Apply the existing feasibility-portfolio thresholds to the remaining capacity.
+template <typename i_t, typename f_t>
+static int feasibility_team_size(const mip_solver_context_t<i_t, f_t>& context)
+{
+  const int held = context.early_cpufj_ptr ? context.early_cpufj_ptr->improvement_lane_count() : 0;
+  return omp_get_num_threads() - held;
+}
 
 template <typename i_t, typename f_t>
 local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context_,
@@ -62,7 +73,7 @@ template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t>& population)
 {
   // TODO: Find a way to enable this in low core count scenarios
-  if (omp_get_num_threads() < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
+  if (feasibility_team_size(context) < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
 
   pop_ptr = &population;
   std::vector<f_t> default_weights(context.problem_ptr->n_constraints, 1.);
@@ -117,6 +128,7 @@ template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_lns_improvement_thread(
   population_t<i_t, f_t>& population)
 {
+  if (context.early_cpufj_ptr && context.early_cpufj_ptr->improvement_lane_count()) return;
   // Share the solve team and leave capacity for feasibility discovery.
   if (lns_worker_count(omp_get_num_threads(),
                        context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) < 2)
@@ -201,7 +213,7 @@ void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
   population_t<i_t, f_t>& population)
 {
   // TODO: Find a way to enable this in low core count scenarios
-  if (omp_get_num_threads() < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
+  if (feasibility_team_size(context) < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
 
   pop_ptr = &population;
 
@@ -241,7 +253,7 @@ void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
 template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::stop_cpufj_scratch_threads()
 {
-  if (omp_get_num_threads() < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
+  if (feasibility_team_size(context) < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
 
   // Signal every persistent worker before reaching any task scheduling point.
   if (scratch_cpu_fj_lns) scratch_cpu_fj_lns->halted = true;
@@ -272,7 +284,7 @@ void local_search_t<i_t, f_t>::start_cpufj_deterministic(mip::branch_and_bound_t
 {
   producer_sync_t& producer_sync = bb.get_producer_sync();
 
-  if (omp_get_num_threads() < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) {
+  if (feasibility_team_size(context) < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) {
     producer_sync.registration_complete();
     return;
   }
@@ -377,8 +389,9 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
   // Start CPU solver in background thread
 #pragma omp taskgroup
   {
-    if (ls_cpu_fj.size() > 0 && omp_get_num_threads() > CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) {
-      size_t n = std::min<size_t>(omp_get_num_threads() - 1, ls_cpu_fj.size());
+    if (ls_cpu_fj.size() > 0 &&
+        feasibility_team_size(context) > CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) {
+      size_t n = std::min<size_t>(feasibility_team_size(context) - 1, ls_cpu_fj.size());
       CUOPT_LOG_DEBUG("Launching %d CPUFJ tasks", n);
 
 #pragma omp taskloop shared(ls_cpu_fj) default(none) num_tasks(n) \

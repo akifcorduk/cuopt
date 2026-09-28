@@ -26,9 +26,11 @@ class hive_lns_bridge_t {
   hive_lns_bridge_t(mip_solver_context_t<i_t, f_t>& context,
                     population_t<i_t, f_t>& population,
                     cuopt::timer_t timer,
-                    cuopt::hive_lns::run_lns_fn run = cuopt::hive_lns::run_lns)
+                    cuopt::hive_lns::run_lns_fn run = cuopt::hive_lns::run_lns,
+                    bool enabled                    = true)
     : context_(context), population_(population), timer_(timer)
   {
+    if (!enabled) return;
     if (lns_worker_count(omp_get_num_threads(),
                          context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) == 0)
       return;

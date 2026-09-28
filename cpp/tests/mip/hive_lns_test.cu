@@ -9,6 +9,7 @@
 #include <mip_heuristics/diversity/diversity_manager.cuh>
 #include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
 #include <mip_heuristics/feasibility_jump/early_lns.cuh>
+#include <mip_heuristics/feasibility_jump/persistent_lns_bridge.cuh>
 #include <mip_heuristics/local_search/cpufj_lns_validation.cuh>
 
 #include <gtest/gtest.h>
@@ -351,7 +352,8 @@ TEST(HiveLns, PresolveWorkersPollAndPublishSharedBestAndContainFailure)
     mip::init_fj_cpu_from_optimization_problem(op, settings.get_tolerances(), preemption);
   auto shared = std::make_shared<mip::fj_cpu_shared_incumbent_t<int, double>>();
   shared->publish(1, 1, {1, 0});
-  int reports          = 0;
+  int reports = 0;
+  std::atomic<bool> source_ready{false};
   early_hive_completed = false;
 #pragma omp parallel num_threads(7)
   {
@@ -365,10 +367,15 @@ TEST(HiveLns, PresolveWorkersPollAndPublishSharedBestAndContainFailure)
           ++reports;
           EXPECT_STREQ(origin, "Hive LNS");
           EXPECT_EQ(x[0], objective);
-          if (reports == 1) shared->publish(.5, .5, {.5, 0});
+          if (reports == 1) source_ready = true;
         },
         42,
         polling_then_failing_early_hive);
+      workers.set_source([&](auto& x) {
+        if (!source_ready.exchange(false)) return false;
+        x = {.5, 0};
+        return true;
+      });
       workers.start();
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
       while (!early_hive_completed.load() && std::chrono::steady_clock::now() < deadline)
@@ -441,6 +448,22 @@ TEST(HiveLns, PresolvePortfolioBudgetAndLifetime)
           portfolio.start(team_size);
           EXPECT_EQ(portfolio.lane_count(), std::max(1, team_size - 4));
           EXPECT_EQ(portfolio.improvement_lane_count(), team_size >= 7 ? 2 : 0);
+          EXPECT_NO_THROW(portfolio.stop(/*keep_lns=*/true));
+          EXPECT_EQ(portfolio.lane_count(), team_size >= 7 ? 2 : 0);
+          if (team_size >= 7) {
+            std::atomic<int> polls{0};
+            portfolio.set_incumbent_callback({});
+            portfolio.set_lns_source([&](auto&) {
+              ++polls;
+              return false;
+            });
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!polls.load() && std::chrono::steady_clock::now() < deadline)
+              std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            EXPECT_GT(polls.load(), 0);
+            // Stop before destroying the source callback's captured counter.
+            EXPECT_NO_THROW(portfolio.stop());
+          }
           EXPECT_NO_THROW(portfolio.stop());
           EXPECT_EQ(portfolio.lane_count(), 0);
           EXPECT_NO_THROW(portfolio.stop());
@@ -454,6 +477,48 @@ TEST(HiveLns, PresolvePortfolioBudgetAndLifetime)
   EXPECT_EQ(probe.lane_count(), 1);
   EXPECT_EQ(probe.improvement_lane_count(), 0);
   probe.stop();
+}
+
+TEST(HiveLns, PersistentBridgeMapsAssignmentsAndRejectsRowViolations)
+{
+  raft::handle_t handle;
+  opt::optimization_problem_t<int, double> op(&handle);
+  init_early_lns_test_problem(op);
+  const double inf = std::numeric_limits<double>::infinity();
+  const std::vector<double> lower{-inf, 0}, upper{inf, 1};
+  const std::vector<opt::var_t> types{opt::var_t::CONTINUOUS, opt::var_t::INTEGER};
+  const double row_lower = -1;
+  op.set_variable_lower_bounds(lower.data(), 2);
+  op.set_variable_upper_bounds(upper.data(), 2);
+  op.set_variable_types(types.data(), 2);
+  op.set_constraint_lower_bounds(&row_lower, 1);
+  opt::mip_solver_settings_t<int, double> settings;
+  settings.tolerances.absolute_tolerance = 3e-7;
+  settings.tolerances.relative_tolerance = 4e-8;
+  mip::problem_t<int, double> problem(op, settings.get_tolerances());
+  problem.preprocess_problem();  // Splits the free variable, changing assignment size.
+  ASSERT_GT(problem.n_variables, op.get_n_variables());
+  mip::mip_solver_context_t<int, double> context(&handle, &problem, settings);
+  mip::diversity_manager_t<int, double> dm(context);
+  dm.population.initialize_population();
+  dm.population.allocate_solutions();
+  mip::persistent_lns_bridge_t<int, double> bridge(problem, dm.population);
+  bridge.submit({-1, 1});
+  dm.population.add_external_solutions_to_population();
+  ASSERT_TRUE(dm.population.is_feasible());
+  EXPECT_EQ(dm.population.best_feasible().get_objective(), 1);
+  std::vector<double> source;
+  ASSERT_TRUE(bridge.snapshot(source));
+  EXPECT_EQ(source, (std::vector<double>{-1, 1}));
+  EXPECT_FALSE(bridge.snapshot(source));
+  bridge.submit({-2, 0});  // Bounds and integrality pass, but the row fails.
+  dm.population.add_external_solutions_to_population();
+  EXPECT_EQ(dm.population.best_feasible().get_objective(), 1);
+  bridge.submit({-1, 0});
+  dm.population.add_external_solutions_to_population();
+  EXPECT_EQ(dm.population.best_feasible().get_objective(), -1);
+  ASSERT_TRUE(bridge.snapshot(source));
+  EXPECT_EQ(source, (std::vector<double>{-1, 0}));
 }
 
 TEST(HiveLns, BenchmarkApiErrorsAreDistinctFromNoSolution)

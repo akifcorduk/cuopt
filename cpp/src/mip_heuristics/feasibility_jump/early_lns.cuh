@@ -11,6 +11,7 @@
 #include "../../../../experiments/hive_lns/repair_tools.cuh"
 
 #include <memory>
+#include <mutex>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -83,6 +84,18 @@ class early_lns_t {
 #pragma omp task firstprivate(worker) depend(out : *worker) default(none) \
   priority(CUOPT_DEFAULT_TASK_PRIORITY)
     worker->run_hive();
+    // Both tasks have reserved capacity. Do not enter a task scheduling point
+    // until they are running on other team members: a taskwait for feasibility
+    // lanes could otherwise execute a queued persistent task on the solve thread,
+    // preventing that thread from ever reaching the LNS stop signal.
+    while (workers_started_.load() < 2)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  void set_source(std::function<bool(std::vector<f_t>&)> source)
+  {
+    std::lock_guard<std::mutex> lock(source_mutex_);
+    source_ = std::move(source);
   }
 
   void request_stop()
@@ -106,6 +119,19 @@ class early_lns_t {
 
   bool snapshot(std::vector<f_t>& assignment, f_t& objective)
   {
+    std::function<bool(std::vector<f_t>&)> source;
+    {
+      std::lock_guard<std::mutex> lock(source_mutex_);
+      source = source_;
+    }
+    std::vector<f_t> external;
+    if (source && source(external)) {
+      const std::vector<double> x(external.begin(), external.end());
+      if (model_.feasible(x)) {
+        const f_t cost = model_.cost(x);
+        shared_->publish(cost, cpufj_->get_user_objective(cost), external);
+      }
+    }
     assignment.resize(model_.lower.size());
     return shared_->adopt(std::numeric_limits<f_t>::infinity(), assignment, &objective);
   }
@@ -133,6 +159,7 @@ class early_lns_t {
 
   void run_cpufj()
   {
+    ++workers_started_;
     const int previous_max_threads = omp_get_max_threads();
     omp_set_num_threads(1);
     cuopt::scope_guard restore([&] { omp_set_num_threads(previous_max_threads); });
@@ -152,6 +179,7 @@ class early_lns_t {
 
   void run_hive()
   {
+    ++workers_started_;
     const int previous_max_threads = omp_get_max_threads();
     omp_set_num_threads(1);
     cuopt::scope_guard restore([&] { omp_set_num_threads(previous_max_threads); });
@@ -198,11 +226,14 @@ class early_lns_t {
   std::shared_ptr<fj_cpu_shared_incumbent_t<i_t, f_t>> shared_;
   std::atomic<bool>& preemption_;
   report_fn report_;
+  std::mutex source_mutex_;
+  std::function<bool(std::vector<f_t>&)> source_;
   uint64_t seed_;
   cuopt::hive_lns::run_lns_fn hive_run_;
   std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> cpufj_;
   cuopt::hive_lns::model_t model_;
   std::atomic<bool> stop_{false};
+  std::atomic<int> workers_started_{0};
   bool started_{false};
   int device_{0};
 };

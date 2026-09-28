@@ -42,7 +42,7 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
 {
   const bool threaded = !omp_in_parallel();
   // 1: presolve, 1: early GPU FJ, 1: early CPU FJ
-  if (!climbers_.empty() ||
+  if (lns_ || !climbers_.empty() ||
       (!threaded && omp_get_num_threads() < CUOPT_MIP_EARLY_CPUFJ_REQUIRED_THREAD_COUNT)) {
     return;
   }
@@ -95,7 +95,7 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
       lns_ = std::make_unique<early_lns_t<i_t, f_t>>(
         *climbers_[0],
         shared,
-        preemption_flag_,
+        lns_preemption_flag_,
         [this](f_t objective, const std::vector<f_t>& x, const char* origin) {
           std::lock_guard<std::mutex> guard(incumbent_mutex_);
           this->try_update_best(objective, x, origin);
@@ -128,12 +128,12 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
 }
 
 template <typename i_t, typename f_t>
-void early_cpufj_t<i_t, f_t>::stop()
+void early_cpufj_t<i_t, f_t>::stop(bool keep_lns)
 {
-  if (climbers_.empty()) { return; }
+  if (climbers_.empty() && !lns_) { return; }
 
   preemption_flag_.store(true);
-  if (lns_) lns_->request_stop();
+  if (lns_ && !keep_lns) lns_->request_stop();
 
   // Every lane is told to stop before any wait, otherwise the first wait blocks on a lane that has
   // not been asked to exit yet.
@@ -148,7 +148,7 @@ void early_cpufj_t<i_t, f_t>::stop()
     }
   }
 
-  if (lns_) {
+  if (lns_ && !keep_lns) {
     lns_->finish();
     lns_.reset();
   }
@@ -161,9 +161,29 @@ void early_cpufj_t<i_t, f_t>::stop()
   CUOPT_LOG_DEBUG("[Early CPUFJ] Stopped after %d iterations over %d climbers, solution_found=%d",
                   total_iterations,
                   (int)climbers_.size(),
-                  this->solution_found_);
+                  !keep_lns && this->solution_found_);
 
   climbers_.clear();
+}
+
+template <typename i_t, typename f_t>
+void early_cpufj_t<i_t, f_t>::set_incumbent_callback(early_incumbent_callback_t<f_t> callback,
+                                                     bool replay_best)
+{
+  std::lock_guard<std::mutex> guard(incumbent_mutex_);
+  this->incumbent_callback_ = std::move(callback);
+  if (replay_best && this->solution_found_ && this->incumbent_callback_) {
+    this->incumbent_callback_(this->best_objective_,
+                              this->get_best_user_objective(),
+                              this->best_assignment_,
+                              "Persistent LNS");
+  }
+}
+
+template <typename i_t, typename f_t>
+void early_cpufj_t<i_t, f_t>::set_lns_source(std::function<bool(std::vector<f_t>&)> source)
+{
+  if (lns_) lns_->set_source(std::move(source));
 }
 
 template <typename i_t, typename f_t>
