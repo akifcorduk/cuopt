@@ -5,7 +5,7 @@
  */
 /* clang-format on */
 
-#include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/lns_thread_budget.hpp>
 #include "../../../experiments/hive_lns/bridge.cuh"
 #include "diversity/diversity_manager.cuh"
 #include "local_search/local_search.cuh"
@@ -334,6 +334,10 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   mip::probing_implied_bound_t<i_t, f_t> probing_implied_bound;
 
   i_t num_threads = omp_get_num_threads();
+  const i_t lns_threads =
+    lns_worker_count(num_threads, context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC);
+  CUOPT_LOG_INFO(
+    "LNS thread budget: %d workers within %d OpenMP threads", lns_threads, num_threads);
 
   if (!context.settings.heuristics_only) {
     // Convert the presolved problem to user_problem_t
@@ -349,7 +353,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     // Fill in the settings for branch and bound
     branch_and_bound_settings.time_limit           = timer_.get_time_limit();
     branch_and_bound_settings.node_limit           = context.settings.node_limit;
-    branch_and_bound_settings.num_threads          = std::max(num_threads - 1, 1);
+    branch_and_bound_settings.num_threads          = std::max(num_threads - 1 - lns_threads, 1);
     branch_and_bound_settings.print_presolve_stats = false;
     branch_and_bound_settings.absolute_mip_gap_tol = context.settings.tolerances.absolute_mip_gap;
     branch_and_bound_settings.relative_mip_gap_tol = context.settings.tolerances.relative_mip_gap;
@@ -499,6 +503,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (!root_structural->recognized()) { root_structural.reset(); }
   }
 
+  // Launch outside the taskgroup: LNS can keep improving while B&B finishes,
+  // and finish() can signal it before waiting for its task after the group ends.
   hive_lns_bridge_t<i_t, f_t> lns_worker(context, dm.population, timer_);
 
 #pragma omp taskgroup

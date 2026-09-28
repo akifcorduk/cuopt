@@ -7,6 +7,7 @@
 #include "../../../experiments/hive_lns/bridge.cuh"
 
 #include <mip_heuristics/diversity/diversity_manager.cuh>
+#include <mip_heuristics/local_search/cpufj_lns_validation.cuh>
 
 #include <gtest/gtest.h>
 
@@ -185,6 +186,9 @@ void failing_worker(
   const model_t& model, const snapshot_fn& snapshot, const submit_fn&, const stop_fn&, uint64_t)
 {
   worker_ran = true;
+  EXPECT_TRUE(omp_in_parallel());
+  EXPECT_GE(omp_get_num_threads(), 9);
+  EXPECT_EQ(omp_get_max_threads(), 1);
   EXPECT_EQ(model.feasibility_tolerance, 3e-7);
   EXPECT_EQ(model.relative_tolerance, 4e-8);
   EXPECT_EQ(model.integrality_tolerance, 2e-4);
@@ -223,15 +227,70 @@ TEST(HiveLns, WorkerFailurePreservesValidatedPopulationIncumbent)
   dm.population.add_solution(std::move(incumbent));
   ASSERT_TRUE(dm.population.is_feasible());
   const auto before = dm.population.best_feasible().get_host_assignment();
-  worker_ran        = false;
-  mip::hive_lns_bridge_t<int, double> worker(
-    context, dm.population, cuopt::timer_t(10), failing_worker);
-  EXPECT_NO_THROW(worker.finish());
-  EXPECT_TRUE(worker_ran.load());
+  for (int team_size : {2, 8, 9, 10}) {
+    worker_ran = false;
+#pragma omp parallel num_threads(team_size)
+    {
+#pragma omp masked
+      {
+        mip::hive_lns_bridge_t<int, double> worker(
+          context, dm.population, cuopt::timer_t(10), failing_worker);
+        EXPECT_NO_THROW(worker.finish());
+      }
+    }
+    EXPECT_EQ(worker_ran.load(), team_size >= 9);
+    EXPECT_FALSE(dm.population.lns_observer);
+  }
   EXPECT_TRUE(dm.population.best_feasible().compute_feasibility());
   EXPECT_EQ(dm.population.best_feasible().get_host_assignment(), before);
   EXPECT_FALSE(context.preempt_heuristic_solver_.load());
   EXPECT_FALSE(dm.population.lns_observer);
+}
+
+TEST(HiveLns, ThreadBudgetLeavesCapacityForExistingSolver)
+{
+  for (int size = 2; size <= 48; ++size) {
+    const int workers = mip::lns_worker_count(size, false);
+    EXPECT_EQ(workers, size <= 8 ? 0 : (size == 9 ? 1 : 2));
+    if (workers) EXPECT_GE(size - workers, 8);
+    EXPECT_EQ(mip::lns_worker_count(size, true), 0);
+  }
+}
+
+TEST(HiveLns, CpufjLnsRevalidatesWithSolverTolerances)
+{
+  mip::fj_cpu_problem_t<int, double> problem;
+  problem.n_variables = problem.n_constraints = 1;
+  problem.offsets                             = {0, 1};
+  problem.variables                           = {0};
+  problem.coefficients = problem.h_obj_coeffs = {1.0};
+  problem.h_var_types                         = {opt::var_t::CONTINUOUS};
+  problem.cstr_lb = problem.cstr_ub        = {1e6};
+  problem.tolerances.absolute_tolerance    = 1e-7;
+  problem.tolerances.relative_tolerance    = 2e-8;
+  problem.tolerances.integrality_tolerance = 1e-4;
+  std::vector<double2> bounds{make_double2(1e6, 1e6 + 1)};
+  EXPECT_TRUE(mip::verify_cpufj_lns_feasible(problem, bounds, {1e6 + .01}));
+  EXPECT_FALSE(mip::verify_cpufj_lns_feasible(problem, bounds, {1e6 + .03}));
+  EXPECT_FALSE(
+    mip::verify_cpufj_lns_feasible(problem, bounds, {std::numeric_limits<double>::quiet_NaN()}));
+  problem.h_var_types = {opt::var_t::INTEGER};
+  bounds              = {make_double2(0, 1)};
+  problem.cstr_lb     = {0};
+  problem.cstr_ub     = {2};
+  EXPECT_TRUE(mip::verify_cpufj_lns_feasible(problem, bounds, {1 + 5e-5}));
+  EXPECT_FALSE(mip::verify_cpufj_lns_feasible(problem, bounds, {1 + 2e-4}));
+  auto seed = std::vector<double>{1 - 5e-5};
+  ASSERT_TRUE(mip::normalize_cpufj_lns_seed(problem, bounds, seed));
+  EXPECT_EQ(seed[0], 1);
+  problem.cstr_lb = problem.cstr_ub = {1 - 5e-5};
+  seed                              = {1 - 5e-5};
+  EXPECT_FALSE(mip::normalize_cpufj_lns_seed(problem, bounds, seed));
+  bounds          = {make_double2(.2, .99999)};
+  problem.cstr_lb = {0};
+  problem.cstr_ub = {2};
+  seed            = {.99999};
+  EXPECT_FALSE(mip::normalize_cpufj_lns_seed(problem, bounds, seed));
 }
 
 TEST(HiveLns, BenchmarkApiErrorsAreDistinctFromNoSolution)

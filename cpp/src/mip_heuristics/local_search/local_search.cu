@@ -12,14 +12,179 @@
 
 #include <branch_and_bound/branch_and_bound.hpp>
 #include <mip_heuristics/diversity/diversity_manager.cuh>
-#include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/lns_thread_budget.hpp>
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
 #include <mip_heuristics/utils.cuh>
 #include <utilities/timer.hpp>
+#include "cpufj_lns_validation.cuh"
 
+#include <mip_heuristics/feasibility_jump/cpu/search/api.hpp>
 #include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <numeric>
+#include <random>
+#include <thread>
+
 namespace cuopt::mathematical_optimization::mip {
+
+namespace {
+
+// Population-guided ruin-and-repair worker body. Runs entirely on one spare OMP thread, driving
+// a single, already-constructed CPU FJ climber (`ptr`) through repeated ruin+repair bursts once
+// the population has a feasible incumbent. It never touches device memory or population
+// internals directly -- all communication is through the CUDA-free host snapshot / external
+// solution queue, so it cannot race the main solve thread or the feasibility-finding scratch
+// CPUFJ lanes.
+template <typename i_t, typename f_t>
+void run_cpufj_lns_ruin_repair(fj_cpu_climber_t<i_t, f_t>* ptr, population_t<i_t, f_t>* population)
+{
+  const i_t n_vars = ptr->problem->n_variables;
+
+  std::vector<i_t> integer_vars;
+  integer_vars.reserve(n_vars);
+  for (i_t v = 0; v < n_vars; ++v) {
+    if (ptr->problem->h_var_types[v] == var_t::CONTINUOUS) continue;
+    const auto bounds = ptr->h_var_bounds[v].get();
+    if (get_upper(bounds) - get_lower(bounds) <= ptr->problem->tolerances.absolute_tolerance) {
+      continue;
+    }
+    integer_vars.push_back(v);
+  }
+  if (integer_vars.empty()) return;
+
+  std::mt19937 rng(static_cast<std::mt19937::result_type>(ptr->settings.seed));
+  // Variables where the last adopted population incumbent disagreed with this climber's own
+  // best-known point. Ruining preferentially from this pool is a crossover-style, population
+  // guided neighborhood rather than uniform-random ruin.
+  std::vector<i_t> guidance_pool;
+  std::vector<uint8_t> chosen(n_vars, 0);
+  std::vector<i_t> ruin_set;
+  std::vector<f_t> pop_assignment;
+  f_t pop_objective{};
+  i_t consecutive_no_improve = 0;
+
+  while (!ptr->halted.load(std::memory_order_relaxed) &&
+         !ptr->preemption_flag.load(std::memory_order_relaxed)) {
+    if (!population->get_best_feasible_snapshot(pop_assignment, pop_objective) ||
+        pop_assignment.size() != static_cast<size_t>(n_vars)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      continue;
+    }
+
+    if (!normalize_cpufj_lns_seed(*ptr->problem, ptr->h_var_bounds.underlying(), pop_assignment)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      continue;
+    }
+    pop_objective = std::inner_product(
+      pop_assignment.begin(), pop_assignment.end(), ptr->problem->h_obj_coeffs.begin(), f_t{0});
+    const bool adopt_population_incumbent =
+      !ptr->feasible_found || pop_objective + OBJECTIVE_EPSILON < (f_t)ptr->h_best_objective;
+    if (adopt_population_incumbent) {
+      guidance_pool.clear();
+      for (i_t v : integer_vars) {
+        if (!ptr->problem->integer_equal((f_t)ptr->h_assignment[v], pop_assignment[v])) {
+          guidance_pool.push_back(v);
+        }
+      }
+      ptr->h_assignment      = pop_assignment;
+      ptr->h_best_assignment = pop_assignment;
+      ptr->h_best_objective  = pop_objective;
+      ptr->feasible_found    = true;
+      consecutive_no_improve = 0;
+    } else {
+      // Restart the local search from its own best-known point before ruining it again.
+      ptr->h_assignment = ptr->h_best_assignment.underlying();
+    }
+
+    const i_t base_size =
+      std::min<i_t>(40, std::max<i_t>(6, static_cast<i_t>(integer_vars.size()) / 200));
+    const i_t ruin_size =
+      std::min<i_t>(static_cast<i_t>(integer_vars.size()),
+                    base_size * (1 + std::min<i_t>(consecutive_no_improve / 6, 6)));
+
+    ruin_set.clear();
+    if (!guidance_pool.empty()) {
+      std::shuffle(guidance_pool.begin(), guidance_pool.end(), rng);
+      for (i_t v : guidance_pool) {
+        if (static_cast<i_t>(ruin_set.size()) >= ruin_size) break;
+        if (chosen[v]) continue;
+        chosen[v] = 1;
+        ruin_set.push_back(v);
+      }
+    }
+    std::uniform_int_distribution<size_t> pick_dist(0, integer_vars.size() - 1);
+    size_t guard = 0;
+    while (static_cast<i_t>(ruin_set.size()) < ruin_size &&
+           guard++ < integer_vars.size() * 4 + 16) {
+      const i_t v = integer_vars[pick_dist(rng)];
+      if (chosen[v]) continue;
+      chosen[v] = 1;
+      ruin_set.push_back(v);
+    }
+    for (i_t v : ruin_set) {
+      chosen[v] = 0;
+    }
+    if (ruin_set.empty()) continue;
+
+    // Ruin: force the chosen variables to re-decide, biased half the time toward the population
+    // incumbent's value at that variable (a directed, crossover-like perturbation) and otherwise
+    // toward a uniformly random point in-domain.
+    std::bernoulli_distribution coin(0.5);
+    for (i_t v : ruin_set) {
+      const auto bounds = ptr->h_var_bounds[v].get();
+      const f_t lo = std::ceil(get_lower(bounds)), hi = std::floor(get_upper(bounds));
+      f_t new_value;
+      if (coin(rng)) {
+        new_value = pop_assignment[v];
+      } else if (std::isfinite(lo) && std::isfinite(hi) &&
+                 lo >= static_cast<f_t>(std::numeric_limits<int64_t>::min()) &&
+                 hi < static_cast<f_t>(std::numeric_limits<int64_t>::max())) {
+        std::uniform_int_distribution<int64_t> value_dist(static_cast<int64_t>(lo),
+                                                          static_cast<int64_t>(hi));
+        new_value = static_cast<f_t>(value_dist(rng));
+      } else {
+        new_value = coin(rng) ? lo : hi;
+        if (!std::isfinite(new_value)) new_value = (f_t)ptr->h_assignment[v];
+      }
+      ptr->h_assignment[v] = new_value;
+    }
+
+    recompute_lhs(*ptr);
+    invalidate_mtm_cache(*ptr);
+
+    const f_t objective_before_repair = (f_t)ptr->h_best_objective;
+    const f_t repair_time_limit =
+      std::min<f_t>(2., 0.15 + 0.02 * static_cast<f_t>(ruin_set.size()));
+    cpufj_solve(ptr, repair_time_limit, std::numeric_limits<double>::infinity());
+
+    const bool locally_improved =
+      ptr->feasible_found &&
+      (f_t)ptr->h_best_objective + OBJECTIVE_EPSILON < objective_before_repair;
+    if (locally_improved &&
+        verify_cpufj_lns_feasible(
+          *ptr->problem, ptr->h_var_bounds.underlying(), ptr->h_best_assignment.underlying())) {
+      consecutive_no_improve = 0;
+    } else {
+      if (locally_improved) {
+        // The claimed improvement did not survive an independent from-scratch check. Do not
+        // keep building on this climber's (untrusted) internal state -- force the next
+        // iteration to re-sync from the population's already-validated incumbent instead.
+        CUOPT_LOG_DEBUG(
+          "LNS improvement worker discarding an internally-inconsistent local incumbent");
+        ptr->feasible_found   = false;
+        ptr->h_best_objective = std::numeric_limits<f_t>::max();
+      }
+      ++consecutive_no_improve;
+    }
+  }
+}
+
+}  // namespace
 
 template <typename i_t, typename f_t>
 local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context_,
@@ -103,6 +268,87 @@ void local_search_t<i_t, f_t>::start_cpufj_scratch_threads(population_t<i_t, f_t
 }
 
 template <typename i_t, typename f_t>
+void local_search_t<i_t, f_t>::start_cpufj_lns_improvement_thread(
+  population_t<i_t, f_t>& population)
+{
+  // Share the solve team and leave capacity for feasibility discovery.
+  if (lns_worker_count(omp_get_num_threads(),
+                       context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) < 2)
+    return;
+
+  try {
+    std::vector<f_t> default_weights(context.problem_ptr->n_constraints, 1.);
+    solution_t<i_t, f_t> solution(*context.problem_ptr);
+    thrust::fill(solution.handle_ptr->get_thrust_policy(),
+                 solution.assignment.begin(),
+                 solution.assignment.end(),
+                 0.0);
+    solution.clamp_within_bounds();
+
+    // Paid once: every subsequent ruin-and-repair iteration reuses this exact climber, mutating
+    // its assignment directly and calling cpufj_solve() again instead of reconstructing (which
+    // would re-download the whole problem from device and re-pay O(nnz) setup every iteration).
+    scratch_cpu_fj_lns             = fj.create_cpu_climber(solution,
+                                               default_weights,
+                                               default_weights,
+                                               0.,
+                                               context.preempt_heuristic_solver_,
+                                               &constraint_prop.bounds_update.probing_cache,
+                                               fj_settings_t{},
+                                               /*randomize=*/true);
+    scratch_cpu_fj_lns->log_prefix = "******* lns improvement: ";
+    // Captured by value: an immutable, ref-counted snapshot of the raw problem data, safe to read
+    // from this callback (which can fire on the LNS worker's own thread) regardless of what the
+    // climber's other, mutable internal state is doing.
+    std::shared_ptr<const fj_cpu_problem_t<i_t, f_t>> lns_problem_snapshot =
+      scratch_cpu_fj_lns->problem;
+    auto lns_bounds                          = scratch_cpu_fj_lns->h_var_bounds.underlying();
+    scratch_cpu_fj_lns->improvement_callback = [&population, lns_problem_snapshot, lns_bounds](
+                                                 f_t obj,
+                                                 const std::vector<f_t>& h_vec,
+                                                 double /*work_units*/) {
+      // This worker mutates and reuses one climber across many ruin-and-repair iterations,
+      // unlike every other CPUFJ lane which solves once from a fresh climber. Never forward a
+      // claimed improvement to the population without independently re-validating it against
+      // the raw two-sided constraint model first.
+      if (!verify_cpufj_lns_feasible(*lns_problem_snapshot, lns_bounds, h_vec)) {
+        CUOPT_LOG_DEBUG(
+          "LNS improvement worker rejected an internally-inconsistent incumbent before publishing");
+        return;
+      }
+      population.add_external_solution(h_vec, obj, solution_origin_t::CPUFJ);
+    };
+
+    CUOPT_LOG_DEBUG("Launching CPUFJ LNS improvement task");
+
+    auto ptr      = scratch_cpu_fj_lns.get();
+    auto* pop_ptr = &population;
+#pragma omp task firstprivate(ptr, pop_ptr) priority(CUOPT_DEFAULT_TASK_PRIORITY) \
+  depend(out : *ptr) default(none)
+    {
+      const int previous_max_threads = omp_get_max_threads();
+      omp_set_num_threads(1);
+      CUOPT_LOG_INFO("CPUFJ_LNS_STARTED omp_thread=%d team_size=%d",
+                     omp_get_thread_num(),
+                     omp_get_num_threads());
+      try {
+        run_cpufj_lns_ruin_repair(ptr, pop_ptr);
+      } catch (const std::exception& e) {
+        CUOPT_LOG_WARN("CPUFJ LNS worker disabled after failure: %s", e.what());
+      } catch (...) {
+        CUOPT_LOG_WARN("CPUFJ LNS worker disabled after unknown failure");
+      }
+      CUOPT_LOG_INFO("CPUFJ_LNS_FINISHED");
+      omp_set_num_threads(previous_max_threads);
+    }
+  } catch (const std::exception& e) {
+    CUOPT_LOG_WARN("CPUFJ LNS setup failed: %s", e.what());
+  } catch (...) {
+    CUOPT_LOG_WARN("CPUFJ LNS setup failed with unknown error");
+  }
+}
+
+template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::start_cpufj_lptopt_scratch_threads(
   population_t<i_t, f_t>& population)
 {
@@ -149,6 +395,9 @@ void local_search_t<i_t, f_t>::stop_cpufj_scratch_threads()
 {
   if (omp_get_num_threads() < CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT) return;
 
+  // Signal every persistent worker before reaching any task scheduling point.
+  if (scratch_cpu_fj_lns) scratch_cpu_fj_lns->halted = true;
+  if (scratch_cpu_fj_on_lp_opt) scratch_cpu_fj_on_lp_opt->halted = true;
   for (auto& cpu_fj : scratch_cpu_fj) {
     cuopt_assert(cpu_fj != nullptr, "scratch climbers must have been created");
     cpu_fj->halted = true;
@@ -158,11 +407,15 @@ void local_search_t<i_t, f_t>::stop_cpufj_scratch_threads()
   }
 
   if (scratch_cpu_fj_on_lp_opt) {
-    scratch_cpu_fj_on_lp_opt->halted = true;
 #pragma omp taskwait depend( \
     in : *scratch_cpu_fj_on_lp_opt)  // Wait for the scratch CPU FJ (LP optimal) task to finish
 
     CUOPT_LOG_DEBUG("All scratch CPUFJ tasks were stopped");
+  }
+
+  if (scratch_cpu_fj_lns) {
+#pragma omp taskwait depend(in : *scratch_cpu_fj_lns)  // Wait for the LNS improvement task
+    CUOPT_LOG_DEBUG("CPUFJ LNS improvement task was stopped");
   }
 }
 

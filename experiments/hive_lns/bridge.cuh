@@ -10,11 +10,11 @@
 #include <deque>
 #include <exception>
 #include <mip_heuristics/diversity/population.cuh>
+#include <mip_heuristics/lns_thread_budget.hpp>
 #include <mip_heuristics/solver_context.cuh>
 #include <mip_heuristics/utils.cuh>
 #include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <utilities/copy_helpers.hpp>
 #include "../../cpp/src/mip_heuristics/lns_improvement.hpp"
 #include "repair_tools.cuh"
@@ -28,6 +28,33 @@ class hive_lns_bridge_t {
                     cuopt::timer_t timer,
                     cuopt::hive_lns::run_lns_fn run = cuopt::hive_lns::run_lns)
     : context_(context), population_(population), timer_(timer)
+  {
+    if (lns_worker_count(omp_get_num_threads(),
+                         context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) == 0)
+      return;
+    try {
+      start(run);
+    } catch (const std::exception& e) {
+      CUOPT_LOG_WARN("Hive LNS setup failed: %s", e.what());
+    } catch (...) {
+      CUOPT_LOG_WARN("Hive LNS setup failed with unknown error");
+    }
+  }
+  ~hive_lns_bridge_t() { finish(); }
+  void request_stop() { stop_.store(true); }
+  void finish()
+  {
+    request_stop();
+    if (!worker_started_) return;
+    auto* worker = this;
+#pragma omp taskwait depend(in : *worker)
+    population_.lns_observer = {};
+    worker_started_          = false;
+  }
+  const std::vector<f_t>& best_assignment() const { return best_; }
+
+ private:
+  void start(cuopt::hive_lns::run_lns_fn run)
   {
     auto& pb    = *context_.problem_ptr;
     auto stream = pb.handle_ptr->get_stream();
@@ -60,7 +87,6 @@ class hive_lns_bridge_t {
       model_.integer.push_back(types[j] == var_t::INTEGER);
     }
     cudaGetDevice(&device_);
-    population_.lns_observer = [this](const std::vector<f_t>& x) { offer(x); };
     {
       std::lock_guard<std::recursive_mutex> lock(population_.write_mutex);
       for (auto& member : population_.solutions) {
@@ -68,67 +94,68 @@ class hive_lns_bridge_t {
           offer(member.second.get_host_assignment());
       }
     }
-    worker_ = std::thread([this, run] {
-      try {
-        if (cudaSetDevice(device_) != cudaSuccess)
-          throw std::runtime_error("LNS CUDA device setup failed");
-        if (pthread_setname_np(pthread_self(), "cuopt-hive-lns") != 0)
-          throw std::runtime_error("LNS thread attribution setup failed");
-        // This handle and both repair backends belong exclusively to this worker.
-        raft::handle_t repair_handle;
-        model_.repair.cpufj = [this, &repair_handle](const auto& request) {
-          return cuopt::hive_lns::repair_neighborhood(
-            model_,
-            request,
-            cuopt::hive_lns::repair_backend_t::cpufj,
-            [this] { return stopped(); },
-            &repair_handle,
-            timer_.remaining_time(),
-            context_.preempt_heuristic_solver_);
-        };
-        model_.repair.submip = [this, &repair_handle](const auto& request) {
-          return cuopt::hive_lns::repair_neighborhood(
-            model_,
-            request,
-            cuopt::hive_lns::repair_backend_t::submip,
-            [this] { return stopped(); },
-            &repair_handle,
-            timer_.remaining_time(),
-            context_.preempt_heuristic_solver_);
-        };
-        CUOPT_LOG_INFO("HIVE_LNS_STARTED");
-        run(
-          model_,
-          [this] { return snapshot(); },
-          [this](const auto& x) { submit(x); },
-          [this] { return stopped(); },
-          context_.base_seed);
-      } catch (const std::exception& e) {
-        stop_.store(true);
-        CUOPT_LOG_WARN("LNS worker disabled after failure: %s", e.what());
-      } catch (...) {
-        stop_.store(true);
-        CUOPT_LOG_WARN("LNS worker disabled after unknown failure");
-      }
-      CUOPT_LOG_INFO("HIVE_LNS_INPUTS %lu", inputs_);
-      CUOPT_LOG_INFO("HIVE_LNS_FINISHED");
-    });
+    population_.lns_observer = [this](const std::vector<f_t>& x) { offer(x); };
+    worker_started_          = true;
+    auto* worker             = this;
+#pragma omp task firstprivate(worker, run) depend(out : *worker) default(none) \
+  priority(CUOPT_DEFAULT_TASK_PRIORITY)
+    worker->run_worker(run);
   }
-  ~hive_lns_bridge_t()
-  {
-    stop_.store(true);
-    if (worker_.joinable()) worker_.join();
-    population_.lns_observer = {};
-  }
-  void finish()
-  {
-    stop_.store(true);
-    if (worker_.joinable()) worker_.join();
-    population_.lns_observer = {};
-  }
-  const std::vector<f_t>& best_assignment() const { return best_; }
 
- private:
+  void run_worker(cuopt::hive_lns::run_lns_fn run)
+  {
+    // OMP threads are reused by other solver tasks after this worker completes.
+    char previous_name[16]{};
+    pthread_getname_np(pthread_self(), previous_name, sizeof(previous_name));
+    const int previous_max_threads = omp_get_max_threads();
+    omp_set_num_threads(1);
+    try {
+      if (cudaSetDevice(device_) != cudaSuccess)
+        throw std::runtime_error("LNS CUDA device setup failed");
+      if (pthread_setname_np(pthread_self(), "cuopt-hive-lns") != 0)
+        throw std::runtime_error("LNS thread attribution setup failed");
+      // This handle and both repair backends belong exclusively to this worker.
+      raft::handle_t repair_handle;
+      model_.repair.cpufj = [this, &repair_handle](const auto& request) {
+        return cuopt::hive_lns::repair_neighborhood(
+          model_,
+          request,
+          cuopt::hive_lns::repair_backend_t::cpufj,
+          [this] { return stopped(); },
+          &repair_handle,
+          timer_.remaining_time(),
+          context_.preempt_heuristic_solver_);
+      };
+      model_.repair.submip = [this, &repair_handle](const auto& request) {
+        return cuopt::hive_lns::repair_neighborhood(
+          model_,
+          request,
+          cuopt::hive_lns::repair_backend_t::submip,
+          [this] { return stopped(); },
+          &repair_handle,
+          timer_.remaining_time(),
+          context_.preempt_heuristic_solver_);
+      };
+      CUOPT_LOG_INFO(
+        "HIVE_LNS_STARTED omp_thread=%d team_size=%d", omp_get_thread_num(), omp_get_num_threads());
+      run(
+        model_,
+        [this] { return snapshot(); },
+        [this](const auto& x) { submit(x); },
+        [this] { return stopped(); },
+        context_.base_seed);
+    } catch (const std::exception& e) {
+      stop_.store(true);
+      CUOPT_LOG_WARN("LNS worker disabled after failure: %s", e.what());
+    } catch (...) {
+      stop_.store(true);
+      CUOPT_LOG_WARN("LNS worker disabled after unknown failure");
+    }
+    CUOPT_LOG_INFO("HIVE_LNS_INPUTS %lu", inputs_);
+    CUOPT_LOG_INFO("HIVE_LNS_FINISHED");
+    omp_set_num_threads(previous_max_threads);
+    if (previous_name[0]) pthread_setname_np(pthread_self(), previous_name);
+  }
   bool stopped() const
   {
     return stop_.load() || timer_.check_time_limit() || context_.preempt_heuristic_solver_.load();
@@ -183,7 +210,7 @@ class hive_lns_bridge_t {
   std::mutex cache_mutex_;
   std::deque<std::vector<double>> cache_;
   std::atomic<bool> stop_{false};
-  std::thread worker_;
+  bool worker_started_{false};
   std::vector<f_t> best_;
   double best_cost_ = std::numeric_limits<double>::infinity();
   size_t inputs_    = 0;

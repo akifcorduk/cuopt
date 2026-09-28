@@ -113,6 +113,11 @@ class population_t {
   void add_external_solution(const std::vector<f_t>& solution,
                              f_t objective,
                              solution_origin_t origin);
+  // Thread-safe, CUDA-free snapshot of the current best feasible solution's host assignment.
+  // Used by background CPU workers (e.g. the LNS improvement thread) that must not touch device
+  // memory or the population's internal (recursive-mutex-guarded) containers directly. Returns
+  // false when no feasible solution has been cached yet.
+  bool get_best_feasible_snapshot(std::vector<f_t>& out_assignment, f_t& out_objective);
   std::vector<solution_t<i_t, f_t>> get_external_solutions();
   void add_external_solutions_to_population();
   size_t get_external_solution_size();
@@ -215,6 +220,14 @@ class population_t {
   f_t best_feasible_objective = std::numeric_limits<f_t>::max();
   assignment_hash_map_t<i_t, f_t> population_hash_map;
   cuopt::timer_t timer;
+
+  // Host-only cache of the best feasible solution, refreshed under write_mutex whenever
+  // add_solution() installs a new best feasible. Guarded by its own lightweight mutex so
+  // background CPU-only workers (which must never touch device memory or write_mutex) can read
+  // it without racing the main solve thread.
+  std::mutex best_feasible_host_mutex;
+  std::vector<f_t> best_feasible_host_assignment;
+  f_t best_feasible_host_objective{std::numeric_limits<f_t>::max()};
 };
 
 }  // namespace cuopt::mathematical_optimization::mip
