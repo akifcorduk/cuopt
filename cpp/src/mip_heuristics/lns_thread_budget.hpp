@@ -15,4 +15,11 @@ inline int lns_worker_count(int team_size, bool deterministic)
   return team_size == CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT + 1 ? 1 : 2;
 }
 
+// This is a split of the existing early CPUFJ budget, not extra pool capacity.
+// Preserve at least one feasibility lane and the caller's presolve reservation.
+inline int presolve_lns_worker_count(int early_worker_budget)
+{
+  return early_worker_budget >= 3 ? 2 : 0;
+}
+
 }  // namespace cuopt::mathematical_optimization::mip

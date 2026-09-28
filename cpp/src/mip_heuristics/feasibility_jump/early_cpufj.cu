@@ -6,8 +6,9 @@
 /* clang-format on */
 
 #include "early_cpufj.cuh"
+#include "early_lns.cuh"
 
-#include <mip_heuristics/mip_constants.hpp>
+#include <mip_heuristics/lns_thread_budget.hpp>
 #include <utilities/seed_generator.cuh>
 
 #include <omp.h>
@@ -51,8 +52,14 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
 
   // Tasks are not preempted, so a lane posted beyond the team size would sit in the queue for the
   // whole of presolve without running an iteration.
-  n_lanes                 = threaded ? 1 : std::clamp(n_lanes, 1, omp_get_num_threads());
-  const int64_t base_seed = cuopt::seed_generator::get_seed();
+  const int worker_budget =
+    threaded
+      ? 1
+      : std::clamp(
+          n_lanes, 1, std::max(1, omp_get_num_threads() - CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS));
+  const int improvement_lanes = threaded ? 0 : presolve_lns_worker_count(worker_budget);
+  n_lanes                     = worker_budget - improvement_lanes;
+  const int64_t base_seed     = cuopt::seed_generator::get_seed();
   climbers_.resize(n_lanes);
 
   auto report_incumbent = [this](f_t solver_obj, const std::vector<f_t>& assignment, double) {
@@ -82,6 +89,29 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
   for (int k = 0; k < n_lanes; ++k)
     climbers_[k]->shared_incumbent = shared;
 
+  // Construct both private search states before any lane starts mutating the anchor.
+  if (improvement_lanes) {
+    try {
+      lns_ = std::make_unique<early_lns_t<i_t, f_t>>(
+        *climbers_[0],
+        shared,
+        preemption_flag_,
+        [this](f_t objective, const std::vector<f_t>& x, const char* origin) {
+          std::lock_guard<std::mutex> guard(incumbent_mutex_);
+          this->try_update_best(objective, x, origin);
+        },
+        seed_);
+    } catch (const std::exception& e) {
+      CUOPT_LOG_WARN("Early LNS setup failed: %s", e.what());
+    } catch (...) {
+      CUOPT_LOG_WARN("Early LNS setup failed with unknown error");
+    }
+  }
+  if (!threaded)
+    CUOPT_LOG_INFO("Early CPUFJ budget: %d feasibility + %d LNS workers within %d OpenMP threads",
+                   n_lanes,
+                   improvement_lane_count(),
+                   omp_get_num_threads());
   CUOPT_LOG_DEBUG("Launching %d early CPUFJ %s", n_lanes, threaded ? "thread" : "tasks");
   if (threaded) {
     auto* climber = climbers_[0].get();
@@ -94,6 +124,7 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
   depend(out : *climber) default(none)
     cpufj_solve(climber);
   }
+  if (lns_) lns_->start();
 }
 
 template <typename i_t, typename f_t>
@@ -102,6 +133,7 @@ void early_cpufj_t<i_t, f_t>::stop()
   if (climbers_.empty()) { return; }
 
   preemption_flag_.store(true);
+  if (lns_) lns_->request_stop();
 
   // Every lane is told to stop before any wait, otherwise the first wait blocks on a lane that has
   // not been asked to exit yet.
@@ -114,6 +146,11 @@ void early_cpufj_t<i_t, f_t>::stop()
     for (size_t k = 0; k < climbers_.size(); ++k) {
 #pragma omp taskwait depend(in : *climbers_[k])  // Wait for each early CPUFJ task to finish
     }
+  }
+
+  if (lns_) {
+    lns_->finish();
+    lns_.reset();
   }
 
   [[maybe_unused]] i_t total_iterations = 0;

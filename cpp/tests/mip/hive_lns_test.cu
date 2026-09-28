@@ -7,6 +7,8 @@
 #include "../../../experiments/hive_lns/bridge.cuh"
 
 #include <mip_heuristics/diversity/diversity_manager.cuh>
+#include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
+#include <mip_heuristics/feasibility_jump/early_lns.cuh>
 #include <mip_heuristics/local_search/cpufj_lns_validation.cuh>
 
 #include <gtest/gtest.h>
@@ -291,6 +293,167 @@ TEST(HiveLns, CpufjLnsRevalidatesWithSolverTolerances)
   problem.cstr_ub = {2};
   seed            = {.99999};
   EXPECT_FALSE(mip::normalize_cpufj_lns_seed(problem, bounds, seed));
+}
+
+void init_early_lns_test_problem(opt::optimization_problem_t<int, double>& op, bool integer = false)
+{
+  const std::vector<double> coefficients{1, 1}, lower{0, 0}, upper{1, 1}, objective{1, 2};
+  const std::vector<double> row_lower{0}, row_upper{2};
+  const std::vector<int> columns{0, 1}, offsets{0, 2};
+  const std::vector<opt::var_t> types(2, integer ? opt::var_t::INTEGER : opt::var_t::CONTINUOUS);
+  op.set_csr_constraint_matrix(coefficients.data(), 2, columns.data(), 2, offsets.data(), 2);
+  op.set_variable_lower_bounds(lower.data(), 2);
+  op.set_variable_upper_bounds(upper.data(), 2);
+  op.set_variable_types(types.data(), 2);
+  op.set_objective_coefficients(objective.data(), 2);
+  op.set_constraint_lower_bounds(row_lower.data(), 1);
+  op.set_constraint_upper_bounds(row_upper.data(), 1);
+}
+
+std::atomic<bool> early_hive_completed{false};
+
+void polling_then_failing_early_hive(const model_t& model,
+                                     const snapshot_fn& snapshot,
+                                     const submit_fn& submit,
+                                     const stop_fn&,
+                                     uint64_t)
+{
+  EXPECT_TRUE(omp_in_parallel());
+  EXPECT_EQ(omp_get_num_threads(), 7);
+  EXPECT_EQ(omp_get_max_threads(), 1);
+  EXPECT_EQ(model.feasibility_tolerance, 3e-7);
+  EXPECT_EQ(model.relative_tolerance, 4e-8);
+  EXPECT_EQ(model.integrality_tolerance, 2e-4);
+  EXPECT_EQ(model.row_tolerances[0], (mip::get_cstr_tolerance<int, double>(0, 2, 3e-7, 4e-8)));
+  auto best = snapshot();
+  EXPECT_EQ(best, (population_t{{1.0, 0.0}}));
+  submit({.75, 0});
+  // The test's producer supplies a newer best through the shared CPUFJ store.
+  best = snapshot();
+  EXPECT_EQ(best, (population_t{{.5, 0.0}}));
+  submit({.25, 0});
+  submit({-1, 0});  // Invalid candidate must not reach the callback or shared best.
+  early_hive_completed = true;
+  throw std::runtime_error("injected presolve LNS failure");
+}
+
+TEST(HiveLns, PresolveWorkersPollAndPublishSharedBestAndContainFailure)
+{
+  raft::handle_t handle;
+  opt::optimization_problem_t<int, double> op(&handle);
+  init_early_lns_test_problem(op);
+  opt::mip_solver_settings_t<int, double> settings;
+  settings.tolerances.absolute_tolerance    = 3e-7;
+  settings.tolerances.relative_tolerance    = 4e-8;
+  settings.tolerances.integrality_tolerance = 2e-4;
+  std::atomic<bool> preemption{false};
+  auto anchor =
+    mip::init_fj_cpu_from_optimization_problem(op, settings.get_tolerances(), preemption);
+  auto shared = std::make_shared<mip::fj_cpu_shared_incumbent_t<int, double>>();
+  shared->publish(1, 1, {1, 0});
+  int reports          = 0;
+  early_hive_completed = false;
+#pragma omp parallel num_threads(7)
+  {
+#pragma omp masked
+    {
+      mip::early_lns_t<int, double> workers(
+        *anchor,
+        shared,
+        preemption,
+        [&](double objective, const auto& x, const char* origin) {
+          ++reports;
+          EXPECT_STREQ(origin, "Hive LNS");
+          EXPECT_EQ(x[0], objective);
+          if (reports == 1) shared->publish(.5, .5, {.5, 0});
+        },
+        42,
+        polling_then_failing_early_hive);
+      workers.start();
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (!early_hive_completed.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      EXPECT_NO_THROW(workers.finish());
+      EXPECT_NO_THROW(workers.finish());
+    }
+  }
+  EXPECT_TRUE(early_hive_completed.load());
+  EXPECT_EQ(reports, 2);
+  EXPECT_EQ(shared->objective.load(), .25);
+  EXPECT_EQ(shared->assignment, (std::vector<double>{.25, 0}));
+  EXPECT_FALSE(preemption.load());
+}
+
+TEST(HiveLns, PresolveSearchImprovesAFeasibleCpuIncumbent)
+{
+  raft::handle_t handle;
+  opt::optimization_problem_t<int, double> op(&handle);
+  init_early_lns_test_problem(op, true);
+  const double row_lower = 1;
+  op.set_constraint_lower_bounds(&row_lower, 1);
+  opt::mip_solver_settings_t<int, double> settings;
+  std::atomic<bool> preemption{false};
+  auto anchor =
+    mip::init_fj_cpu_from_optimization_problem(op, settings.get_tolerances(), preemption);
+  auto shared = std::make_shared<mip::fj_cpu_shared_incumbent_t<int, double>>();
+  shared->publish(3, 3, {1, 1});
+  std::atomic<int> reports{0};
+#pragma omp parallel num_threads(7)
+  {
+#pragma omp masked
+    {
+      mip::early_lns_t<int, double> workers(
+        *anchor,
+        shared,
+        preemption,
+        [&](double objective, const auto& x, const char*) {
+          ++reports;
+          EXPECT_GE(objective, 1);
+          EXPECT_GE(x[0] + x[1], 1);
+        },
+        42);
+      workers.start();
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (shared->objective.load() > 1 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      workers.finish();
+    }
+  }
+  EXPECT_EQ(shared->objective.load(), 1);
+  EXPECT_EQ(shared->assignment, (std::vector<double>{1, 0}));
+  EXPECT_GT(reports.load(), 0);
+}
+
+TEST(HiveLns, PresolvePortfolioBudgetAndLifetime)
+{
+  raft::handle_t handle;
+  opt::optimization_problem_t<int, double> op(&handle);
+  init_early_lns_test_problem(op, true);
+  opt::mip_solver_settings_t<int, double> settings;
+  for (int team_size : {2, 6, 7, 10}) {
+#pragma omp parallel num_threads(team_size)
+    {
+#pragma omp masked
+      {
+        mip::early_cpufj_t<int, double> portfolio(op, settings.get_tolerances(), {}, 42);
+        for (int restart = 0; restart < 2; ++restart) {
+          // Even an oversized request must honor the presolve reservation.
+          portfolio.start(team_size);
+          EXPECT_EQ(portfolio.lane_count(), std::max(1, team_size - 4));
+          EXPECT_EQ(portfolio.improvement_lane_count(), team_size >= 7 ? 2 : 0);
+          EXPECT_NO_THROW(portfolio.stop());
+          EXPECT_EQ(portfolio.lane_count(), 0);
+          EXPECT_NO_THROW(portfolio.stop());
+        }
+      }
+    }
+  }
+  // The short initialization probe precedes the OMP team and keeps its single lane.
+  mip::early_cpufj_t<int, double> probe(op, settings.get_tolerances(), {}, 42);
+  probe.start(20, true);
+  EXPECT_EQ(probe.lane_count(), 1);
+  EXPECT_EQ(probe.improvement_lane_count(), 0);
+  probe.stop();
 }
 
 TEST(HiveLns, BenchmarkApiErrorsAreDistinctFromNoSolution)
