@@ -19,6 +19,7 @@
 #include <dual_simplex/simplex_solver_settings.hpp>
 #include <dual_simplex/solve.hpp>
 #include <pdlp/translate.hpp>
+#include <utilities/scope_guard.hpp>
 
 // Must match the setting in solve.cu
 #define DETECT_SYMMETRY_AFTER_PRESOLVE
@@ -184,9 +185,18 @@ void extract_probing_implied_bounds(const problem_t<i_t, f_t>& op_problem,
 }
 
 template <typename i_t, typename f_t>
-solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
+solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver(
+  std::function<void(mip_solver_context_t<i_t, f_t>&)> presolve_finished_callback)
 {
   solution_t<i_t, f_t> sol(*context.problem_ptr);
+
+  bool presolve_callback_finished = false;
+  auto finish_presolve_callback   = [&] {
+    if (presolve_callback_finished) { return; }
+    presolve_callback_finished = true;
+    if (presolve_finished_callback) { presolve_finished_callback(context); }
+  };
+  auto finish_presolve_guard = cuopt::scope_guard(finish_presolve_callback);
 
   //  we need to keep original problem const
   cuopt_assert(context.problem_ptr != nullptr, "invalid problem pointer");
@@ -236,6 +246,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   }
 
   if (!presolve_success) {
+    finish_presolve_callback();
     CUOPT_LOG_INFO("Problem proven infeasible in presolve");
     sol.set_problem_fully_reduced();
     context.problem_ptr->post_process_solution(sol);
@@ -243,6 +254,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   }
 
   if (run_presolve && context.problem_ptr->empty) {
+    finish_presolve_callback();
     CUOPT_LOG_INFO("Problem full reduced in presolve");
     sol.set_problem_fully_reduced();
     context.solution_publication.publish_if_better(
@@ -252,6 +264,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   }
 
   if (timer_.check_time_limit()) {
+    finish_presolve_callback();
     CUOPT_LOG_INFO("Time limit reached after presolve");
     context.stats.total_solve_time = timer_.elapsed_time();
     context.problem_ptr->post_process_solution(sol);
@@ -260,6 +273,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
   // if the problem was reduced to a LP: run concurrent LP
   if (run_presolve && context.problem_ptr->n_integer_vars == 0) {
+    finish_presolve_callback();
     CUOPT_LOG_INFO("Problem reduced to a LP, running concurrent LP");
     pdlp_solver_settings_t<i_t, f_t> settings{};
     settings.time_limit            = timer_.remaining_time();
@@ -429,18 +443,6 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                                                           context.symmetry.get());
     context.branch_and_bound_ptr = branch_and_bound.get();
 
-    // Convert the best external upper bound from user-space to B&B's internal objective space.
-    // context.problem_ptr is the post-trivial-presolve problem, whose get_solver_obj_from_user_obj
-    // produces values in the same space as B&B node lower bounds.
-    if (std::isfinite(context.initial_upper_bound)) {
-      f_t bb_ub = context.problem_ptr->get_solver_obj_from_user_obj(context.initial_upper_bound);
-      branch_and_bound->set_initial_upper_bound(bb_ub);
-      dm.population.best_feasible_objective = bb_ub;
-      CUOPT_LOG_DEBUG("B&B using initial upper bound %.6e (user-space: %.6e) from early heuristics",
-                      bb_ub,
-                      context.initial_upper_bound);
-    }
-
     auto* stats_ptr = &context.stats;
     branch_and_bound->set_user_bound_callback(
       [stats_ptr](f_t user_bound) { stats_ptr->set_solution_bound(user_bound); });
@@ -497,6 +499,25 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         dm.population.add_external_solution(assignment, objective, solution_origin_t::EXTERNAL);
       });
     if (!root_structural->recognized()) { root_structural.reset(); }
+  }
+
+  // This is the normal handoff boundary: all presolve and main-B&B setup are complete. Stop and
+  // join the original-space root dives immediately before the main B&B task can launch.
+  finish_presolve_callback();
+
+  if (!context.settings.heuristics_only && std::isfinite(context.initial_upper_bound)) {
+    // The handoff callback may have supplied a later original-space incumbent. Convert that final
+    // user-space bound only after the auxiliary root dives have joined.
+    f_t bb_ub = context.problem_ptr->get_solver_obj_from_user_obj(context.initial_upper_bound);
+    branch_and_bound->set_initial_upper_bound(bb_ub);
+    context.solution_publication.set_published_floor(bb_ub);
+    // The auxiliary incumbent is deliberately first in initial_solutions. Let the population
+    // accept and validate it even though B&B already uses the same value as its cutoff.
+    dm.population.best_feasible_objective =
+      context.has_aux_initial_solution ? std::numeric_limits<f_t>::infinity() : bb_ub;
+    CUOPT_LOG_DEBUG("B&B using initial upper bound %.6e (user-space: %.6e) from early heuristics",
+                    bb_ub,
+                    context.initial_upper_bound);
   }
 
 #pragma omp taskgroup

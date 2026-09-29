@@ -64,9 +64,9 @@ struct mip_solver_context_t {
   mip::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
-  const mip_solver_settings_t<i_t, f_t> settings;
+  mip_solver_settings_t<i_t, f_t> settings;
 
-  // Base seed, all random number generators derive a seed and strem from it.
+  // Base seed, all random number generators derive a seed and stream from it.
   const uint64_t base_seed;
   solver_stats_t<i_t, f_t> stats;
   // Every incumbent reported to the user goes through here, from whichever thread found it.
@@ -88,6 +88,13 @@ struct mip_solver_context_t {
 
   // Matching incumbent assignment in original output space from early heuristics.
   std::vector<f_t> initial_incumbent_assignment{};
+
+  // Host task slots held by the optional pre-presolve root-diving arm while cuOpt presolve runs.
+  int pre_presolve_aux_slots{0};
+
+  // The first user-given solution is the auxiliary arm's best incumbent. Keeping this separate
+  // lets B&B retain the cutoff while the population validates and forwards that incumbent.
+  bool has_aux_initial_solution{false};
 
   // Symmetry information for orbital fixing during B&B. Null if no exploitable symmetry.
   std::unique_ptr<mip::mip_symmetry_t<i_t, f_t>> symmetry;

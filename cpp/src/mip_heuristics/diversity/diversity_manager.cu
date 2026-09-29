@@ -95,33 +95,6 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
            "ls"),
     ls_hash_map(*context.problem_ptr)
 {
-  int max_config             = -1;
-  int env_config_id          = -1;
-  const char* env_max_config = std::getenv("CUOPT_MAX_CONFIG");
-  if (env_max_config != nullptr) {
-    try {
-      max_config = std::stoi(env_max_config);
-      CUOPT_LOG_INFO("Using maximum configuration value from environment: %d", max_config);
-    } catch (const std::exception& e) {
-      CUOPT_LOG_WARN("Failed to parse CUOPT_MAX_CONFIG environment variable: %s", e.what());
-    }
-  }
-
-  const char* env_config_id_raw = std::getenv("CUOPT_CONFIG_ID");
-  if (env_config_id_raw == nullptr) { return; }
-
-  try {
-    env_config_id = std::stoi(env_config_id_raw);
-  } catch (const std::exception& e) {
-    CUOPT_LOG_WARN("Failed to parse CUOPT_CONFIG_ID environment variable: %s", e.what());
-    return;
-  }
-
-  if (max_config > 0 && env_config_id >= max_config) {
-    CUOPT_LOG_WARN(
-      "CUOPT_CONFIG_ID=%d is outside [0, %d). Ignoring cut override.", env_config_id, max_config);
-    return;
-  }
 }
 
 template <typename i_t, typename f_t>
@@ -331,8 +304,9 @@ bool diversity_manager_t<i_t, f_t>::run_presolve(f_t time_limit, timer_t global_
     // as well as concurrency.
     const i_t held_by_cpufj =
       context.early_cpufj_ptr != nullptr ? (i_t)context.early_cpufj_ptr->lane_count() : 0;
+    const i_t held_by_aux = std::max(context.pre_presolve_aux_slots, 0);
     ls.constraint_prop.bounds_update.settings.num_tasks =
-      std::max(1, omp_get_num_threads() - 1 - held_by_cpufj);
+      std::max(1, omp_get_num_threads() - 1 - held_by_cpufj - held_by_aux);
     f_t time_for_probing_cache = std::min(time_limit, (f_t)global_timer.remaining_time());
     timer_t probing_timer{time_for_probing_cache};
     [[maybe_unused]] const auto probing_t0 = std::chrono::steady_clock::now();

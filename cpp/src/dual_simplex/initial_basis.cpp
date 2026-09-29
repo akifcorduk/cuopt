@@ -11,6 +11,7 @@
 #include <dual_simplex/singletons.hpp>
 #include <math_optimization/tic_toc.hpp>
 
+#include <cuopt/error.hpp>
 #include <raft/core/nvtx.hpp>
 
 #include <cassert>
@@ -80,8 +81,12 @@ void decompress_vstatus(const std::vector<uint8_t>& packed_vstatus,
   size_t compressed_size = vstatus_size / 4;
   size_t has_tail        = (vstatus_size % 4 > 0);
 
+  EXE_CUOPT_EXPECTS(packed_vstatus.size() == compressed_size + has_tail,
+                    "Packed basis status has %zu bytes; expected %zu bytes for %zu variables",
+                    packed_vstatus.size(),
+                    compressed_size + has_tail,
+                    vstatus_size);
   vstatus.resize(vstatus_size);
-  assert(packed_vstatus.size() == compressed_size + has_tail);
 
   for (size_t i = 0; i < compressed_size; ++i) {
     size_t j       = i * 4;

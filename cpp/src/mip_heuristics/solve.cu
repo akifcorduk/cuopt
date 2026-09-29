@@ -14,6 +14,7 @@
 #include <mip_heuristics/feasibility_jump/early_gpufj.cuh>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
+#include <mip_heuristics/pre_presolve_primal.cuh>
 #include <mip_heuristics/presolve/presolve_budget_policy.hpp>
 #include <mip_heuristics/presolve/semi_continuous.cuh>
 #include <mip_heuristics/presolve/third_party_presolve.hpp>
@@ -65,8 +66,10 @@
 #include <cuda_profiler_api.h>
 #include <omp.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <mutex>
 #include <sstream>
 
@@ -118,6 +121,10 @@ mip_solution_t<i_t, f_t> run_mip_solver(
   timer_t& timer,
   f_t& initial_upper_bound,
   std::vector<f_t>& initial_incumbent_assignment,
+  int early_cpufj_reserved_threads,
+  int pre_presolve_aux_slots,
+  std::function<bool(f_t, const std::vector<f_t>&, const char*)> shared_incumbent_callback,
+  std::function<void(mip::mip_solver_context_t<i_t, f_t>*)> presolve_finished_callback,
   std::unique_ptr<mip::mip_symmetry_t<i_t, f_t>> symmetry = nullptr)
 {
   try {
@@ -140,6 +147,7 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     }
     // if the input problem is empty: early exit
     if (problem.empty) {
+      if (presolve_finished_callback) { presolve_finished_callback(nullptr); }
       mip::solution_t<i_t, f_t> solution(problem);
       problem.preprocess_problem();
       thrust::for_each(
@@ -237,6 +245,7 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     // It will be converted to the target solver-space at each consumption point.
     solver.context.initial_upper_bound          = initial_upper_bound;
     solver.context.initial_incumbent_assignment = initial_incumbent_assignment;
+    solver.context.pre_presolve_aux_slots       = pre_presolve_aux_slots;
     if (std::isfinite(initial_upper_bound)) {
       solver.context.solution_publication.set_published_floor(
         solver.context.problem_ptr->get_solver_obj_from_user_obj(initial_upper_bound));
@@ -244,6 +253,7 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     solver.context.symmetry = std::move(symmetry);
     if (timer.check_time_limit()) {
       CUOPT_LOG_INFO("Time limit reached before main solve");
+      if (presolve_finished_callback) { presolve_finished_callback(&solver.context); }
       mip::solution_t<i_t, f_t> sol(problem);
       auto stats                 = solver.get_solver_stats();
       stats.total_solve_time     = timer.elapsed_time();
@@ -285,30 +295,56 @@ mip_solution_t<i_t, f_t> run_mip_solver(
          papilo_num_original_vars = problem.get_papilo_original_num_variables(),
          &papilo_callback_mutex,
          &papilo_best_solver_obj,
-         &timer](f_t solver_obj,
-                 f_t user_obj,
-                 const std::vector<f_t>& assignment,
-                 const char* heuristic_name) {
-          std::lock_guard<std::mutex> lock(papilo_callback_mutex);
-          if (solver_obj >= papilo_best_solver_obj) { return; }
-          papilo_best_solver_obj = solver_obj;
+         &timer,
+         shared_incumbent_callback](f_t solver_obj,
+                                    f_t user_obj,
+                                    const std::vector<f_t>& assignment,
+                                    const char* heuristic_name) {
+          if (!shared_incumbent_callback) {
+            // Preserve PR #1953's stock serialization exactly when the experiment is disabled.
+            std::lock_guard<std::mutex> lock(papilo_callback_mutex);
+            if (solver_obj >= papilo_best_solver_obj) { return; }
+            papilo_best_solver_obj = solver_obj;
+
+            std::vector<f_t> user_assignment;
+            presolver_ptr->uncrush_primal_solution(assignment, user_assignment);
+            cuopt_assert(user_assignment.size() == (size_t)papilo_num_original_vars,
+                         "Size mismatch");
+            ctx_ptr->initial_incumbent_assignment = user_assignment;
+            ctx_ptr->initial_upper_bound          = user_obj;
+            CUOPT_LOG_INFO(
+              "New solution from early primal heuristics (%s). Objective %+.6e. Time %.3f",
+              heuristic_name,
+              user_obj,
+              timer.elapsed_time());
+            invoke_solution_callbacks(mip_callbacks,
+                                      has_semi_continuous_callback_translation,
+                                      semi_continuous_original_num_variables,
+                                      user_obj,
+                                      user_assignment,
+                                      no_bound);
+            return;
+          }
 
           std::vector<f_t> user_assignment;
-          presolver_ptr->uncrush_primal_solution(assignment, user_assignment);
-          cuopt_assert(user_assignment.size() == (size_t)papilo_num_original_vars, "Size mismatch");
-          ctx_ptr->initial_incumbent_assignment = user_assignment;
-          ctx_ptr->initial_upper_bound          = user_obj;
-          CUOPT_LOG_INFO(
-            "New solution from early primal heuristics (%s). Objective %+.6e. Time %.3f",
-            heuristic_name,
-            user_obj,
-            timer.elapsed_time());
-          invoke_solution_callbacks(mip_callbacks,
-                                    has_semi_continuous_callback_translation,
-                                    semi_continuous_original_num_variables,
-                                    user_obj,
-                                    user_assignment,
-                                    no_bound);
+          {
+            std::lock_guard<std::mutex> lock(papilo_callback_mutex);
+            if (solver_obj >= papilo_best_solver_obj) { return; }
+            papilo_best_solver_obj = solver_obj;
+
+            presolver_ptr->uncrush_primal_solution(assignment, user_assignment);
+            cuopt_assert(user_assignment.size() == (size_t)papilo_num_original_vars,
+                         "Size mismatch");
+          }
+
+          if (!shared_incumbent_callback(user_obj, user_assignment, heuristic_name)) { return; }
+          // Another PaPILO-space lane may have reported a still better point while the shared
+          // callback ran. Do not overwrite that newer incumbent when this callback resumes.
+          std::lock_guard<std::mutex> lock(papilo_callback_mutex);
+          if (solver_obj <= papilo_best_solver_obj) {
+            ctx_ptr->initial_incumbent_assignment = user_assignment;
+            ctx_ptr->initial_upper_bound          = user_obj;
+          }
         };
       early_cpufj = std::make_unique<mip::early_cpufj_t<i_t, f_t>>(
         *problem.original_problem_ptr,
@@ -320,7 +356,7 @@ mip_solution_t<i_t, f_t> run_mip_solver(
       if (std::isfinite(initial_upper_bound)) {
         early_cpufj->set_best_objective(problem.get_solver_obj_from_user_obj(initial_upper_bound));
       }
-      early_cpufj->start(omp_get_num_threads() - CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS);
+      early_cpufj->start(omp_get_num_threads() - early_cpufj_reserved_threads);
       solver.context.early_cpufj_ptr = early_cpufj.get();
       CUOPT_LOG_DEBUG("Started early CPUFJ on papilo-presolved problem during cuOpt presolve");
 
@@ -336,7 +372,10 @@ mip_solution_t<i_t, f_t> run_mip_solver(
       }
     }
 
-    auto presolved_sol            = solver.run_solver();
+    auto presolved_sol = solver.run_solver([callback = std::move(presolve_finished_callback)](
+                                             mip::mip_solver_context_t<i_t, f_t>& context) mutable {
+      if (callback) { callback(&context); }
+    });
     bool is_feasible_on_presolved = presolved_sol.get_feasible();
     presolved_sol.problem_ptr     = &problem;
     // at this point we need to compute the feasibility on the original problem not the presolved
@@ -370,7 +409,8 @@ template <typename i_t, typename f_t>
 mip_solution_t<i_t, f_t> solve_mip_helper(
   optimization_problem_t<i_t, f_t>& op_problem,
   mip_solver_settings_t<i_t, f_t> const& settings_const,
-  const std::shared_ptr<mip::early_cpufj_t<i_t, f_t>>& pre_solve_heuristics)
+  const std::shared_ptr<mip::early_cpufj_t<i_t, f_t>>& pre_solve_heuristics,
+  const mip::pre_presolve_config_t& pre_presolve_config)
 {
   try {
     mip_solver_settings_t<i_t, f_t> settings(settings_const);
@@ -499,14 +539,56 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
     f_t early_best_user_obj{std::numeric_limits<f_t>::infinity()};
     std::vector<f_t> early_best_user_assignment;
     std::mutex early_callback_mutex;
+    // User/PI callbacks are not required to be thread-safe. Keep publication serialized without
+    // holding the state/mailbox mutex across user code or calls into the auxiliary B&B.
+    std::mutex solution_callback_mutex;
 
     std::unique_ptr<mip::early_cpufj_t<i_t, f_t>> early_cpufj;
     std::unique_ptr<mip::early_gpufj_t<i_t, f_t>> early_gpufj;
     std::unique_ptr<mip::early_structural_t<i_t, f_t>> early_structural;
+    std::unique_ptr<mip::pre_presolve_primal_t<i_t, f_t>> pre_presolve_primal;
+    mip::pre_presolve_primal_t<i_t, f_t>* pre_presolve_mailbox = nullptr;
+    bool pre_presolve_started                                  = false;
+    int pre_presolve_aux_slots                                 = 0;
+
+    f_t aux_best_user_score{std::numeric_limits<f_t>::infinity()};
+    f_t aux_best_user_obj{std::numeric_limits<f_t>::infinity()};
+    std::vector<f_t> aux_best_user_assignment;
 
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                         op_problem.get_problem_category() != problem_category_t::LP &&
                         op_problem.get_n_constraints() > 0;
+    const int mip_omp_threads = omp_get_num_threads();
+    const bool pre_presolve_eligible =
+      pre_presolve_config.enabled && run_early_fj &&
+      mip::is_pre_presolve_primal_eligible(op_problem.get_n_constraints(),
+                                           op_problem.get_n_variables(),
+                                           op_problem.get_nnz(),
+                                           op_problem.has_quadratic_objective(),
+                                           op_problem.has_quadratic_constraints(),
+                                           op_problem.get_n_integers() > 0,
+                                           run_presolve,
+                                           settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC,
+                                           mip_omp_threads);
+    int early_cpufj_reserved_threads = pre_presolve_eligible
+                                         ? pre_presolve_config.cpufj_reserved_threads()
+                                         : CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS;
+    if (pre_presolve_config.enabled) {
+      CUOPT_LOG_INFO(
+        "PRE_PRESOLVE_PLAN raw_id=%d config_id=%d name=%s eligible=%d rows=%d cols=%d nnz=%d "
+        "team=%d cpufj_lanes=%d aux_slots=%d cooperative=%d",
+        pre_presolve_config.raw_id,
+        pre_presolve_config.config_id,
+        pre_presolve_config.name(),
+        pre_presolve_eligible,
+        op_problem.get_n_constraints(),
+        op_problem.get_n_variables(),
+        op_problem.get_nnz(),
+        mip_omp_threads,
+        run_early_fj ? mip_omp_threads - early_cpufj_reserved_threads : 0,
+        pre_presolve_eligible ? pre_presolve_config.task_slots() : 0,
+        pre_presolve_config.cooperative());
+    }
     const f_t objective_sense = op_problem.get_sense() ? f_t{-1} : f_t{1};
     f_t no_bound              = objective_sense > f_t{0} ? (f_t)-1e20 : (f_t)1e20;
 
@@ -525,6 +607,56 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
        &early_best_user_assignment,
        &early_incumbent_pool,
        &early_callback_mutex,
+       &solution_callback_mutex,
+       &pre_presolve_mailbox,
+       &timer,
+       objective_sense,
+       cooperative   = pre_presolve_config.cooperative(),
+       mip_callbacks = settings.get_mip_callbacks(),
+       has_semi_continuous_callback_translation =
+         mip_solver_settings_accessor<i_t, f_t>::has_semi_continuous_callback_translation(settings),
+       semi_continuous_original_num_variables =
+         mip_solver_settings_accessor<i_t, f_t>::get_semi_continuous_original_num_variables(
+           settings),
+       no_bound](
+        f_t, f_t user_obj, const std::vector<f_t>& assignment, const char* heuristic_name) {
+        std::lock_guard<std::mutex> publication_lock(solution_callback_mutex);
+        mip::pre_presolve_primal_t<i_t, f_t>* mailbox = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(early_callback_mutex);
+          const f_t objective = objective_sense * user_obj;
+          if (objective >= early_best_user_score.load()) { return; }
+          early_best_user_score.store(objective);
+          early_best_user_obj        = user_obj;
+          early_best_user_assignment = assignment;
+          early_incumbent_pool.push_back({user_obj, assignment});
+          if (cooperative) { mailbox = pre_presolve_mailbox; }
+        }
+        CUOPT_LOG_INFO("New solution from early primal heuristics (%s). Objective %+.6e. Time %.3f",
+                       heuristic_name,
+                       user_obj,
+                       timer.elapsed_time());
+        auto user_assignment = assignment;
+        invoke_solution_callbacks(mip_callbacks,
+                                  has_semi_continuous_callback_translation,
+                                  semi_continuous_original_num_variables,
+                                  user_obj,
+                                  user_assignment,
+                                  no_bound);
+        // Never call into the auxiliary B&B while holding early_callback_mutex: its solution
+        // callback can synchronously return through the independent auxiliary callback below.
+        if (mailbox != nullptr) { mailbox->offer_external_incumbent(user_obj, assignment); }
+      };
+
+    auto aux_incumbent_callback =
+      [&early_best_user_score,
+       &early_best_user_obj,
+       &early_best_user_assignment,
+       &aux_best_user_score,
+       &aux_best_user_obj,
+       &aux_best_user_assignment,
+       &early_callback_mutex,
+       &solution_callback_mutex,
        &timer,
        objective_sense,
        mip_callbacks = settings.get_mip_callbacks(),
@@ -535,13 +667,24 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
            settings),
        no_bound](
         f_t, f_t user_obj, const std::vector<f_t>& assignment, const char* heuristic_name) {
-        std::lock_guard<std::mutex> lock(early_callback_mutex);
+        std::lock_guard<std::mutex> publication_lock(solution_callback_mutex);
         const f_t objective = objective_sense * user_obj;
-        if (objective >= early_best_user_score.load()) { return; }
-        early_best_user_score.store(objective);
-        early_best_user_obj        = user_obj;
-        early_best_user_assignment = assignment;
-        early_incumbent_pool.push_back({user_obj, assignment});
+        bool publish        = false;
+        {
+          std::lock_guard<std::mutex> lock(early_callback_mutex);
+          if (objective < aux_best_user_score) {
+            aux_best_user_score      = objective;
+            aux_best_user_obj        = user_obj;
+            aux_best_user_assignment = assignment;
+          }
+          if (objective < early_best_user_score.load()) {
+            early_best_user_score.store(objective);
+            early_best_user_obj        = user_obj;
+            early_best_user_assignment = assignment;
+            publish                    = true;
+          }
+        }
+        if (!publish) { return; }
         CUOPT_LOG_INFO("New solution from early primal heuristics (%s). Objective %+.6e. Time %.3f",
                        heuristic_name,
                        user_obj,
@@ -554,6 +697,15 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
                                   user_assignment,
                                   no_bound);
       };
+
+    auto pre_presolve_guard = cuopt::scope_guard([&]() {
+      {
+        std::lock_guard<std::mutex> lock(early_callback_mutex);
+        pre_presolve_mailbox = nullptr;
+      }
+      if (pre_presolve_primal) { pre_presolve_primal->stop(); }
+      pre_presolve_primal.reset();
+    });
 
     if (run_early_fj) {
       // Start early CPUFJ on original problem (will restart on presolved problem after Papilo)
@@ -568,7 +720,7 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
         early_cpufj->set_best_objective(pre_solve_heuristics->get_best_objective());
       }
       // Papilo runs on its own threads, so the team is otherwise idle here.
-      early_cpufj->start(omp_get_num_threads() - CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS);
+      early_cpufj->start(omp_get_num_threads() - early_cpufj_reserved_threads);
       CUOPT_LOG_DEBUG("Started early CPUFJ on original problem with %d lanes",
                       early_cpufj->lane_count());
     }
@@ -614,6 +766,57 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
     mip::problem_t<i_t, f_t> problem(
       op_problem, settings.get_tolerances(), settings.determinism_mode == CUOPT_MODE_DETERMINISTIC);
 
+    if (pre_presolve_eligible) {
+      pre_presolve_primal = std::make_unique<mip::pre_presolve_primal_t<i_t, f_t>>(
+        problem, settings, pre_presolve_config, aux_incumbent_callback);
+
+      // Cooperative arms start with the best result from the one-lane pre-solve probe (or a newer
+      // stock early heuristic). offer_external_incumbent is safe before start().
+      if (pre_presolve_config.cooperative()) {
+        f_t seed_user_obj;
+        std::vector<f_t> seed_assignment;
+        {
+          std::lock_guard<std::mutex> lock(early_callback_mutex);
+          seed_user_obj   = early_best_user_obj;
+          seed_assignment = early_best_user_assignment;
+        }
+        if (!seed_assignment.empty()) {
+          pre_presolve_primal->offer_external_incumbent(seed_user_obj, seed_assignment);
+        }
+      }
+
+      pre_presolve_started = pre_presolve_primal->start();
+      if (pre_presolve_started) {
+        f_t latest_user_obj;
+        std::vector<f_t> latest_assignment;
+        {
+          std::lock_guard<std::mutex> lock(early_callback_mutex);
+          pre_presolve_mailbox = pre_presolve_primal.get();
+          latest_user_obj      = early_best_user_obj;
+          latest_assignment    = early_best_user_assignment;
+        }
+        // Close the construction/start race: a stock lane may have improved between the seed above
+        // and publishing the mailbox pointer.
+        if (pre_presolve_config.cooperative() && !latest_assignment.empty()) {
+          pre_presolve_primal->offer_external_incumbent(latest_user_obj, latest_assignment);
+        }
+        pre_presolve_aux_slots = pre_presolve_config.task_slots();
+        CUOPT_LOG_INFO("Started pre-presolve primal configuration %d (%s) with %d workers",
+                       pre_presolve_config.config_id,
+                       pre_presolve_config.name(),
+                       pre_presolve_config.diving_workers());
+      } else {
+        pre_presolve_primal.reset();
+        early_cpufj_reserved_threads = CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS;
+        CUOPT_LOG_WARN(
+          "PRE_PRESOLVE_START_FAILED raw_id=%d config_id=%d enabled=0 start_failed=1 "
+          "post_cpufj_lanes=%d",
+          pre_presolve_config.raw_id,
+          pre_presolve_config.config_id,
+          mip_omp_threads - early_cpufj_reserved_threads);
+      }
+    }
+
     if (run_early_fj) {
       // Start early GPU FJ (uses GPU while CPU is busy with Papilo)
       early_gpufj =
@@ -624,6 +827,17 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
         op_problem, settings.get_tolerances(), early_fj_callback);
       if (early_structural) { early_structural->start(); }
     }
+
+    auto early_parallel_guard = cuopt::scope_guard([&]() {
+      if (early_gpufj) {
+        early_gpufj->stop();
+        early_gpufj.reset();
+      }
+      if (early_structural) {
+        early_structural->stop();
+        early_structural.reset();
+      }
+    });
 
     auto constexpr const dual_postsolve = false;
     if (run_presolve) {
@@ -730,19 +944,29 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
 
     // Add early-heuristic incumbents (original-space) to initial_solutions.
     // PaPILO crushing + validation happens downstream in add_user_given_solutions().
-    if (!early_incumbent_pool.empty()) {
-      auto stream                           = op_problem.get_handle_ptr()->get_stream();
-      constexpr size_t max_early_incumbents = 5;
-      const size_t first_kept               = early_incumbent_pool.size() > max_early_incumbents
-                                                ? early_incumbent_pool.size() - max_early_incumbents
-                                                : 0;
-      for (size_t i = first_kept; i < early_incumbent_pool.size(); ++i) {
-        auto d = std::make_shared<rmm::device_uvector<f_t>>(
-          device_copy(early_incumbent_pool[i].assignment, stream));
-        settings.initial_solutions.emplace_back(std::move(d));
-      }
+    std::vector<early_incumbent_entry_t> stock_early_incumbents;
+    f_t solver_initial_upper_bound;
+    std::vector<f_t> solver_initial_assignment;
+    {
+      std::lock_guard<std::mutex> lock(early_callback_mutex);
+      stock_early_incumbents     = early_incumbent_pool;
+      solver_initial_upper_bound = early_best_user_obj;
+      solver_initial_assignment  = early_best_user_assignment;
+    }
+
+    auto stream                           = op_problem.get_handle_ptr()->get_stream();
+    constexpr size_t max_early_incumbents = 5;
+    const size_t first_kept               = stock_early_incumbents.size() > max_early_incumbents
+                                              ? stock_early_incumbents.size() - max_early_incumbents
+                                              : 0;
+    for (size_t i = first_kept; i < stock_early_incumbents.size(); ++i) {
+      auto d = std::make_shared<rmm::device_uvector<f_t>>(
+        device_copy(stock_early_incumbents[i].assignment, stream));
+      settings.initial_solutions.emplace_back(std::move(d));
+    }
+    if (first_kept < stock_early_incumbents.size()) {
       CUOPT_LOG_DEBUG("Added %zu early-heuristic incumbents to initial solutions",
-                      early_incumbent_pool.size() - first_kept);
+                      stock_early_incumbents.size() - first_kept);
     }
 
     if (settings.user_problem_file != "") {
@@ -753,15 +977,123 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
       CUOPT_LOG_INFO("Writing presolved problem to file: %s", settings.presolve_file.c_str());
       presolve_result_opt->reduced_problem.write_to_mps(settings.presolve_file);
     }
-    // early_best_user_obj is in user-space.
-    // run_mip_solver stores it in context.initial_upper_bound and converts to target spaces as
-    // needed.
+
+    std::function<bool(f_t, const std::vector<f_t>&, const char*)> share_post_papilo_incumbent;
+    if (pre_presolve_started) {
+      share_post_papilo_incumbent = [&](f_t user_obj,
+                                        const std::vector<f_t>& assignment,
+                                        const char* heuristic_name) {
+        std::lock_guard<std::mutex> publication_lock(solution_callback_mutex);
+        mip::pre_presolve_primal_t<i_t, f_t>* mailbox = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(early_callback_mutex);
+          const f_t objective = objective_sense * user_obj;
+          if (objective >= early_best_user_score.load()) { return false; }
+          early_best_user_score.store(objective);
+          early_best_user_obj        = user_obj;
+          early_best_user_assignment = assignment;
+          if (pre_presolve_config.cooperative()) { mailbox = pre_presolve_mailbox; }
+        }
+        CUOPT_LOG_INFO("New solution from early primal heuristics (%s). Objective %+.6e. Time %.3f",
+                       heuristic_name,
+                       user_obj,
+                       timer.elapsed_time());
+        auto user_assignment = assignment;
+        invoke_solution_callbacks(
+          settings.get_mip_callbacks(),
+          mip_solver_settings_accessor<i_t, f_t>::has_semi_continuous_callback_translation(
+            settings),
+          mip_solver_settings_accessor<i_t, f_t>::get_semi_continuous_original_num_variables(
+            settings),
+          user_obj,
+          user_assignment,
+          no_bound);
+        if (mailbox != nullptr) { mailbox->offer_external_incumbent(user_obj, assignment); }
+        return true;
+      };
+    }
+
+    std::function<void(mip::mip_solver_context_t<i_t, f_t>*)> finish_pre_presolve_primal;
+    if (pre_presolve_started) {
+      finish_pre_presolve_primal = [&](mip::mip_solver_context_t<i_t, f_t>* context) noexcept {
+        try {
+          {
+            std::lock_guard<std::mutex> lock(early_callback_mutex);
+            pre_presolve_mailbox = nullptr;
+          }
+          if (pre_presolve_primal) { pre_presolve_primal->stop(); }
+
+          f_t latest_user_obj;
+          std::vector<f_t> latest_assignment;
+          f_t best_aux_user_obj;
+          std::vector<f_t> best_aux_assignment;
+          {
+            std::lock_guard<std::mutex> lock(early_callback_mutex);
+            latest_user_obj     = early_best_user_obj;
+            latest_assignment   = early_best_user_assignment;
+            best_aux_user_obj   = aux_best_user_obj;
+            best_aux_assignment = aux_best_user_assignment;
+          }
+          pre_presolve_primal.reset();
+
+          if (context == nullptr) { return; }
+          context->pre_presolve_aux_slots = 0;
+
+          if (!best_aux_assignment.empty()) {
+            auto d =
+              std::make_shared<rmm::device_uvector<f_t>>(device_copy(best_aux_assignment, stream));
+            context->settings.initial_solutions.insert(context->settings.initial_solutions.begin(),
+                                                       std::move(d));
+            context->has_aux_initial_solution = true;
+          }
+
+          const bool latest_is_better =
+            !latest_assignment.empty() &&
+            (!std::isfinite(context->initial_upper_bound) ||
+             objective_sense * latest_user_obj < objective_sense * context->initial_upper_bound);
+          if (latest_is_better) {
+            context->initial_upper_bound          = latest_user_obj;
+            context->initial_incumbent_assignment = std::move(latest_assignment);
+          }
+
+          if (!best_aux_assignment.empty()) {
+            CUOPT_LOG_INFO("PRE_PRESOLVE_HANDOFF config_id=%d has_aux=1 objective=%.16e",
+                           pre_presolve_config.config_id,
+                           best_aux_user_obj);
+          }
+        } catch (const std::exception& e) {
+          CUOPT_LOG_ERROR("Failed to finalize pre-presolve root diving: %s", e.what());
+        } catch (...) {
+          CUOPT_LOG_ERROR("Failed to finalize pre-presolve root diving");
+        }
+      };
+    }
+
     auto sol = run_mip_solver(problem,
                               settings,
                               timer,
-                              early_best_user_obj,
-                              early_best_user_assignment,
+                              solver_initial_upper_bound,
+                              solver_initial_assignment,
+                              early_cpufj_reserved_threads,
+                              pre_presolve_aux_slots,
+                              share_post_papilo_incumbent,
+                              finish_pre_presolve_primal,
                               std::move(symmetry));
+
+    // run_mip_solver may improve the original-space incumbent during cuOpt presolve (for example,
+    // through the post-PaPILO CPUFJ lanes). Merge that pair into the state used by the end-of-solve
+    // fallback. Do not overwrite a newer auxiliary incumbent captured by the handoff callback on an
+    // early return from run_mip_solver.
+    {
+      std::lock_guard<std::mutex> lock(early_callback_mutex);
+      const f_t solver_initial_score = objective_sense * solver_initial_upper_bound;
+      if (!solver_initial_assignment.empty() &&
+          solver_initial_score < early_best_user_score.load()) {
+        early_best_user_score.store(solver_initial_score);
+        early_best_user_obj        = solver_initial_upper_bound;
+        early_best_user_assignment = std::move(solver_initial_assignment);
+      }
+    }
 
     const f_t cuopt_presolve_time = sol.get_stats().presolve_time;
 
@@ -918,6 +1250,19 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       op_problem.get_handle_ptr()->get_stream()};
   }
 
+  // Resolve the benchmark arm before any heuristic starts. Malformed or only-partially-specified
+  // environment variables are configuration errors and intentionally propagate to the caller.
+  const auto pre_presolve_config = mip::resolve_pre_presolve_config_from_env();
+  mip_solver_settings_t<i_t, f_t> effective_settings(settings_const);
+  if (pre_presolve_config.enabled) {
+    const int64_t base_seed       = settings_const.seed >= 0 ? settings_const.seed : 42;
+    const int64_t experiment_seed = base_seed + pre_presolve_config.repeat;
+    cuopt::cuopt_expects(experiment_seed <= std::numeric_limits<i_t>::max(),
+                         cuopt::error_type_t::ValidationError,
+                         "experiment seed exceeds the supported integer range");
+    effective_settings.seed = static_cast<i_t>(experiment_seed);
+  }
+
   // catch problem representation troubles early
   try {
     problem_checking_t<i_t, f_t>::check_problem_representation(op_problem);
@@ -933,26 +1278,36 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
                                     op_problem.get_handle_ptr()->get_stream());
   }
 
-  init_logger_t log(settings_const.log_file, settings_const.log_to_console);
+  init_logger_t log(effective_settings.log_file, effective_settings.log_to_console);
+  if (pre_presolve_config.enabled) {
+    CUOPT_LOG_INFO(
+      "PRE_PRESOLVE_CONFIG raw_id=%d max_config=%d repeat=%d config_id=%d name=%s seed=%d",
+      pre_presolve_config.raw_id,
+      pre_presolve_config.max_config,
+      pre_presolve_config.repeat,
+      pre_presolve_config.config_id,
+      pre_presolve_config.name(),
+      effective_settings.seed);
+  }
 
   // Run a very short burst of CPUFJ during the few dozen of milliseconds at solver init for very
   // small instances
   std::shared_ptr<mip::early_cpufj_t<i_t, f_t>> pre_solve_heuristics;
   // Semi-continuous variables are only reformulated once solve_mip_helper is under way, so the
   // probe would search a relaxation that admits 0 < x < L and report it as an incumbent.
-  if (settings_const.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
+  if (effective_settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
       op_problem.get_problem_category() != problem_category_t::LP &&
       op_problem.get_n_constraints() > 0 && !op_problem.has_semi_continuous_variables()) {
     // The probe publishes before solve_mip_helper reaches its own setup() loop, and get_solution
     // consumers size their view from n_variables. setup() only stores it, so the later call is a
     // repeated store of the same count: no reformulation has run on either side of it.
-    for (auto callback : settings_const.get_mip_callbacks()) {
+    for (auto callback : effective_settings.get_mip_callbacks()) {
       callback->template setup<f_t>(op_problem.get_n_variables());
     }
     pre_solve_heuristics = std::make_shared<mip::early_cpufj_t<i_t, f_t>>(
       op_problem,
-      settings_const.get_tolerances(),
-      [mip_callbacks = settings_const.get_mip_callbacks(),
+      effective_settings.get_tolerances(),
+      [mip_callbacks = effective_settings.get_mip_callbacks(),
        no_bound      = op_problem.get_sense() ? (f_t)1e20 : (f_t)-1e20,
        probe_start   = std::chrono::steady_clock::now()](
         f_t, f_t user_obj, const std::vector<f_t>& assignment, const char* heuristic_name) {
@@ -966,7 +1321,7 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
           user_obj,
           std::chrono::duration<double>(std::chrono::steady_clock::now() - probe_start).count());
       },
-      mip::derive_seed(settings_const.seed, mip::rng_id_t::early_cpufj));
+      mip::derive_seed(effective_settings.seed, mip::rng_id_t::early_cpufj));
     pre_solve_heuristics->start(1, /*low_latency=*/true);
   }
   cuopt::scope_guard release_probe([&pre_solve_heuristics] {
@@ -984,13 +1339,14 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
   if (saved_max_active_levels < 2) { omp_set_max_active_levels(2); }
 
   // Creates the OpenMP thread pool. It will be shared across the entire MIP solver.
-#pragma omp parallel num_threads(num_threads) default(none) \
-  shared(sol, op_problem, settings_const, exception, pre_solve_heuristics)
+#pragma omp parallel num_threads(num_threads) default(none) shared( \
+    sol, op_problem, effective_settings, exception, pre_solve_heuristics, pre_presolve_config)
   {
 #pragma omp masked
     {
       try {
-        sol = solve_mip_helper<i_t, f_t>(op_problem, settings_const, pre_solve_heuristics);
+        sol = solve_mip_helper<i_t, f_t>(
+          op_problem, effective_settings, pre_solve_heuristics, pre_presolve_config);
       } catch (const std::exception& e) {
         CUOPT_LOG_ERROR("Exception in MIP OpenMP region: %s", e.what());
         exception = std::current_exception();

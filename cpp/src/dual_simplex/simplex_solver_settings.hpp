@@ -65,6 +65,7 @@ struct simplex_solver_settings_t {
       use_left_looking_lu(false),
       eliminate_singletons(true),
       print_presolve_stats(true),
+      preserve_advanced_basis_dimensions(false),
       barrier_presolve(false),
       cudss_deterministic(false),
       deterministic(false),
@@ -95,6 +96,9 @@ struct simplex_solver_settings_t {
       iteration_log_frequency(1000),
       first_iteration_log(2),
       num_threads(omp_get_max_threads() - 1),
+      root_diving_only(false),
+      root_diving_config(-1),
+      random_seed(0),
       max_cut_passes(0),
       mir_cuts(-1),
       mixed_integer_gomory_cuts(-1),
@@ -111,7 +115,6 @@ struct simplex_solver_settings_t {
       mip_batch_pdlp_strong_branching(0),
       mip_batch_pdlp_reliability_branching(0),
       strong_branching_simplex_iteration_limit(-1),
-      random_seed(0),
       bnb_steal_chance(-1),
       bnb_nodes_per_steal(-1),
       bnb_max_steal_attempts(-1),
@@ -119,6 +122,7 @@ struct simplex_solver_settings_t {
       inside_mip(0),
       inside_submip(0),
       inside_root_node(0),
+      root_diving_peer_incumbent_callback(nullptr),
       solution_callback(nullptr),
       heuristic_preemption_callback(nullptr),
       dual_simplex_objective_callback(nullptr),
@@ -168,9 +172,11 @@ struct simplex_solver_settings_t {
     use_left_looking_lu;  // true to use left looking LU factorization, false to use right looking
   bool eliminate_singletons;  // true to eliminate singletons from the basis
   bool print_presolve_stats;  // true to print presolve stats
-  bool barrier_presolve;      // true to use barrier presolve
-  bool cudss_deterministic;   // true to use cuDSS deterministic mode, false for non-deterministic
-  bool barrier;               // true to use barrier method, false to use dual simplex method
+  // Internal advanced-basis contract: preserve input column indices through presolve.
+  bool preserve_advanced_basis_dimensions;
+  bool barrier_presolve;     // true to use barrier presolve
+  bool cudss_deterministic;  // true to use cuDSS deterministic mode, false for non-deterministic
+  bool barrier;              // true to use barrier method, false to use dual simplex method
   bool deterministic;  // true to use B&B deterministic mode, false to use non-deterministic mode
   bool eliminate_dense_columns;         // true to eliminate dense columns from A*D*A^T
   bool barrier_iterative_refinement;    // true to use iterative refinement for barrier method
@@ -202,12 +208,16 @@ struct simplex_solver_settings_t {
   i_t qcqp_ruiz_equilibration;          // -1 automatic (imbalance heuristic), 0 disabled, 1 enabled
   f_t barrier_initial_point_safeguard;  // margin pushing the barrier initial iterate into
   // the interior of the nonnegative orthant / SOC
-  bool check_Q;                    // true to check if Q is positive semidefinite
-  bool crossover;                  // true to do crossover, false to not
-  i_t refactor_frequency;          // number of basis updates before refactorization
-  i_t iteration_log_frequency;     // number of iterations between log updates
-  i_t first_iteration_log;         // number of iterations to log at beginning of solve
-  i_t num_threads;                 // number of threads to use
+  bool check_Q;                 // true to check if Q is positive semidefinite
+  bool crossover;               // true to do crossover, false to not
+  i_t refactor_frequency;       // number of basis updates before refactorization
+  i_t iteration_log_frequency;  // number of iterations between log updates
+  i_t first_iteration_log;      // number of iterations to log at beginning of solve
+  i_t num_threads;              // number of threads to use
+  // Internal mode for launching method-specific dives directly from the solved root relaxation.
+  bool root_diving_only;
+  // Internal pre-presolve experiment profile. -1 disables the specialized scheduler.
+  int root_diving_config;
   i_t random_seed;                 // random seed
   i_t max_cut_passes;              // number of cut passes to make
   i_t mir_cuts;                    // -1 automatic, 0 to disable, >0 to enable MIR cuts
@@ -259,6 +269,9 @@ struct simplex_solver_settings_t {
   // Settings for the recursive sub-MIP
   mip_submip_hyper_params_t<i_t, f_t> submip_settings;
 
+  // Consume the newest peer incumbent in original user-problem column space. Returning false
+  // means no newer incumbent is waiting. This is only used by cooperative root-diving profiles.
+  std::function<bool(std::vector<f_t>&)> root_diving_peer_incumbent_callback;
   std::function<void(std::vector<f_t>&, f_t)> solution_callback;
   std::function<void()> heuristic_preemption_callback;
   std::function<void(std::vector<f_t>&, std::vector<f_t>&, f_t)> set_simplex_solution_callback;
