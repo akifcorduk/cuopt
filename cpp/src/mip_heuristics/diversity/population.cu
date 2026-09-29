@@ -146,6 +146,21 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
                                                    solution_origin_t origin)
 {
   context.solution_publication.publish_if_better(problem_ptr, solution, objective);
+  {
+    std::lock_guard<std::mutex> host_lock(best_feasible_host_mutex);
+    if (lns_seed_polling && std::isfinite(objective)) {
+      // Keep this independent of solution_mutex: draining the main queue performs
+      // GPU work and must not block either LNS worker's incumbent polling.
+      pending_lns_seeds.emplace_back(objective, solution);
+      if (pending_lns_seeds.size() > 10) {
+        auto worst = std::max_element(
+          pending_lns_seeds.begin(), pending_lns_seeds.end(), [](const auto& a, const auto& b) {
+            return a.first < b.first;
+          });
+        pending_lns_seeds.erase(worst);
+      }
+    }
+  }
   std::lock_guard<std::mutex> lock(solution_mutex);
 
   if (origin == solution_origin_t::CPUFJ) {
@@ -185,6 +200,45 @@ bool population_t<i_t, f_t>::get_best_feasible_snapshot(std::vector<f_t>& out_as
   if (best_feasible_host_assignment.empty()) return false;
   out_assignment = best_feasible_host_assignment;
   out_objective  = best_feasible_host_objective;
+  return true;
+}
+
+template <typename i_t, typename f_t>
+void population_t<i_t, f_t>::enable_lns_seed_polling()
+{
+  std::lock_guard<std::mutex> host_lock(best_feasible_host_mutex);
+  lns_seed_polling = true;
+}
+
+template <typename i_t, typename f_t>
+bool population_t<i_t, f_t>::take_lns_seed_candidate(std::vector<f_t>& out_assignment,
+                                                     f_t& out_objective,
+                                                     f_t objective_cutoff)
+{
+  std::lock_guard<std::mutex> host_lock(best_feasible_host_mutex);
+  pending_lns_seeds.erase(
+    std::remove_if(pending_lns_seeds.begin(),
+                   pending_lns_seeds.end(),
+                   [objective_cutoff](const auto& seed) { return seed.first >= objective_cutoff; }),
+    pending_lns_seeds.end());
+  const bool cached = !best_feasible_host_assignment.empty() &&
+                      best_feasible_host_objective < objective_cutoff &&
+                      best_feasible_host_objective < last_lns_cached_objective;
+  auto best = std::min_element(pending_lns_seeds.begin(),
+                               pending_lns_seeds.end(),
+                               [](const auto& a, const auto& b) { return a.first < b.first; });
+  if (best != pending_lns_seeds.end() && (!cached || best->first < best_feasible_host_objective)) {
+    out_objective  = best->first;
+    out_assignment = std::move(best->second);
+    pending_lns_seeds.erase(best);
+    return true;
+  }
+  if (!cached) return false;
+  out_objective  = best_feasible_host_objective;
+  out_assignment = best_feasible_host_assignment;
+  // A cached point can cease to improve after private normalization. Deliver it
+  // once so rejection cannot repeatedly hide usable pending incumbents.
+  last_lns_cached_objective = best_feasible_host_objective;
   return true;
 }
 

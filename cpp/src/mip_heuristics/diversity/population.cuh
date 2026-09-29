@@ -118,6 +118,12 @@ class population_t {
   // memory or the population's internal (recursive-mutex-guarded) containers directly. Returns
   // false when no feasible solution has been cached yet.
   bool get_best_feasible_snapshot(std::vector<f_t>& out_assignment, f_t& out_objective);
+  // Persistent LNS also needs incumbents waiting in the external queue. These are
+  // candidates, not validated population entries: the caller must check feasibility.
+  void enable_lns_seed_polling();
+  bool take_lns_seed_candidate(std::vector<f_t>& out_assignment,
+                               f_t& out_objective,
+                               f_t objective_cutoff);
   std::vector<solution_t<i_t, f_t>> get_external_solutions();
   void add_external_solutions_to_population();
   size_t get_external_solution_size();
@@ -228,6 +234,9 @@ class population_t {
   std::mutex best_feasible_host_mutex;
   std::vector<f_t> best_feasible_host_assignment;
   f_t best_feasible_host_objective{std::numeric_limits<f_t>::max()};
+  bool lns_seed_polling{false};  // Guarded by best_feasible_host_mutex.
+  f_t last_lns_cached_objective{std::numeric_limits<f_t>::infinity()};
+  std::vector<std::pair<f_t, std::vector<f_t>>> pending_lns_seeds;
 };
 
 }  // namespace cuopt::mathematical_optimization::mip

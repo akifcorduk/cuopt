@@ -19,6 +19,55 @@
 #include <thread>
 
 namespace cuopt::mathematical_optimization::mip {
+// CPUFJ solves a fresh neighborhood on every call. Keep its setup contract and
+// the LNS worker's validated incumbent separate from that solve-local state.
+template <typename i_t, typename f_t>
+bool repair_cpufj_lns_neighborhood(fj_cpu_climber_t<i_t, f_t>* ptr, f_t time_limit)
+{
+  auto archived_assignment = ptr->h_best_assignment.underlying();
+  const bool have_archive =
+    ptr->feasible_found &&
+    normalize_cpufj_lns_seed(*ptr->problem, ptr->h_var_bounds.underlying(), archived_assignment);
+  const f_t archived_objective = have_archive
+                                   ? std::inner_product(archived_assignment.begin(),
+                                                        archived_assignment.end(),
+                                                        ptr->problem->h_obj_coeffs.begin(),
+                                                        f_t{0})
+                                   : std::numeric_limits<f_t>::infinity();
+
+  // A previous scalar repair expands equalities/ranged constraints into search
+  // rows. Restore model-row membership before calling the unchanged setup again.
+  ptr->n_rows = 0;
+  ptr->violated_constraints.resize(ptr->problem->n_constraints);
+  ptr->satisfied_constraints.resize(ptr->problem->n_constraints);
+  recompute_lhs(*ptr);
+  invalidate_mtm_cache(*ptr);
+  cpufj_solve(ptr, time_limit, std::numeric_limits<double>::infinity());
+
+  // A feasible ruined start can replace CPUFJ's best even when it is worse than
+  // the previous neighborhood's incumbent. Retain only a validated improvement.
+  auto candidate = ptr->h_best_assignment.underlying();
+  const bool valid =
+    ptr->feasible_found &&
+    normalize_cpufj_lns_seed(*ptr->problem, ptr->h_var_bounds.underlying(), candidate);
+  const f_t objective =
+    valid ? std::inner_product(
+              candidate.begin(), candidate.end(), ptr->problem->h_obj_coeffs.begin(), f_t{0})
+          : std::numeric_limits<f_t>::infinity();
+  const bool improved = valid && objective + OBJECTIVE_EPSILON < archived_objective;
+  ptr->feasible_found = improved || have_archive;
+  if (improved) {
+    ptr->h_best_assignment = std::move(candidate);
+    ptr->h_best_objective  = objective;
+  } else if (have_archive) {
+    ptr->h_best_assignment = std::move(archived_assignment);
+    ptr->h_best_objective  = archived_objective;
+  } else {
+    ptr->h_best_objective = std::numeric_limits<f_t>::max();
+  }
+  return improved;
+}
+
 // Incumbent-guided ruin-and-repair worker body. Runs entirely on one spare OMP thread, driving
 // a single, already-constructed CPU FJ climber (`ptr`) through repeated ruin+repair bursts once
 // the population has a feasible incumbent. It never touches device memory or population
@@ -139,31 +188,11 @@ void run_cpufj_lns_ruin_repair(fj_cpu_climber_t<i_t, f_t>* ptr,
       ptr->h_assignment[v] = new_value;
     }
 
-    recompute_lhs(*ptr);
-    invalidate_mtm_cache(*ptr);
-
-    const f_t objective_before_repair = (f_t)ptr->h_best_objective;
     const f_t repair_time_limit =
       std::min<f_t>(2., 0.15 + 0.02 * static_cast<f_t>(ruin_set.size()));
-    cpufj_solve(ptr, repair_time_limit, std::numeric_limits<double>::infinity());
-
-    const bool locally_improved =
-      ptr->feasible_found &&
-      (f_t)ptr->h_best_objective + OBJECTIVE_EPSILON < objective_before_repair;
-    if (locally_improved &&
-        verify_cpufj_lns_feasible(
-          *ptr->problem, ptr->h_var_bounds.underlying(), ptr->h_best_assignment.underlying())) {
+    if (repair_cpufj_lns_neighborhood(ptr, repair_time_limit)) {
       consecutive_no_improve = 0;
     } else {
-      if (locally_improved) {
-        // The claimed improvement did not survive an independent from-scratch check. Do not
-        // keep building on this climber's (untrusted) internal state -- force the next
-        // iteration to re-sync from the population's already-validated incumbent instead.
-        CUOPT_LOG_DEBUG(
-          "LNS improvement worker discarding an internally-inconsistent local incumbent");
-        ptr->feasible_found   = false;
-        ptr->h_best_objective = std::numeric_limits<f_t>::max();
-      }
       ++consecutive_no_improve;
     }
   }

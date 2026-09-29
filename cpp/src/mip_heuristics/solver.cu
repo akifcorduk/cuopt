@@ -508,7 +508,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       context.early_cpufj_ptr->set_lns_source(
         [&persistent_lns](auto& x) { return persistent_lns->snapshot(x); });
       context.early_cpufj_ptr->set_incumbent_callback(
-        [&persistent_lns](f_t, f_t, const auto& x, const char*) { persistent_lns->submit(x); },
+        [&persistent_lns](f_t, f_t, const auto& x, const char* origin) {
+          persistent_lns->submit(x, origin);
+        },
         /*replay_best=*/true);
       CUOPT_LOG_INFO("Persistent LNS pair continuing after cuOpt presolve");
     } catch (const std::exception& e) {
