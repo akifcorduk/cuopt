@@ -767,14 +767,16 @@ class cut_generation_t {
                    const simplex::user_problem_t<i_t, f_t>& user_problem,
                    const probing_implied_bound_t<i_t, f_t>& probing_implied_bound,
                    std::shared_ptr<mip::clique_table_t<i_t, f_t>>& clique_table,
-                   omp_atomic_t<bool>* signal_extend = nullptr)
+                   omp_atomic_t<bool>* signal_extend   = nullptr,
+                   const std::vector<f_t>* fj_row_heat = nullptr)
     : cut_pool_(cut_pool),
       knapsack_generation_(lp, settings, Arow, new_slacks, var_types),
       flow_cover_generation_(lp, settings, Arow, new_slacks),
       user_problem_(user_problem),
       probing_implied_bound_(probing_implied_bound),
       clique_table_(clique_table),
-      signal_extend_(signal_extend)
+      signal_extend_(signal_extend),
+      fj_row_heat_(fj_row_heat)
   {
   }
 
@@ -875,6 +877,7 @@ class cut_generation_t {
   // Keep a live reference so the synchronized cut pass consumes the published table.
   std::shared_ptr<mip::clique_table_t<i_t, f_t>>& clique_table_;
   omp_atomic_t<bool>* signal_extend_{nullptr};
+  const std::vector<f_t>* fj_row_heat_{nullptr};
   fractional_conflict_subgraph_t<i_t, f_t> sub_cg_;
 };
 

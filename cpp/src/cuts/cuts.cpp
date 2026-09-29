@@ -4107,6 +4107,17 @@ void cut_generation_t<i_t, f_t>::generate_mir_cuts(
   std::vector<f_t> scores;
   complemented_mir.compute_initial_scores_for_rows(lp, settings, Arow, xstar, ystar, scores);
 
+  // Apply FJ heat guidance to scores if available
+  if (fj_row_heat_ != nullptr && fj_row_heat_->size() == static_cast<size_t>(lp.num_rows)) {
+    const f_t fj_beta = static_cast<f_t>(0.80);  // Stronger weighting of combined heat signal
+    for (i_t i = 0; i < lp.num_rows; ++i) {
+      const f_t heat = (*fj_row_heat_)[i];
+      if (heat > static_cast<f_t>(0.0) && heat <= static_cast<f_t>(1.0)) {
+        scores[i] *= (static_cast<f_t>(1.0) + fj_beta * heat);
+      }
+    }
+  }
+
   // Push all the scores onto the priority queue
   std::priority_queue<std::pair<f_t, i_t>> score_queue;
   for (i_t i = 0; i < lp.num_rows; i++) {

@@ -371,8 +371,9 @@ inline bool is_known_infeasible(const std::string& filename)
 // "TBD" is emitted when the BKS is unknown so downstream parsers
 // can join lines on (instance, field) without dropping rows. "NaN" is
 // emitted for root_lp_* when the value is unavailable.
+// Return the emitted record so the caller can also persist it in its instance log.
 template <typename Solution>
-inline void print_miplib_gap_stat(
+inline std::string print_miplib_gap_stat(
   const std::string& filename,
   const Solution& solution,
   double solve_time_seconds,
@@ -459,6 +460,7 @@ inline void print_miplib_gap_stat(
 
   std::printf("%s\n", line.c_str());
   std::fflush(stdout);
+  return line;
 }
 
 }  // namespace cuopt_bench

@@ -325,6 +325,7 @@ class branch_and_bound_t {
                                 i_t original_rows,
                                 f_t& last_upper_bound,
                                 f_t& last_objective,
+                                f_t& prev_change,
                                 f_t root_relax_objective,
                                 i_t& cut_pool_size,
                                 const std::vector<f_t>& saved_solution);

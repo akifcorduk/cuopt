@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <argparse/argparse.hpp>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -91,7 +92,8 @@ void write_to_output_file(const std::string& out_dir,
 
 inline auto make_async() { return rmm::mr::cuda_async_memory_resource(); }
 
-constexpr bool use_c_api = true;
+// Root cut statistics are published through the C++ benchmark_info_t pointer.
+constexpr bool use_c_api = false;
 
 struct c_api_handles_t {
   c_api_handles_t()                                  = default;
@@ -323,7 +325,8 @@ int run_single_file(std::string file_path,
   settings.presolver                     = cuopt::mathematical_optimization::presolver_t::Default;
   settings.reliability_branching         = reliability_branching;
   settings.clique_cuts                   = -1;
-  settings.seed                          = 42;
+  const char* evaluation_seed            = std::getenv("HIVE_EVALUATION_SEED");
+  settings.seed                          = evaluation_seed ? std::stoi(evaluation_seed) : 42;
 
   // This benchmark and the solver library have separate loggers, both writing settings.log_file.
   // Configure the solver's first so its own initializer reuses that configuration rather than
@@ -463,13 +466,16 @@ int run_single_file(std::string file_path,
       case CUOPT_TERMINATION_STATUS_INFEASIBLE: _status_str = "Infeasible"; break;
       default: _status_str = "Other"; break;
     }
-    cuopt_bench::print_miplib_gap_stat(base_filename,
-                                       solution,
-                                       _gap_seconds,
-                                       _status_str,
-                                       benchmark_info.root_lp_no_cuts,
-                                       benchmark_info.root_lp_with_cuts,
-                                       benchmark_info.cut_generation_time_sec);
+    const auto gap_stat =
+      cuopt_bench::print_miplib_gap_stat(base_filename,
+                                         solution,
+                                         _gap_seconds,
+                                         _status_str,
+                                         benchmark_info.root_lp_no_cuts,
+                                         benchmark_info.root_lp_with_cuts,
+                                         benchmark_info.cut_generation_time_sec);
+    // Keep the same record in per-instance logs when console logging is disabled.
+    CUOPT_LOG_INFO("%s", gap_stat.c_str());
   }
 
   std::stringstream ss;

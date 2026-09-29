@@ -3367,6 +3367,7 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
   i_t original_rows,
   f_t& last_upper_bound,
   f_t& last_objective,
+  f_t& prev_change,
   f_t root_relax_objective,
   i_t& cut_pool_size,
   [[maybe_unused]] const std::vector<f_t>& saved_solution) -> cut_pass_action_t
@@ -3676,6 +3677,10 @@ auto branch_and_bound_t<i_t, f_t>::do_cut_pass(
       root_relax_objective);
     return cut_pass_action_t::BREAK;
   }
+  if (cut_pass >= 2 && prev_change > 0.0 && change_in_objective < 0.25 * prev_change) {
+    return cut_pass_action_t::BREAK;
+  }
+  prev_change    = change_in_objective;
   last_objective = root_objective_;
   return cut_pass_action_t::CONTINUE;
 }
@@ -3922,6 +3927,55 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   if (num_fractional != 0 && settings_.max_cut_passes > 0) { print_table_header(); }
 
   cut_pool_t<i_t, f_t> cut_pool(original_lp_.num_cols, settings_);
+
+  // Initialize FJ row heat for cut guidance based on LP dual values and slack values
+  std::vector<f_t> fj_row_heat(original_lp_.num_rows, static_cast<f_t>(0.0));
+  {
+    // Heuristic: rows with nonzero dual values and small slacks are binding
+    // and good candidates for cut generation
+    const f_t max_dual  = static_cast<f_t>(1e-8);  // Small threshold for dual activity
+    f_t max_abs_dual    = max_dual;
+    f_t max_slack_value = static_cast<f_t>(1e-8);
+
+    // Find normalization factors
+    for (i_t i = 0; i < original_lp_.num_rows; ++i) {
+      if (i < static_cast<i_t>(root_relax_soln_.y.size())) {
+        max_abs_dual = std::max(max_abs_dual, std::abs(root_relax_soln_.y[i]));
+      }
+      const i_t slack_idx = new_slacks_[i];
+      if (slack_idx >= 0 && slack_idx < static_cast<i_t>(root_relax_soln_.x.size())) {
+        max_slack_value = std::max(max_slack_value, root_relax_soln_.x[slack_idx]);
+      }
+    }
+
+    // Compute combined heat from dual and slack signals
+    if (max_abs_dual > max_dual || max_slack_value > static_cast<f_t>(1e-8)) {
+      for (i_t i = 0; i < original_lp_.num_rows; ++i) {
+        f_t dual_heat  = static_cast<f_t>(0.0);
+        f_t slack_heat = static_cast<f_t>(0.0);
+
+        if (max_abs_dual > max_dual && i < static_cast<i_t>(root_relax_soln_.y.size())) {
+          // Normalize dual value: high dual = binding constraint
+          dual_heat =
+            std::min(static_cast<f_t>(1.0), std::abs(root_relax_soln_.y[i]) / max_abs_dual);
+        }
+
+        const i_t slack_idx = new_slacks_[i];
+        if (slack_idx >= 0 && slack_idx < static_cast<i_t>(root_relax_soln_.x.size()) &&
+            max_slack_value > static_cast<f_t>(1e-8)) {
+          // Normalize slack: small slack = tight constraint (inverted)
+          const f_t slack_val = root_relax_soln_.x[slack_idx];
+          slack_heat =
+            static_cast<f_t>(1.0) - std::min(static_cast<f_t>(1.0), slack_val / max_slack_value);
+        }
+
+        // Weighted average: prioritize slack heat (tightness) with slight boost
+        // 0.4 = 40% dual, 60% slack
+        fj_row_heat[i] = dual_heat * static_cast<f_t>(0.4) + slack_heat * static_cast<f_t>(0.6);
+      }
+    }
+  }
+
   cut_generation_t<i_t, f_t> cut_generation(cut_pool,
                                             original_lp_,
                                             settings_,
@@ -3931,7 +3985,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                             original_problem_,
                                             probing_implied_bound_,
                                             clique_table_,
-                                            clique_signal);
+                                            clique_signal,
+                                            &fj_row_heat);
 
   std::vector<f_t> saved_solution;
 #ifdef CHECK_CUTS_AGAINST_SAVED_SOLUTION
@@ -3940,6 +3995,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
   f_t last_upper_bound     = std::numeric_limits<f_t>::infinity();
   f_t last_objective       = root_objective_;
+  f_t prev_change          = 0.0;
   f_t root_relax_objective = root_objective_;
 
   // Publish the no-cuts root LP value once. The with-cuts companion is
@@ -4005,6 +4061,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                                     original_rows,
                                                     last_upper_bound,
                                                     last_objective,
+                                                    prev_change,
                                                     root_relax_objective,
                                                     cut_pool_size,
                                                     saved_solution);
