@@ -14,6 +14,7 @@
 #include <mip_heuristics/solver.cuh>
 #include <utilities/timer.hpp>
 
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <random>
@@ -124,6 +125,8 @@ class population_t {
   bool take_lns_seed_candidate(std::vector<f_t>& out_assignment,
                                f_t& out_objective,
                                f_t objective_cutoff);
+  // Limit simultaneous GPU solution buffers while consuming host-side incumbents.
+  static constexpr size_t external_solution_batch_size = 10;
   std::vector<solution_t<i_t, f_t>> get_external_solutions();
   void add_external_solutions_to_population();
   size_t get_external_solution_size();
@@ -213,8 +216,8 @@ class population_t {
     timer_t timer;  // debug timer to track how long a solution has lingered in the queue
   };
 
-  std::vector<external_solution_t> external_solution_queue;
-  std::vector<external_solution_t> external_solution_queue_cpufj;
+  std::deque<external_solution_t> external_solution_queue;
+  std::deque<external_solution_t> external_solution_queue_cpufj;
   std::mt19937 rng;
   i_t update_iter = 0;
   std::recursive_mutex write_mutex;
