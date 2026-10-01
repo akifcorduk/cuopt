@@ -65,6 +65,7 @@ set(MIP_NON_LP_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/fj_cpu_binary_preprocess.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/fj_cpu_binary_kernels.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/early_cpufj.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/pre_presolve_primal.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/early_gpufj.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/structural/early_structural.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/structural/arc_flow.cu)

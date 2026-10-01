@@ -883,4 +883,28 @@ TEST(HiveLns, PresolveBudgetsIncludePapiloAndAuxiliaryWorkers)
   EXPECT_FALSE(mip::early_structural_has_capacity(3, 1, 1));
 }
 
+TEST(HiveLns, DivingReservationPreservesLnsAndFitsPresolveTeam)
+{
+  constexpr int diving_slots = 4;  // Three divers plus their coordinator.
+  for (int team = 12; team <= 128; ++team) {
+    for (int structural : {0, 1}) {
+      const int early  = mip::presolve_early_worker_budget(team, 4, 1, structural, diving_slots);
+      const int papilo = mip::papilo_thread_budget(team, early, 1, structural, diving_slots);
+      EXPECT_EQ(mip::presolve_lns_worker_count(early), 2);
+      EXPECT_GE(early - 2, 1);
+      EXPECT_LE(early + papilo + 1 + structural + diving_slots, team);
+      const int reduced = mip::presolve_early_worker_budget(team, 4, 0, structural, diving_slots);
+      const int probing = mip::probing_thread_budget(team, reduced, structural, diving_slots);
+      EXPECT_EQ(mip::presolve_lns_worker_count(reduced), 2);
+      EXPECT_GE(reduced - 2, 1);
+      EXPECT_LE(reduced + probing + 1 + structural + diving_slots, team);
+    }
+  }
+  // On the benchmark's 24-thread team, four CPUFJ lanes fund the auxiliary work.
+  EXPECT_EQ(mip::presolve_early_worker_budget(24, 4, 1, 0, diving_slots), 15);
+  EXPECT_EQ(mip::papilo_thread_budget(24, 15, 1, 0, diving_slots), 4);
+  EXPECT_EQ(mip::presolve_early_worker_budget(24, 4, 0, 0, diving_slots), 16);
+  EXPECT_EQ(mip::probing_thread_budget(24, 16, 0, diving_slots), 3);
+}
+
 }  // namespace cuopt::hive_lns::test

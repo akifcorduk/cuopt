@@ -1936,7 +1936,7 @@ i_t presolve(const lp_problem_t<i_t, f_t>& original,
       if ((problem.A.col_start[j + 1] - problem.A.col_start[j]) == 0) { num_empty_cols++; }
     }
   }
-  if (num_empty_cols > 0) {
+  if (num_empty_cols > 0 && !settings.preserve_advanced_basis_dimensions) {
     settings.log.printf("Presolve attempt to remove %d empty cols\n", num_empty_cols);
     remove_empty_cols(problem, num_empty_cols, presolve_info, linear_cols);
   }

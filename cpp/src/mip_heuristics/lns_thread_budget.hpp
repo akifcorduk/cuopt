@@ -30,32 +30,42 @@ inline int presolve_lns_worker_count(int early_worker_budget)
 inline int presolve_early_worker_budget(int team_size,
                                         int presolve_workers,
                                         int gpufj_workers,
-                                        int structural_workers)
+                                        int structural_workers,
+                                        int auxiliary_workers = 0)
 {
   // Preserve the LNS pair once the usual presolve reservation allows it, reducing
   // Papilo's arena on small teams instead of leaving a persistent worker queued.
   const int minimum = team_size >= CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS + 3 ? 3 : 1;
-  return std::max(minimum, team_size - presolve_workers - gpufj_workers - structural_workers);
+  return std::max(
+    minimum, team_size - presolve_workers - gpufj_workers - structural_workers - auxiliary_workers);
 }
 
-inline bool early_structural_has_capacity(int team_size, int cpufj_workers, int gpufj_workers)
+inline bool early_structural_has_capacity(int team_size,
+                                          int cpufj_workers,
+                                          int gpufj_workers,
+                                          int auxiliary_workers = 0)
 {
-  return team_size > cpufj_workers + gpufj_workers + 1;
+  return team_size > cpufj_workers + gpufj_workers + auxiliary_workers + 1;
 }
 
 inline int papilo_thread_budget(int team_size,
                                 int cpufj_workers,
                                 int gpufj_workers,
-                                int structural_workers)
+                                int structural_workers,
+                                int auxiliary_workers = 0)
 {
-  return std::clamp(team_size - cpufj_workers - gpufj_workers - structural_workers,
-                    1,
-                    CUOPT_MIP_PAPILO_THREAD_LIMIT);
+  return std::clamp(
+    team_size - cpufj_workers - gpufj_workers - structural_workers - auxiliary_workers,
+    1,
+    CUOPT_MIP_PAPILO_THREAD_LIMIT);
 }
 
-inline int probing_thread_budget(int team_size, int cpufj_workers, int structural_workers)
+inline int probing_thread_budget(int team_size,
+                                 int cpufj_workers,
+                                 int structural_workers,
+                                 int auxiliary_workers = 0)
 {
-  return std::max(1, team_size - 1 - cpufj_workers - structural_workers);
+  return std::max(1, team_size - 1 - cpufj_workers - structural_workers - auxiliary_workers);
 }
 
 }  // namespace cuopt::mathematical_optimization::mip
