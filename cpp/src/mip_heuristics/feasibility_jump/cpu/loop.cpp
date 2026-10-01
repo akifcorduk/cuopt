@@ -31,12 +31,13 @@ namespace cuopt::mathematical_optimization::mip {
 
 namespace {
 // Diagnostic controls are read once per process; no environment lookup or shared
-// counter update occurs in the search loop. The default leaves search unchanged.
+// counter update occurs in the search loop. Corners default to all workers with
+// no additional gate beyond the existing eligible perturbation boundary.
 struct cpu_corner_experiment_t {
   enum class scope_t { off, lns, portfolio, all };
-  scope_t scope{scope_t::off};
-  const char* name{"off"};
-  double gate_multiplier{-1};  // Historical: zero for LNS, four for regular lanes.
+  scope_t scope{scope_t::all};
+  const char* name{"all"};
+  double gate_multiplier{0};
   // Per scope: solves, perturbation boundaries, feasible/positive boundaries,
   // gate-blocked boundaries, attempted jumps, executed jumps, moved variables.
   std::atomic<uint64_t> counts[2][7]{};
@@ -46,6 +47,7 @@ struct cpu_corner_experiment_t {
     if (const char* value = std::getenv("CPUFJ_CORNER_SCOPE")) {
       if (std::strcmp(value, "off") == 0) {
         scope = scope_t::off;
+        name  = "off";
       } else if (std::strcmp(value, "lns") == 0) {
         scope = scope_t::lns;
         name  = "lns";
