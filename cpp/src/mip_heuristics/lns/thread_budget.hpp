@@ -9,12 +9,9 @@
 #include <algorithm>
 
 namespace cuopt::mathematical_optimization::mip {
-// The main-solve repair LNS and CPUFJ LNS tasks share the solve's OpenMP team, with the
-// same pair budget as during presolve.
-inline int lns_worker_count(int team_size, bool deterministic)
-{
-  return deterministic || team_size < CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS + 3 ? 0 : 2;
-}
+// Disable persistent LNS for this benchmark and return its slots to B&B.
+// Presolve LNS keeps its separate budget below.
+inline int lns_worker_count(int /*team_size*/, bool /*deterministic*/) { return 0; }
 
 // This is a split of the existing early CPUFJ budget, not extra pool capacity.
 // Preserve at least one feasibility lane and the caller's presolve reservation.

@@ -490,11 +490,11 @@ TEST(Lns, RunImprovesFromToleranceFeasibleSeedWithoutMutatingSource)
   EXPECT_EQ(source, std::vector<double>(n, 1.0 - 5e-5));
 }
 
-TEST(Lns, MainSolveBudgetMatchesPresolvePair)
+TEST(Lns, MainSolveBudgetReleasesPersistentLnsSlots)
 {
   for (int size = 2; size <= 48; ++size) {
     const int workers = mip::lns_worker_count(size, false);
-    EXPECT_EQ(workers, size >= 7 ? 2 : 0);
+    EXPECT_EQ(workers, 0);
     EXPECT_EQ(mip::lns_worker_count(size, true), 0);
   }
 }
@@ -851,11 +851,11 @@ TEST(Lns, MainWorkersStopWithoutBranchAndBoundOnSmallTeams)
         {
           dm.ls.start_cpufj_scratch_threads(dm.population);
           dm.ls.start_cpufj_lns_improvement_thread(dm.population);
-          EXPECT_EQ(dm.ls.scratch_cpu_fj_lns != nullptr, team_size >= 7);
-          EXPECT_EQ(dm.ls.repair_lns != nullptr, team_size >= 7);
+          EXPECT_EQ(dm.ls.scratch_cpu_fj_lns, nullptr);
+          EXPECT_EQ(dm.ls.repair_lns, nullptr);
           // The low-thread configurations retain unconstructed scratch slots.
           for (const auto& worker : dm.ls.scratch_cpu_fj)
-            EXPECT_EQ(worker != nullptr, team_size >= 10);
+            EXPECT_EQ(worker != nullptr, team_size >= CUOPT_MIP_FJ_REQUIRED_THREAD_COUNT);
 
           dm.ls.stop_cpufj_scratch_threads();
           bool stopped = true;

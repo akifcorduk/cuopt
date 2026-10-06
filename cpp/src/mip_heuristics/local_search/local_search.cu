@@ -29,8 +29,8 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
-// The Papilo-model LNS pair already owns two members of this OpenMP team.
-// Apply the existing feasibility-portfolio thresholds to the remaining capacity.
+// Apply the existing feasibility-portfolio thresholds to the capacity remaining
+// after reserving any enabled persistent LNS workers.
 template <typename i_t, typename f_t>
 static int feasibility_team_size(const mip_solver_context_t<i_t, f_t>& context)
 {
