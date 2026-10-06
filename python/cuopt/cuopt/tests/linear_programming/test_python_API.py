@@ -18,6 +18,7 @@ from cuopt.linear_programming.problem import (
     MINIMIZE,
     SEMI_CONTINUOUS,
     CType,
+    LinearExpression,
     Problem,
     VType,
     sense,
@@ -109,7 +110,7 @@ def test_model():
     assert csr.column_indices == expected_column_indices
     assert csr.values == expected_values
 
-    expected_slack = [-6, 0]
+    expected_slack = [6, 0]
     expected_var_values = [36, 41]
 
     for i, var in enumerate(prob.getVariables()):
@@ -153,11 +154,79 @@ def test_model():
 def test_constraint_duplicate_terms_slack():
     """Merged coeffs in vindex_coeff_dict must not be double-counted in slack."""
     prob = Problem()
-    x = prob.addVariable()
+    x = prob.addVariable(lb=0.0, ub=10.0, obj=0.0)
     c = prob.addConstraint(5 * x + 7 * x <= 18)
     assert c.getCoefficient(x) == 12
-    x.Value = 1.0
-    assert c.compute_slack() == pytest.approx(6.0)
+    # Feasible point with slack 6 under classical LE slack: rhs - A@x.
+    settings = SolverSettings()
+    settings.set_parameter("time_limit", 10)
+    # Fix x=1 via bounds so populate_solution computes a known slack.
+    x.LB = 1.0
+    x.UB = 1.0
+    prob.setObjective(0 * x, sense=MINIMIZE)
+    prob.solve(settings)
+    assert c.Slack == pytest.approx(6.0)
+
+
+def test_variable_type_is_normalized():
+    """Every entry path stores a VType member and rejects other values."""
+    prob = Problem()
+    from_enum = prob.addVariable(vtype=INTEGER)
+    from_str = prob.addVariable(vtype="I")
+    from_bytes = prob.addVariable(vtype=b"I")
+    default = prob.addVariable()
+
+    for var in (from_enum, from_str, from_bytes):
+        assert var.VariableType is VType.INTEGER
+    assert default.VariableType is VType.CONTINUOUS
+    assert prob.IsMIP
+
+    # Both the setter and direct assignment normalize.
+    from_str.setVariableType(b"S")
+    assert from_str.VariableType is VType.SEMI_CONTINUOUS
+    from_bytes.VariableType = "C"
+    assert from_bytes.VariableType is VType.CONTINUOUS
+
+    with pytest.raises(ValueError):
+        from_enum.setVariableType(7)
+
+
+def test_variable_type_normalized_from_mps(tmp_path):
+    """MPS parsing yields VType members and keeps each column's own type."""
+    prob = Problem("mip")
+    x = prob.addVariable(lb=0.0, ub=10.0, vtype=INTEGER, name="x")
+    y = prob.addVariable(lb=0.0, ub=10.0, name="y")
+    prob.addConstraint(x + y <= 5, name="c")
+    prob.setObjective(x + y, sense=MAXIMIZE)
+
+    path = str(tmp_path / "mip.mps")
+    prob.writeMPS(path)
+
+    loaded = Problem.read(path)
+    # writeMPS emits integer columns inside INTORG/INTEND markers, so the
+    # column order is not preserved; key by name. `is` rather than `==`
+    # because VType subclasses str: "I" == VType.INTEGER.
+    types = {
+        v.getVariableName(): v.VariableType for v in loaded.getVariables()
+    }
+    assert types["x"] is VType.INTEGER
+    assert types["y"] is VType.CONTINUOUS
+    assert loaded.IsMIP
+
+
+def test_write_mps_with_empty_constraint_row(tmp_path):
+    problem = Problem("empty-row")
+    x = problem.addVariable(name="x", lb=0.0, ub=1.0)
+    empty = LinearExpression(vars=[], coefficients=[], constant=0.0)
+    problem.addConstraint(empty <= 1.0, name="empty")
+    problem.setObjective(x)
+
+    path = tmp_path / "empty-row.mps"
+    problem.writeMPS(str(path))
+
+    assert problem.model.get_constraint_matrix_offsets().tolist() == [0, 0]
+    assert " L  empty\n" in path.read_text()
+    assert "RHS1      empty 1\n" in path.read_text()
 
 
 def test_semi_continuous_variable():

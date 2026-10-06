@@ -18,6 +18,8 @@
 #include <pdlp/cuopt_c_internal.hpp>
 #include <utilities/logger.hpp>
 
+#include <optional>
+
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 
 #include <cuopt/version_config.hpp>
@@ -92,6 +94,9 @@ struct solver_settings_handle_t {
   ~solver_settings_handle_t() { delete settings; }
   solver_settings_t<cuopt_int_t, cuopt_float_t>* settings;
   std::vector<std::unique_ptr<cuopt::internals::base_solution_callback_t>> callbacks;
+  // Log callback registered via cuOptSetLogCallback
+  cuOptLogCallback log_callback{nullptr};
+  void* log_callback_user_data{nullptr};
 };
 
 solver_settings_handle_t* get_settings_handle(cuOptSolverSettings settings)
@@ -1043,6 +1048,17 @@ cuopt_int_t cuOptSetMIPSetSolutionCallback(cuOptSolverSettings settings,
   return CUOPT_SUCCESS;
 }
 
+cuopt_int_t cuOptSetLogCallback(cuOptSolverSettings settings,
+                                cuOptLogCallback callback,
+                                void* user_data)
+{
+  if (settings == nullptr) { return CUOPT_INVALID_ARGUMENT; }
+  solver_settings_handle_t* handle = get_settings_handle(settings);
+  handle->log_callback             = callback;
+  handle->log_callback_user_data   = user_data;
+  return CUOPT_SUCCESS;
+}
+
 cuopt_int_t cuOptSetInitialPrimalSolution(cuOptSolverSettings settings,
                                           const cuopt_float_t* primal_solution,
                                           cuopt_int_t num_variables)
@@ -1119,6 +1135,14 @@ cuopt_int_t cuOptSolve(cuOptOptimizationProblem problem,
   if (settings == nullptr) { return CUOPT_INVALID_ARGUMENT; }
   if (solution_ptr == nullptr) { return CUOPT_INVALID_ARGUMENT; }
 
+  // Register the callback for this thread for the duration of the solve.
+  // cuOptLogCallback and log_callback_with_data_t share the same signature.
+  solver_settings_handle_t* handle = get_settings_handle(settings);
+  std::optional<cuopt::scoped_log_callback_t> log_scope;
+  if (handle->log_callback) {
+    log_scope.emplace(handle->log_callback, handle->log_callback_user_data);
+  }
+
   problem_and_stream_view_t* problem_and_stream_view =
     static_cast<problem_and_stream_view_t*>(problem);
 
@@ -1131,13 +1155,11 @@ cuopt_int_t cuOptSolve(cuOptOptimizationProblem problem,
         problem_interface->get_problem_category() == problem_category_t::IP) {
       solver_settings_t<cuopt_int_t, cuopt_float_t>* solver_settings =
         get_settings_handle(settings)->settings;
-      cuopt::mathematical_optimization::mip_solver_settings_t<cuopt_int_t, cuopt_float_t>&
-        mip_settings = solver_settings->get_mip_settings();
 
       // Solve returns unique_ptr<mip_solution_interface_t>
       auto solution_interface =
         cuopt::mathematical_optimization::solve_mip<cuopt_int_t, cuopt_float_t>(problem_interface,
-                                                                                mip_settings);
+                                                                                *solver_settings);
 
       auto solution_holder =
         std::make_unique<solution_and_stream_view_t>(true, problem_and_stream_view->memory_backend);
@@ -1152,13 +1174,11 @@ cuopt_int_t cuOptSolve(cuOptOptimizationProblem problem,
     } else {
       solver_settings_t<cuopt_int_t, cuopt_float_t>* solver_settings =
         get_settings_handle(settings)->settings;
-      cuopt::mathematical_optimization::pdlp_solver_settings_t<cuopt_int_t, cuopt_float_t>&
-        pdlp_settings = solver_settings->get_pdlp_settings();
 
       // Solve returns unique_ptr<lp_solution_interface_t>
       auto solution_interface =
         cuopt::mathematical_optimization::solve_lp<cuopt_int_t, cuopt_float_t>(problem_interface,
-                                                                               pdlp_settings);
+                                                                               *solver_settings);
 
       auto solution_holder = std::make_unique<solution_and_stream_view_t>(
         false, problem_and_stream_view->memory_backend);

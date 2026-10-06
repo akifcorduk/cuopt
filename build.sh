@@ -69,6 +69,12 @@ CUOPT_SH_CLIENT_BUILD_DIR=${REPODIR}/python/cuopt_self_hosted/build
 DOCS_BUILD_DIR=${REPODIR}/docs/cuopt/build
 BUILD_DIRS="${LIBCUOPT_BUILD_DIR} ${CUOPT_BUILD_DIR} ${CUOPT_SERVER_BUILD_DIR} ${CUOPT_SERVICE_CLIENT_BUILD_DIR} ${CUOPT_SH_CLIENT_BUILD_DIR} ${PY_LIBCUOPT_BUILD_DIR} ${DOCS_BUILD_DIR}"
 
+CUDA_VERSION="${RAPIDS_CUDA_VERSION:-$(nvcc --version | sed -E -n 's/^.*release ([0-9]+\.[0-9]+).*$/\1/p')}"
+if [[ -z "$CUDA_VERSION" ]]; then
+    echo "Could not determine CUDA version. Please set RAPIDS_CUDA_VERSION or make sure your \$PATH contains a valid nvcc."
+    exit 1
+fi
+
 # Set defaults for vars modified by flags to this script
 VERBOSE_FLAG=""
 BUILD_TYPE=Release
@@ -89,7 +95,15 @@ SKIP_GRPC_BUILD=0
 WRITE_FATBIN=1
 HOST_LINEINFO=0
 CACHE_ARGS=()
-PYTHON_ARGS_FOR_INSTALL=("-m" "pip" "install" "--no-build-isolation" "--no-deps")
+PYTHON_ARGS_FOR_INSTALL=(
+    "-m"
+    "pip"
+    "install"
+    "--no-build-isolation"
+    "--no-deps"
+    "--config-settings=rapidsai.disable-cuda=true"
+    "--config-settings=rapidsai.matrix-entry=cuda=${CUDA_VERSION};cuda_suffixed=false;use_cuda_wheels=false"
+)
 LOGGING_ACTIVE_LEVEL="INFO"
 FETCH_RAPIDS=ON
 PARALLEL_LEVEL=${PARALLEL_LEVEL:=$(nproc)}
@@ -505,7 +519,10 @@ if hasArg java; then
         bash "${REPODIR}"/java/cuopt/scripts/build_native.sh
         source "${REPODIR}"/java/cuopt/scripts/maven.sh
         cuopt_maven_args
-        cuopt_mvn -f "${REPODIR}"/java/cuopt/pom.xml clean package \
+        # cd into java/cuopt so Maven's directory-search picks up java/cuopt/.mvn/maven.config --
+        # it walks up from the current working directory, not from -f's directory.
+        cd "${REPODIR}"/java/cuopt
+        cuopt_mvn -f pom.xml clean package \
             -DskipTests \
             -Dcuopt.native.dir="${CUOPT_JAVA_NATIVE_BUILD_DIR}"
     fi

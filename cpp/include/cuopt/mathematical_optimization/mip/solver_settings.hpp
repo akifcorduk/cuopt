@@ -16,8 +16,10 @@
 #include <cuopt/mathematical_optimization/mip/heuristics_hyper_params.hpp>
 #include <cuopt/mathematical_optimization/mip/submip_hyper_params.hpp>
 #include <cuopt/mathematical_optimization/pdlp/pdlp_hyper_params.cuh>
+#include <cuopt/mathematical_optimization/pdlp/solver_settings.hpp>
 #include <cuopt/mathematical_optimization/utilities/internals.hpp>
 
+#include <cuda/stream>
 #include <raft/core/device_span.hpp>
 #include <rmm/device_uvector.hpp>
 
@@ -89,7 +91,8 @@ class mip_solver_settings_t {
    */
   void add_initial_solution(const f_t* initial_solution,
                             i_t size,
-                            rmm::cuda_stream_view stream = rmm::cuda_stream_default);
+                            cuda::stream_ref stream = cuda::stream_ref{
+                              cudaStream_t{cudaStreamDefault}});
 
   /**
    * @brief Get the callback for the user solution
@@ -143,7 +146,9 @@ class mip_solver_settings_t {
     0};  // 0 = DS only, 1 = cooperative DS + PDLP, 2 = batch PDLP only
   i_t strong_branching_simplex_iteration_limit = -1;
   i_t num_gpus                                 = 1;
-  bool log_to_console                          = true;
+  method_t method{method_t::Concurrent};
+  i_t concurrent_nnz_cutoff{50'000'000};
+  bool log_to_console = true;
 
   std::string log_file;
   std::string sol_file;
@@ -171,6 +176,13 @@ class mip_solver_settings_t {
    * no-op when no certified reduction exists.
    */
   bool block_bve{true};
+  /**
+   * @brief Enable the indicator-strengthening step of presolve (MIP only).
+   *
+   * Runs before Papilo and only when the higher-level presolve is enabled. It appends implied
+   * indicator rows and lifts capacity rows by the indicator that bounds all of their members.
+   */
+  bool indicator_strengthening{true};
   /**
    * @brief Determinism mode for MIP solver.
    *

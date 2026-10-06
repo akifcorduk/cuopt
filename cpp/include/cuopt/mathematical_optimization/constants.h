@@ -36,6 +36,7 @@
 #define CUOPT_NODE_LIMIT                            "node_limit"
 #define CUOPT_PDLP_SOLVER_MODE                      "pdlp_solver_mode"
 #define CUOPT_METHOD                                "method"
+#define CUOPT_CONCURRENT_NNZ_CUTOFF                 "concurrent_nnz_cutoff"
 #define CUOPT_PER_CONSTRAINT_RESIDUAL               "per_constraint_residual"
 #define CUOPT_SAVE_BEST_PRIMAL_SO_FAR               "save_best_primal_so_far"
 #define CUOPT_FIRST_PRIMAL_FEASIBLE                 "first_primal_feasible"
@@ -51,12 +52,18 @@
 #define CUOPT_BARRIER_PRESOLVE_BOUND_FREE_VARIABLES "barrier_presolve_bound_free_variables"
 #define CUOPT_BARRIER_ITERATIVE_REFINEMENT          "barrier_iterative_refinement"
 #define CUOPT_BARRIER_ADAPTIVE_REGULARIZATION       "barrier_adaptive_regularization"
+#define CUOPT_BARRIER_PRIMAL_REGULARIZATION         "barrier_primal_regularization"
+#define CUOPT_BARRIER_DUAL_REGULARIZATION           "barrier_dual_regularization"
 #define CUOPT_BARRIER_STEP_SCALE                    "barrier_step_scale"
 #define CUOPT_ELIMINATE_DENSE_COLUMNS               "eliminate_dense_columns"
 #define CUOPT_CUDSS_DETERMINISTIC                   "cudss_deterministic"
 #define CUOPT_PRESOLVE                              "presolve"
+#define CUOPT_DUAL_SIMPLEX_INITIAL_PERTURBATION     "dual_simplex_initial_perturbation"
+#define CUOPT_DUAL_SIMPLEX_REMOVE_PERTURBATION      "dual_simplex_remove_perturbation"
+#define CUOPT_PRIMAL_SIMPLEX_PRICING                "primal_simplex_pricing"
 #define CUOPT_MIP_PROBING                           "mip_probing"
 #define CUOPT_DUAL_POSTSOLVE                        "dual_postsolve"
+#define CUOPT_SEQUENCE_SOLVE                        "sequence_solve"
 #define CUOPT_MIP_DETERMINISM_MODE                  "mip_determinism_mode"
 #define CUOPT_MIP_ABSOLUTE_TOLERANCE                "mip_absolute_tolerance"
 #define CUOPT_MIP_RELATIVE_TOLERANCE                "mip_relative_tolerance"
@@ -80,6 +87,7 @@
 #define CUOPT_MIP_REDUCED_COST_STRENGTHENING        "mip_reduced_cost_strengthening"
 #define CUOPT_MIP_RINS                              "mip_rins"
 #define CUOPT_MIP_RENS                              "mip_rens"
+#define CUOPT_MIP_MUTATION                          "mip_mutation"
 #define CUOPT_MIP_OBJECTIVE_STEP                    "mip_objective_step"
 #define CUOPT_MIP_CUT_CHANGE_THRESHOLD              "mip_cut_change_threshold"
 #define CUOPT_MIP_CUT_MIN_ORTHOGONALITY             "mip_cut_min_orthogonality"
@@ -88,16 +96,15 @@
 #define CUOPT_MIP_STRONG_BRANCHING_SIMPLEX_ITERATION_LIMIT \
   "mip_strong_branching_simplex_iteration_limit"
 
-#define CUOPT_SOLUTION_FILE                "solution_file"
-#define CUOPT_NUM_CPU_THREADS              "num_cpu_threads"
-#define CUOPT_NUM_GPUS                     "num_gpus"
-#define CUOPT_DISTRIBUTED_PDLP_PARTITIONER "distributed_pdlp_partitioner"
-#define CUOPT_USE_DISTRIBUTED_PDLP         "use_distributed_pdlp"
-#define CUOPT_USER_PROBLEM_FILE            "user_problem_file"
-#define CUOPT_PRESOLVE_FILE                "presolve_file"
-#define CUOPT_RANDOM_SEED                  "random_seed"
-#define CUOPT_PDLP_PRECISION               "pdlp_precision"
-#define CUOPT_MIP_SEMICONTINUOUS_BIG_M     "mip_semi_continuous_big_m"
+#define CUOPT_SOLUTION_FILE             "solution_file"
+#define CUOPT_NUM_CPU_THREADS           "num_cpu_threads"
+#define CUOPT_NUM_GPUS                  "num_gpus"
+#define CUOPT_MULTIGPU_PDLP_PARTITIONER "multigpu_pdlp_partitioner"
+#define CUOPT_USER_PROBLEM_FILE         "user_problem_file"
+#define CUOPT_PRESOLVE_FILE             "presolve_file"
+#define CUOPT_RANDOM_SEED               "random_seed"
+#define CUOPT_PDLP_PRECISION            "pdlp_precision"
+#define CUOPT_MIP_SEMICONTINUOUS_BIG_M  "mip_semi_continuous_big_m"
 
 #define CUOPT_MIP_HYPER_HEURISTIC_POPULATION_SIZE     "mip_hyper_heuristic_population_size"
 #define CUOPT_MIP_HYPER_HEURISTIC_NUM_CPUFJ_THREADS   "mip_hyper_heuristic_num_cpufj_threads"
@@ -131,7 +138,6 @@
 #define CUOPT_MIP_HYPER_DIVING_FARKAS        "mip_hyper_diving_farkas"
 #define CUOPT_MIP_HYPER_DIVING_VECTOR_LENGTH "mip_hyper_diving_vector_length"
 /* @brief Diving heuristic limits */
-#define CUOPT_MIP_HYPER_DIVING_MIN_NODE_DEPTH         "mip_hyper_diving_min_node_depth"
 #define CUOPT_MIP_HYPER_DIVING_NODE_LIMIT             "mip_hyper_diving_node_limit"
 #define CUOPT_MIP_HYPER_DIVING_ITERATION_LIMIT_FACTOR "mip_hyper_diving_iteration_limit_factor"
 #define CUOPT_MIP_HYPER_DIVING_BACKTRACK_LIMIT        "mip_hyper_diving_backtrack_limit"
@@ -153,8 +159,21 @@
 /* @brief Block bounded-variable-elimination step of cuOpt's internal MIP presolve */
 #define CUOPT_MIP_HYPER_BLOCK_BVE "mip_hyper_block_bve"
 
+/* @brief Indicator-strengthening step that runs before Papilo presolve on MIPs */
+#define CUOPT_MIP_HYPER_PRESOLVE_INDICATOR_STRENGTHENING \
+  "mip_hyper_presolve_indicator_strengthening"
+
 /* @brief QCQP (barrier) scaling hyper-parameters */
 #define CUOPT_QCQP_HYPER_RUIZ_EQUILIBRATION "qcqp_hyper_ruiz_equilibration"
+
+/* @brief Barrier scaling hyper-parameter: CPU/GPU Ruiz crossover */
+#define CUOPT_BARRIER_HYPER_GPU_RUIZ_NNZ_THRESHOLD "barrier_hyper_gpu_ruiz_nnz_threshold"
+
+/* @brief PDLP scaling hyper-parameter: Curtis-Reid prescaling toggle */
+#define CUOPT_PDLP_HYPER_ENABLE_CURTIS_REID_SCALING "pdlp_hyper_enable_curtis_reid_scaling"
+
+/* @brief Barrier initial point safeguard */
+#define CUOPT_BARRIER_INITIAL_POINT_SAFEGUARD "barrier_initial_point_safeguard"
 
 /* @brief MIP determinism mode constants */
 #define CUOPT_MODE_OPPORTUNISTIC 0
@@ -207,7 +226,13 @@
 #define CUOPT_METHOD_PDLP         1
 #define CUOPT_METHOD_DUAL_SIMPLEX 2
 #define CUOPT_METHOD_BARRIER      3
-#define CUOPT_METHOD_UNSET        4
+#define CUOPT_METHOD_PRIMAL       4
+#define CUOPT_METHOD_UNSET        5
+
+#define CUOPT_BARRIER_DUAL_INITIAL_POINT_AUTOMATIC             -1
+#define CUOPT_BARRIER_DUAL_INITIAL_POINT_LUSTIG_MARSTEN_SHANNO 0
+#define CUOPT_BARRIER_DUAL_INITIAL_POINT_LEAST_SQUARES         1
+#define CUOPT_BARRIER_DUAL_INITIAL_POINT_SEDUMI_MU             2
 
 /* @brief PDLP precision mode constants */
 #define CUOPT_PDLP_DEFAULT_PRECISION -1
@@ -218,27 +243,21 @@
 /* @brief File format constants for problem I/O */
 #define CUOPT_FILE_FORMAT_MPS 0
 
-/* @brief Status codes constants */
-#define CUOPT_SUCCESS          0
-#define CUOPT_INVALID_ARGUMENT 1
-#define CUOPT_MPS_FILE_ERROR   2
-#define CUOPT_MPS_PARSE_ERROR  3
-#define CUOPT_VALIDATION_ERROR 4
-#define CUOPT_OUT_OF_MEMORY    5
-#define CUOPT_RUNTIME_ERROR    6
+/* @brief Status codes constants -- shared with cuopt::client, defined in status_codes.h */
+#include "cuopt/status_codes.h"
 
 #define CUOPT_PRESOLVE_DEFAULT -1
 #define CUOPT_PRESOLVE_OFF     0
 #define CUOPT_PRESOLVE_PAPILO  1
 #define CUOPT_PRESOLVE_PSLP    2
 
-/* @brief distributed_pdlp_partitioner values.
+/* @brief multigpu_pdlp_partitioner values.
  * Auto: pick automatically (RoundRobin on 1 GPU, KaMinPar otherwise).
  * KaMinPar: multi-threaded KaMinPar graph partitioner.
  * RoundRobin: round-robin assignment, no graph. */
-#define CUOPT_DISTRIBUTED_PDLP_PARTITIONER_AUTO        0
-#define CUOPT_DISTRIBUTED_PDLP_PARTITIONER_KAMINPAR    1
-#define CUOPT_DISTRIBUTED_PDLP_PARTITIONER_ROUND_ROBIN 2
+#define CUOPT_MULTIGPU_PDLP_PARTITIONER_AUTO        0
+#define CUOPT_MULTIGPU_PDLP_PARTITIONER_KAMINPAR    1
+#define CUOPT_MULTIGPU_PDLP_PARTITIONER_ROUND_ROBIN 2
 
 /* @brief MIP scaling mode constants */
 #define CUOPT_MIP_SCALING_OFF          0
