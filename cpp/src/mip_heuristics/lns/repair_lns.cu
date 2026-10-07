@@ -585,7 +585,9 @@ void repair_lns_t<i_t, f_t>::search(search_state_t& state, branch_state_t& episo
 }
 
 template <typename i_t, typename f_t>
-void repair_lns_t<i_t, f_t>::run(const seed_fn& seeds, const submit_fn& submit)
+void repair_lns_t<i_t, f_t>::run(const seed_fn& seeds,
+                                 const submit_fn& submit,
+                                 const std::function<void()>& between_restarts)
 {
   const auto& p = *problem_;
   const i_t n   = p.n_variables;
@@ -629,6 +631,10 @@ void repair_lns_t<i_t, f_t>::run(const seed_fn& seeds, const submit_fn& submit)
   std::vector<std::vector<f_t>> population;
 
   while (!stopped()) {
+    if (between_restarts) {
+      between_restarts();
+      if (stopped()) break;
+    }
     population.clear();
     seeds(population);
     population.erase(

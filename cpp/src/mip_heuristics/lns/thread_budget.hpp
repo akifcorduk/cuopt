@@ -10,11 +10,16 @@
 
 namespace cuopt::mathematical_optimization::mip {
 inline constexpr bool presolve_cpufj_lns_enabled    = false;
-inline constexpr bool presolve_repair_lns_enabled   = false;
+inline constexpr bool presolve_repair_lns_enabled   = true;
 inline constexpr bool persistent_cpufj_lns_enabled  = true;
-inline constexpr bool persistent_repair_lns_enabled = false;
+inline constexpr bool persistent_repair_lns_enabled = true;
 
-// Benchmark one LNS worker while returning disabled workers to the main solve.
+// Share the single presolve repair task with CPUFJ LNS between repair restarts.
+inline constexpr bool presolve_lns_alternating = true;
+static_assert(!presolve_lns_alternating ||
+              (presolve_repair_lns_enabled && !presolve_cpufj_lns_enabled));
+
+// Reserve only the enabled LNS workers and return the remaining slots to the main solve.
 inline int lns_worker_count(int team_size, bool deterministic)
 {
   return deterministic || team_size < CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS + 3

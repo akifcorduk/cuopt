@@ -110,7 +110,10 @@ class repair_lns_t {
                                   const raft::handle_t* handle);
 
   // Runs until halted or preempted. The calling thread must have the solver's device set.
-  void run(const seed_fn& seeds, const submit_fn& submit);
+  // Optional work runs on this same thread before each repair restart.
+  void run(const seed_fn& seeds,
+           const submit_fn& submit,
+           const std::function<void()>& between_restarts = {});
 
  private:
   struct bandit_arm_t;

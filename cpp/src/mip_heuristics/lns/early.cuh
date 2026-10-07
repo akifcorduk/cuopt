@@ -145,12 +145,21 @@ class early_lns_t {
     omp_set_num_threads(1);
     cuopt::scope_guard restore([&] { omp_set_num_threads(previous_max_threads); });
     RAFT_CUDA_TRY(cudaSetDevice(device_));
-    repair_lns_->run(
-      [this](auto& seeds) {
-        std::vector<f_t> assignment;
-        if (snapshot(assignment)) seeds.push_back(std::move(assignment));
-      },
-      [this](const auto& x, f_t) { submit(x, "Repair LNS"); });
+    const typename repair_lns_t<i_t, f_t>::seed_fn seeds = [this](auto& seeds) {
+      std::vector<f_t> assignment;
+      if (snapshot(assignment)) seeds.push_back(std::move(assignment));
+    };
+    const typename repair_lns_t<i_t, f_t>::submit_fn report = [this](const auto& x, f_t) {
+      submit(x, "Repair LNS");
+    };
+    if constexpr (presolve_lns_alternating) {
+      cpufj_lns_search_t<i_t, f_t> search(cpufj_.get());
+      repair_lns_->run(seeds, report, [this, &search] {
+        search.run_once([this](auto& x) { return snapshot(x); });
+      });
+    } else {
+      repair_lns_->run(seeds, report);
+    }
   }
 
   std::shared_ptr<fj_cpu_shared_incumbent_t<i_t, f_t>> shared_;

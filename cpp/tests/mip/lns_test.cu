@@ -383,6 +383,55 @@ TEST(Lns, MainSolveBudgetMatchesEnabledWorkers)
   }
 }
 
+TEST(Lns, AlternatingSearchReusesOneThreadAndStopsBetweenMethods)
+{
+  std::atomic<bool> preemption{false};
+  auto anchor = make_anchor(covering_pair(), preemption, test_tolerances());
+  mip::repair_lns_t<int, double> repair(*anchor, preemption, 42);
+  mip::cpufj_lns_search_t<int, double> cpufj(anchor.get());
+  const auto caller = std::this_thread::get_id();
+  std::vector<int> methods;
+  int improvements    = 0;
+  const auto validate = [&](const auto& x, double objective) {
+    EXPECT_EQ(std::this_thread::get_id(), caller);
+    EXPECT_TRUE(repair.feasible(x));
+    EXPECT_DOUBLE_EQ(objective, repair.cost(x));
+    ++improvements;
+  };
+  anchor->improvement_callback = [&](double objective, const auto& x, double) {
+    validate(x, objective);
+  };
+  repair.run(
+    [&](auto& seeds) {
+      EXPECT_EQ(std::this_thread::get_id(), caller);
+      methods.push_back(1);
+      seeds.push_back({1, 1});
+    },
+    validate,
+    [&] {
+      if (methods.size() == 4) {
+        repair.halted = true;
+        return;
+      }
+      cpufj.run_once([&](auto& x) {
+        EXPECT_EQ(std::this_thread::get_id(), caller);
+        methods.push_back(0);
+        x = {1, 1};
+        return true;
+      });
+    });
+  EXPECT_EQ(methods, (std::vector<int>{0, 1, 0, 1}));
+  EXPECT_GT(improvements, 0);
+  EXPECT_FALSE(preemption.load());
+
+  // Stopping the shared worker also prevents another CPUFJ seed read.
+  anchor->halted = true;
+  cpufj.run_once([&](auto&) {
+    ADD_FAILURE() << "Stopped CPUFJ search polled another seed";
+    return false;
+  });
+}
+
 TEST(Lns, CpufjLnsRevalidatesWithSolverTolerances)
 {
   mip::fj_cpu_problem_t<int, double> problem;
