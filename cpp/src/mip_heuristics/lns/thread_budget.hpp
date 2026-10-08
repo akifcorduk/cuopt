@@ -9,8 +9,8 @@
 #include <algorithm>
 
 namespace cuopt::mathematical_optimization::mip {
-inline constexpr bool presolve_cpufj_lns_enabled    = false;
-inline constexpr bool presolve_repair_lns_enabled   = false;
+inline constexpr bool presolve_cpufj_lns_enabled    = true;
+inline constexpr bool presolve_repair_lns_enabled   = true;
 inline constexpr bool persistent_cpufj_lns_enabled  = true;
 inline constexpr bool persistent_repair_lns_enabled = false;
 
