@@ -18,7 +18,7 @@ namespace cuopt::mathematical_optimization::mip {
 
 enum class cpufj_lns_experiment_t { control, diverse_seeds, structural, structural_state };
 // Each benchmark commit changes only this selector, with identical instrumentation.
-inline constexpr auto cpufj_lns_experiment = cpufj_lns_experiment_t::control;
+inline constexpr auto cpufj_lns_experiment = cpufj_lns_experiment_t::diverse_seeds;
 
 inline const char* cpufj_lns_experiment_name(cpufj_lns_experiment_t experiment)
 {
