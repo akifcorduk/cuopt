@@ -104,7 +104,7 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
       *task_exception_,
       [this](f_t objective, const std::vector<f_t>& x, const char* origin) {
         std::lock_guard<std::mutex> guard(incumbent_mutex_);
-        this->try_update_best(objective, x, origin);
+        this->try_update_best(objective, x, origin, /*from_lns=*/true);
       },
       seed_);
     improvement_lanes_ = improvement_lanes;

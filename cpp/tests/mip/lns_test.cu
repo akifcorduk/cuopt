@@ -555,7 +555,7 @@ TEST(Lns, OptionalClimberDoesNotAdvanceFeasibilityRng)
   }
 }
 
-TEST(Lns, PresolveWorkerFailureIsCapturedAfterPublishingImprovement)
+TEST(Lns, PresolveCallbackFailureIsCapturedBeforeSharingImprovement)
 {
   raft::handle_t handle;
   opt::optimization_problem_t<int, double> op(&handle);
@@ -599,7 +599,7 @@ TEST(Lns, PresolveWorkerFailureIsCapturedAfterPublishingImprovement)
     EXPECT_TRUE(reported.load());
     ASSERT_TRUE(task_exception);
     EXPECT_THROW(std::rethrow_exception(task_exception), std::runtime_error);
-    EXPECT_LT(shared->objective.load(), 3);
+    EXPECT_EQ(shared->objective.load(), 3);
   } else {
     EXPECT_FALSE(reported.load());
     EXPECT_FALSE(task_exception);

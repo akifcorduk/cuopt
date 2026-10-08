@@ -94,7 +94,8 @@ static void invoke_solution_callbacks(
   int semi_continuous_original_num_variables,
   f_t objective,
   std::vector<f_t>& assignment,
-  f_t bound)
+  f_t bound,
+  bool from_lns = false)
 {
   if (strip_semi_continuous_auxiliaries) {
     mip::strip_semi_continuous_auxiliaries_from_assignment(assignment,
@@ -106,8 +107,8 @@ static void invoke_solution_callbacks(
     if (callback != nullptr &&
         callback->get_type() == internals::base_solution_callback_type::GET_SOLUTION) {
       auto get_sol_callback = static_cast<internals::get_solution_callback_t*>(callback);
-      get_sol_callback->get_solution(
-        assignment.data(), obj_vec.data(), bound_vec.data(), get_sol_callback->get_user_data());
+      internals::invoke_get_solution_callback(
+        get_sol_callback, assignment.data(), obj_vec.data(), bound_vec.data(), {from_lns});
     }
   }
 }
@@ -291,7 +292,8 @@ mip_solution_t<i_t, f_t> run_mip_solver(
          &timer](f_t solver_obj,
                  f_t user_obj,
                  const std::vector<f_t>& assignment,
-                 const char* heuristic_name) {
+                 const char* heuristic_name,
+                 bool from_lns) {
           std::lock_guard<std::mutex> lock(papilo_callback_mutex);
           if (solver_obj >= papilo_best_solver_obj) { return; }
           papilo_best_solver_obj = solver_obj;
@@ -312,7 +314,8 @@ mip_solution_t<i_t, f_t> run_mip_solver(
                                     semi_continuous_original_num_variables,
                                     user_obj,
                                     user_assignment,
-                                    no_bound);
+                                    no_bound,
+                                    from_lns);
         };
       const int structural_cpu_budget = mip::presolve_early_worker_budget(
         omp_get_num_threads(), CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS, 0, 1);
@@ -546,8 +549,11 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
        semi_continuous_original_num_variables =
          mip_solver_settings_accessor<i_t, f_t>::get_semi_continuous_original_num_variables(
            settings),
-       no_bound](
-        f_t, f_t user_obj, const std::vector<f_t>& assignment, const char* heuristic_name) {
+       no_bound](f_t,
+                 f_t user_obj,
+                 const std::vector<f_t>& assignment,
+                 const char* heuristic_name,
+                 bool from_lns) {
         std::lock_guard<std::mutex> lock(early_callback_mutex);
         const f_t objective = objective_sense * user_obj;
         if (objective >= early_best_user_score.load()) { return; }
@@ -565,7 +571,8 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
                                   semi_continuous_original_num_variables,
                                   user_obj,
                                   user_assignment,
-                                  no_bound);
+                                  no_bound,
+                                  from_lns);
       };
 
     if (run_early_fj) {
@@ -1000,10 +1007,14 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
       settings_const.get_tolerances(),
       [mip_callbacks = settings_const.get_mip_callbacks(),
        no_bound      = op_problem.get_sense() ? (f_t)1e20 : (f_t)-1e20,
-       probe_start   = std::chrono::steady_clock::now()](
-        f_t, f_t user_obj, const std::vector<f_t>& assignment, const char* heuristic_name) {
+       probe_start   = std::chrono::steady_clock::now()](f_t,
+                                                       f_t user_obj,
+                                                       const std::vector<f_t>& assignment,
+                                                       const char* heuristic_name,
+                                                       bool from_lns) {
         std::vector<f_t> user_assignment = assignment;
-        invoke_solution_callbacks(mip_callbacks, false, 0, user_obj, user_assignment, no_bound);
+        invoke_solution_callbacks(
+          mip_callbacks, false, 0, user_obj, user_assignment, no_bound, from_lns);
         // try_update_best is the monotonicity gate and the single probe lane serialises on
         // early_cpufj_t::incumbent_mutex_, so there is nothing left to guard here.
         CUOPT_LOG_INFO(

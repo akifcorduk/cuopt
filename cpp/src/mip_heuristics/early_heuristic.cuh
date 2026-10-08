@@ -19,8 +19,11 @@
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename f_t>
-using early_incumbent_callback_t = std::function<void(
-  f_t solver_obj, f_t user_obj, const std::vector<f_t>& assignment, const char* heuristic_name)>;
+using early_incumbent_callback_t = std::function<void(f_t solver_obj,
+                                                      f_t user_obj,
+                                                      const std::vector<f_t>& assignment,
+                                                      const char* heuristic_name,
+                                                      bool from_lns)>;
 
 // CRTP base for early heuristics that run on the original (or papilo-presolved) problem
 // during presolve to find incumbents as early as possible.
@@ -59,7 +62,8 @@ class early_heuristic_t {
   // Uses a private CUDA stream to avoid racing with the FJ solver's stream.
   void try_update_best(f_t solver_obj,
                        const std::vector<f_t>& assignment,
-                       const char* heuristic_name = Derived::name())
+                       const char* heuristic_name = Derived::name(),
+                       bool from_lns              = false)
   {
     if (solver_obj >= best_objective_) { return; }
     best_objective_ = solver_obj;
@@ -70,7 +74,7 @@ class early_heuristic_t {
     // Log and callback are deferred to the shared incumbent_callback_ which enforces
     // global monotonicity across all early heuristic instances.
     if (incumbent_callback_) {
-      incumbent_callback_(solver_obj, user_obj, best_assignment_, heuristic_name);
+      incumbent_callback_(solver_obj, user_obj, best_assignment_, heuristic_name, from_lns);
     }
   }
 

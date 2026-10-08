@@ -130,7 +130,8 @@ static void run_repair_lns_task(repair_lns_t<i_t, f_t>& repair_lns,
   RAFT_CUDA_TRY(cudaSetDevice(device));
   repair_lns.run([&feed](auto& seeds) { feed.recent_feasible(seeds); },
                  [&population](const auto& x, f_t objective) {
-                   population.add_external_solution(x, objective, solution_origin_t::CPUFJ);
+                   population.add_external_solution(
+                     x, objective, solution_origin_t::CPUFJ, /*from_lns=*/true);
                  });
 }
 
@@ -168,7 +169,7 @@ void local_search_t<i_t, f_t>::start_cpufj_lns_improvement_thread(
   scratch_cpu_fj_lns->log_prefix = "******* lns improvement: ";
   scratch_cpu_fj_lns->improvement_callback =
     [&population](f_t obj, const std::vector<f_t>& h_vec, double /*work_units*/) {
-      population.add_external_solution(h_vec, obj, solution_origin_t::CPUFJ);
+      population.add_external_solution(h_vec, obj, solution_origin_t::CPUFJ, /*from_lns=*/true);
     };
 
   repair_lns_feed = std::make_unique<lns_population_feed_t<i_t, f_t>>(population);

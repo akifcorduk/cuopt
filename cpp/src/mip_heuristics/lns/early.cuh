@@ -124,9 +124,10 @@ class early_lns_t {
   {
     if (stopped()) return;
     const f_t objective = repair_lns_->cost(assignment);
-    // Publish before invoking callbacks, so polling only holds the short copy lock.
-    shared_->publish(objective, cpufj_->get_user_objective(objective), assignment);
+    // Attribute the incumbent before another lane can adopt and report it as its own.
+    // Neither reporting nor polling holds the shared-incumbent lock during callbacks.
     report_(objective, assignment, origin);
+    shared_->publish(objective, cpufj_->get_user_objective(objective), assignment);
   }
 
   void run_cpufj()
