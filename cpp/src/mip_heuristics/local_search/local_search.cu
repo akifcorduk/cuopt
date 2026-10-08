@@ -221,7 +221,10 @@ void local_search_t<i_t, f_t>::start_cpufj_lns_improvement_thread(
             assignment.resize(n);
             return feed_ptr->best_feasible(assignment);
           },
-          [repair_ptr](const auto& assignment) { return repair_ptr->feasible(assignment); });
+          [repair_ptr](const auto& assignment, cpufj_lns_rejection_t* rejection) {
+            return repair_ptr->feasible(assignment, rejection);
+          },
+          [feed_ptr](auto& seeds) { feed_ptr->recent_feasible(seeds); });
       } catch (...) {
 #pragma omp critical(cuopt_mip_task_exception)
         if (!*exception_ptr) *exception_ptr = std::current_exception();

@@ -33,6 +33,7 @@ template <typename i_t, typename f_t>
 struct fj_cpu_problem_t;
 
 enum class lns_repair_backend_t { cpufj, submip };
+enum class cpufj_lns_rejection_t;
 
 template <typename f_t>
 std::vector<f_t> lns_integer_values(f_t lower, f_t upper)
@@ -99,7 +100,7 @@ class repair_lns_t {
 
   std::atomic<bool> halted{false};
 
-  bool feasible(const std::vector<f_t>& x) const;
+  bool feasible(const std::vector<f_t>& x, cpufj_lns_rejection_t* rejection = nullptr) const;
   f_t cost(const std::vector<f_t>& x) const;
 
   lns_neighborhood_t<i_t, f_t> make_neighborhood(const lns_repair_request_t<f_t>& request) const;

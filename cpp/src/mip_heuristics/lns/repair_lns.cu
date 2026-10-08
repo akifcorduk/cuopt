@@ -132,9 +132,10 @@ repair_lns_t<i_t, f_t>::repair_lns_t(const fj_cpu_climber_t<i_t, f_t>& anchor,
 }
 
 template <typename i_t, typename f_t>
-bool repair_lns_t<i_t, f_t>::feasible(const std::vector<f_t>& x) const
+bool repair_lns_t<i_t, f_t>::feasible(const std::vector<f_t>& x,
+                                      cpufj_lns_rejection_t* rejection) const
 {
-  return verify_cpufj_lns_feasible(*problem_, bounds_, types_, x);
+  return verify_cpufj_lns_feasible(*problem_, bounds_, types_, x, rejection);
 }
 
 template <typename i_t, typename f_t>

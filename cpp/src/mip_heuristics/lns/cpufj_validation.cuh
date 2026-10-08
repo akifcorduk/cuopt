@@ -9,18 +9,31 @@
 
 #include <algorithm>
 #include <cmath>
+#include <type_traits>
 #include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
+enum class cpufj_lns_rejection_t { none, size, domain, objective, rows, unknown };
+enum class cpufj_lns_validation_stage_t { model, projection, projected_model };
+
+struct cpufj_lns_seed_validation_t {
+  cpufj_lns_rejection_t rejection    = cpufj_lns_rejection_t::none;
+  cpufj_lns_validation_stage_t stage = cpufj_lns_validation_stage_t::model;
+  bool projected                     = false;
+};
+
 // Reused climbers mutate cached activities during ruin/repair. Recheck the raw model
 // before retaining or publishing a candidate, using the solver's configured tolerances.
 template <typename i_t, typename f_t>
 bool verify_cpufj_lns_feasible(const fj_cpu_problem_t<i_t, f_t>& problem,
                                const std::vector<typename type_2<f_t>::type>& bounds,
                                const std::vector<var_t>& types,
-                               const std::vector<f_t>& assignment)
+                               const std::vector<f_t>& assignment,
+                               cpufj_lns_rejection_t* rejection = nullptr)
 {
+  if (rejection) *rejection = cpufj_lns_rejection_t::size;
   if (assignment.size() != static_cast<size_t>(problem.n_variables)) return false;
+  if (rejection) *rejection = cpufj_lns_rejection_t::domain;
   const f_t int_tol = problem.tolerances.integrality_tolerance;
   for (i_t v = 0; v < problem.n_variables; ++v) {
     const f_t x = assignment[v];
@@ -32,7 +45,9 @@ bool verify_cpufj_lns_feasible(const fj_cpu_problem_t<i_t, f_t>& problem,
   f_t objective = 0;
   for (i_t v = 0; v < problem.n_variables; ++v)
     objective += problem.h_obj_coeffs[v] * assignment[v];
+  if (rejection) *rejection = cpufj_lns_rejection_t::objective;
   if (!std::isfinite(objective)) return false;
+  if (rejection) *rejection = cpufj_lns_rejection_t::rows;
   for (i_t c = 0; c < problem.n_constraints; ++c) {
     f_t activity = 0, correction = 0;
     for (i_t p = problem.offsets[c]; p < problem.offsets[c + 1]; ++p) {
@@ -46,6 +61,7 @@ bool verify_cpufj_lns_feasible(const fj_cpu_problem_t<i_t, f_t>& problem,
       lb, ub, problem.tolerances.absolute_tolerance, problem.tolerances.relative_tolerance);
     if (!std::isfinite(activity) || activity < lb - tol || activity > ub + tol) return false;
   }
+  if (rejection) *rejection = cpufj_lns_rejection_t::none;
   return true;
 }
 
@@ -63,9 +79,11 @@ bool clamp_cpufj_lns_seed_to_domain(const fj_cpu_problem_t<i_t, f_t>& problem,
                                     const std::vector<typename type_2<f_t>::type>& bounds,
                                     const std::vector<var_t>& types,
                                     std::vector<f_t>& assignment,
-                                    bool* changed = nullptr)
+                                    bool* changed                    = nullptr,
+                                    cpufj_lns_rejection_t* rejection = nullptr)
 {
   if (changed) *changed = false;
+  if (rejection) *rejection = cpufj_lns_rejection_t::domain;
   for (i_t v = 0; v < problem.n_variables; ++v) {
     const bool integer = types[v] == var_t::INTEGER;
     const f_t lo       = integer ? std::ceil(get_lower(bounds[v])) : get_lower(bounds[v]);
@@ -75,7 +93,7 @@ bool clamp_cpufj_lns_seed_to_domain(const fj_cpu_problem_t<i_t, f_t>& problem,
     if (changed) *changed |= value != assignment[v];
     assignment[v] = value;
   }
-  return verify_cpufj_lns_feasible(problem, bounds, types, assignment);
+  return verify_cpufj_lns_feasible(problem, bounds, types, assignment, rejection);
 }
 
 // Round integer values and clamp to strict domains, validating before and after adjustment.
@@ -101,15 +119,39 @@ bool clamp_and_validate_cpufj_lns_seed(const fj_cpu_problem_t<i_t, f_t>& problem
 template <typename i_t, typename f_t, typename model_validator_t>
 bool clamp_and_validate_cpufj_lns_seed(const fj_cpu_climber_t<i_t, f_t>& climber,
                                        std::vector<f_t>& assignment,
-                                       const model_validator_t& model_feasible)
+                                       const model_validator_t& model_feasible,
+                                       cpufj_lns_seed_validation_t* diagnostics = nullptr)
 {
-  if (!model_feasible(assignment)) return false;
-  bool changed = false;
-  return clamp_cpufj_lns_seed_to_domain(*climber.problem,
-                                        climber.h_var_bounds.underlying(),
-                                        climber.problem->h_var_types,
-                                        assignment,
-                                        &changed) &&
-         (!changed || model_feasible(assignment));
+  cpufj_lns_seed_validation_t result;
+  // Detailed validators report the first failing check during the existing pass.
+  // Keep the simple predicate interface for early workers and other callers.
+  const auto validate_model = [&]() {
+    if constexpr (std::is_invocable_r_v<bool,
+                                        model_validator_t,
+                                        const std::vector<f_t>&,
+                                        cpufj_lns_rejection_t*>) {
+      return model_feasible(assignment, &result.rejection);
+    } else {
+      const bool valid = model_feasible(assignment);
+      result.rejection = valid ? cpufj_lns_rejection_t::none : cpufj_lns_rejection_t::unknown;
+      return valid;
+    }
+  };
+  bool valid = validate_model();
+  if (valid) {
+    result.stage = cpufj_lns_validation_stage_t::projection;
+    valid        = clamp_cpufj_lns_seed_to_domain(*climber.problem,
+                                           climber.h_var_bounds.underlying(),
+                                           climber.problem->h_var_types,
+                                           assignment,
+                                           &result.projected,
+                                           &result.rejection);
+    if (valid && result.projected) {
+      result.stage = cpufj_lns_validation_stage_t::projected_model;
+      valid        = validate_model();
+    }
+  }
+  if (diagnostics) *diagnostics = result;
+  return valid;
 }
 }  // namespace cuopt::mathematical_optimization::mip

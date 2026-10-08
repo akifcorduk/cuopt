@@ -9,6 +9,7 @@
 #include <mip_heuristics/feasibility_jump/cpu/climber.hpp>
 #include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
+#include <mip_heuristics/lns/cpufj_experiment.cuh>
 #include <mip_heuristics/lns/cpufj_validation.cuh>
 #include <mip_heuristics/lns/early.cuh>
 #include <mip_heuristics/lns/repair_lns.cuh>
@@ -850,6 +851,177 @@ TEST(Lns, MainWorkersStopWithoutBranchAndBoundOnSmallTeams)
     }
     EXPECT_FALSE(task_exception);
   }
+}
+
+TEST(Lns, WorkerRejectsWrongSizeBeforeCallingModelValidator)
+{
+  std::atomic<bool> preemption{false};
+  auto anchor   = make_anchor(covering_pair(), preemption, test_tolerances());
+  int snapshots = 0, validations = 0;
+  mip::run_cpufj_lns_ruin_repair<int, double>(
+    anchor.get(),
+    [&](auto& x) {
+      x = {1};
+      if (++snapshots == 3) preemption = true;
+      return true;
+    },
+    [&](const auto&) {
+      ++validations;
+      return true;
+    });
+  EXPECT_EQ(snapshots, 3);
+  EXPECT_EQ(validations, 0);
+  EXPECT_FALSE(anchor->feasible_found);
+}
+
+TEST(Lns, SeedDiagnosticsSeparateModelDomainAndRowFailures)
+{
+  std::atomic<bool> preemption{false};
+  const auto model = single_variable(true, 0, 2, 0, 1);
+  auto anchor      = make_anchor(model, preemption, test_tolerances());
+  const std::vector<double2> bounds{make_double2(0, 2)};
+  const auto model_feasible = [&](const auto& x, mip::cpufj_lns_rejection_t* reason) {
+    return mip::verify_cpufj_lns_feasible(*anchor->problem, bounds, model.types, x, reason);
+  };
+  mip::cpufj_lns_seed_validation_t diagnostics;
+  std::vector<double> seed{3};
+  EXPECT_FALSE(mip::clamp_and_validate_cpufj_lns_seed(*anchor, seed, model_feasible, &diagnostics));
+  EXPECT_EQ(diagnostics.stage, mip::cpufj_lns_validation_stage_t::model);
+  EXPECT_EQ(diagnostics.rejection, mip::cpufj_lns_rejection_t::domain);
+  EXPECT_FALSE(diagnostics.projected);
+  EXPECT_EQ(seed, (std::vector<double>{3}));
+  seed = {2};
+  EXPECT_FALSE(mip::clamp_and_validate_cpufj_lns_seed(*anchor, seed, model_feasible, &diagnostics));
+  EXPECT_EQ(diagnostics.stage, mip::cpufj_lns_validation_stage_t::model);
+  EXPECT_EQ(diagnostics.rejection, mip::cpufj_lns_rejection_t::rows);
+  EXPECT_FALSE(diagnostics.projected);
+  seed = {1};
+  EXPECT_TRUE(mip::clamp_and_validate_cpufj_lns_seed(*anchor, seed, model_feasible, &diagnostics));
+  EXPECT_EQ(diagnostics.rejection, mip::cpufj_lns_rejection_t::none);
+  EXPECT_FALSE(diagnostics.projected);
+}
+
+TEST(Lns, SeedDiagnosticsDistinguishPrivateProjectionRowFailures)
+{
+  std::atomic<bool> preemption{false};
+  const host_model_t model{{1, -.5},
+                           {0, 0},
+                           {4e7, 8e7},
+                           {1, 1},
+                           {0},
+                           {0},
+                           {0, 1},
+                           {0, 2},
+                           {opt::var_t::INTEGER, opt::var_t::INTEGER}};
+  auto anchor = make_anchor(model, preemption, test_tolerances());
+  const std::vector<double2> bounds{make_double2(0, 4e7), make_double2(0, 8e7)};
+  const auto model_feasible = [&](const auto& x, mip::cpufj_lns_rejection_t* reason) {
+    return mip::verify_cpufj_lns_feasible(*anchor->problem, bounds, model.types, x, reason);
+  };
+  mip::cpufj_lns_seed_validation_t diagnostics;
+  std::vector<double> seed{2e7, 4e7};
+  EXPECT_FALSE(mip::clamp_and_validate_cpufj_lns_seed(*anchor, seed, model_feasible, &diagnostics));
+  EXPECT_EQ(diagnostics.stage, mip::cpufj_lns_validation_stage_t::projection);
+  EXPECT_EQ(diagnostics.rejection, mip::cpufj_lns_rejection_t::rows);
+  EXPECT_TRUE(diagnostics.projected);
+  EXPECT_EQ(seed, (std::vector<double>{1e7, 1e7}));
+}
+
+TEST(Lns, SeedDiagnosticsReportAcceptedClampingAfterOriginalModelRevalidation)
+{
+  std::atomic<bool> preemption{false};
+  const auto model = single_variable(true, 0, 4e7, 0, 4e7);
+  auto anchor      = make_anchor(model, preemption, test_tolerances());
+  const std::vector<double2> bounds{make_double2(0, 4e7)};
+  int model_validations     = 0;
+  const auto model_feasible = [&](const auto& x, mip::cpufj_lns_rejection_t* reason) {
+    ++model_validations;
+    return mip::verify_cpufj_lns_feasible(*anchor->problem, bounds, model.types, x, reason);
+  };
+  mip::cpufj_lns_seed_validation_t diagnostics;
+  std::vector<double> seed{2e7};
+  ASSERT_TRUE(mip::clamp_and_validate_cpufj_lns_seed(*anchor, seed, model_feasible, &diagnostics));
+  EXPECT_EQ(diagnostics.stage, mip::cpufj_lns_validation_stage_t::projected_model);
+  EXPECT_EQ(diagnostics.rejection, mip::cpufj_lns_rejection_t::none);
+  EXPECT_TRUE(diagnostics.projected);
+  EXPECT_EQ(model_validations, 2);
+  EXPECT_EQ(seed, (std::vector<double>{1e7}));
+}
+
+TEST(Lns, SeedRejectionDiagnosticsPreserveConfiguredTolerances)
+{
+  std::atomic<bool> preemption{false};
+  const auto model      = single_variable(false, 0, 2, 0, 1);
+  const auto tolerances = test_tolerances();
+  auto anchor           = make_anchor(model, preemption, tolerances);
+  const std::vector<double2> bounds{make_double2(0, 2)};
+  const double row_tolerance = mip::get_cstr_tolerance<int, double>(
+    0, 1, tolerances.absolute_tolerance, tolerances.relative_tolerance);
+  mip::cpufj_lns_rejection_t reason;
+  EXPECT_TRUE(mip::verify_cpufj_lns_feasible(
+    *anchor->problem, bounds, model.types, std::vector<double>{1 + row_tolerance * 0.5}, &reason));
+  EXPECT_EQ(reason, mip::cpufj_lns_rejection_t::none);
+  EXPECT_FALSE(mip::verify_cpufj_lns_feasible(
+    *anchor->problem, bounds, model.types, std::vector<double>{1 + row_tolerance * 2}, &reason));
+  EXPECT_EQ(reason, mip::cpufj_lns_rejection_t::rows);
+  EXPECT_FALSE(
+    mip::verify_cpufj_lns_feasible(*anchor->problem,
+                                   bounds,
+                                   model.types,
+                                   std::vector<double>{2 + tolerances.integrality_tolerance * 2},
+                                   &reason));
+  EXPECT_EQ(reason, mip::cpufj_lns_rejection_t::domain);
+}
+
+TEST(Lns, AlternativeSeedsExcludeBestAssignmentsAndIgnoreDuplicates)
+{
+  const std::vector<double> population_best{0, 0}, worker_best{1, 0};
+  const std::vector<double> first{0, 1}, second{1, 1};
+  const std::vector<std::vector<double>> distinct{first, second};
+  const std::vector<std::vector<double>> repeated{
+    population_best, worker_best, first, first, second, first, {1}, second};
+  std::mt19937 distinct_rng(42), repeated_rng(42);
+  bool saw_first = false, saw_second = false;
+  for (int iteration = 0; iteration < 32; ++iteration) {
+    std::vector<double> expected, selected;
+    ASSERT_TRUE(mip::choose_cpufj_lns_alternative(
+      distinct, population_best, worker_best, distinct_rng, expected));
+    ASSERT_TRUE(mip::choose_cpufj_lns_alternative(
+      repeated, population_best, worker_best, repeated_rng, selected));
+    EXPECT_EQ(selected, expected);
+    saw_first |= selected == first;
+    saw_second |= selected == second;
+  }
+  EXPECT_TRUE(saw_first);
+  EXPECT_TRUE(saw_second);
+  std::vector<double> selected;
+  EXPECT_FALSE(mip::choose_cpufj_lns_alternative<double>(
+    {population_best, worker_best, {1}}, population_best, worker_best, repeated_rng, selected));
+}
+
+TEST(Lns, AlternativeRepairUsesItsStartAndRetainsBetterArchive)
+{
+  std::atomic<bool> preemption{false};
+  auto anchor = make_anchor(covering_pair(), preemption, test_tolerances());
+  // Force the scalar engine, whose incumbent restarts would otherwise return to the archive.
+  anchor->low_latency = true;
+  const std::vector<double> archived{1, 0}, alternative{0, 1};
+  anchor->h_best_assignment    = archived;
+  anchor->h_best_objective     = 1;
+  anchor->feasible_found       = true;
+  anchor->h_assignment         = alternative;
+  int callbacks                = 0;
+  anchor->improvement_callback = [&](double objective, const auto& assignment, double) {
+    ++callbacks;
+    EXPECT_EQ(assignment, alternative);
+    EXPECT_DOUBLE_EQ(objective, 2);
+    preemption = true;
+  };
+  EXPECT_FALSE(mip::repair_cpufj_lns_neighborhood(anchor.get(), 0.1, true));
+  EXPECT_EQ(callbacks, 1);
+  EXPECT_TRUE(anchor->feasible_found);
+  EXPECT_EQ(anchor->h_best_assignment.underlying(), archived);
+  EXPECT_DOUBLE_EQ(anchor->h_best_objective, 1);
 }
 
 }  // namespace cuopt::lns::test
