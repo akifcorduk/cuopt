@@ -217,6 +217,45 @@ TEST(Lns, GeometryRequirementsPreserveSmallGateCertification)
   EXPECT_FALSE(mip::has_cpufj_lns_geometry(model.climber));
 }
 
+TEST(Lns, IntegerRuinSamplingStaysWithinInclusiveSignedDomains)
+{
+  constexpr auto lowest  = std::numeric_limits<int64_t>::min();
+  constexpr auto highest = std::numeric_limits<int64_t>::max();
+  const std::vector<std::pair<int64_t, int64_t>> domains{{-5, -1},
+                                                         {-5, 5},
+                                                         {0, 0},
+                                                         {lowest, lowest},
+                                                         {highest, highest},
+                                                         {lowest, lowest + 9},
+                                                         {highest - 9, highest},
+                                                         {lowest, 0},
+                                                         {-1, highest},
+                                                         {lowest, highest}};
+  cuopt::pcgenerator_t rng(42), replay(42);
+  for (const auto& [lower, upper] : domains) {
+    SCOPED_TRACE(::testing::Message() << "domain [" << lower << ", " << upper << "]");
+    for (int i = 0; i < 4096; ++i) {
+      const auto value = mip::sample_cpufj_lns_integer(rng, lower, upper);
+      ASSERT_GE(value, lower);
+      ASSERT_LE(value, upper);
+      ASSERT_EQ(value, mip::sample_cpufj_lns_integer(replay, lower, upper));
+    }
+  }
+}
+
+TEST(Lns, IntegerRuinSamplingReachesBothNegativeDomainEndpoints)
+{
+  cuopt::pcgenerator_t rng(42);
+  bool lower_seen = false, upper_seen = false;
+  for (int i = 0; i < 256; ++i) {
+    const auto value = mip::sample_cpufj_lns_integer(rng, -5, -1);
+    lower_seen |= value == -5;
+    upper_seen |= value == -1;
+  }
+  EXPECT_TRUE(lower_seen);
+  EXPECT_TRUE(upper_seen);
+}
+
 template <typename f_t>
 void check_row_tolerance_parity()
 {

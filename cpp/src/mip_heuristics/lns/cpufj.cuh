@@ -7,6 +7,8 @@
 #include <mip_heuristics/feasibility_jump/cpu/search/api.hpp>
 #include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
 #include <mip_heuristics/utils.hpp>
+#include <utilities/pcgenerator.hpp>
+#include <utilities/splitmix64.hpp>
 #include <utilities/timer.hpp>
 #include "cpufj_geometry.cuh"
 #include "cpufj_validation.cuh"
@@ -17,10 +19,27 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <random>
 #include <thread>
 
 namespace cuopt::mathematical_optimization::mip {
+// Sample an inclusive signed domain without floating-point rounding or signed overflow.
+inline int64_t sample_cpufj_lns_integer(cuopt::pcgenerator_t& rng, int64_t lower, int64_t upper)
+{
+  const uint64_t width = static_cast<uint64_t>(upper) - static_cast<uint64_t>(lower) + 1;
+  uint64_t offset      = rng.next_u64();
+  // A zero width represents the complete int64_t domain.
+  if (width != 0) {
+    const uint64_t threshold = -width % width;
+    while (offset < threshold)
+      offset = rng.next_u64();
+    offset %= width;
+  }
+  const uint64_t value = static_cast<uint64_t>(lower) + offset;
+  return value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+           ? static_cast<int64_t>(value)
+           : -1 - static_cast<int64_t>(std::numeric_limits<uint64_t>::max() - value);
+}
+
 // CPUFJ solves a fresh neighborhood on every call. Keep its setup contract and
 // the LNS worker's validated incumbent separate from that solve-local state.
 template <typename i_t, typename f_t>
@@ -107,8 +126,9 @@ void run_cpufj_lns_ruin_repair(fj_cpu_climber_t<i_t, f_t>* ptr,
   }
   if (integer_vars.empty()) return;
 
-  std::mt19937 rng(static_cast<std::mt19937::result_type>(ptr->settings.seed));
-  std::uniform_real_distribution<double> random_unit(0.0, 1.0);
+  // Keep ruin draws separate from CPUFJ's repair generator, which uses settings.seed directly.
+  cuopt::splitmix64_t seed_rng(ptr->settings.seed);
+  cuopt::pcgenerator_t rng(seed_rng.next_u64());
   // Variables where the last adopted population incumbent disagreed with this climber's own
   // best-known point. Ruining preferentially from this pool is a crossover-style, population
   // guided neighborhood rather than uniform-random ruin.
@@ -169,7 +189,7 @@ void run_cpufj_lns_ruin_repair(fj_cpu_climber_t<i_t, f_t>* ptr,
 
     ruin_set.clear();
     if (!guidance_pool.empty()) {
-      std::shuffle(guidance_pool.begin(), guidance_pool.end(), rng);
+      rng.shuffle(guidance_pool);
       for (i_t v : guidance_pool) {
         if (static_cast<i_t>(ruin_set.size()) >= ruin_size) break;
         if (chosen[v]) continue;
@@ -177,11 +197,10 @@ void run_cpufj_lns_ruin_repair(fj_cpu_climber_t<i_t, f_t>* ptr,
         ruin_set.push_back(v);
       }
     }
-    std::uniform_int_distribution<size_t> pick_dist(0, integer_vars.size() - 1);
     size_t guard = 0;
     while (static_cast<i_t>(ruin_set.size()) < ruin_size &&
            guard++ < integer_vars.size() * 4 + 16) {
-      const i_t v = integer_vars[pick_dist(rng)];
+      const i_t v = integer_vars[rng.uniform<size_t>(0, integer_vars.size())];
       if (chosen[v]) continue;
       chosen[v] = 1;
       ruin_set.push_back(v);
@@ -198,16 +217,15 @@ void run_cpufj_lns_ruin_repair(fj_cpu_climber_t<i_t, f_t>* ptr,
       const auto bounds = ptr->h_var_bounds[v].get();
       const f_t lo = std::ceil(get_lower(bounds)), hi = std::floor(get_upper(bounds));
       f_t new_value;
-      if (random_unit(rng) < 0.5) {
+      if (rng.next_double() < 0.5) {
         new_value = pop_assignment[v];
       } else if (std::isfinite(lo) && std::isfinite(hi) &&
                  lo >= static_cast<f_t>(std::numeric_limits<int64_t>::min()) &&
                  hi < static_cast<f_t>(std::numeric_limits<int64_t>::max())) {
-        std::uniform_int_distribution<int64_t> value_dist(static_cast<int64_t>(lo),
-                                                          static_cast<int64_t>(hi));
-        new_value = static_cast<f_t>(value_dist(rng));
+        new_value = static_cast<f_t>(
+          sample_cpufj_lns_integer(rng, static_cast<int64_t>(lo), static_cast<int64_t>(hi)));
       } else {
-        new_value = random_unit(rng) < 0.5 ? lo : hi;
+        new_value = rng.next_double() < 0.5 ? lo : hi;
         if (!std::isfinite(new_value)) new_value = (f_t)ptr->h_assignment[v];
       }
       ptr->h_assignment[v] = new_value;
