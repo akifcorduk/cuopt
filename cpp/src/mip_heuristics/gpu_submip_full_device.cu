@@ -32,22 +32,22 @@ namespace {
 
 class stream_drain_t {
  public:
-  explicit stream_drain_t(const rmm::cuda_stream& stream) : stream_(stream) {}
+  explicit stream_drain_t(cudaStream_t stream) : stream_(stream) {}
 
   ~stream_drain_t()
   {
-    if (!drained_) { RAFT_CUDA_TRY_NO_THROW(cudaStreamSynchronize(stream_.value())); }
+    if (!drained_) { RAFT_CUDA_TRY_NO_THROW(cudaStreamSynchronize(stream_)); }
   }
 
   void synchronize()
   {
-    const auto status = cudaStreamSynchronize(stream_.value());
+    const auto status = cudaStreamSynchronize(stream_);
     drained_          = true;
     RAFT_CUDA_TRY(status);
   }
 
  private:
-  const rmm::cuda_stream& stream_;
+  cudaStream_t stream_;
   bool drained_{false};
 };
 
@@ -115,6 +115,53 @@ class paired_cancel_t {
 
 }  // namespace
 
+struct gpu_submip_device_pool_t::impl_t {
+  struct entry_t {
+    explicit entry_t(int device_) : device(device_) {}
+
+    int device;
+    bool busy{true};
+    rmm::cuda_stream stream{rmm::cuda_stream::flags::non_blocking};
+    raft::handle_t handle{stream};
+  };
+
+  ~impl_t()
+  {
+    for (auto& entry : entries) {
+      raft::device_setter device_guard(entry->device);
+      entry.reset();
+    }
+  }
+
+  std::mutex mutex;
+  std::vector<std::unique_ptr<entry_t>> entries;
+};
+
+gpu_submip_device_pool_t::gpu_submip_device_pool_t() : impl_(std::make_shared<impl_t>()) {}
+gpu_submip_device_pool_t::~gpu_submip_device_pool_t() = default;
+
+std::shared_ptr<const raft::handle_t> gpu_submip_device_pool_t::acquire(int device)
+{
+  raft::device_setter device_guard(device);
+  std::lock_guard lock(impl_->mutex);
+  impl_t::entry_t* selected = nullptr;
+  for (auto& entry : impl_->entries) {
+    if (!entry->busy && entry->device == device) {
+      selected = entry.get();
+      break;
+    }
+  }
+  if (!selected) {
+    impl_->entries.push_back(std::make_unique<impl_t::entry_t>(device));
+    selected = impl_->entries.back().get();
+  }
+  selected->busy = true;
+  return {&selected->handle, [pool = impl_, selected](const raft::handle_t*) {
+            std::lock_guard lock(pool->mutex);
+            selected->busy = false;
+          }};
+}
+
 int gpu_submip_device_id(const raft::handle_t* handle) { return handle->get_device(); }
 
 template <typename i_t, typename f_t>
@@ -128,7 +175,7 @@ bool run_gpu_submip_job_full_device(const gpu_submip_job_t<i_t, f_t>& job,
 {
   raft::device_setter device_guard(device);
   rmm::cuda_stream stream(rmm::cuda_stream::flags::non_blocking);
-  stream_drain_t drain(stream);
+  stream_drain_t drain(stream.value());
   bool found = false;
   {
     // Construct rather than copy: cuBLAS/cuSPARSE handles and their stream bindings
@@ -157,17 +204,19 @@ bool run_gpu_submip_job_full_device_continuous(
   const gpu_submip_options_t& options,
   std::function<f_t()> current_user_cutoff,
   std::function<void(const std::vector<f_t>&, f_t)> publish,
-  int device)
+  int device,
+  gpu_submip_device_pool_t* device_pool)
 {
   paired_cancel_t cancellation(root_halt, pair_halt);
   raft::device_setter device_guard(device);
-  rmm::cuda_stream stream(rmm::cuda_stream::flags::non_blocking);
-  stream_drain_t drain(stream);
+  gpu_submip_device_pool_t local_pool;
+  auto lease         = (device_pool ? device_pool : &local_pool)->acquire(device);
+  const auto& handle = *lease;
+  stream_drain_t drain(handle.get_stream().get());
   bool published_any   = false;
   uint64_t descent     = 0;
   const double started = tic();
   {
-    raft::handle_t handle(stream);
     std::unique_ptr<gpu_submip_fp_t<i_t, f_t>> session;
     const auto base_seed = get_base_seed(settings.seed);
     pcgenerator_t rng(derive_seed(base_seed, rng_id_t::gpu_submip_worker, job.job_id),
@@ -180,7 +229,7 @@ bool run_gpu_submip_job_full_device_continuous(
     CUOPT_LOG_INFO("GpuSubmipFullDevice job=%llu device=%d stream=%p sm_count=%d continuous=1",
                    (unsigned long long)job.job_id,
                    device,
-                   reinterpret_cast<void*>(stream.value()),
+                   reinterpret_cast<void*>(handle.get_stream().get()),
                    handle.get_device_properties().multiProcessorCount);
     while (!cancellation.cancelled() && tic() < job.deadline) {
       ++descent;
@@ -292,6 +341,7 @@ template bool run_gpu_submip_job_full_device_continuous<int, double>(
   const gpu_submip_options_t&,
   std::function<double()>,
   std::function<void(const std::vector<double>&, double)>,
-  int);
+  int,
+  gpu_submip_device_pool_t*);
 
 }  // namespace cuopt::mathematical_optimization::mip

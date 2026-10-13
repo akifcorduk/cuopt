@@ -54,6 +54,8 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
+class gpu_submip_device_pool_t;
+
 enum class mip_status_t {
   OPTIMAL         = 0,  // The optimal integer solution was found
   UNBOUNDED       = 1,  // The problem is unbounded
@@ -323,6 +325,7 @@ class branch_and_bound_t {
     std::atomic<uint64_t> paired_valid{0};
     std::atomic<uint64_t> paired_pending_joins{0};
     std::atomic<double> paired_join_wait_seconds{0.0};
+    std::shared_ptr<gpu_submip_device_pool_t> device_pool;
     struct source_stats_t {
       std::atomic<uint64_t> callbacks{0};
       std::atomic<uint64_t> eligible{0};

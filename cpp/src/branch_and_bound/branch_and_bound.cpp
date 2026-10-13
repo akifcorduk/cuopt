@@ -2494,7 +2494,7 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   try {
     return std::make_unique<gpu_submip_pair_t>(
       [shared, mip_settings, job, demand, report_error](std::atomic<int>* pair_halt) {
-        // This scope ends after the full-device executor has destroyed/drained its stream.
+        // This scope ends after the executor drains its stream and returns its resource lease.
         // Release also covers cancellation before readiness and every exceptional exit.
         scope_guard release_demand([&]() { demand->release(); });
         scope_guard completed(
@@ -2539,7 +2539,8 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
                                                                 shared->options,
                                                                 shared->current_user_cutoff,
                                                                 shared->publish,
-                                                                gpu_submip_device_id(ready_handle));
+                                                                gpu_submip_device_id(ready_handle),
+                                                                shared->device_pool.get());
           if (valid) { shared->paired_valid.fetch_add(1, std::memory_order_relaxed); }
         } catch (...) {
           // Cancel both B&B and regular heuristics before relinquishing demand. Other
@@ -5260,6 +5261,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     gpu_submip_shared_->fatal_cancel        = gpu_submip_fatal_cancel_;
     gpu_submip_shared_->root_halt           = &node_concurrent_halt_;
     gpu_submip_shared_->root_start          = exploration_stats_.start_time;
+    gpu_submip_shared_->device_pool         = std::make_shared<gpu_submip_device_pool_t>();
     gpu_submip_shared_->current_user_cutoff = [this]() {
       return compute_user_objective(original_lp_, upper_bound_.load());
     };

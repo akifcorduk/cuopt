@@ -220,6 +220,46 @@ TEST_F(GpuSubmipFullDevice, CancelledJobDoesNotPublish)
   expect_original_device();
 }
 
+TEST_F(GpuSubmipFullDevice, ReturningResourcesDoesNotInvalidateAnotherCapture)
+{
+  gpu_submip_device_pool_t pool;
+  auto first               = pool.acquire(original_device);
+  auto second              = pool.acquire(original_device);
+  const auto* first_handle = first.get();
+  EXPECT_NE(first.get(), second.get());
+  EXPECT_NE(first->get_stream(), second->get_stream());
+  const auto blas = first->get_cublas_handle();
+  rmm::device_uvector<int> data(1, second->get_stream());
+  second->sync_stream();
+
+  RAFT_CUDA_TRY(
+    cudaStreamBeginCapture(second->get_stream().get(), cudaStreamCaptureModeThreadLocal));
+  RAFT_CUDA_TRY(cudaMemsetAsync(data.data(), 0, sizeof(int), second->get_stream().get()));
+  // Destroying first's cuBLAS handle here would synchronize the entire device
+  // and invalidate second's in-progress capture, even on separate streams.
+  first.reset();
+  auto reused = pool.acquire(original_device);
+  EXPECT_EQ(reused.get(), first_handle);
+  cudaGraph_t graph = nullptr;
+  RAFT_CUDA_TRY(cudaStreamEndCapture(second->get_stream().get(), &graph));
+  ASSERT_NE(graph, nullptr);
+  RAFT_CUDA_TRY(cudaGraphDestroy(graph));
+  EXPECT_EQ(reused->get_cublas_handle(), blas);
+  expect_original_device();
+}
+
+TEST_F(GpuSubmipFullDevice, OutstandingLeaseRetainsResources)
+{
+  auto pool       = std::make_unique<gpu_submip_device_pool_t>();
+  auto lease      = pool->acquire(original_device);
+  const auto blas = lease->get_cublas_handle();
+  pool.reset();
+  EXPECT_EQ(lease->get_cublas_handle(), blas);
+  lease->sync_stream();
+  lease.reset();
+  expect_original_device();
+}
+
 TEST_F(GpuSubmipFullDevice, ConcurrentCallsKeepBoundsAndSettingsIndependent)
 {
   // Fractional LP seeds require projection after rounding. Opposite slack bounds
@@ -379,7 +419,9 @@ TEST_F(GpuSubmipFullDevice, ContinuousSessionRestartsAfterCycleAndPairCancelLeav
                                  settings,
                                  7,
                                  false);
-  job.deadline              = tic() + 10.;
+  // Allow instrumented GPU execution to finish a natural descent; the second
+  // cutoff read, rather than the wall deadline, must trigger cancellation.
+  job.deadline = tic() + 60.;
   std::atomic<int> root_halt{0}, pair_halt{0};
   int cutoff_reads = 0;
   int publications = 0;

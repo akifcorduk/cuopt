@@ -12,6 +12,22 @@ namespace cuopt::mathematical_optimization::mip {
 // Keep the CUDA-facing handle definition out of host-only worker implementations.
 int gpu_submip_device_id(const raft::handle_t* handle);
 
+// Exclusive leases keep streams and library handles alive across paired jobs. Keep
+// the pool alive until all solver workers have stopped: cuBLAS handle destruction
+// synchronizes the device and cannot overlap another worker's graph capture.
+class gpu_submip_device_pool_t {
+ public:
+  gpu_submip_device_pool_t();
+  ~gpu_submip_device_pool_t();
+  gpu_submip_device_pool_t(const gpu_submip_device_pool_t&)            = delete;
+  gpu_submip_device_pool_t& operator=(const gpu_submip_device_pool_t&) = delete;
+  std::shared_ptr<const raft::handle_t> acquire(int device);
+
+ private:
+  struct impl_t;
+  std::shared_ptr<impl_t> impl_;
+};
+
 // Execute on the caller's thread using the selected device's ordinary CUDA context.
 // Each call owns its stream, RAFT resources, and FP session. Callbacks run on this
 // thread; concurrent callers must synchronize any shared publication state.
@@ -39,6 +55,7 @@ bool run_gpu_submip_job_full_device_continuous(
   const gpu_submip_options_t& options,
   std::function<f_t()> current_user_cutoff,
   std::function<void(const std::vector<f_t>&, f_t)> publish,
-  int device);
+  int device,
+  gpu_submip_device_pool_t* device_pool = nullptr);
 
 }  // namespace cuopt::mathematical_optimization::mip
