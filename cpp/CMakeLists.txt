@@ -1649,6 +1649,19 @@ if (BUILD_MIP_BENCHMARKS AND NOT BUILD_LP_ONLY)
             "${dejavu_SOURCE_DIR}"
     )
 
+    add_executable(solve_GPU_SUBMIP_REPLAY
+            ../benchmarks/linear_programming/cuopt/gpu_submip_replay.cu)
+    set_target_properties(solve_GPU_SUBMIP_REPLAY PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+    target_compile_options(solve_GPU_SUBMIP_REPLAY
+            PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CUOPT_CXX_FLAGS}>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:${CUOPT_CUDA_FLAGS}>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:-fopenmp>"
+    )
+    target_link_libraries(solve_GPU_SUBMIP_REPLAY PUBLIC
+            cuopt_static OpenMP::OpenMP_CXX OpenMP::OpenMP_CUDA)
+    target_include_directories(solve_GPU_SUBMIP_REPLAY PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 endif ()
 
 option(BUILD_LP_BENCHMARKS "Build LP benchmarks" OFF)

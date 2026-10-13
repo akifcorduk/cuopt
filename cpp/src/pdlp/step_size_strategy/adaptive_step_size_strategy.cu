@@ -5,6 +5,7 @@
  */
 /* clang-format on */
 
+#include <cuopt/error.hpp>
 #include <cuopt/mathematical_optimization/pdlp/pdlp_hyper_params.cuh>
 
 #include <pdlp/pdlp_climber_strategy.hpp>
@@ -62,6 +63,8 @@ adaptive_step_size_strategy_t<i_t, f_t>::adaptive_step_size_strategy_t(
     reusable_device_scalar_value_0_{zero_v<f_t>, stream_view_},
     dot_product_storage(0, stream_view_),
     graph(stream_view_, is_legacy_batch_mode),
+    fused_graph_(stream_view_, is_legacy_batch_mode),
+    fused_graph_with_current_At_y_(stream_view_, is_legacy_batch_mode),
     climber_strategies_(climber_strategies),
     hyper_params_(hyper_params)
 {
@@ -345,19 +348,64 @@ void adaptive_step_size_strategy_t<i_t, f_t>::compute_step_sizes(
 
   cuopt_assert(!batch_mode_, "Batch mode is not supported for compute_step_sizes");
 
-  graph.run(total_pdlp_iterations, [&]() {
-    // compute numerator and deminator of n_lim
-    compute_interaction_and_movement(pdhg_solver.get_primal_tmp_resource(),
-                                     pdhg_solver.get_cusparse_view(),
-                                     pdhg_solver.get_saddle_point_state());
-    // Compute n_lim, n_next and decide if step size is valid
-    compute_step_sizes_from_movement_and_interaction<i_t, f_t>
-      <<<1, 1, 0, stream_view_.get()>>>(this->view(),
-                                        primal_step_size.data(),
-                                        dual_step_size.data(),
-                                        pdhg_solver.get_d_total_pdhg_iterations().data());
-  });
+  graph.run(total_pdlp_iterations,
+            [&]() { enqueue_step_size_decision(pdhg_solver, primal_step_size, dual_step_size); });
   // Steam sync so that next call can see modification made to host var valid_step_size
+  stream_view_.sync();
+}
+
+template <typename i_t, typename f_t>
+void adaptive_step_size_strategy_t<i_t, f_t>::enqueue_step_size_decision(
+  pdhg_solver_t<i_t, f_t>& pdhg_solver,
+  rmm::device_uvector<f_t>& primal_step_size,
+  rmm::device_uvector<f_t>& dual_step_size)
+{
+  compute_interaction_and_movement(pdhg_solver.get_primal_tmp_resource(),
+                                   pdhg_solver.get_cusparse_view(),
+                                   pdhg_solver.get_saddle_point_state());
+  compute_step_sizes_from_movement_and_interaction<i_t, f_t>
+    <<<1, 1, 0, stream_view_.get()>>>(this->view(),
+                                      primal_step_size.data(),
+                                      dual_step_size.data(),
+                                      pdhg_solver.get_d_total_pdhg_iterations().data());
+}
+
+template <typename i_t, typename f_t>
+void adaptive_step_size_strategy_t<i_t, f_t>::enqueue_fused_step(
+  pdhg_solver_t<i_t, f_t>& pdhg_solver,
+  rmm::device_uvector<f_t>& primal_step_size,
+  rmm::device_uvector<f_t>& dual_step_size,
+  bool recompute_current_At_y)
+{
+  pdhg_solver.enqueue_primal_dual_step(primal_step_size, dual_step_size, recompute_current_At_y);
+  enqueue_step_size_decision(pdhg_solver, primal_step_size, dual_step_size);
+}
+
+template <typename i_t, typename f_t>
+void adaptive_step_size_strategy_t<i_t, f_t>::take_fused_step(
+  pdhg_solver_t<i_t, f_t>& pdhg_solver,
+  rmm::device_uvector<f_t>& primal_step_size,
+  rmm::device_uvector<f_t>& dual_step_size,
+  i_t iterations_since_last_restart,
+  bool last_restart_was_average,
+  i_t total_pdlp_iterations)
+{
+  raft::common::nvtx::range fun_scope("take_fused_adaptive_step");
+  cuopt_expects(!batch_mode_ && !hyper_params_.use_reflected_primal_dual &&
+                  !pdhg_solver.is_distributed_master(),
+                error_type_t::ValidationError,
+                "Fused adaptive steps require single-GPU non-reflected PDLP");
+  const bool recompute_current_At_y =
+    pdhg_solver.total_pdhg_iterations_ == 0 ||
+    (iterations_since_last_restart == 0 && last_restart_was_average);
+  auto& fused_graph = recompute_current_At_y ? fused_graph_with_current_At_y_ : fused_graph_;
+  fused_graph.run(total_pdlp_iterations, [&]() {
+    enqueue_fused_step(pdhg_solver, primal_step_size, dual_step_size, recompute_current_At_y);
+  });
+  // Capture invalidation may replay the body eagerly. Count each attempt once,
+  // outside capture, exactly as pdhg_solver_t::take_step does.
+  ++pdhg_solver.total_pdhg_iterations_;
+  // The CPU retry loop must observe the mapped host acceptance/error flag.
   stream_view_.sync();
 }
 

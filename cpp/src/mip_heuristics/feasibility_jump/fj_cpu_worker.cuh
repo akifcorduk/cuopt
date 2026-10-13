@@ -42,6 +42,16 @@ struct fj_cpu_worker_t {
   std::atomic<bool> preemption_flag{false};
   std::unique_ptr<fj_cpu_climber_t<i_t, f_t>, fj_cpu_deleter_t> fj_cpu;
   std::function<void(f_t, const std::vector<f_t>&, double)> improvement_callback;
+  // Optional diagnostics around actual CPU execution (not OpenMP task submission).
+  std::function<void(bool)> lifecycle_callback;
+  static void notify_lifecycle(const std::function<void(bool)>& callback, bool starting) noexcept
+  {
+    try {
+      if (callback) { callback(starting); }
+    } catch (...) {
+      // Diagnostics must never change CPUFJ search or task completion.
+    }
+  }
   // Set before create_worker to join a portfolio; left null when the climber runs alone.
   std::shared_ptr<fj_cpu_shared_incumbent_t<i_t, f_t>> shared_incumbent;
 

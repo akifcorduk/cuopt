@@ -133,6 +133,49 @@ TEST(Population, ExplicitLnsOriginSurvivesPublicationAndQueueDrain)
   EXPECT_EQ(callback.origins, (std::vector<int>{1, 0, 1, 0, 0}));
 }
 
+TEST(Population, ParkedGpuPublishesCpuFjAndFeedsLnsWithoutDrainingPopulation)
+{
+  raft::handle_t handle;
+  opt::optimization_problem_t<int, double> op(&handle);
+  init_population_test_problem(op);
+  opt::mip_solver_settings_t<int, double> settings;
+  mip::problem_t<int, double> problem(op, settings.get_tolerances());
+  problem.preprocess_problem();
+  mip::mip_solver_context_t<int, double> context(&handle, &problem, settings);
+  mip::diversity_manager_t<int, double> dm(context);
+  dm.population.initialize_population();
+  dm.population.allocate_solutions();
+
+  bool parked   = false;
+  int delivered = 0, fed = 0;
+  context.gpu_handoff_host_solution = [&](const std::vector<double>& assignment, bool accepted) {
+    // The producer callback must run outside the population queue lock.
+    EXPECT_LE(dm.population.get_external_solution_size(), 4);
+    if (!parked) { return false; }
+    if (accepted) { return true; }
+    ++delivered;
+    return assignment == std::vector<double>{0.25, 0};
+  };
+  dm.population.set_feasible_solution_callback(
+    [&](const std::vector<double>& assignment, double objective, double user_objective) {
+      EXPECT_EQ(assignment, (std::vector<double>{fed == 0 ? 0.25 : 0.0, 0}));
+      EXPECT_DOUBLE_EQ(objective, fed == 0 ? 0.25 : 0.0);
+      EXPECT_DOUBLE_EQ(user_objective, objective);
+      ++fed;
+    });
+  dm.population.add_external_solution({0.5, 0}, 0.5, mip::solution_origin_t::CPUFJ);
+  EXPECT_EQ(delivered, 0);
+  EXPECT_EQ(fed, 0);
+  parked = true;
+  dm.population.add_external_solution({0.25, 0}, 0.25, mip::solution_origin_t::CPUFJ);
+  dm.population.add_external_solution({0.75, 0}, 0.75, mip::solution_origin_t::CPUFJ);
+  dm.population.add_external_solution({0, 0}, 0, mip::solution_origin_t::BRANCH_AND_BOUND);
+  EXPECT_EQ(delivered, 2);
+  EXPECT_EQ(fed, 2);
+  EXPECT_EQ(dm.population.get_external_solution_size(), 4);
+  dm.population.clear_feasible_solution_callback();
+}
+
 TEST(Population, ExternalQueueKeepsGlobalBestFiftyAcrossOrigins)
 {
   raft::handle_t handle;

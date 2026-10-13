@@ -14,8 +14,12 @@
 #include <utilities/timer.hpp>
 
 #include <thrust/count.h>
+#include <thrust/universal_vector.h>
 
+#include <atomic>
 #include <deque>
+#include <limits>
+#include <optional>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -93,11 +97,47 @@ struct cycle_queue_t {
 };
 
 struct fp_config_t {
-  double alpha                           = default_alpha;
+  double alpha         = default_alpha;
+  double initial_alpha = default_alpha;
+  // Zero retains the ordinary FP projection scheduling. Sub-MIP sessions set a hard cap.
+  double projection_time_limit           = 0.;
+  double rounding_time_limit             = 0.5;
+  double propagation_time_limit          = 0.7;
   double alpha_decrease_factor           = 0.9;
   bool check_distance_cycle              = true;
   int first_stage_kk                     = 70;
   double cycle_distance_reduction_ration = 0.1;
+  // Keep the continuous projection seed separate from the rounded distance target.
+  bool use_projection_warm_start = false;
+  bool log_descent_diagnostics   = false;
+  bool fused_adaptive_step       = false;
+};
+
+template <typename i_t, typename f_t>
+struct fp_projection_host_data_t {
+  std::vector<f_t> objective;
+  std::vector<i_t> integer_indices;
+  std::vector<typename type_2<f_t>::type> variable_bounds;
+  f_t objective_norm{0};
+  thrust::universal_host_pinned_vector<f_t> assignment;
+  thrust::universal_host_pinned_vector<f_t> last_projection;
+};
+
+struct fp_descent_diagnostics_t {
+  uint64_t job_id{0};
+  const char* exit_reason{"unknown"};
+  int projections{0};
+  double pdlp_limit_seconds{0.};
+  int free_integers{0};
+  int last_fractional{-1};
+  int best_fractional{std::numeric_limits<int>::max()};
+  int pdlp_status{-1};
+  int pdlp_steps{-1};
+  double pdlp_primal_residual{std::numeric_limits<double>::quiet_NaN()};
+  double last_distance{std::numeric_limits<double>::quiet_NaN()};
+  double cutoff{std::numeric_limits<double>::infinity()};
+  double rounding_seconds{0};
+  double fj_seconds{0};
 };
 
 template <typename i_t, typename f_t>
@@ -133,6 +173,17 @@ class feasibility_pump_t {
   void relax_general_integers(solution_t<i_t, f_t>& solution);
   void revert_relaxation(solution_t<i_t, f_t>& solution);
   bool test_fj_feasible(solution_t<i_t, f_t>& solution, f_t time_limit);
+  bool stop_requested();
+  void log_projection_diagnostics(const solution_t<i_t, f_t>& solution);
+  bool finish_descent(bool feasible, const char* reason);
+  // Private immutable-model sessions may cache these host inputs. Bounds must
+  // be refreshed for every node before starting a descent.
+  void set_projection_host_metadata(const std::vector<f_t>& objective,
+                                    const std::vector<i_t>& integer_indices);
+  void set_projection_host_bounds(const std::vector<typename type_2<f_t>::type>& bounds);
+  void copy_projection_host_iterates(solution_t<i_t, f_t>& solution,
+                                     std::vector<f_t>& assignment,
+                                     std::vector<f_t>& previous_projection);
 
   mip_solver_context_t<i_t, f_t>& context;
   // keep a reference from upstream local search
@@ -142,6 +193,8 @@ class feasibility_pump_t {
   cycle_queue_t<i_t, f_t> cycle_queue;
   constraint_prop_t<i_t, f_t>& constraint_prop;
   fp_config_t config;
+  fp_descent_diagnostics_t diagnostics;
+  std::optional<fp_projection_host_data_t<i_t, f_t>> projection_host_data;
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
   rmm::device_uvector<var_t> orig_variable_types;
@@ -150,6 +203,11 @@ class feasibility_pump_t {
   std::mt19937 rng;
   std::deque<f_t> last_distances;
   f_t last_lp_time;
+  f_t total_lp_time                 = 0;
+  i_t n_lp_calls                    = 0;
+  f_t total_verification_time       = 0;
+  i_t n_verification_calls          = 0;
+  std::atomic<int>* concurrent_halt = nullptr;
   f_t total_fp_time_until_cycle;
   f_t fp_fj_cycle_time_begin;
   f_t proj_and_round_time;

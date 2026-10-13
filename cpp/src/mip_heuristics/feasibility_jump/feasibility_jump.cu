@@ -73,6 +73,21 @@ fj_t<i_t, f_t>::fj_t(mip_solver_context_t<i_t, f_t>& context_,
     row_size_nonbin_prefix_sum(pb_ptr->nonbinary_indices.size(), pb_ptr->handle_ptr->get_stream()),
     work_ids_for_related_vars(pb_ptr->n_variables, pb_ptr->handle_ptr->get_stream())
 {
+  update_launch_dimensions();
+  reset_weights(pb_ptr->handle_ptr->get_stream());
+
+  // ensure the problem and its transpose are in a valid state (assert checks)
+  pb_ptr->check_problem_representation(true);
+
+  device_init(pb_ptr->handle_ptr->get_stream());
+  // allocate here to avoid cuda graph updates
+  // +1 comes from the main climber
+  alloc_max_climbers(1);
+}
+
+template <typename i_t, typename f_t>
+void fj_t<i_t, f_t>::update_launch_dimensions()
+{
   setval_launch_dims =
     get_launch_dims_update_assignment_kernel<i_t, f_t>(TPB_setval, pb_ptr->handle_ptr);
   update_changed_constraints_launch_dims =
@@ -102,21 +117,34 @@ fj_t<i_t, f_t>::fj_t(mip_solver_context_t<i_t, f_t>& context_,
                                                                 pb_ptr->handle_ptr);
   load_balancing_prepare_launch_dims =
     get_launch_dims_load_balancing_prepare_iteration<i_t, f_t>(TPB_loadbalance, pb_ptr->handle_ptr);
-  reset_weights(pb_ptr->handle_ptr->get_stream());
-
-  // ensure the problem and its transpose are in a valid state (assert checks)
-  pb_ptr->check_problem_representation(true);
-
-  device_init(pb_ptr->handle_ptr->get_stream());
-  // allocate here to avoid cuda graph updates
-  // +1 comes from the main climber
-  alloc_max_climbers(1);
 }
 
 template <typename i_t, typename f_t>
 void fj_t<i_t, f_t>::reset_cuda_graph()
 {
   step_graph_.reset();
+}
+
+template <typename i_t, typename f_t>
+void fj_t<i_t, f_t>::recreate_streams()
+{
+  handle_ptr->sync_stream();
+  for (auto& climber : climbers) {
+    climber->stream.synchronize();
+    climber->load_balancing_bin_stream.synchronize();
+    climber->load_balancing_nonbin_stream.synchronize();
+  }
+  reset_cuda_graph();
+  update_launch_dimensions();
+  for (auto& climber : climbers) {
+    climber->stream                       = rmm::cuda_stream{rmm::cuda_stream::flags::non_blocking};
+    climber->load_balancing_bin_stream    = rmm::cuda_stream{rmm::cuda_stream::flags::non_blocking};
+    climber->load_balancing_nonbin_stream = rmm::cuda_stream{rmm::cuda_stream::flags::non_blocking};
+    climber->grid_score_buf.resize(update_weights_launch_dims.first.x, handle_ptr->get_stream());
+    climber->grid_var_buf.resize(update_weights_launch_dims.first.x, handle_ptr->get_stream());
+    climber->grid_delta_buf.resize(update_weights_launch_dims.first.x, handle_ptr->get_stream());
+  }
+  populate_climber_views();
 }
 
 template <typename i_t, typename f_t>
@@ -854,7 +882,8 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
     // to actualize time limit
     handle_ptr->sync_stream();
     if (timer.check_time_limit() || steps >= settings.iteration_limit ||
-        context.preempt_heuristic_solver_.load()) {
+        context.preempt_heuristic_solver_.load() ||
+        (concurrent_halt != nullptr && concurrent_halt->load() != 0)) {
       limit_reached = true;
     }
 
@@ -954,7 +983,7 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx)
   }
 #if CUOPT_LOG_ACTIVE_LEVEL == RAPIDS_LOGGER_LOG_LEVEL_TRACE
   auto h_sol = cuopt::host_copy(solution.assignment, climber_stream);
-  static std::set<std::vector<f_t>> solutions_set;
+  static thread_local std::set<std::vector<f_t>> solutions_set;
   bool same_sol = solutions_set.count(h_sol) > 0;
   solutions_set.insert(h_sol);
   CUOPT_LOG_TRACE("n_iter %d n_local_mins %d best excess %f same sol %d max cstr score %f",

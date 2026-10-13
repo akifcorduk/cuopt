@@ -250,8 +250,7 @@ pdlp_restart_strategy_t<i_t, f_t>::pdlp_restart_strategy_t(
     /// Compute max number of blocks for live kernel
     int numBlocksPerSm       = 0;
     constexpr int numThreads = 128;
-    cudaDeviceProp deviceProp;
-    RAFT_CUDA_TRY(cudaGetDeviceProperties(&deviceProp, dev));
+    const auto& deviceProp   = handle_ptr->get_device_properties();
     RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
       &numBlocksPerSm,
       solve_bound_constrained_trust_region_kernel<i_t, f_t, numThreads>,

@@ -18,6 +18,7 @@
 #include <pdlp/pdlp.cuh>
 
 #include <utilities/copy_helpers.hpp>
+#include <utilities/logger.hpp>
 #include <utilities/timer.hpp>
 
 #include <raft/sparse/detail/cusparse_wrappers.h>
@@ -61,6 +62,56 @@ long double vector_norm(Iter_T first, Iter_T last)
   return sqrt(inner_product(first, last, first, 0.0));
 }
 
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::set_projection_host_metadata(
+  const std::vector<f_t>& objective, const std::vector<i_t>& integer_indices)
+{
+  cuopt_expects(
+    objective.size() == static_cast<size_t>(context.problem_ptr->n_variables) &&
+      integer_indices.size() == static_cast<size_t>(context.problem_ptr->n_integer_vars),
+    error_type_t::ValidationError,
+    "FP cached host metadata does not match the GPU problem");
+  auto& data           = projection_host_data.emplace();
+  data.objective       = objective;
+  data.integer_indices = integer_indices;
+  data.objective_norm  = vector_norm(objective.begin(), objective.end());
+  data.assignment.resize(objective.size());
+  data.last_projection.resize(objective.size());
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::set_projection_host_bounds(
+  const std::vector<typename type_2<f_t>::type>& bounds)
+{
+  cuopt_expects(projection_host_data && bounds.size() == projection_host_data->objective.size(),
+                error_type_t::ValidationError,
+                "FP cached host bounds do not match the GPU problem");
+  projection_host_data->variable_bounds = bounds;
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::copy_projection_host_iterates(
+  solution_t<i_t, f_t>& solution,
+  std::vector<f_t>& assignment,
+  std::vector<f_t>& previous_projection)
+{
+  auto& data = *projection_host_data;
+  cuopt_expects(data.assignment.size() == solution.assignment.size() &&
+                  data.last_projection.size() == last_projection.size() &&
+                  data.variable_bounds.size() == data.assignment.size(),
+                error_type_t::ValidationError,
+                "FP cached host inputs require a new model or refreshed node bounds");
+  const auto stream     = solution.handle_ptr->get_stream();
+  auto* host_assignment = thrust::raw_pointer_cast(data.assignment.data());
+  auto* host_projection = thrust::raw_pointer_cast(data.last_projection.data());
+  raft::copy(host_assignment, solution.assignment.data(), solution.assignment.size(), stream);
+  raft::copy(host_projection, last_projection.data(), last_projection.size(), stream);
+  // Both CPU inputs share one completion boundary and persistent pinned storage.
+  stream.sync();
+  assignment.assign(host_assignment, host_assignment + data.assignment.size());
+  previous_projection.assign(host_projection, host_projection + data.last_projection.size());
+}
+
 // this function creates a weighted objective between the distance to the polytope and the original
 // objective in the beginning the solution will favor the original objective but later it favors the
 // feasibility(distance)
@@ -75,11 +126,17 @@ void feasibility_pump_t<i_t, f_t>::adjust_objective_with_original(solution_t<i_t
       "changing alpha from %f to %f", config.alpha, config.alpha * config.alpha_decrease_factor);
     config.alpha = config.alpha * config.alpha_decrease_factor;
   }
-  f_t distance_weight         = 1. - config.alpha;
-  std::vector<f_t> obj_vector = cuopt::host_copy(solution.problem_ptr->objective_coefficients,
-                                                 solution.handle_ptr->get_stream());
-  solution.handle_ptr->sync_stream();
-  const f_t l2_norm_of_original_obj = vector_norm(obj_vector.begin(), obj_vector.end());
+  f_t distance_weight = 1. - config.alpha;
+  std::vector<f_t> uncached_objective;
+  if (!projection_host_data) {
+    uncached_objective = cuopt::host_copy(solution.problem_ptr->objective_coefficients,
+                                          solution.handle_ptr->get_stream());
+  }
+  const auto& obj_vector =
+    projection_host_data ? projection_host_data->objective : uncached_objective;
+  const f_t l2_norm_of_original_obj = projection_host_data
+                                        ? projection_host_data->objective_norm
+                                        : vector_norm(obj_vector.begin(), obj_vector.end());
   const f_t l2_norm_of_distance_obj = vector_norm(dist_objective.begin(), dist_objective.end());
   CUOPT_LOG_TRACE("l2_norm_of_original_obj %f l2_norm_of_distance_obj %f",
                   l2_norm_of_original_obj,
@@ -134,18 +191,30 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
 {
   raft::common::nvtx::range fun_scope("linear_project_onto_polytope");
   CUOPT_LOG_DEBUG("linear projection of fp");
-  auto h_assignment = solution.get_host_assignment();
-  auto h_variable_bounds =
-    cuopt::host_copy(solution.problem_ptr->variable_bounds, solution.handle_ptr->get_stream());
-  auto h_last_projection = cuopt::host_copy(last_projection, solution.handle_ptr->get_stream());
-  const f_t int_tol      = context.settings.tolerances.integrality_tolerance;
+  std::vector<f_t> h_assignment;
+  std::vector<f_t> h_last_projection;
+  std::vector<typename type_2<f_t>::type> uncached_bounds;
+  std::vector<i_t> uncached_integer_indices;
+  if (projection_host_data) {
+    copy_projection_host_iterates(solution, h_assignment, h_last_projection);
+  } else {
+    h_assignment = solution.get_host_assignment();
+    uncached_bounds =
+      cuopt::host_copy(solution.problem_ptr->variable_bounds, solution.handle_ptr->get_stream());
+    h_last_projection = cuopt::host_copy(last_projection, solution.handle_ptr->get_stream());
+    uncached_integer_indices =
+      cuopt::host_copy(solution.problem_ptr->integer_indices, solution.handle_ptr->get_stream());
+  }
+  const auto& h_variable_bounds =
+    projection_host_data ? projection_host_data->variable_bounds : uncached_bounds;
+  const auto& h_integer_indices =
+    projection_host_data ? projection_host_data->integer_indices : uncached_integer_indices;
+  const f_t int_tol = context.settings.tolerances.integrality_tolerance;
   constraints_delta_t<i_t, f_t> h_constraints;
   variables_delta_t<i_t, f_t> h_variables;
   h_variables.n_vars = solution.problem_ptr->n_variables;
   std::vector<f_t> obj_coefficients(solution.problem_ptr->n_variables, 0.);
   problem_t<i_t, f_t> temp_p(*solution.problem_ptr);
-  auto h_integer_indices =
-    cuopt::host_copy(solution.problem_ptr->integer_indices, solution.handle_ptr->get_stream());
   f_t obj_offset = 0;
   // for each integer add the variable and the distance constraints
   for (auto i : h_integer_indices) {
@@ -193,6 +262,20 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   }
   cuopt_assert(h_assignment.size() == temp_p.n_variables, "Var count mismatch!");
   cuopt_assert(temp_p.objective_coefficients.size() == temp_p.n_variables, "Var count mismatch!");
+  if (config.use_projection_warm_start) {
+    // The distance rows above refer to the rounded target. PDLP starts from the
+    // node LP solution or the preceding continuous projection instead.
+    std::copy(h_last_projection.begin(), h_last_projection.end(), h_assignment.begin());
+    // Distance rows can change identity even when their count stays unchanged.
+    // Only duals belonging to the stable subproblem rows can be reused.
+    auto& dual = solution.lp_state.prev_dual;
+    if (dual.size() > static_cast<size_t>(solution.problem_ptr->n_constraints)) {
+      thrust::fill(solution.handle_ptr->get_thrust_policy(),
+                   dual.begin() + solution.problem_ptr->n_constraints,
+                   dual.end(),
+                   f_t(0));
+    }
+  }
   solution.copy_new_assignment(h_assignment);
   cuopt_assert(solution.assignment.size() == temp_p.n_variables, "Var count mismatch!");
   // copy new objective coefficients
@@ -210,20 +293,26 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   const f_t rlp_base = context.settings.heuristic_params.relaxed_lp_time_limit;
   f_t time_limit     = longer_lp_run ? 5. * rlp_base : rlp_base;
   time_limit         = std::max(0.05, std::min(time_limit, timer.remaining_time() / 10.));
-  static f_t lp_time = 0;
-  static i_t n_calls = 0;
-  f_t old_remaining  = timer.remaining_time();
+  if (config.projection_time_limit > 0) {
+    time_limit = std::min(time_limit, f_t(config.projection_time_limit));
+  }
+  if (context.diversity_manager_ptr == nullptr) {
+    time_limit = std::max(f_t(0), std::min(time_limit, f_t(timer.remaining_time())));
+  }
+  const double projection_begin = timer.elapsed_time();
   cuopt_func_call(solution.test_variable_bounds(false));
   relaxed_lp_settings_t lp_settings;
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
+  lp_settings.concurrent_halt     = concurrent_halt;
+  lp_settings.fused_adaptive_step = config.fused_adaptive_step;
   auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
   cuopt_func_call(solution.test_variable_bounds(false));
-  last_lp_time = old_remaining - timer.remaining_time();
-  lp_time += last_lp_time;
-  n_calls++;
-  CUOPT_LOG_DEBUG("lp_time %f average lp_time %f", last_lp_time, lp_time / n_calls);
+  last_lp_time = timer.elapsed_time() - projection_begin;
+  total_lp_time += last_lp_time;
+  n_lp_calls++;
+  CUOPT_LOG_DEBUG("lp_time %f average lp_time %f", last_lp_time, total_lp_time / n_lp_calls);
   solution.assignment.resize(solution.problem_ptr->n_variables, solution.handle_ptr->get_stream());
   raft::copy(last_projection.data(),
              solution.assignment.data(),
@@ -231,6 +320,18 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
              solution.handle_ptr->get_stream());
   // Projection result might be feasible but not optimal, due to time limits
   bool is_feasible = solution.compute_feasibility();
+  if (config.log_descent_diagnostics) {
+    const auto& information = solver_response.get_additional_termination_information();
+    ++diagnostics.projections;
+    diagnostics.pdlp_limit_seconds = time_limit;
+    diagnostics.last_fractional =
+      solution.problem_ptr->n_integer_vars - solution.n_assigned_integers;
+    diagnostics.best_fractional =
+      std::min(diagnostics.best_fractional, diagnostics.last_fractional);
+    diagnostics.pdlp_status          = static_cast<int>(solver_response.get_termination_status());
+    diagnostics.pdlp_steps           = information.number_of_steps_taken;
+    diagnostics.pdlp_primal_residual = information.l2_primal_residual;
+  }
   cuopt_func_call(solution.test_variable_bounds(false));
   if (!is_feasible) {
     CUOPT_LOG_DEBUG("LP is infeasible returning the current PDLP solution! Code %d",
@@ -245,14 +346,24 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
 template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
 {
+  const double rounding_begin = config.log_descent_diagnostics ? timer.elapsed_time() : 0.;
   bool result;
   CUOPT_LOG_DEBUG("Rounding the point");
-  timer_t bounds_prop_timer(std::max(0.05, std::min(0.5, timer.remaining_time() / 10.)));
-  const f_t lp_run_time_after_feasible     = 0.;
-  bool old_var                             = constraint_prop.round_all_vars;
-  f_t old_time                             = constraint_prop.max_time_for_bounds_prop;
-  constraint_prop.round_all_vars           = false;
-  constraint_prop.max_time_for_bounds_prop = 0.7;
+  auto round_time =
+    std::max(0.05, std::min(config.rounding_time_limit, timer.remaining_time() / 10.));
+  if (context.diversity_manager_ptr == nullptr) {
+    round_time = std::max(0., std::min(round_time, timer.remaining_time()));
+  }
+  timer_t bounds_prop_timer(round_time);
+  const f_t lp_run_time_after_feasible = 0.;
+  bool old_var                         = constraint_prop.round_all_vars;
+  f_t old_time                         = constraint_prop.max_time_for_bounds_prop;
+  constraint_prop.round_all_vars       = false;
+  constraint_prop.max_time_for_bounds_prop =
+    context.diversity_manager_ptr == nullptr
+      ? std::max(0., std::min(config.propagation_time_limit, timer.remaining_time()))
+      : config.propagation_time_limit;
+  const double propagation_limit = constraint_prop.max_time_for_bounds_prop;
   result = constraint_prop.apply_round(solution, lp_run_time_after_feasible, bounds_prop_timer);
   constraint_prop.round_all_vars           = old_var;
   constraint_prop.max_time_for_bounds_prop = old_time;
@@ -265,6 +376,24 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
              solution.handle_ptr->get_stream());
   if (result) {
     CUOPT_LOG_DEBUG("New feasible solution with objective %g", solution.get_user_objective());
+  }
+  if (config.log_descent_diagnostics) {
+    const double elapsed = timer.elapsed_time() - rounding_begin;
+    diagnostics.rounding_seconds += elapsed;
+    if (diagnostics.projections == 1 || diagnostics.projections % 10 == 0) {
+      CUOPT_LOG_INFO(
+        "GpuSubmipFpRounding job=%llu iter=%d fractional=%d total_excess=%.9g "
+        "cutoff_excess=%.9g seconds=%.6f rounding_limit_seconds=%.6f "
+        "propagation_limit_seconds=%.6f",
+        (unsigned long long)diagnostics.job_id,
+        diagnostics.projections,
+        int(solution.problem_ptr->n_integer_vars - solution.n_assigned_integers),
+        double(solution.h_infeasibility_cost),
+        std::max(0., double(solution.h_obj) - diagnostics.cutoff),
+        elapsed,
+        round_time,
+        propagation_limit);
+    }
   }
   return result;
 }
@@ -308,7 +437,9 @@ bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& soluti
   fj.settings.n_of_minimums_for_exit = 5000;
   fj.settings.time_limit             = std::min(time_limit, timer.remaining_time());
   cuopt_func_call(solution.test_variable_bounds(true));
-  is_feasible = fj.solve(solution);
+  const double fj_begin = config.log_descent_diagnostics ? timer.elapsed_time() : 0.;
+  is_feasible           = fj.solve(solution);
+  if (config.log_descent_diagnostics) { diagnostics.fj_seconds += timer.elapsed_time() - fj_begin; }
   cuopt_func_call(solution.test_variable_bounds(true));
   // if FJ didn't change the solution, take last incumbent solution
   if (!is_feasible) {
@@ -329,7 +460,7 @@ bool feasibility_pump_t<i_t, f_t>::handle_cycle(solution_t<i_t, f_t>& solution)
   raft::common::nvtx::range fun_scope("handle_cycle");
   CUOPT_LOG_DEBUG("running handle cycle");
   bool is_feasible       = false;
-  fp_fj_cycle_time_begin = timer.remaining_time();
+  fp_fj_cycle_time_begin = timer.elapsed_time();
   CUOPT_LOG_DEBUG("Running longer FJ on last rounding");
   raft::copy(solution.assignment.data(),
              last_rounding.data(),
@@ -376,10 +507,11 @@ void feasibility_pump_t<i_t, f_t>::reset()
 {
   best_excess               = std::numeric_limits<f_t>::infinity();
   total_fp_time_until_cycle = 0;
-  fp_fj_cycle_time_begin    = timer.remaining_time();
+  fp_fj_cycle_time_begin    = timer.elapsed_time();
   max_n_of_integers         = 0;
-  config.alpha              = default_alpha;
+  config.alpha              = config.initial_alpha;
   last_distances.resize(0);
+  if (config.log_descent_diagnostics) { diagnostics = {}; }
 }
 
 template <typename i_t, typename f_t>
@@ -415,7 +547,43 @@ bool feasibility_pump_t<i_t, f_t>::check_distance_cycle(solution_t<i_t, f_t>& so
     CUOPT_LOG_DEBUG("Distance of projection: %f", distance_to_last_rounding);
   }
   last_distances.push_front(distance_to_last_rounding);
+  if (config.log_descent_diagnostics) {
+    diagnostics.last_distance = distance_to_last_rounding;
+    log_projection_diagnostics(solution);
+  }
   return is_cycle;
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::log_projection_diagnostics(const solution_t<i_t, f_t>& solution)
+{
+  if (diagnostics.projections != 1 && diagnostics.projections % 10 != 0) { return; }
+  const auto status = optimization_problem_solution_t<i_t, f_t>::get_termination_status_string(
+    static_cast<pdlp_termination_status_t>(diagnostics.pdlp_status));
+  CUOPT_LOG_INFO(
+    "GpuSubmipFpProjection job=%llu iter=%d fractional=%d free_integer=%d distance=%.9g "
+    "total_excess=%.9g cutoff_excess=%.9g alpha=%.6g pdlp_status=%s "
+    "pdlp_steps=%d pdlp_primal_residual=%.9g pdlp_seconds=%.6f pdlp_limit_seconds=%.6f",
+    (unsigned long long)diagnostics.job_id,
+    diagnostics.projections,
+    diagnostics.last_fractional,
+    diagnostics.free_integers,
+    diagnostics.last_distance,
+    double(solution.h_infeasibility_cost),
+    std::max(0., double(solution.h_obj) - diagnostics.cutoff),
+    config.alpha,
+    status.c_str(),
+    diagnostics.pdlp_steps,
+    diagnostics.pdlp_primal_residual,
+    double(last_lp_time),
+    diagnostics.pdlp_limit_seconds);
+}
+
+template <typename i_t, typename f_t>
+bool feasibility_pump_t<i_t, f_t>::finish_descent(bool feasible, const char* reason)
+{
+  if (config.log_descent_diagnostics) { diagnostics.exit_reason = reason; }
+  return feasible;
 }
 
 template <typename i_t, typename f_t>
@@ -468,6 +636,23 @@ void feasibility_pump_t<i_t, f_t>::revert_relaxation(solution_t<i_t, f_t>& solut
 }
 
 template <typename i_t, typename f_t>
+bool feasibility_pump_t<i_t, f_t>::stop_requested()
+{
+  if (context.diversity_manager_ptr && context.diversity_manager_ptr->check_b_b_preemption()) {
+    if (config.log_descent_diagnostics) { diagnostics.exit_reason = "cancel"; }
+    return true;
+  }
+  if ((concurrent_halt && concurrent_halt->load(std::memory_order_acquire)) ||
+      context.preempt_heuristic_solver_.load()) {
+    if (config.log_descent_diagnostics) { diagnostics.exit_reason = "cancel"; }
+    return true;
+  }
+  const bool expired = timer.check_time_limit();
+  if (expired && config.log_descent_diagnostics) { diagnostics.exit_reason = "deadline"; }
+  return expired;
+}
+
+template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
@@ -478,17 +663,19 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
   while (true) {
-    if (context.diversity_manager_ptr->check_b_b_preemption() || timer.check_time_limit()) {
+    if (stop_requested()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");
-      round(solution);
+      if (context.diversity_manager_ptr != nullptr) { round(solution); }
       return false;
     }
-    proj_begin = timer.remaining_time();
+    proj_begin = timer.elapsed_time();
     // pass n_assigned_integers from the previous iteration
     f_t ratio_of_assigned_integers =
       f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
-    i_t n_integers   = solution.compute_number_of_integers();
+    if (context.diversity_manager_ptr == nullptr && stop_requested()) { return false; }
+    // Projection already refreshed this count as part of compute_feasibility.
+    i_t n_integers = solution.n_assigned_integers;
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
                     n_integers,
                     solution.problem_ptr->n_integer_vars);
@@ -503,59 +690,70 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
         if (is_feasible) {
           bool res = solution.compute_feasibility();
           cuopt_assert(res, "Feasibility issue");
-          return true;
+          return finish_descent(true, "feasible_rounding");
         }
         cuopt::default_logger().flush();
-        f_t remaining_time_end_fp = timer.remaining_time();
-        total_fp_time_until_cycle = fp_fj_cycle_time_begin - remaining_time_end_fp;
+        const double elapsed_time_end_fp = timer.elapsed_time();
+        total_fp_time_until_cycle        = elapsed_time_end_fp - fp_fj_cycle_time_begin;
         CUOPT_LOG_DEBUG("total_fp_time_until_cycle: %f", total_fp_time_until_cycle);
-        return false;
+        return finish_descent(false, "distance_cycle");
       }
     }
     // if it is feasible check if all are still integer
     if (n_integers == solution.problem_ptr->n_integer_vars) {
       if (is_feasible) {
         CUOPT_LOG_DEBUG("Feasible solution found after LP with relative tolerance");
-        return true;
+        return finish_descent(true, "feasible_projection");
       }
       // if the solution is almost on polytope
       else if (last_distances[0] < distance_to_check_for_feasible) {
         // run the LP with full precision to check if it actually is feasible
         const f_t lp_verify_time_limit = 5.;
         relaxed_lp_settings_t lp_settings;
-        lp_settings.time_limit            = lp_verify_time_limit;
+        lp_settings.time_limit =
+          context.diversity_manager_ptr == nullptr
+            ? std::max(0.,
+                       std::min(double(context.settings.heuristic_params.relaxed_lp_time_limit),
+                                timer.remaining_time()))
+            : lp_verify_time_limit;
+        lp_settings.concurrent_halt       = concurrent_halt;
+        lp_settings.fused_adaptive_step   = config.fused_adaptive_step;
         lp_settings.tolerance             = solution.problem_ptr->tolerances.absolute_tolerance;
         lp_settings.return_first_feasible = true;
         lp_settings.save_state            = true;
+        const auto verification_begin     = timer.elapsed_time();
         run_lp_with_vars_fixed(*solution.problem_ptr,
                                solution,
                                solution.problem_ptr->integer_indices,
                                lp_settings,
                                &constraint_prop.bounds_update);
+        total_verification_time += timer.elapsed_time() - verification_begin;
+        ++n_verification_calls;
         is_feasible = solution.get_feasible();
         n_integers  = solution.compute_number_of_integers();
         if (is_feasible && n_integers == solution.problem_ptr->n_integer_vars) {
           CUOPT_LOG_DEBUG("Feasible solution verified with LP!");
-          return true;
+          return finish_descent(true, "feasible_verification");
         }
       }
     }
     cuopt_func_call(solution.test_variable_bounds(false));
     is_feasible = round(solution);
     cuopt_func_call(solution.test_variable_bounds(true));
-    proj_and_round_time = proj_begin - timer.remaining_time();
+    if (context.diversity_manager_ptr == nullptr && stop_requested()) { return false; }
+    proj_and_round_time = timer.elapsed_time() - proj_begin;
     if (!is_feasible) {
       const f_t time_ratio = 0.2;
       is_feasible          = test_fj_feasible(solution, time_ratio * proj_and_round_time);
     }
     if (timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");
-      return false;
+      return finish_descent(false, "deadline");
     }
     if (is_feasible) {
       bool res = solution.compute_feasibility();
       cuopt_assert(res, "Feasibility issue");
-      return true;
+      return finish_descent(true, "feasible_rounding_or_fj");
     }
     // do the cycle check if alpha diff is small enough
     f_t alpha_at_earlier_iter = config.alpha / config.alpha_decrease_factor;
@@ -565,14 +763,14 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     cycle_queue.update_recent_solutions(solution);
     if (is_cycle) {
       CUOPT_LOG_DEBUG("FP cycle encountered");
-      f_t remaining_time_end_fp = timer.remaining_time();
-      total_fp_time_until_cycle = fp_fj_cycle_time_begin - remaining_time_end_fp;
+      const double elapsed_time_end_fp = timer.elapsed_time();
+      total_fp_time_until_cycle        = elapsed_time_end_fp - fp_fj_cycle_time_begin;
       CUOPT_LOG_DEBUG(
-        "remaining_time_end_fp %f fp_fj_cycle_time_begin %f total_fp_time_until_cycle: %f",
-        remaining_time_end_fp,
+        "elapsed_time_end_fp %f fp_fj_cycle_time_begin %f total_fp_time_until_cycle: %f",
+        elapsed_time_end_fp,
         fp_fj_cycle_time_begin,
         total_fp_time_until_cycle);
-      return false;
+      return finish_descent(false, "integer_cycle");
     }
     cycle_queue.n_iterations_without_cycle++;
   }

@@ -12,6 +12,8 @@
 #include "setup/structure.hpp"
 #include "starts/starts.hpp"
 
+#include <utilities/scope_guard.hpp>
+
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
@@ -54,11 +56,17 @@ void fj_cpu_worker_t<i_t, f_t>::run_async(f_t time_limit, double work_unit_limit
 {
   if (!is_initialized) return;
 
-  auto& fj_ptr = fj_cpu;
-#pragma omp task shared(fj_cpu, is_initialized, fj_ptr) firstprivate(time_limit, work_unit_limit) \
+  auto& fj_ptr         = fj_cpu;
+  const auto lifecycle = lifecycle_callback;
+#pragma omp task shared(fj_cpu, is_initialized, fj_ptr) \
+  firstprivate(time_limit, work_unit_limit, lifecycle)  \
   priority(CUOPT_DEFAULT_TASK_PRIORITY) default(none) depend(out : fj_ptr)
   {
-    if (is_initialized) { cpufj_solve(fj_cpu.get(), time_limit, work_unit_limit); }
+    if (is_initialized) {
+      notify_lifecycle(lifecycle, true);
+      scope_guard lifecycle_end([&]() { notify_lifecycle(lifecycle, false); });
+      cpufj_solve(fj_cpu.get(), time_limit, work_unit_limit);
+    }
   }
 }
 
@@ -66,6 +74,9 @@ template <typename i_t, typename f_t>
 void fj_cpu_worker_t<i_t, f_t>::run_sync(f_t time_limit, double work_unit_limit)
 {
   if (!is_initialized) return;
+  const auto lifecycle = lifecycle_callback;
+  notify_lifecycle(lifecycle, true);
+  scope_guard lifecycle_end([&]() { notify_lifecycle(lifecycle, false); });
   cpufj_solve(fj_cpu.get(), time_limit, work_unit_limit);
   is_initialized = false;
   fj_cpu.reset();

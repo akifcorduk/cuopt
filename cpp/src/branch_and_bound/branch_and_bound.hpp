@@ -9,6 +9,9 @@
 
 #include <branch_and_bound/bb_event.hpp>
 #include <branch_and_bound/deterministic_workers.hpp>
+#include <branch_and_bound/gpu_submip_pair.hpp>
+#include <branch_and_bound/gpu_submip_queue.hpp>
+#include <branch_and_bound/gpu_submip_worker.hpp>
 #include <branch_and_bound/mip_node.hpp>
 #include <branch_and_bound/node_queue.hpp>
 #include <branch_and_bound/pseudo_costs.hpp>
@@ -32,6 +35,7 @@
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
+#include <cuopt/mathematical_optimization/mip/solver_settings.hpp>
 #include <cuopt/mathematical_optimization/pdlp/solver_settings.hpp>
 
 #include <mip_heuristics/presolve/third_party_presolve.hpp>
@@ -39,6 +43,7 @@
 
 #include <omp.h>
 
+#include <array>
 #include <atomic>
 #include <functional>
 #include <future>
@@ -78,6 +83,9 @@ inline std::string mip_status_to_string(mip_status_t status)
   }
   return "UNKNOWN";
 }
+
+template <typename i_t, typename f_t>
+struct fj_cpu_worker_t;
 
 template <typename i_t, typename f_t>
 struct clique_table_t;
@@ -150,6 +158,29 @@ class branch_and_bound_t {
 
   void set_concurrent_lp_root_solve(bool enable) { enable_concurrent_lp_root_solve_ = enable; }
 
+  void set_tree_entry_callback(std::function<void()> callback)
+  {
+    tree_entry_callback_ = std::move(callback);
+  }
+
+  void set_gpu_submip_configuration(std::function<const raft::handle_t*()> handle_provider,
+                                    const mip_solver_settings_t<i_t, f_t>& settings,
+                                    std::function<void()> release = {})
+  {
+    gpu_submip_handle_   = std::move(handle_provider);
+    gpu_submip_settings_ = std::make_shared<mip_solver_settings_t<i_t, f_t>>(settings);
+    gpu_submip_release_  = std::move(release);
+  }
+
+  void set_gpu_submip_handoff_callbacks(std::function<bool()> acquire,
+                                        std::function<void()> release,
+                                        std::function<void()> fatal_cancel = {})
+  {
+    gpu_submip_demand_acquire_ = std::move(acquire);
+    gpu_submip_demand_release_ = std::move(release);
+    gpu_submip_fatal_cancel_   = std::move(fatal_cancel);
+  }
+
   // Seed the global upper bound from an external source (e.g., early FJ during presolve).
   // `bound` must be in B&B's internal objective space.
   void set_initial_upper_bound(f_t bound);
@@ -170,6 +201,11 @@ class branch_and_bound_t {
   bool enable_concurrent_lp_root_solve() const { return enable_concurrent_lp_root_solve_; }
   std::atomic<int>* get_root_concurrent_halt() { return &root_concurrent_halt_; }
   void set_root_concurrent_halt(int value) { root_concurrent_halt_ = value; }
+  void request_halt()
+  {
+    solver_status_ = mip_status_t::HALT;
+    halt_solver();
+  }
   simplex::lp_status_t solve_root_relaxation(
     simplex::simplex_solver_settings_t<i_t, f_t> const& lp_settings,
     simplex::lp_solution_t<i_t, f_t>& root_relax_soln,
@@ -254,6 +290,76 @@ class branch_and_bound_t {
   bool enable_concurrent_lp_root_solve_{false};
   std::atomic<int> root_concurrent_halt_{0};
   std::atomic<int> node_concurrent_halt_{0};
+  std::function<void()> tree_entry_callback_;
+  std::function<const raft::handle_t*()> gpu_submip_handle_;
+  std::function<void()> gpu_submip_release_;
+  std::function<bool()> gpu_submip_demand_acquire_;
+  std::function<void()> gpu_submip_demand_release_;
+  std::function<void()> gpu_submip_fatal_cancel_;
+  std::shared_ptr<mip_solver_settings_t<i_t, f_t>> gpu_submip_settings_;
+  struct gpu_submip_shared_t {
+    gpu_submip_shared_t(gpu_submip_options_t options_, double deadline_)
+      : options(std::move(options_)), deadline(deadline_)
+    {
+    }
+    gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>> queue{2};
+    const gpu_submip_options_t options;
+    const double deadline;
+    std::atomic<uint64_t> next_job{0};
+    std::atomic<uint64_t> next_source{1};
+    std::function<const raft::handle_t*()> ready_handle;
+    std::function<bool()> demand_acquire;
+    std::function<void()> demand_release;
+    std::function<void()> fatal_cancel;
+    std::function<f_t()> current_user_cutoff;
+    std::function<void(const std::vector<f_t>&, f_t)> publish;
+    std::atomic<int>* root_halt{nullptr};
+    double root_start{0};
+    std::mutex error_mutex;
+    std::exception_ptr async_error;
+    std::atomic<uint64_t> paired_started{0};
+    std::atomic<uint64_t> paired_gpu_started{0};
+    std::atomic<uint64_t> paired_completed{0};
+    std::atomic<uint64_t> paired_valid{0};
+    std::atomic<uint64_t> paired_pending_joins{0};
+    std::atomic<double> paired_join_wait_seconds{0.0};
+    struct source_stats_t {
+      std::atomic<uint64_t> callbacks{0};
+      std::atomic<uint64_t> eligible{0};
+      std::atomic<uint64_t> selected{0};
+      std::atomic<uint64_t> enqueued{0};
+      std::atomic<uint64_t> enqueue_failed{0};
+      std::atomic<uint64_t> dequeued{0};
+      std::atomic<uint64_t> valid{0};
+    };
+    std::array<source_stats_t, gpu_submip_source_count> source_stats;
+  };
+  std::shared_ptr<gpu_submip_shared_t> gpu_submip_shared_;
+  std::function<bool(const std::vector<f_t>&, std::vector<f_t>&)> gpu_submip_to_user_;
+  uint64_t gpu_submip_source_id_{0};
+  // Quick sub-MIP DFS shares this B&B owner; each source keeps its own initial/stride slots.
+  std::array<std::atomic<uint64_t>, gpu_submip_source_count> gpu_submip_eligible_callbacks_{};
+  std::exception_ptr gpu_submip_exception_;
+
+  void run_gpu_submip_worker() noexcept;
+  void run_gpu_submip_worker_impl();
+  bool capture_gpu_submip_snapshot(const char* stage);
+  void release_gpu_submip_worker() noexcept;
+  void publish_gpu_submip_solution(const std::vector<f_t>& user_assignment);
+  void enqueue_gpu_submip_job(const simplex::lp_problem_t<i_t, f_t>& lp,
+                              const std::vector<simplex::variable_type_t>& types,
+                              const std::vector<f_t>& relaxation,
+                              i_t tree_node,
+                              i_t depth,
+                              i_t fractional,
+                              search_strategy_t strategy = search_strategy_t::BEST_FIRST);
+  std::unique_ptr<gpu_submip_pair_t> launch_gpu_submip_cpufj(
+    const simplex::lp_problem_t<i_t, f_t>& lp,
+    const std::vector<simplex::variable_type_t>& types,
+    const std::vector<f_t>& seed,
+    search_strategy_t strategy,
+    i_t structural_columns,
+    fj_cpu_worker_t<i_t, f_t>& cpu_worker);
   bool is_root_solution_set{false};
   bool has_initial_pseudocost_{false};
 
@@ -386,7 +492,8 @@ class branch_and_bound_t {
                                 const third_party_presolve_t<i_t, f_t>& presolver,
                                 submip_stats_t& submip_stats,
                                 f_t fixrate,
-                                std::string_view log_prefix);
+                                std::string_view log_prefix,
+                                std::mutex* postsolve_mutex = nullptr);
 
   // Solve the RINS sub-MIP.
   void solve_submip(diving_worker_t<i_t, f_t>* worker,

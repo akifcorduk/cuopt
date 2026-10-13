@@ -56,6 +56,7 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   set_pdlp_solver_mode(pdlp_settings);
   // TODO: set Stable3 here?
   pdlp::pdlp_solver_t<i_t, f_t> lp_solver(op_problem, pdlp_settings);
+  lp_solver.set_fused_adaptive_step(settings.fused_adaptive_step);
   if (settings.has_initial_primal) {
     i_t prev_size = lp_state.prev_dual.size();
     CUOPT_LOG_DEBUG(

@@ -73,6 +73,7 @@ enum class rng_id_t : uint64_t {
   early_cpufj,
   early_gpufj,
   line_segment_search,
+  gpu_submip_worker,
 };
 
 inline uint64_t get_base_seed(int64_t requested_seed)

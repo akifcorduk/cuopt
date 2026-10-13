@@ -106,6 +106,8 @@ class fj_t {
        rng_id_t seed_component_id = rng_id_t::local_search_cpu_fj);
   ~fj_t();
   void reset_cuda_graph();
+  void recreate_streams();
+  void update_launch_dimensions();
   i_t solve(solution_t<i_t, f_t>& solution);
   std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> create_cpu_climber(
     solution_t<i_t, f_t>& solution,
@@ -146,6 +148,7 @@ class fj_t {
   mip_solver_context_t<i_t, f_t>& context;
   problem_t<i_t, f_t>* pb_ptr;
   raft::handle_t* handle_ptr;
+  std::atomic<int>* concurrent_halt{nullptr};
 
   // cstr weights is the sum of both -1 (as they all start with 1) but to save from the perf we
   // always keep all cstr_weight is accessed multiple times in the code, so single access it better

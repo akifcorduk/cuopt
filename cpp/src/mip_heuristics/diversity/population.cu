@@ -150,6 +150,18 @@ void population_t<i_t, f_t>::add_external_solution(const std::vector<f_t>& solut
                                                    bool from_lns)
 {
   if (!std::isfinite(objective)) return;
+  // During the full-device handoff the GPU population consumer is parked. CPU FJ
+  // candidates still reach B&B validation and the host LNS feed immediately.
+  const bool accepted_by_bnb = origin == solution_origin_t::BRANCH_AND_BOUND;
+  if ((origin == solution_origin_t::CPUFJ || accepted_by_bnb) &&
+      context.gpu_handoff_host_solution &&
+      context.gpu_handoff_host_solution(solution, accepted_by_bnb)) {
+    std::lock_guard<std::mutex> callback_lock(feasible_solution_callback_mutex);
+    if (feasible_solution_callback) {
+      feasible_solution_callback(
+        solution, objective, problem_ptr->get_user_obj_from_solver_obj(objective));
+    }
+  }
   // Publish with producer metadata before queueing. Later population callbacks are
   // suppressed by the publication objective floor; new descendants have their own origin.
   context.solution_publication.publish_if_better(problem_ptr, solution, objective, from_lns);

@@ -769,6 +769,17 @@ void pdlp_solver_t<i_t, f_t>::set_inside_mip(bool inside_mip)
 }
 
 template <typename i_t, typename f_t>
+void pdlp_solver_t<i_t, f_t>::set_fused_adaptive_step(bool enabled)
+{
+  cuopt_expects(!enabled || (!batch_mode_ && !is_distributed_master() &&
+                             settings_.hyper_params.use_adaptive_step_size_strategy &&
+                             !settings_.hyper_params.use_reflected_primal_dual),
+                error_type_t::ValidationError,
+                "Fused adaptive steps require single-GPU non-reflected adaptive PDLP");
+  fused_adaptive_step_ = enabled;
+}
+
+template <typename i_t, typename f_t>
 void pdlp_solver_t<i_t, f_t>::record_best_primal_so_far(
   const pdlp::pdlp_termination_strategy_t<i_t, f_t>& current,
   const pdlp::pdlp_termination_strategy_t<i_t, f_t>& average,
@@ -3157,6 +3168,15 @@ void pdlp_solver_t<i_t, f_t>::take_adaptive_step(i_t total_pdlp_iterations, bool
     print("primal_step_size_", primal_step_size_);
     print("dual_step_size_", dual_step_size_);
 #endif
+    if (fused_adaptive_step_) {
+      step_size_strategy_.take_fused_step(pdhg_solver_,
+                                          primal_step_size_,
+                                          dual_step_size_,
+                                          restart_strategy_.get_iterations_since_last_restart(),
+                                          restart_strategy_.get_last_restart_was_average(),
+                                          total_pdlp_iterations);
+      continue;
+    }
     pdhg_solver_.take_step(
       primal_step_size_,
       dual_step_size_,

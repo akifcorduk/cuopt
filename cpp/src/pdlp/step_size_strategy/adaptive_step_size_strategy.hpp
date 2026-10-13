@@ -66,6 +66,13 @@ class adaptive_step_size_strategy_t {
                           rmm::device_uvector<f_t>& dual_step_size,
                           i_t total_pdlp_iterations);
 
+  void take_fused_step(pdhg_solver_t<i_t, f_t>& pdhg_solver,
+                       rmm::device_uvector<f_t>& primal_step_size,
+                       rmm::device_uvector<f_t>& dual_step_size,
+                       i_t iterations_since_last_restart,
+                       bool last_restart_was_average,
+                       i_t total_pdlp_iterations);
+
   void get_primal_and_dual_stepsizes(rmm::device_uvector<f_t>& primal_step_size,
                                      rmm::device_uvector<f_t>& dual_step_size);
   /**
@@ -103,6 +110,14 @@ class adaptive_step_size_strategy_t {
   void resize_context(i_t new_size);
 
  private:
+  void enqueue_step_size_decision(pdhg_solver_t<i_t, f_t>& pdhg_solver,
+                                  rmm::device_uvector<f_t>& primal_step_size,
+                                  rmm::device_uvector<f_t>& dual_step_size);
+  void enqueue_fused_step(pdhg_solver_t<i_t, f_t>& pdhg_solver,
+                          rmm::device_uvector<f_t>& primal_step_size,
+                          rmm::device_uvector<f_t>& dual_step_size,
+                          bool recompute_current_At_y);
+
   const bool batch_mode_;
 
   raft::handle_t const* handle_ptr_{nullptr};
@@ -130,6 +145,10 @@ class adaptive_step_size_strategy_t {
   size_t dot_product_bytes{0};
 
   ping_pong_graph_t<i_t> graph;
+  // Restart-to-average invalidates current A^T y. Each topology needs both
+  // pointer parities; rejected attempts retain the accepted-iteration parity.
+  ping_pong_graph_t<i_t> fused_graph_;
+  ping_pong_graph_t<i_t> fused_graph_with_current_At_y_;
 
   const std::vector<pdlp_climber_strategy_t>& climber_strategies_;
   const pdlp::pdlp_hyper_params_t& hyper_params_;

@@ -31,6 +31,21 @@ class solution_t {
 
   void copy_from(const solution_t<i_t, f_t>& other_sol);
 
+  // The caller must finish all uses of the previous stream before changing buffer ownership.
+  void set_storage_stream(cuda::stream_ref stream)
+  {
+    assignment.set_stream(stream);
+    lower_excess.set_stream(stream);
+    upper_excess.set_stream(stream);
+    lower_slack.set_stream(stream);
+    upper_slack.set_stream(stream);
+    constraint_value.set_stream(stream);
+    obj_val.set_stream(stream);
+    n_feasible_constraints.set_stream(stream);
+    lp_state.prev_primal.set_stream(stream);
+    lp_state.prev_dual.set_stream(stream);
+  }
+
   void resize_copy(const solution_t<i_t, f_t>& other_sol);
   void resize_to_problem();
   void resize_to_original_problem();

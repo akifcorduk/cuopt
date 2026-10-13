@@ -8,6 +8,7 @@
 #pragma once
 
 #include <branch_and_bound/worker.hpp>
+#include <branch_and_bound/worker_pool_diagnostics.hpp>
 #include <utilities/circular_deque.hpp>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -67,6 +68,7 @@ class worker_pool_t {
       num_idle_workers_--;
       assert(idle_workers_.size() == static_cast<size_t>(num_idle_workers_.load()));
       assert(idx >= 0 && static_cast<size_t>(idx) < workers_.size());
+      if (diagnostics_) { diagnostics_->acquire(idx); }
       return workers_[idx].get();
     }
   }
@@ -86,6 +88,53 @@ class worker_pool_t {
 
     idle_workers_.push_back(worker->worker_id);
     num_idle_workers_++;
+    if (diagnostics_) { diagnostics_->release(worker->worker_id); }
+  }
+
+  // Enable only for the sub-MIP pool, immediately after init and before its first acquire.
+  void enable_idle_diagnostics(uint64_t pool_id, bool inside_submip, double root_start)
+  {
+    std::lock_guard lock(mutex_);
+    assert(is_initialized_ && idle_workers_.size() == workers_.size());
+    if (!diagnostics_) {
+      diagnostics_ = std::make_unique<worker_pool_diagnostics_t>(
+        workers_.size(), pool_id, inside_submip, root_start);
+    }
+  }
+
+  // End the measurement after the owning tree taskgroup joins. Repeated closes are harmless.
+  void close_idle_diagnostics()
+  {
+    std::lock_guard lock(mutex_);
+    if (diagnostics_) { diagnostics_->close(); }
+  }
+
+  void observe_submip_schedule(submip_schedule_reason_t reason)
+  {
+    if (!diagnostics_) { return; }
+    std::lock_guard lock(mutex_);
+    diagnostics_->observe(reason, idle_workers_.size());
+  }
+
+  void submip_task_queued(i_t slot, const char* strategy, bool deferred)
+  {
+    if (!diagnostics_) { return; }
+    std::lock_guard lock(mutex_);
+    diagnostics_->queued(slot, strategy, deferred);
+  }
+
+  void submip_task_started(i_t slot)
+  {
+    if (!diagnostics_) { return; }
+    std::lock_guard lock(mutex_);
+    diagnostics_->started(slot);
+  }
+
+  void submip_task_stage(i_t slot, const char* stage)
+  {
+    if (!diagnostics_) { return; }
+    std::lock_guard lock(mutex_);
+    diagnostics_->task_stage(slot, stage);
   }
 
   WorkerType* operator[](i_t id)
@@ -113,6 +162,7 @@ class worker_pool_t {
   omp_mutex_t mutex_;
   circular_deque_t<i_t> idle_workers_;
   omp_atomic_t<i_t> num_idle_workers_{0};
+  std::unique_ptr<worker_pool_diagnostics_t> diagnostics_;
 };
 
 template <typename i_t, typename f_t>

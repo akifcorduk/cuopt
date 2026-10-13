@@ -19,6 +19,9 @@
 #include <dual_simplex/simplex_solver_settings.hpp>
 #include <dual_simplex/solve.hpp>
 #include <pdlp/translate.hpp>
+#include <utilities/mip_gpu_handoff.hpp>
+#include <utilities/mip_green_context.cuh>
+#include <utilities/scope_guard.hpp>
 
 // Must match the setting in solve.cu
 #define DETECT_SYMMETRY_AFTER_PRESOLVE
@@ -29,7 +32,11 @@
 #include <mip_heuristics/structural/early_structural.cuh>
 #include <raft/core/cusparse_macros.hpp>
 
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <future>
 #include <memory>
 #include <thread>
@@ -84,6 +91,88 @@ struct branch_and_bound_solution_helper_t {
   diversity_manager_t<i_t, f_t>* dm;
   simplex_solver_settings_t<i_t, f_t>& settings_;
 };
+
+template <typename i_t, typename f_t>
+static void restore_gpu_partition_at_scope_exit(mip_solver_context_t<i_t, f_t>& context,
+                                                diversity_manager_t<i_t, f_t>& dm,
+                                                cuopt::mip_green_context_t& gpu_partition,
+                                                solution_t<i_t, f_t>& sol)
+{
+  try {
+    dm.restore_gpu_partition(gpu_partition);
+  } catch (const std::exception& e) {
+    CUOPT_LOG_WARN("GPU partition cleanup failed: %s", e.what());
+  } catch (...) {
+    CUOPT_LOG_WARN("GPU partition cleanup failed with an unknown exception");
+  }
+  sol.set_storage_stream(context.handle_ptr->get_stream());
+  context.gpu_partition_safe_point = {};
+}
+
+template <typename i_t, typename f_t>
+static void record_parallel_exception(mip_solver_context_t<i_t, f_t>& context,
+                                      diversity_manager_t<i_t, f_t>& dm,
+                                      branch_and_bound_t<i_t, f_t>* branch_and_bound,
+                                      std::exception_ptr& parallel_exception)
+{
+  auto exception = std::current_exception();
+#pragma omp critical(cuopt_mip_task_exception)
+  {
+    if (!parallel_exception) { parallel_exception = exception; }
+    if (context.task_exception && !*context.task_exception) { *context.task_exception = exception; }
+  }
+  context.preempt_heuristic_solver_ = true;
+  dm.global_concurrent_halt         = 1;
+  if (branch_and_bound) {
+    branch_and_bound->set_root_concurrent_halt(1);
+    branch_and_bound->request_halt();
+  }
+}
+
+static void log_gpu_handoff(
+  const char* phase, int sm_count, const timer_t& timer, uint64_t generation, uint64_t demand)
+{
+  CUOPT_LOG_INFO(
+    "GpuSubmipHandoff phase=%s elapsed=%.6f sm_count=%d green_context=0 "
+    "generation=%llu demand=%llu host_monotonic_seconds=%.9f",
+    phase,
+    timer.elapsed_time(),
+    sm_count,
+    (unsigned long long)generation,
+    (unsigned long long)demand,
+    std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+template <typename i_t, typename f_t>
+static void finish_gpu_handoff(mip_solver_context_t<i_t, f_t>& context,
+                               cuopt::mip_gpu_handoff_t& handoff,
+                               bool enabled)
+{
+  if (!enabled) { return; }
+  context.preempt_heuristic_solver_.store(true, std::memory_order_release);
+  handoff.finish();
+}
+
+static void finish_regular_gpu_worker(cuopt::mip_gpu_handoff_t& handoff)
+{
+  RAFT_CUDA_TRY(cudaDeviceSynchronize());
+  handoff.regular_finished();
+}
+
+template <typename i_t, typename f_t>
+static bool publish_handoff_host_solution(mip_solver_context_t<i_t, f_t>& context,
+                                          const cuopt::mip_gpu_handoff_t& handoff,
+                                          const std::vector<f_t>& assignment,
+                                          bool accepted_by_bnb)
+{
+  if (!handoff.requested() || context.preempt_heuristic_solver_.load(std::memory_order_acquire) ||
+      !context.problem_ptr->branch_and_bound_callback) {
+    return false;
+  }
+  if (accepted_by_bnb) { return true; }
+  return context.problem_ptr->branch_and_bound_callback(assignment,
+                                                        heuristics_origin_t::HEURISTICS);
+}
 
 // Extract probing cache into CPU-only CSR struct for implied bounds cuts
 template <typename i_t, typename f_t>
@@ -185,7 +274,13 @@ void extract_probing_implied_bounds(const problem_t<i_t, f_t>& op_problem,
 template <typename i_t, typename f_t>
 solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 {
+  cuopt::mip_green_context_t gpu_partition(context.handle_ptr);
+  cuopt::mip_gpu_handoff_t gpu_handoff;
   solution_t<i_t, f_t> sol(*context.problem_ptr);
+  auto partition_callback_cleanup = cuopt::scope_guard([&]() {
+    context.gpu_partition_safe_point  = {};
+    context.gpu_handoff_host_solution = {};
+  });
 
   //  we need to keep original problem const
   cuopt_assert(context.problem_ptr != nullptr, "invalid problem pointer");
@@ -195,6 +290,38 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                 "preprocess_problem should be called before running the solver");
 
   diversity_manager_t<i_t, f_t> dm(context);
+  auto partition_restoration = cuopt::scope_guard(
+    [&]() { restore_gpu_partition_at_scope_exit(context, dm, gpu_partition, sol); });
+  const char* gpu_submip_env  = std::getenv("CUOPT_GPU_SUBMIP");
+  const char* disable_gpu_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
+  const bool gpu_submip_requested =
+    gpu_submip_env != nullptr && std::strcmp(gpu_submip_env, "1") == 0;
+  const bool gpu_submip_enabled =
+    gpu_submip_requested && omp_get_num_threads() >= 4 &&
+    (disable_gpu_env == nullptr || std::strcmp(disable_gpu_env, "1") != 0) &&
+    context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC &&
+    !context.settings.heuristics_only && context.settings.num_gpus == 1;
+  if (gpu_submip_requested && omp_get_num_threads() < 4) {
+    CUOPT_LOG_WARN("GPU subMIP disabled: at least four OpenMP threads are required");
+  }
+  const bool full_gpu_handoff = gpu_submip_enabled && gpu_submip_options_from_environment().mode ==
+                                                        gpu_submip_mode_t::CPUFJ_FULL_GPU;
+  if (full_gpu_handoff) {
+    const int sm_count = context.handle_ptr->get_device_properties().multiProcessorCount;
+    log_gpu_handoff("root", sm_count, timer_, 0, 0);
+    gpu_handoff.set_observer(
+      [&, sm_count](const char* phase, uint64_t generation, uint64_t demand) {
+        log_gpu_handoff(phase, sm_count, timer_, generation, demand);
+      });
+    context.gpu_partition_safe_point  = [&]() { dm.park_gpu_handoff(gpu_handoff); };
+    context.gpu_handoff_host_solution = [&](const std::vector<f_t>& assignment, bool accepted) {
+      return publish_handoff_host_solution(context, gpu_handoff, assignment, accepted);
+    };
+    dm.ls.fp.concurrent_halt = gpu_handoff.halt_flag();
+    dm.ls.fj.concurrent_halt = gpu_handoff.halt_flag();
+  } else if (gpu_submip_enabled) {
+    context.gpu_partition_safe_point = [&]() { dm.update_gpu_partition(gpu_partition); };
+  }
   if (context.problem_ptr->empty) {
     CUOPT_LOG_INFO("Problem fully reduced in presolve");
     sol.set_problem_fully_reduced();
@@ -386,6 +513,12 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       context.settings.mip_batch_pdlp_strong_branching;
     branch_and_bound_settings.mip_batch_pdlp_reliability_branching =
       context.settings.mip_batch_pdlp_reliability_branching;
+    if (gpu_submip_enabled && branch_and_bound_settings.mip_batch_pdlp_reliability_branching != 0) {
+      CUOPT_LOG_INFO(
+        "GPU subMIP experiment uses CPU node reliability branching to preserve the "
+        "GPU worker allocation");
+      branch_and_bound_settings.mip_batch_pdlp_reliability_branching = 0;
+    }
 
     branch_and_bound_settings.strong_branching_simplex_iteration_limit =
       context.settings.strong_branching_simplex_iteration_limit < 0
@@ -440,6 +573,21 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                                                           context.problem_ptr->clique_table,
                                                           context.symmetry.get());
     context.branch_and_bound_ptr = branch_and_bound.get();
+    if (full_gpu_handoff) {
+      branch_and_bound->set_tree_entry_callback([&]() { gpu_handoff.enable(); });
+      branch_and_bound->set_gpu_submip_handoff_callbacks(
+        [&]() { return gpu_handoff.acquire(); },
+        [&]() { gpu_handoff.release(); },
+        [&]() { context.preempt_heuristic_solver_.store(true, std::memory_order_release); });
+      branch_and_bound->set_gpu_submip_configuration(
+        [&]() { return gpu_handoff.ready() ? context.handle_ptr : nullptr; }, context.settings);
+    } else if (gpu_submip_enabled) {
+      branch_and_bound->set_tree_entry_callback([&]() { gpu_partition.request(); });
+      branch_and_bound->set_gpu_submip_configuration(
+        [&]() { return gpu_partition.submip_handle(); },
+        context.settings,
+        [&]() { gpu_partition.release_submip(); });
+    }
 
     // Convert the best external upper bound from user-space to B&B's internal objective space.
     // context.problem_ptr is the post-trivial-presolve problem, whose get_solver_obj_from_user_obj
@@ -511,12 +659,20 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     if (!root_structural->recognized()) { root_structural.reset(); }
   }
 
+  std::exception_ptr parallel_exception;
+
 #pragma omp taskgroup
   {
     if (!context.settings.heuristics_only) {
 #pragma omp task default(shared) priority(CUOPT_CRITICAL_TASK_PRIORITY)
       {
-        branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
+        auto handoff_completion =
+          cuopt::scope_guard([&]() { finish_gpu_handoff(context, gpu_handoff, full_gpu_handoff); });
+        try {
+          branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
+        } catch (...) {
+          record_parallel_exception(context, dm, branch_and_bound.get(), parallel_exception);
+        }
       }
     }
 
@@ -529,8 +685,21 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
     // Start the primal heuristics
     context.diversity_manager_ptr = &dm;
-    sol                           = dm.run_solver();
+    try {
+      sol = dm.run_solver();
+      if (full_gpu_handoff) { finish_regular_gpu_worker(gpu_handoff); }
+    } catch (...) {
+      record_parallel_exception(context, dm, branch_and_bound.get(), parallel_exception);
+    }
   }  // implicit barrier for all tasks created in B&B and heuristics
+
+  if (parallel_exception) { std::rethrow_exception(parallel_exception); }
+
+  if (gpu_submip_enabled) {
+    dm.restore_gpu_partition(gpu_partition);
+    sol.set_storage_stream(context.handle_ptr->get_stream());
+    context.gpu_partition_safe_point = {};
+  }
 
   dm.population.add_external_solutions_to_population();
   if (dm.population.is_feasible() &&

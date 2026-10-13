@@ -8,6 +8,7 @@
 #pragma once
 
 #include <thrust/pair.h>
+#include <atomic>
 #include <mip_heuristics/local_search/rounding/bounds_repair.cuh>
 #include <mip_heuristics/presolve/bounds_presolve.cuh>
 #include <mip_heuristics/presolve/conditional_bound_strengthening.cuh>
@@ -155,7 +156,13 @@ struct constraint_prop_t {
   bool single_rounding_only = false;
   bool round_all_vars       = true;
   // this is second timer that can continue but without recovery mode
-  f_t max_time_for_bounds_prop = 5.;
+  f_t max_time_for_bounds_prop      = 5.;
+  std::atomic<int>* concurrent_halt = nullptr;
+
+  bool stop_requested() const
+  {
+    return concurrent_halt && concurrent_halt->load(std::memory_order_acquire);
+  }
 };
 
 }  // namespace cuopt::mathematical_optimization::mip

@@ -105,6 +105,7 @@ class pdlp_solver_t {
                                                    const primal_quality_adapter_t& other);
 
   void set_inside_mip(bool inside_mip);
+  void set_fused_adaptive_step(bool enabled);
 
   void compute_initial_step_size();
   void compute_initial_primal_weight();
@@ -287,6 +288,7 @@ class pdlp_solver_t {
   primal_quality_adapter_t best_primal_quality_so_far_;
   // Flag to indicate if solver is being called from MIP. No logging is done in this case.
   bool inside_mip_{false};
+  bool fused_adaptive_step_{false};
 };
 
 }  // namespace cuopt::mathematical_optimization::pdlp

@@ -39,6 +39,18 @@ static int feasibility_team_size(const mip_solver_context_t<i_t, f_t>& context)
          lns_worker_count(team, context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC);
 }
 
+// Invoke only between complete GPU operations. The callback drains GPU work before migration
+// or parking, and temporary solutions must follow the handle's allocation stream.
+template <typename i_t, typename f_t>
+static void apply_gpu_partition_safe_point(mip_solver_context_t<i_t, f_t>& context,
+                                           solution_t<i_t, f_t>& solution)
+{
+  if (context.gpu_partition_safe_point) {
+    context.gpu_partition_safe_point();
+    solution.set_storage_stream(solution.handle_ptr->get_stream());
+  }
+}
+
 template <typename i_t, typename f_t>
 local_search_t<i_t, f_t>::local_search_t(mip_solver_context_t<i_t, f_t>& context_,
                                          rmm::device_uvector<f_t>& lp_optimal_solution_)
@@ -589,6 +601,7 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
                                                       timer_t timer)
 {
   raft::common::nvtx::range fun_scope("check_fj_on_lp_optimal");
+  apply_gpu_partition_safe_point(context, solution);
   if (lp_optimal_exists) {
     raft::copy(solution.assignment.data(),
                lp_optimal_solution.data(),
@@ -621,7 +634,8 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
   fj.settings.n_of_minimums_for_exit = 20000;
   fj.settings.update_weights         = true;
   fj.settings.feasibility_run        = false;
-  f_t time_limit                     = std::min(30., timer.remaining_time());
+  apply_gpu_partition_safe_point(context, solution);
+  f_t time_limit = std::min(30., timer.remaining_time());
   do_fj_solve(solution, fj, time_limit, "on_lp_optimal");
   return solution.get_feasible();
 }
@@ -630,6 +644,7 @@ template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fj_on_zero(solution_t<i_t, f_t>& solution, timer_t timer)
 {
   raft::common::nvtx::range fun_scope("run_fj_on_zero");
+  apply_gpu_partition_safe_point(context, solution);
   thrust::fill(solution.handle_ptr->get_thrust_policy(),
                solution.assignment.begin(),
                solution.assignment.end(),
@@ -677,6 +692,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
       timer_t binary_timer(timer.remaining_time() / 3);
       i_t binary_it_counter = 0;
       for (; binary_it_counter < 100; ++binary_it_counter) {
+        apply_gpu_partition_safe_point(context, solution);
         population_ptr->add_external_solutions_to_population();
         if (context.preempt_heuristic_solver_.load()) {
           CUOPT_LOG_DEBUG("Preempting heuristic solver!");
@@ -709,6 +725,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
       fp.last_distances.resize(0);
 
       for (i_t integer_it_counter = 0; integer_it_counter < 500; ++integer_it_counter) {
+        apply_gpu_partition_safe_point(context, solution);
         CUOPT_LOG_DEBUG(
           "Running integer problem from it %d large_restart_it %d", integer_it_counter, i);
         is_feasible = fp.run_single_fp_descent(solution);
@@ -871,6 +888,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
   }
   i_t last_improved_iteration = 0;
   for (i_t i = 0; i < n_fp_iterations && !timer.check_time_limit(); ++i) {
+    apply_gpu_partition_safe_point(context, solution);
     if (timer.check_time_limit()) {
       is_feasible = false;
       break;

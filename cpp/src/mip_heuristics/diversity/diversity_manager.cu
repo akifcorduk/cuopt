@@ -22,6 +22,8 @@
 #include <pdlp/solve.cuh>
 
 #include <utilities/copy_helpers.hpp>
+#include <utilities/mip_gpu_handoff.hpp>
+#include <utilities/mip_green_context.cuh>
 #include <utilities/scope_guard.hpp>
 
 #include <omp.h>
@@ -96,33 +98,6 @@ diversity_manager_t<i_t, f_t>::diversity_manager_t(mip_solver_context_t<i_t, f_t
            "ls"),
     ls_hash_map(*context.problem_ptr)
 {
-  int max_config             = -1;
-  int env_config_id          = -1;
-  const char* env_max_config = std::getenv("CUOPT_MAX_CONFIG");
-  if (env_max_config != nullptr) {
-    try {
-      max_config = std::stoi(env_max_config);
-      CUOPT_LOG_INFO("Using maximum configuration value from environment: %d", max_config);
-    } catch (const std::exception& e) {
-      CUOPT_LOG_WARN("Failed to parse CUOPT_MAX_CONFIG environment variable: %s", e.what());
-    }
-  }
-
-  const char* env_config_id_raw = std::getenv("CUOPT_CONFIG_ID");
-  if (env_config_id_raw == nullptr) { return; }
-
-  try {
-    env_config_id = std::stoi(env_config_id_raw);
-  } catch (const std::exception& e) {
-    CUOPT_LOG_WARN("Failed to parse CUOPT_CONFIG_ID environment variable: %s", e.what());
-    return;
-  }
-
-  if (max_config > 0 && env_config_id >= max_config) {
-    CUOPT_LOG_WARN(
-      "CUOPT_CONFIG_ID=%d is outside [0, %d). Ignoring cut override.", env_config_id, max_config);
-    return;
-  }
 }
 
 template <typename i_t, typename f_t>
@@ -466,8 +441,64 @@ bool diversity_manager_t<i_t, f_t>::check_b_b_preemption()
     population.add_external_solutions_to_population();
     return true;
   }
+  if (context.gpu_partition_safe_point) { context.gpu_partition_safe_point(); }
   population.add_external_solutions_to_population();
   return false;
+}
+
+template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::update_solution_streams()
+{
+  const auto stream = context.handle_ptr->get_stream();
+  for (auto& entry : population.solutions) {
+    entry.second.set_storage_stream(stream);
+  }
+  for (auto& solution : initial_sol_vector) {
+    solution.set_storage_stream(stream);
+  }
+  problem_ptr->lp_state.prev_primal.set_stream(stream);
+  problem_ptr->lp_state.prev_dual.set_stream(stream);
+  ls.problem_with_objective_cut.lp_state.prev_primal.set_stream(stream);
+  ls.problem_with_objective_cut.lp_state.prev_dual.set_stream(stream);
+}
+
+template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::update_gpu_partition(cuopt::mip_green_context_t& partition)
+{
+  if (!partition.activate_regular()) { return; }
+  ls.fj.recreate_streams();
+  update_solution_streams();
+  partition.publish_ready();
+}
+
+template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::park_gpu_handoff(cuopt::mip_gpu_handoff_t& handoff)
+{
+  if (!handoff.requested()) { return; }
+  // Publish candidates queued before the host-only CPUFJ delivery path became active.
+  population.add_external_solutions_to_population();
+  // FJ has auxiliary streams, so draining only the main RAFT stream is insufficient.
+  handoff.park_if_requested([]() { RAFT_CUDA_TRY(cudaDeviceSynchronize()); });
+}
+
+template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::restore_gpu_partition(cuopt::mip_green_context_t& partition)
+{
+  if (!partition.active()) { return; }
+  std::exception_ptr restoration_error;
+  try {
+    partition.restore_regular();
+  } catch (...) {
+    restoration_error = std::current_exception();
+  }
+  // Rebind persistent buffers even if CUDA synchronization failed during restoration.
+  update_solution_streams();
+  try {
+    ls.fj.recreate_streams();
+  } catch (...) {
+    if (!restoration_error) { restoration_error = std::current_exception(); }
+  }
+  if (restoration_error) { std::rethrow_exception(restoration_error); }
 }
 
 // returns the best feasible solution

@@ -15,8 +15,10 @@
 #include <utilities/work_unit_scheduler.hpp>
 
 #include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
+#include <vector>
 
 #pragma once
 
@@ -65,6 +67,12 @@ struct mip_solver_context_t {
   mip::branch_and_bound_t<i_t, f_t>* branch_and_bound_ptr{nullptr};
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
+  // Called only by the regular GPU worker between complete heuristic operations to migrate
+  // its streams or drain and park it for an exclusive GPU handoff.
+  std::function<void()> gpu_partition_safe_point;
+  // CPUFJ can publish directly to B&B while the regular GPU population consumer is parked.
+  // The second argument identifies incumbents already accepted by B&B.
+  std::function<bool(const std::vector<f_t>&, bool)> gpu_handoff_host_solution;
   // Owned by solve_mip and rethrown after its OpenMP team joins. Tasks write it inside
   // omp critical(cuopt_mip_task_exception).
   std::exception_ptr* task_exception{nullptr};

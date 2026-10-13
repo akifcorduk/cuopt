@@ -16,13 +16,21 @@ ConfigureTest(NUMOPT_INTERNAL_TEST
     # linear_programming
     ${CUOPT_TEST_DIR}/linear_programming/pdlp_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/unit_tests/pdlp_memory_test.cu
+    ${CUOPT_TEST_DIR}/linear_programming/unit_tests/pdlp_fused_adaptive_step_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/unit_tests/optimization_problem_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/unit_tests/presolve_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/parser_test.cpp
     # mip
+    ${CUOPT_TEST_DIR}/mip/gpu_submip_fp_test.cu
+    ${CUOPT_TEST_DIR}/mip/gpu_submip_full_device_test.cu
+    ${CUOPT_TEST_DIR}/mip/mip_gpu_handoff_test.cpp
+    ${CUOPT_TEST_DIR}/mip/worker_pool_diagnostics_test.cpp
+    ${CUOPT_TEST_DIR}/mip/gpu_submip_worker_test.cpp
+    ${CUOPT_TEST_DIR}/mip/gpu_submip_fixed_columns_test.cpp
     ${CUOPT_TEST_DIR}/mip/lns_test.cu
     ${CUOPT_TEST_DIR}/mip/miplib_test.cu
     ${CUOPT_TEST_DIR}/mip/mip_node_test.cpp
+    ${CUOPT_TEST_DIR}/mip/post_root_snapshot_test.cpp
     ${CUOPT_TEST_DIR}/mip/problem_test.cu
     ${CUOPT_TEST_DIR}/mip/population_test.cu
     ${CUOPT_TEST_DIR}/mip/elim_var_remap_test.cu

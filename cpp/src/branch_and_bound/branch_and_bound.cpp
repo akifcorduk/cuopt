@@ -9,7 +9,9 @@
 #include <branch_and_bound/degenerate_pivots.hpp>
 #include <branch_and_bound/diving_heuristics.hpp>
 #include <branch_and_bound/fractional.hpp>
+#include <branch_and_bound/gpu_submip_worker.hpp>
 #include <branch_and_bound/mip_node.hpp>
+#include <branch_and_bound/post_root_snapshot.hpp>
 #include <branch_and_bound/pseudo_costs.hpp>
 #include <branch_and_bound/symmetry.hpp>
 
@@ -17,6 +19,8 @@
 
 #include <cuts/cuts.hpp>
 #include <mip_heuristics/feasibility_jump/fj_cpu_worker.cuh>
+#include <mip_heuristics/gpu_submip_fp.hpp>
+#include <mip_heuristics/gpu_submip_full_device.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/presolve/conflict_graph/clique_table.cuh>
 #include <mip_heuristics/presolve/third_party_presolve.hpp>
@@ -37,16 +41,22 @@
 #include <raft/core/nvtx.hpp>
 #include <utilities/circular_deque.hpp>
 #include <utilities/hashing.hpp>
+#include <utilities/logger.hpp>
 
 #include <omp.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <list>
 #include <string>
+#include <thread>
 #include <utilities/scope_guard.hpp>
 #include <vector>
 
@@ -58,6 +68,36 @@
 #endif
 
 namespace cuopt::mathematical_optimization::mip {
+
+namespace {
+void configure_gpu_submip_host_thread()
+{
+  omp_set_num_threads(1);
+#ifdef __linux__
+  // OpenMP may pin the creating lane to one core. Allow the extra worker to use
+  // the configured OpenMP places instead of competing only with that lane.
+  cpu_set_t allowed;
+  CPU_ZERO(&allowed);
+  for (int place = 0; place < omp_get_num_places(); ++place) {
+    std::vector<int> processors(omp_get_place_num_procs(place));
+    omp_get_place_proc_ids(place, processors.data());
+    for (int processor : processors) {
+      if (processor >= 0 && processor < CPU_SETSIZE) { CPU_SET(processor, &allowed); }
+    }
+  }
+  if (CPU_COUNT(&allowed) > 0 && sched_setaffinity(0, sizeof(allowed), &allowed) != 0) {
+    CUOPT_LOG_INFO("GPU sub-MIP worker retains its inherited CPU affinity");
+  }
+#endif
+}
+
+void stop_and_join_gpu_submip(std::thread& worker, std::atomic<int>& halt)
+{
+  if (!worker.joinable()) { return; }
+  halt.store(true, std::memory_order_release);
+  worker.join();
+}
+}  // namespace
 
 using simplex::basis_update_mpf_t;
 using simplex::bounds_strengthening_t;
@@ -622,11 +662,16 @@ void branch_and_bound_t<i_t, f_t>::set_solution_from_submip(
   const third_party_presolve_t<i_t, f_t>& presolver,
   submip_stats_t& submip_stats,
   f_t fixrate,
-  [[maybe_unused]] std::string_view log_prefix)
+  [[maybe_unused]] std::string_view log_prefix,
+  std::mutex* postsolve_mutex)
 {
   bool check_postsolve = false;
   std::vector<f_t> leaf_sol;
-  presolver.uncrush_primal_solution(solution, leaf_sol, check_postsolve);
+  {
+    std::unique_lock<std::mutex> lock;
+    if (postsolve_mutex) { lock = std::unique_lock<std::mutex>(*postsolve_mutex); }
+    presolver.uncrush_primal_solution(solution, leaf_sol, check_postsolve);
+  }
   f_t obj = compute_objective(lp, leaf_sol);
 
   std::vector<f_t> user_sol;
@@ -1376,7 +1421,7 @@ std::pair<node_status_t, branch_direction_t> branch_and_bound_t<i_t, f_t>::updat
   const f_t abs_fathom_tol               = settings_.absolute_mip_gap_tol / 10;
   lp_problem_t<i_t, f_t>& leaf_problem   = worker->leaf_problem;
   lp_solution_t<i_t, f_t>& leaf_solution = worker->leaf_solution;
-  const f_t upper_bound                  = policy.upper_bound();
+  f_t upper_bound                        = policy.upper_bound();
   node_status_t status                   = node_status_t::PENDING;
   branch_direction_t round_dir           = branch_direction_t::NONE;
 
@@ -1423,6 +1468,18 @@ std::pair<node_status_t, branch_direction_t> branch_and_bound_t<i_t, f_t>::updat
     policy.update_pseudo_costs(node_ptr, leaf_obj);
     node_ptr->lower_bound = leaf_obj;
     snap_to_lattice(leaf_problem, node_ptr, leaf_obj);
+
+    if (num_frac > 0 && node_ptr->lower_bound <= upper_bound + abs_fathom_tol) {
+      if (gpu_submip_shared_) {
+        enqueue_gpu_submip_job(leaf_problem,
+                               worker->var_types,
+                               leaf_solution.x,
+                               node_ptr->node_id,
+                               node_ptr->depth,
+                               num_frac,
+                               worker->search_strategy);
+      }
+    }
 
     if (num_frac == 0) {
       policy.handle_integer_solution(node_ptr, leaf_obj, leaf_solution.x);
@@ -1769,6 +1826,7 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(bfs_worker_t<i_t, f_t>* worker,
     worker->lower_bound = node_ptr->lower_bound;
 
     if (node_ptr->lower_bound > upper_bound_.load()) {
+      submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::NODE_BOUND_PRUNED);
       search_tree_.graphviz_node(settings_.log, node_ptr, "cutoff", node_ptr->lower_bound);
       search_tree_.update(node_ptr, node_status_t::FATHOMED);
       worker->recompute_basis  = true;
@@ -1866,9 +1924,15 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(bfs_worker_t<i_t, f_t>* worker,
     worker->recompute_basis  = node_status != node_status_t::HAS_CHILDREN;
     worker->recompute_bounds = node_status != node_status_t::HAS_CHILDREN;
 
+    if (node_status != node_status_t::HAS_CHILDREN) {
+      submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::NODE_WITHOUT_CHILDREN);
+    }
     if (node_status == node_status_t::HAS_CHILDREN) {
       if (can_launch_new_submip) {
         can_launch_new_submip = !launch_submip_worker(worker->leaf_solution.x);
+      } else {
+        submip_worker_pool_.observe_submip_schedule(
+          submip_schedule_reason_t::PLUNGE_ALREADY_LAUNCHED);
       }
 
       // The stack should only contain the children of the current parent.
@@ -2273,20 +2337,419 @@ bool branch_and_bound_t<i_t, f_t>::launch_diving_worker(bfs_worker_t<i_t, f_t>* 
 }
 
 template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::enqueue_gpu_submip_job(const lp_problem_t<i_t, f_t>& lp,
+                                                          const std::vector<variable_type_t>& types,
+                                                          const std::vector<f_t>& relaxation,
+                                                          i_t tree_node,
+                                                          i_t depth,
+                                                          i_t fractional,
+                                                          search_strategy_t strategy)
+{
+  const auto shared = gpu_submip_shared_;
+  if (!shared || !shared->options.enable_fp ||
+      shared->options.mode != gpu_submip_mode_t::NODE_QUEUE) {
+    return;
+  }
+  const auto source  = gpu_submip_source(settings_.inside_submip, strategy);
+  auto& source_stats = shared->source_stats[static_cast<size_t>(source)];
+  source_stats.callbacks.fetch_add(1, std::memory_order_relaxed);
+  if (fractional <= 0 || depth < shared->options.min_depth ||
+      fractional > shared->options.max_fractional || node_concurrent_halt_.load() ||
+      tic() >= shared->deadline) {
+    return;
+  }
+  source_stats.eligible.fetch_add(1, std::memory_order_relaxed);
+  const auto ordinal = gpu_submip_eligible_callbacks_[static_cast<size_t>(source)].fetch_add(
+    1, std::memory_order_relaxed);
+  if (ordinal >= static_cast<uint64_t>(shared->options.initial_calls) &&
+      ordinal % shared->options.node_stride != 0) {
+    return;
+  }
+  source_stats.selected.fetch_add(1, std::memory_order_relaxed);
+  auto reservation = shared->queue.try_reserve();
+  if (!reservation) {
+    source_stats.enqueue_failed.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  std::vector<f_t> incumbent;
+  {
+    std::lock_guard lock(mutex_upper_);
+    if (incumbent_.has_incumbent && incumbent_.x.size() == relaxation.size()) {
+      incumbent = incumbent_.x;
+    }
+  }
+  auto job = std::make_unique<gpu_submip_job_t<i_t, f_t>>(
+    make_gpu_submip_job(lp,
+                        types,
+                        relaxation,
+                        incumbent,
+                        upper_bound_.load(),
+                        shared->options,
+                        *gpu_submip_settings_,
+                        shared->next_job.fetch_add(1),
+                        gpu_submip_source_applies_rins(source)));
+  job->source_id  = gpu_submip_source_id_;
+  job->source     = source;
+  job->strategy   = strategy;
+  job->tree_node  = tree_node;
+  job->depth      = depth;
+  job->fractional = fractional;
+  job->deadline   = shared->deadline;
+  job->to_user    = gpu_submip_to_user_;
+  if (reservation.publish(std::move(job))) {
+    source_stats.enqueued.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    source_stats.enqueue_failed.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+template <typename i_t, typename f_t>
+std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_submip_cpufj(
+  const lp_problem_t<i_t, f_t>& lp,
+  const std::vector<variable_type_t>& types,
+  const std::vector<f_t>& seed,
+  search_strategy_t strategy,
+  i_t structural_columns,
+  fj_cpu_worker_t<i_t, f_t>& cpu_worker)
+{
+  const auto shared = gpu_submip_shared_;
+  if (!shared || shared->options.mode != gpu_submip_mode_t::CPUFJ_FULL_GPU ||
+      !shared->options.enable_fp || shared->root_halt->load() || tic() >= shared->deadline) {
+    return {};
+  }
+  // These three CPUFJ sites supply their full simplex seed. Reject invalid data without
+  // replacing the seed or changing the existing CPU worker's behavior.
+  if (seed.size() != static_cast<size_t>(lp.num_cols) ||
+      !std::all_of(seed.begin(), seed.end(), [](f_t value) { return std::isfinite(value); })) {
+    CUOPT_LOG_INFO(
+      "GpuSubmipPairSkipped reason=invalid_cpu_seed strategy=%d columns=%d seed_size=%zu",
+      static_cast<int>(strategy),
+      lp.num_cols,
+      seed.size());
+    return {};
+  }
+  const auto job_id       = shared->next_job.fetch_add(1);
+  const auto mip_settings = gpu_submip_settings_;
+  auto job                = std::make_shared<gpu_submip_job_t<i_t, f_t>>(make_gpu_submip_job(lp,
+                                                                              types,
+                                                                              seed,
+                                                                              std::vector<f_t>{},
+                                                                              upper_bound_.load(),
+                                                                              shared->options,
+                                                                              *mip_settings,
+                                                                              job_id,
+                                                                              false));
+  job->source             = gpu_submip_source_t::CPU_SUBMIP;
+  job->source_id          = gpu_submip_source_id_;
+  job->strategy           = strategy;
+  job->tree_node          = -1;
+  job->depth              = -1;
+  std::vector<i_t> fractional;
+  job->fractional = fractional_variables(settings_, seed, types, fractional);
+  job->deadline   = shared->deadline;
+  job->to_user    = gpu_submip_to_user_;
+  const auto demand =
+    std::make_shared<gpu_submip_demand_t>(shared->demand_acquire, shared->demand_release);
+  if (!*demand) {
+    CUOPT_LOG_INFO("GpuSubmipPairSkipped pair=%llu reason=handoff_unavailable elapsed=%.6f",
+                   (unsigned long long)job_id,
+                   toc(shared->root_start));
+    return {};
+  }
+  const auto cpu_start          = std::make_shared<double>(0);
+  const auto join_start         = std::make_shared<double>(0);
+  const auto stop_start         = std::make_shared<double>(0);
+  cpu_worker.lifecycle_callback = [job_id, strategy, shared, cpu_start](bool starting) noexcept {
+    const double now = tic();
+    if (starting) { *cpu_start = now; }
+    CUOPT_LOG_INFO("GpuSubmipPairCpu%s pair=%llu strategy=%d elapsed=%.6f seconds=%.6f",
+                   starting ? "Start" : "End",
+                   (unsigned long long)job_id,
+                   static_cast<int>(strategy),
+                   now - shared->root_start,
+                   starting ? 0.0 : now - *cpu_start);
+  };
+  CUOPT_LOG_INFO(
+    "GpuSubmipPairLaunch pair=%llu source=cpu_submip source_id=%llu strategy=%d "
+    "rows=%d columns=%d structural_columns=%d fractional=%d additional_fixings=0 "
+    "elapsed=%.6f",
+    (unsigned long long)job_id,
+    (unsigned long long)job->source_id,
+    static_cast<int>(strategy),
+    lp.num_rows,
+    lp.num_cols,
+    structural_columns,
+    job->fractional,
+    toc(shared->root_start));
+  CUOPT_LOG_INFO("GpuSubmipPairCpuWorkStart pair=%llu elapsed=%.6f",
+                 (unsigned long long)job_id,
+                 toc(shared->root_start));
+  shared->paired_started.fetch_add(1, std::memory_order_relaxed);
+  const auto report_error = [shared](std::exception_ptr error) {
+    std::lock_guard lock(shared->error_mutex);
+    if (!shared->async_error) { shared->async_error = std::move(error); }
+    shared->root_halt->store(1, std::memory_order_release);
+    if (shared->fatal_cancel) { shared->fatal_cancel(); }
+  };
+  try {
+    return std::make_unique<gpu_submip_pair_t>(
+      [shared, mip_settings, job, demand, report_error](std::atomic<int>* pair_halt) {
+        // This scope ends after the full-device executor has destroyed/drained its stream.
+        // Release also covers cancellation before readiness and every exceptional exit.
+        scope_guard release_demand([&]() { demand->release(); });
+        scope_guard completed(
+          [&]() { shared->paired_completed.fetch_add(1, std::memory_order_relaxed); });
+        try {
+          configure_gpu_submip_host_thread();
+          const raft::handle_t* ready_handle = nullptr;
+          while (!pair_halt->load(std::memory_order_acquire) &&
+                 !shared->root_halt->load(std::memory_order_acquire) && tic() < shared->deadline) {
+            ready_handle = shared->ready_handle();
+            if (ready_handle) { break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+          if (!ready_handle || pair_halt->load() || shared->root_halt->load() ||
+              tic() >= shared->deadline) {
+            CUOPT_LOG_INFO(
+              "GpuSubmipPairGpuSkipped pair=%llu reason=halt_before_handoff elapsed=%.6f",
+              (unsigned long long)job->job_id,
+              toc(shared->root_start));
+            return;
+          }
+          const double started = tic();
+          shared->paired_gpu_started.fetch_add(1, std::memory_order_relaxed);
+          CUOPT_LOG_INFO(
+            "GpuSubmipPairGpuStart pair=%llu source=cpu_submip strategy=%d elapsed=%.6f",
+            (unsigned long long)job->job_id,
+            static_cast<int>(job->strategy),
+            started - shared->root_start);
+          bool valid = false;
+          scope_guard ended([&]() {
+            CUOPT_LOG_INFO("GpuSubmipPairGpuEnd pair=%llu elapsed=%.6f seconds=%.6f valid=%d",
+                           (unsigned long long)job->job_id,
+                           toc(shared->root_start),
+                           toc(started),
+                           int(valid));
+          });
+          valid =
+            run_gpu_submip_job_full_device_continuous<i_t, f_t>(*job,
+                                                                *mip_settings,
+                                                                shared->root_halt,
+                                                                pair_halt,
+                                                                shared->options,
+                                                                shared->current_user_cutoff,
+                                                                shared->publish,
+                                                                gpu_submip_device_id(ready_handle));
+          if (valid) { shared->paired_valid.fetch_add(1, std::memory_order_relaxed); }
+        } catch (...) {
+          // Cancel both B&B and regular heuristics before relinquishing demand. Other
+          // paired jobs retain their leases until drained; handoff.finish remains root-owned.
+          report_error(std::current_exception());
+        }
+      },
+      report_error,
+      [shared, job_id, join_start, stop_start](bool starting, bool already_finished) noexcept {
+        const double now = tic();
+        if (starting) {
+          *join_start = now;
+          if (!already_finished) {
+            shared->paired_pending_joins.fetch_add(1, std::memory_order_relaxed);
+          }
+        } else {
+          shared->paired_join_wait_seconds.fetch_add(now - *join_start, std::memory_order_relaxed);
+        }
+        CUOPT_LOG_INFO(
+          "GpuSubmipPairJoin%s pair=%llu elapsed=%.6f wait_seconds=%.6f "
+          "gpu_finished_before_join=%d",
+          starting ? "Start" : "End",
+          (unsigned long long)job_id,
+          now - shared->root_start,
+          starting ? 0.0 : now - *join_start,
+          int(already_finished));
+        if (!starting) {
+          CUOPT_LOG_INFO(
+            "GpuSubmipPairCleanupEnd pair=%llu elapsed=%.6f stop_to_cleanup_seconds=%.6f",
+            (unsigned long long)job_id,
+            now - shared->root_start,
+            now - *stop_start);
+        }
+      },
+      [shared, job_id, stop_start]() noexcept {
+        *stop_start = tic();
+        CUOPT_LOG_INFO("GpuSubmipPairCpuWorkEnd pair=%llu elapsed=%.6f",
+                       (unsigned long long)job_id,
+                       *stop_start - shared->root_start);
+        CUOPT_LOG_INFO(
+          "GpuSubmipPairStopRequested pair=%llu elapsed=%.6f reason=cpu_submip_scope_end",
+          (unsigned long long)job_id,
+          *stop_start - shared->root_start);
+      });
+  } catch (...) {
+    // A std::thread/closure allocation failure must not strand a demand lease or throw
+    // through an OpenMP task. Surface the failure at the root after other pairs join.
+    report_error(std::current_exception());
+    demand->release();
+    shared->paired_completed.fetch_add(1, std::memory_order_relaxed);
+    CUOPT_LOG_INFO("GpuSubmipPairGpuSkipped pair=%llu reason=thread_start_failure elapsed=%.6f",
+                   (unsigned long long)job_id,
+                   toc(shared->root_start));
+    return {};
+  }
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::publish_gpu_submip_solution(
+  const std::vector<f_t>& user_assignment)
+{
+  if (user_assignment.size() != static_cast<size_t>(original_problem_.num_cols)) { return; }
+  std::vector<f_t> assignment;
+  f_t parent_objective;
+  {
+    std::lock_guard lock(mutex_original_lp_);
+    crush_primal_solution(
+      original_problem_, original_lp_, user_assignment, new_slacks_, assignment);
+    f_t primal_error, bound_error;
+    i_t fractional;
+    if (!check_guess(
+          original_lp_, settings_, var_types_, assignment, primal_error, bound_error, fractional)) {
+      settings_.log.printf("GPU job candidate rejected by parent feasibility check\n");
+      return;
+    }
+    parent_objective = compute_objective(original_lp_, assignment);
+  }
+  if (node_concurrent_halt_.load() || parent_objective >= upper_bound_.load()) { return; }
+  if (set_solution_from_heuristics(user_assignment, heuristics_origin_t::SUBMIP)) {
+    CUOPT_LOG_INFO("GpuSubmipIncumbent objective=%.17g elapsed=%.6f",
+                   compute_user_objective(original_lp_, parent_objective),
+                   toc(exploration_stats_.start_time));
+    if (settings_.solution_callback) {
+      auto callback_assignment = user_assignment;
+      settings_.solution_callback(callback_assignment, parent_objective);
+    }
+  }
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::release_gpu_submip_worker() noexcept
+{
+  try {
+    if (gpu_submip_release_) { gpu_submip_release_(); }
+  } catch (...) {
+    gpu_submip_exception_ = std::current_exception();
+  }
+}
+
+template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::capture_gpu_submip_snapshot(const char* stage)
+{
+  const char* path = std::getenv("CUOPT_GPU_SUBMIP_SNAPSHOT");
+  if (settings_.inside_submip || path == nullptr) { return false; }
+  const char* requested = std::getenv("CUOPT_GPU_SUBMIP_SNAPSHOT_STAGE");
+  const bool after_cuts = requested && std::string(requested) == "post_cuts";
+  if (after_cuts != (std::string(stage) == "post_cuts")) { return false; }
+  std::vector<f_t> snapshot_incumbent;
+  f_t snapshot_upper;
+  {
+    std::lock_guard lock(mutex_upper_);
+    if (incumbent_.has_incumbent) { snapshot_incumbent = incumbent_.x; }
+    snapshot_upper = upper_bound_.load();
+  }
+  auto snapshot = capture_post_root_snapshot(original_lp_,
+                                             var_types_,
+                                             root_relax_soln_,
+                                             root_vstatus_,
+                                             edge_norms_,
+                                             snapshot_incumbent,
+                                             root_objective_,
+                                             snapshot_upper,
+                                             new_slacks_);
+  write_post_root_snapshot(path, snapshot);
+  settings_.log.printf("GpuSubmipSnapshot path=%s elapsed=%.6f incumbent=%d stage=%s\n",
+                       path,
+                       toc(exploration_stats_.start_time),
+                       !snapshot_incumbent.empty(),
+                       stage);
+  const char* stop = std::getenv("CUOPT_GPU_SUBMIP_CAPTURE_ONLY");
+  return stop && std::string(stop) == "1";
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker() noexcept
+{
+  try {
+    run_gpu_submip_worker_impl();
+  } catch (...) {
+    gpu_submip_exception_ = std::current_exception();
+    request_halt();
+  }
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker_impl()
+{
+  scope_guard release([this]() { release_gpu_submip_worker(); });
+  configure_gpu_submip_host_thread();
+  const auto shared = gpu_submip_shared_;
+  // This thread only consumes immutable jobs. Existing CPU workers own every tree and LP solve.
+  std::unique_ptr<gpu_submip_fp_t<i_t, f_t>> session;
+  while (!node_concurrent_halt_.load(std::memory_order_acquire) && !shared->queue.closed() &&
+         tic() < shared->deadline) {
+    const auto* handle = gpu_submip_handle_();
+    if (!handle) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+    auto job = shared->queue.pop_for(std::chrono::milliseconds(50));
+    if (!job) { continue; }
+    auto& source_stats = shared->source_stats[static_cast<size_t>(job->source)];
+    source_stats.dequeued.fetch_add(1, std::memory_order_relaxed);
+    const bool valid = run_gpu_submip_job<i_t, f_t>(
+      *job,
+      *gpu_submip_settings_,
+      handle,
+      &node_concurrent_halt_,
+      shared->options,
+      [this]() { return compute_user_objective(original_lp_, upper_bound_.load()); },
+      [this](const std::vector<f_t>& candidate, f_t) { publish_gpu_submip_solution(candidate); },
+      &session);
+    if (valid) { source_stats.valid.fetch_add(1, std::memory_order_relaxed); }
+  }
+}
+
+template <typename i_t, typename f_t>
 bool branch_and_bound_t<i_t, f_t>::launch_submip_worker(const std::vector<f_t>& sol)
 {
   bool enable_rins     = settings_.submip_settings.rins != 0;
   bool enable_rens     = settings_.submip_settings.rens != 0;
   bool enable_mutation = settings_.submip_settings.mutation != 0 && !settings_.inside_submip;
 
-  if (solver_status_ != mip_status_t::UNSET) return false;
-  if (node_concurrent_halt_.load(std::memory_order::acquire)) return false;
-  if (!enable_rins && !enable_rens && !enable_mutation) return false;
-  if (!enable_rens && !incumbent_.has_incumbent) return false;
-  if (submip_worker_pool_.num_idle() == 0) return false;
+  submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::REQUEST);
+  if (solver_status_ != mip_status_t::UNSET) {
+    submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::SOLVER_STOPPED);
+    return false;
+  }
+  if (node_concurrent_halt_.load(std::memory_order::acquire)) {
+    submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::HALTED);
+    return false;
+  }
+  if (!enable_rins && !enable_rens && !enable_mutation) {
+    submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::DISABLED);
+    return false;
+  }
+  if (!enable_rens && !incumbent_.has_incumbent) {
+    submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::NO_INCUMBENT);
+    return false;
+  }
+  if (submip_worker_pool_.num_idle() == 0) {
+    submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::NO_SLOT);
+    return false;
+  }
 
   diving_worker_t<i_t, f_t>* worker = submip_worker_pool_.pop_idle_worker();
-  if (!worker) return false;
+  if (!worker) {
+    submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::ACQUIRE_RACE);
+    return false;
+  }
 
   mutex_upper_.lock();
   bool has_incumbent = incumbent_.has_incumbent;
@@ -2296,6 +2759,7 @@ bool branch_and_bound_t<i_t, f_t>::launch_submip_worker(const std::vector<f_t>& 
   mutex_upper_.unlock();
 
   if (!use_mutation && !use_rins && !enable_rens) {
+    submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::NO_STRATEGY);
     submip_worker_pool_.return_worker_to_pool(worker);
     return false;
   }
@@ -2312,13 +2776,19 @@ bool branch_and_bound_t<i_t, f_t>::launch_submip_worker(const std::vector<f_t>& 
   simplex_solver_settings_t<i_t, f_t> submip_settings = settings_;
   submip_settings.concurrent_halt                     = &node_concurrent_halt_;
 
+  submip_worker_pool_.observe_submip_schedule(submip_schedule_reason_t::DISPATCHED);
   if (use_mutation) {
     worker->search_strategy = search_strategy_t::MUTATION;
+    submip_worker_pool_.submip_task_queued(
+      worker->worker_id, search_strategy_to_string(worker->search_strategy), true);
 #pragma omp task priority(CUOPT_DEFAULT_TASK_PRIORITY) affinity(worker) firstprivate(worker)
     mutation(worker, submip_settings);
     return true;
   }
 
+  submip_worker_pool_.submip_task_queued(worker->worker_id,
+                                         search_strategy_to_string(worker->search_strategy),
+                                         !settings_.inside_submip);
   if (settings_.inside_submip) {
     // LLVM libomp's GOMP compatibility path skips GCC's firstprivate copy
     // function for included tasks.
@@ -2340,6 +2810,7 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
                                                 simplex_solver_settings_t<i_t, f_t> submip_settings)
 {
   double start_time = tic();
+  submip_worker_pool_.submip_task_stage(worker->worker_id, "child_prepare_start");
 
   bool is_root_heuristic = submip_settings.inside_root_node;
   i_t submip_level       = settings_.submip_settings.level + 1;
@@ -2376,10 +2847,16 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
 
   submip_settings.branch_and_bound_simplex_iteration_limit =
     iter_offset + simplex_iter * iter_ratio - simplex_iter_used;
-  if (submip_settings.branch_and_bound_simplex_iteration_limit <= 0) { return; }
+  if (submip_settings.branch_and_bound_simplex_iteration_limit <= 0) {
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "child_iteration_limit");
+    return;
+  }
 
   submip_settings.time_limit = settings_.time_limit - toc(exploration_stats_.start_time);
-  if (submip_settings.time_limit <= 0) { return; }
+  if (submip_settings.time_limit <= 0) {
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "child_time_limit");
+    return;
+  }
 
   submip_settings.relative_mip_gap_tol =
     std::min(settings_.submip_settings.target_mip_gap, rel_gap);
@@ -2402,18 +2879,23 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   simplex::convert_lp_to_user_problem(
     worker->leaf_problem, worker->var_types, settings_, submip_problem);
 
-  third_party_presolve_t<i_t, f_t> presolver;
+  auto presolver_owner    = std::make_shared<third_party_presolve_t<i_t, f_t>>();
+  auto& presolver         = *presolver_owner;
+  auto postsolve_mutex    = gpu_submip_shared_ ? std::make_shared<std::mutex>() : nullptr;
   f_t presolve_time_limit = std::min(0.1 * submip_settings.time_limit, 60.0);
+  submip_worker_pool_.submip_task_stage(worker->worker_id, "presolve_start");
   third_party_presolve_status_t presolver_status =
     presolver.apply_to_subproblem(submip_problem, submip_settings, presolve_time_limit, 1);
 
   double presolve_time = toc(start_time);
+  submip_worker_pool_.submip_task_stage(worker->worker_id, "presolve_end");
 
   if (presolver_status == third_party_presolve_status_t::INFEASIBLE ||
       presolver_status == third_party_presolve_status_t::UNBNDORINFEAS ||
       presolver_status == third_party_presolve_status_t::UNBOUNDED) {
     DEBUG_SUBMIP("{}Presolve detected infeasibility", log_prefix);
     submip_stats.save_infeasible(fixrate);
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "presolve_infeasible_or_unbounded");
     return;
   }
 
@@ -2424,16 +2906,19 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
                  submip_problem.num_rows,
                  submip_problem.num_cols);
     submip_stats.save_empty();
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "presolve_trivial");
     return;
   }
 
   if (toc(exploration_stats_.start_time) > settings_.time_limit) {
     solver_status_ = mip_status_t::TIME_LIMIT;
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "child_time_limit");
     return;
   }
 
   if (submip_settings.concurrent_halt &&
       submip_settings.concurrent_halt->load(std::memory_order_acquire)) {
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "child_halted");
     return;
   }
 
@@ -2441,10 +2926,15 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   submip_settings.dual_simplex_objective_callback = nullptr;
   submip_settings.set_simplex_solution_callback   = nullptr;
   submip_settings.solution_callback =
-    [this, &presolver, fixrate, &submip_stats, log_prefix, worker](const std::vector<f_t>& solution,
-                                                                   f_t obj) {
-      this->set_solution_from_submip(
-        worker->leaf_problem, solution, presolver, submip_stats, fixrate, log_prefix);
+    [this, &presolver, postsolve_mutex, fixrate, &submip_stats, log_prefix, worker](
+      const std::vector<f_t>& solution, f_t obj) {
+      this->set_solution_from_submip(worker->leaf_problem,
+                                     solution,
+                                     presolver,
+                                     submip_stats,
+                                     fixrate,
+                                     log_prefix,
+                                     postsolve_mutex.get());
     };
 
   DEBUG_SUBMIP("{}Sub-MIP: {} constraints, {} variables, {} nonzeros\n",
@@ -2457,11 +2947,45 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   submip_settings.time_limit = settings_.time_limit - toc(exploration_stats_.start_time);
   if (submip_settings.time_limit <= 0.0) {
     solver_status_ = mip_status_t::TIME_LIMIT;
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "child_time_limit");
     return;
   }
 
   branch_and_bound_t submip_bnb(submip_problem, submip_settings, tic(), empty_probing);
   mip_solution_t<i_t, f_t> submip_solution(submip_problem.num_cols);
+  if (gpu_submip_shared_) {
+    // Each job owns this postsolve chain; no child solver, pool worker, or stats object escapes.
+    // Serialize Papilo undo with its existing CPU callbacks, without extending that lock across
+    // validation/publication or any ancestor mapping.
+    const auto parent_lp     = std::make_shared<const lp_problem_t<i_t, f_t>>(worker->leaf_problem);
+    const auto parent_types  = worker->var_types;
+    const auto parent_mapper = gpu_submip_to_user_;
+    const auto mip_settings  = gpu_submip_settings_;
+    const i_t child_user_columns     = submip_problem.num_cols;
+    submip_bnb.gpu_submip_shared_    = gpu_submip_shared_;
+    submip_bnb.gpu_submip_settings_  = mip_settings;
+    submip_bnb.gpu_submip_source_id_ = gpu_submip_shared_->next_source.fetch_add(1);
+    submip_bnb.gpu_submip_to_user_   = [presolver_owner,
+                                      postsolve_mutex,
+                                      parent_lp,
+                                      parent_types,
+                                      parent_mapper,
+                                      mip_settings,
+                                      child_user_columns](const std::vector<f_t>& candidate,
+                                                          std::vector<f_t>& user) {
+      if (candidate.size() < static_cast<size_t>(child_user_columns)) { return false; }
+      std::vector<f_t> reduced(candidate.begin(), candidate.begin() + child_user_columns);
+      std::vector<f_t> parent;
+      {
+        std::lock_guard lock(*postsolve_mutex);
+        presolver_owner->uncrush_primal_solution(reduced, parent, false);
+      }
+      if (!gpu_submip_candidate_is_valid(*parent_lp, parent_types, parent, *mip_settings)) {
+        return false;
+      }
+      return parent_mapper && parent_mapper(parent, user);
+    };
+  }
 
   std::vector<f_t> presolved_incumbent;
 
@@ -2500,7 +3024,13 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
     });
   }
 
+  std::unique_ptr<gpu_submip_pair_t> gpu_cpufj_pair;
   fj_cpu_worker_t<i_t, f_t> submip_fj_cpu_worker;
+  // Stop GPU work before CPUFJ cleanup can wait on its asynchronous task, including
+  // exceptional exits. The pair itself joins only after that existing cleanup completes.
+  scope_guard stop_gpu_cpufj([&]() {
+    if (gpu_cpufj_pair) { gpu_cpufj_pair->request_stop(); }
+  });
 
   if (settings_.submip_settings.enable_cpufj) {
     // Since we do not have an incumbent, use the LP solution of the last round of variable fixing
@@ -2535,6 +3065,12 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
                                        submip_bnb.settings_,
                                        std::format("{} [CPU FJ]", log_prefix),
                                        worker->rng.next_i64());
+    gpu_cpufj_pair = submip_bnb.launch_gpu_submip_cpufj(submip_bnb.original_lp_,
+                                                        submip_bnb.var_types_,
+                                                        initial_guess,
+                                                        worker->search_strategy,
+                                                        submip_bnb.original_problem_.num_cols,
+                                                        submip_fj_cpu_worker);
     submip_fj_cpu_worker.run_async(time_limit, work_limit);
   }
 
@@ -2551,8 +3087,11 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
 
   if (halted) { submip_bnb.halt_solver(); }
 
+  submip_worker_pool_.submip_task_stage(worker->worker_id, "child_solve_start");
   mip_status_t submip_status = submip_bnb.solve(submip_solution);
-  f_t submip_time            = toc(start_time);
+  if (gpu_cpufj_pair) { gpu_cpufj_pair->request_stop(); }
+  submip_worker_pool_.submip_task_stage(worker->worker_id, "child_solve_end");
+  f_t submip_time = toc(start_time);
 
   DEBUG_SUBMIP(
     "{}Sub-MIP: status={}, iterations={} (total={}), presolve_time={:.2f}, total_time={:.2f} \n",
@@ -2570,8 +3109,13 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   }
 
   if (submip_solution.has_incumbent) {
-    set_solution_from_submip(
-      worker->leaf_problem, submip_solution.x, presolver, submip_stats, fixrate, log_prefix);
+    set_solution_from_submip(worker->leaf_problem,
+                             submip_solution.x,
+                             presolver,
+                             submip_stats,
+                             fixrate,
+                             log_prefix,
+                             postsolve_mutex.get());
   }
 
   // Accumulate simplex iterations to determine when to stop exploring the sub-MIP
@@ -2787,6 +3331,9 @@ void branch_and_bound_t<i_t, f_t>::mutation(diving_worker_t<i_t, f_t>* worker,
                                             simplex_solver_settings_t<i_t, f_t> submip_settings)
 {
   raft::common::nvtx::range scope("BB::mutation_thread");
+  if (!submip_settings.inside_root_node) {
+    submip_worker_pool_.submip_task_started(worker->worker_id);
+  }
   if (worker->orbital_fixing) { worker->orbital_fixing->disable(); }
 
   i_t submip_level = settings_.submip_settings.level + 1;
@@ -2833,6 +3380,8 @@ void branch_and_bound_t<i_t, f_t>::mutation(diving_worker_t<i_t, f_t>* worker,
                target_fixrate,
                target_fixrate * integer_list.size());
 
+  submip_worker_pool_.submip_task_stage(
+    worker->worker_id, is_feasible ? "fixing_target_reached" : "fixing_bounds_infeasible");
   if (!is_feasible) {
     DEBUG_SUBMIP("{}bound strengthening detected infeasibility.", submip_settings.log.log_prefix)
 
@@ -2850,11 +3399,16 @@ void branch_and_bound_t<i_t, f_t>::mutation(diving_worker_t<i_t, f_t>* worker,
   // levels up to try to find a feasible solution quickly from the neighbourhood.
   if (fixrate < settings_.submip_settings.min_fixrate_cap ||
       (settings_.inside_submip && mutation_stats_.total_success != 0)) {
+    submip_worker_pool_.submip_task_stage(worker->worker_id, "quick_dfs_start");
     worker->start_node.packed_vstatus = simplex::compress_vstatus(worker->leaf_vstatus);
     worker->start_lower               = lower;
     worker->start_upper               = upper;
 
+    std::unique_ptr<gpu_submip_pair_t> gpu_cpufj_pair;
     fj_cpu_worker_t<i_t, f_t> submip_fj_cpu_worker;
+    scope_guard stop_gpu_cpufj([&]() {
+      if (gpu_cpufj_pair) { gpu_cpufj_pair->request_stop(); }
+    });
     if (settings_.submip_settings.enable_cpufj) {
       submip_fj_cpu_worker.improvement_callback =
         [this](f_t obj, const std::vector<f_t>& assignment, double work_units) {
@@ -2870,6 +3424,12 @@ void branch_and_bound_t<i_t, f_t>::mutation(diving_worker_t<i_t, f_t>* worker,
                                          settings_,
                                          std::format("{} [CPU FJ]", submip_settings.log.log_prefix),
                                          worker->rng.next_i64());
+      gpu_cpufj_pair = launch_gpu_submip_cpufj(worker->leaf_problem,
+                                               worker->var_types,
+                                               worker->leaf_solution.x,
+                                               worker->search_strategy,
+                                               original_problem_.num_cols,
+                                               submip_fj_cpu_worker);
       submip_fj_cpu_worker.run_sync(time_limit, work_limit);
     }
 
@@ -2882,6 +3442,7 @@ void branch_and_bound_t<i_t, f_t>::mutation(diving_worker_t<i_t, f_t>* worker,
     simplex_solver_settings_t<i_t, f_t> dfs_settings = submip_settings;
     dfs_settings.diving_settings.backtrack_limit     = settings_.submip_settings.dfs_max_backtrack;
     dive_with(worker, dfs_settings);
+    if (gpu_cpufj_pair) { gpu_cpufj_pair->request_stop(); }
 
   } else {
     solve_submip(worker, mutation_stats_, fixrate, stats.total_simplex_iters, submip_settings);
@@ -2911,6 +3472,9 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
   diving_worker_t<i_t, f_t>* worker, simplex_solver_settings_t<i_t, f_t> submip_settings)
 {
   raft::common::nvtx::range scope("BB::submip_thread");
+  if (!submip_settings.inside_root_node) {
+    submip_worker_pool_.submip_task_started(worker->worker_id);
+  }
   if (worker->orbital_fixing) { worker->orbital_fixing->disable(); }
 
   i_t submip_level = settings_.submip_settings.level + 1;
@@ -2926,9 +3490,10 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
 
   ++submip_stats.total_calls;
 
-  bool has_submip          = false;
-  worker->recompute_bounds = false;
-  worker->recompute_basis  = true;
+  bool has_submip            = false;
+  const char* fixing_outcome = "fixing_stopped";
+  worker->recompute_bounds   = false;
+  worker->recompute_basis    = true;
 
   branch_and_bound_stats_t<i_t, f_t> stats;
   mip_node_t<i_t, f_t>& node        = worker->start_node;
@@ -2981,7 +3546,8 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
       // The RINS neighbourhood ran dry. If it is already tight enough, take it rather than
       // diluting it with fixings that do not agree with the incumbent.
       if (num_bound_changed == 0 && fixrate >= min_fixrate) {
-        has_submip = true;
+        fixing_outcome = "fixing_rins_exhausted";
+        has_submip     = true;
         break;
       }
 
@@ -2990,7 +3556,8 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
         round_target_fixrate = max_fixrate - prev_fixrate;
         round_target         = round_target_fixrate * num_integers;
         if (round_target == 0) {
-          has_submip = fixrate > 0;
+          has_submip     = fixrate > 0;
+          fixing_outcome = has_submip ? "fixing_target_reached" : "fixing_no_variables";
           break;
         }
       }
@@ -3007,7 +3574,8 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
         round_target_fixrate = max_fixrate - prev_fixrate;
         round_target         = round_target_fixrate * num_integers;
         if (round_target == 0) {
-          has_submip = fixrate > 0;
+          has_submip     = fixrate > 0;
+          fixing_outcome = has_submip ? "fixing_target_reached" : "fixing_no_variables";
           break;
         }
       }
@@ -3025,13 +3593,15 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
       // Even sweep over all integer variables, we exhausted all variables that can be fixed.
       // If this is the case, then tries to solve the sub-mip anyway.
       if (num_bound_changed == 0) {
-        has_submip = true;
+        fixing_outcome = "fixing_variables_exhausted";
+        has_submip     = true;
         break;
       }
     }
 
     if (toc(exploration_stats_.start_time) > settings_.time_limit) {
       solver_status_ = mip_status_t::TIME_LIMIT;
+      fixing_outcome = "fixing_time_limit";
       break;
     }
 
@@ -3054,6 +3624,7 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
       max_fixrate);
 
     if (!is_feasible) {
+      fixing_outcome = "fixing_bounds_infeasible";
       DEBUG_SUBMIP("{}Round {}: bound strengthening detected infeasibility.",
                    submip_settings.log.log_prefix,
                    round)
@@ -3061,7 +3632,8 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
     }
 
     if (fixrate >= max_fixrate) {
-      has_submip = true;
+      fixing_outcome = "fixing_target_reached";
+      has_submip     = true;
       break;
     }
 
@@ -3078,6 +3650,7 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
     int64_t simplex_iter_limit = iter_offset + simplex_iter * iter_ratio;
     int64_t max_iter           = simplex_iter_limit - stats.total_simplex_iters;
     if (max_iter <= 0) {
+      fixing_outcome = "fixing_iteration_limit";
       DEBUG_SUBMIP("{}Round {}: max iteration reached! {}/{}",
                    submip_settings.log.log_prefix,
                    round,
@@ -3088,6 +3661,7 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
 
     dual_status_t lp_status = solve_node_lp(&node, submip_settings, worker, stats, log, max_iter);
     if (lp_status != dual_status_t::OPTIMAL) {
+      fixing_outcome = "fixing_lp_nonoptimal";
       DEBUG_SUBMIP("{}Round {}: simplex returned {}",
                    submip_settings.log.log_prefix,
                    round,
@@ -3103,6 +3677,7 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
 
     snap_to_lattice(worker->leaf_problem, &node, leaf_obj);
     if (leaf_obj > upper_bound_.load()) {
+      fixing_outcome = "fixing_objective_cutoff";
       DEBUG_SUBMIP("{}Round {}: reached cutoff point. obj={:.4g}. upper_bound={:.4g}",
                    submip_settings.log.log_prefix,
                    round,
@@ -3112,6 +3687,7 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
     }
 
     if (num_frac == 0) {
+      fixing_outcome = "fixing_found_solution";
       // We found a feasible solution when fixing the variables in RINS/RENS.
       add_feasible_solution(
         worker->leaf_problem, leaf_obj, current_sol, -1, worker->search_strategy);
@@ -3132,6 +3708,7 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
     exploration_stats_.total_simplex_iters += stats.total_simplex_iters;
   }
 
+  submip_worker_pool_.submip_task_stage(worker->worker_id, fixing_outcome);
   if (has_submip) {
     // If not enough variables was fixed (the neighbourhood is too loose) or the sub-MIP already
     // found a solution that improved the incumbent, then do a DFS with a backtrack_limit of 5
@@ -3143,8 +3720,14 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
       worker->start_upper               = upper;
 
       bool is_feasible = worker->presolve_start_bounds(settings_);
+      submip_worker_pool_.submip_task_stage(
+        worker->worker_id, is_feasible ? "quick_dfs_start" : "quick_dfs_bounds_infeasible");
       if (is_feasible) {
+        std::unique_ptr<gpu_submip_pair_t> gpu_cpufj_pair;
         fj_cpu_worker_t<i_t, f_t> submip_fj_cpu_worker;
+        scope_guard stop_gpu_cpufj([&]() {
+          if (gpu_cpufj_pair) { gpu_cpufj_pair->request_stop(); }
+        });
 
         if (settings_.submip_settings.enable_cpufj) {
           submip_fj_cpu_worker.improvement_callback =
@@ -3163,6 +3746,12 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
             settings_,
             std::format("{} [CPU FJ]", submip_settings.log.log_prefix),
             worker->rng.next_i64());
+          gpu_cpufj_pair = launch_gpu_submip_cpufj(worker->leaf_problem,
+                                                   worker->var_types,
+                                                   worker->leaf_solution.x,
+                                                   worker->search_strategy,
+                                                   original_problem_.num_cols,
+                                                   submip_fj_cpu_worker);
           submip_fj_cpu_worker.run_sync(time_limit, work_limit);
         }
 
@@ -3175,6 +3764,7 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
         simplex_solver_settings_t<i_t, f_t> dfs_settings = submip_settings;
         dfs_settings.diving_settings.backtrack_limit = settings_.submip_settings.dfs_max_backtrack;
         dive_with(worker, dfs_settings);
+        if (gpu_cpufj_pair) { gpu_cpufj_pair->request_stop(); }
       }
 
     } else {
@@ -4193,6 +4783,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     return solver_status_;
   }
 
+  if (root_status == lp_status_t::ITERATION_LIMIT) {
+    solver_status_ = mip_status_t::ITERATION_LIMIT;
+    set_final_solution(solution, -inf);
+    return solver_status_;
+  }
+
   if (root_status == lp_status_t::NUMERICAL_ISSUES) {
     solver_status_ = mip_status_t::NUMERICAL;
     set_final_solution(solution, -inf);
@@ -4491,13 +5087,20 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   // Stops the root heuristics and clear the associated data
   root_heuristics.stop_and_sync();
 
+  // The completed cuts state remains usable if stopping the root workers exhausted the budget.
+  set_uninitialized_steepest_edge_norms(original_lp_, basic_list, edge_norms_);
+
+  if (capture_gpu_submip_snapshot("post_cuts")) {
+    solver_status_ = mip_status_t::HALT;
+    set_final_solution(solution, root_objective_);
+    return solver_status_;
+  }
+
   if (toc(exploration_stats_.start_time) > settings_.time_limit) {
     solver_status_ = mip_status_t::TIME_LIMIT;
     set_final_solution(solution, root_objective_);
     return solver_status_;
   }
-
-  set_uninitialized_steepest_edge_norms(original_lp_, basic_list, edge_norms_);
 
   pc_.resize(original_lp_.num_cols);
   pc_.Arow = Arow_;
@@ -4520,6 +5123,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                basis_update,
                                symmetry_,
                                pc_);
+  }
+
+  // Strong branching can consume the remaining solve budget. Its LP and basis
+  // are still valid worker inputs even when the main search cannot enter the tree.
+  if (toc(exploration_stats_.start_time) > settings_.time_limit) {
+    capture_gpu_submip_snapshot("post_strong_branching_time_limit");
   }
 
   if (received_halt_signal()) {
@@ -4595,6 +5204,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     }
   }
 
+  if (capture_gpu_submip_snapshot("post_root")) {
+    solver_status_ = mip_status_t::HALT;
+    set_final_solution(solution, root_objective_);
+    return solver_status_;
+  }
+  if (gpu_submip_shared_) {
+    enqueue_gpu_submip_job(original_lp_, var_types_, root_relax_soln_.x, 0, 0, num_fractional);
+  }
+
   // Choose variable to branch on
   i_t branch_var = pc_.variable_selection(fractional, root_relax_soln_.x);
 
@@ -4632,6 +5250,46 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
   print_table_header();
 
+  if (tree_entry_callback_) { tree_entry_callback_(); }
+  if (gpu_submip_handle_ && !settings_.inside_submip && !settings_.deterministic) {
+    gpu_submip_shared_ = std::make_shared<gpu_submip_shared_t>(
+      gpu_submip_options_from_environment(), exploration_stats_.start_time + settings_.time_limit);
+    gpu_submip_shared_->ready_handle        = gpu_submip_handle_;
+    gpu_submip_shared_->demand_acquire      = gpu_submip_demand_acquire_;
+    gpu_submip_shared_->demand_release      = gpu_submip_demand_release_;
+    gpu_submip_shared_->fatal_cancel        = gpu_submip_fatal_cancel_;
+    gpu_submip_shared_->root_halt           = &node_concurrent_halt_;
+    gpu_submip_shared_->root_start          = exploration_stats_.start_time;
+    gpu_submip_shared_->current_user_cutoff = [this]() {
+      return compute_user_objective(original_lp_, upper_bound_.load());
+    };
+    gpu_submip_shared_->publish = [this](const std::vector<f_t>& candidate, f_t) {
+      publish_gpu_submip_solution(candidate);
+    };
+    const i_t user_columns = original_problem_.num_cols;
+    gpu_submip_to_user_    = [user_columns](const std::vector<f_t>& candidate,
+                                         std::vector<f_t>& user) {
+      if (candidate.size() < static_cast<size_t>(user_columns)) { return false; }
+      user.assign(candidate.begin(), candidate.begin() + user_columns);
+      return true;
+    };
+    enqueue_gpu_submip_job(original_lp_, var_types_, root_relax_soln_.x, 0, 0, num_fractional);
+  }
+
+  // A dedicated thread keeps its CUDA context bound to one OS thread and cannot
+  // occupy an included OpenMP task before the existing search workers are launched.
+  std::thread gpu_submip_thread;
+  scope_guard join_gpu_submip([&]() {
+    if (gpu_submip_shared_ && gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
+    stop_and_join_gpu_submip(gpu_submip_thread, node_concurrent_halt_);
+  });
+  if (gpu_submip_handle_ && !settings_.inside_submip && !settings_.deterministic &&
+      gpu_submip_shared_->options.mode == gpu_submip_mode_t::NODE_QUEUE) {
+    gpu_submip_thread = std::thread(&branch_and_bound_t::run_gpu_submip_worker, this);
+  }
+  scope_guard close_submip_pool_diagnostics(
+    [&]() { submip_worker_pool_.close_idle_diagnostics(); });
+
 #pragma omp taskgroup
   {
     if (settings_.deterministic) {
@@ -4663,6 +5321,17 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                new_slacks_,
                                num_bfs_workers);
 
+      const char* pool_diagnostics = std::getenv("CUOPT_SUBMIP_POOL_DIAGNOSTICS");
+      if ((pool_diagnostics && std::atoi(pool_diagnostics) != 0) ||
+          (gpu_submip_shared_ &&
+           gpu_submip_shared_->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU)) {
+        static std::atomic<uint64_t> next_pool_id{0};
+        submip_worker_pool_.enable_idle_diagnostics(
+          next_pool_id.fetch_add(1, std::memory_order_relaxed),
+          settings_.inside_submip,
+          gpu_submip_shared_ ? gpu_submip_shared_->root_start : exploration_stats_.start_time);
+      }
+
       diving_worker_pool_.init(num_diving_workers,
                                original_lp_,
                                Arow_,
@@ -4688,6 +5357,46 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       best_first_search_with(initial_worker);
     }
   }  // Implicit barrier for all tasks created within the group (RINS, B&B workers)
+  submip_worker_pool_.close_idle_diagnostics();
+
+  if (gpu_submip_shared_ && gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
+  stop_and_join_gpu_submip(gpu_submip_thread, node_concurrent_halt_);
+  if (gpu_submip_shared_ && gpu_submip_handle_ &&
+      gpu_submip_shared_->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU) {
+    const auto shared = gpu_submip_shared_;
+    CUOPT_LOG_INFO(
+      "GpuSubmipPairSummary launched=%llu gpu_started=%llu completed=%llu valid=%llu "
+      "pending_joins=%llu join_wait_seconds=%.6f cpu_lp_solves=0",
+      (unsigned long long)shared->paired_started.load(),
+      (unsigned long long)shared->paired_gpu_started.load(),
+      (unsigned long long)shared->paired_completed.load(),
+      (unsigned long long)shared->paired_valid.load(),
+      (unsigned long long)shared->paired_pending_joins.load(),
+      shared->paired_join_wait_seconds.load());
+    if (shared->async_error) { std::rethrow_exception(shared->async_error); }
+  }
+  if (gpu_submip_shared_ && gpu_submip_handle_ &&
+      gpu_submip_shared_->options.mode == gpu_submip_mode_t::NODE_QUEUE) {
+    for (size_t source = 0; source < gpu_submip_source_count; ++source) {
+      const auto& stats   = gpu_submip_shared_->source_stats[source];
+      const auto enqueued = stats.enqueued.load();
+      const auto dequeued = stats.dequeued.load();
+      // Valid counts audited publication attempts; global acceptance is logged separately.
+      CUOPT_LOG_INFO(
+        "GpuSubmipQueueSummary source=%s callbacks=%llu eligible=%llu selected=%llu "
+        "enqueued=%llu enqueue_failed=%llu dequeued=%llu valid=%llu unexecuted=%llu",
+        gpu_submip_source_name(static_cast<gpu_submip_source_t>(source)),
+        (unsigned long long)stats.callbacks.load(),
+        (unsigned long long)stats.eligible.load(),
+        (unsigned long long)stats.selected.load(),
+        (unsigned long long)enqueued,
+        (unsigned long long)stats.enqueue_failed.load(),
+        (unsigned long long)dequeued,
+        (unsigned long long)stats.valid.load(),
+        (unsigned long long)(enqueued - dequeued));
+    }
+  }
+  if (gpu_submip_exception_) { std::rethrow_exception(gpu_submip_exception_); }
 
   is_running_ = false;
   settings_.log.printf("\n");

@@ -687,6 +687,16 @@ void pdhg_solver_t<i_t, f_t>::compute_primal_projection_with_gradient(
 }
 
 template <typename i_t, typename f_t>
+void pdhg_solver_t<i_t, f_t>::enqueue_primal_dual_step(rmm::device_uvector<f_t>& primal_step_size,
+                                                       rmm::device_uvector<f_t>& dual_step_size,
+                                                       bool recompute_current_At_y)
+{
+  if (recompute_current_At_y) { compute_At_y(); }
+  compute_primal_projection_with_gradient(primal_step_size);
+  compute_next_dual_solution(dual_step_size);
+}
+
+template <typename i_t, typename f_t>
 void pdhg_solver_t<i_t, f_t>::compute_next_primal_dual_solution(
   rmm::device_uvector<f_t>& primal_step_size,
   i_t iterations_since_last_restart,
@@ -718,22 +728,15 @@ void pdhg_solver_t<i_t, f_t>::compute_next_primal_dual_solution(
 #endif
 
     // Primal and dual steps are captured in a cuda graph since called very often
-    graph_all.run(total_pdlp_iterations, [&]() {
-      // First compute only A_t @ y, needed later in adaptative step size
-      compute_At_y();
-      // Compute fused primal gradient with projection
-      compute_primal_projection_with_gradient(primal_step_size);
-      // Compute next dual solution
-      compute_next_dual_solution(dual_step_size);
-    });
+    graph_all.run(total_pdlp_iterations,
+                  [&]() { enqueue_primal_dual_step(primal_step_size, dual_step_size, true); });
   } else {
 #ifdef PDLP_DEBUG_MODE
     std::cout << "    Not computing A_t * Y" << std::endl;
 #endif
     // A_t * y was already computed in previous iteration
     graph_prim_proj_gradient_dual.run(total_pdlp_iterations, [&]() {
-      compute_primal_projection_with_gradient(primal_step_size);
-      compute_next_dual_solution(dual_step_size);
+      enqueue_primal_dual_step(primal_step_size, dual_step_size, false);
     });
   }
 }

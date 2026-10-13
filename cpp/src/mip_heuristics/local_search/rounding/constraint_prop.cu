@@ -774,7 +774,7 @@ bool constraint_prop_t<i_t, f_t>::run_repair_procedure(problem_t<i_t, f_t>& prob
   i_t n_of_repairs_needed_for_feasible = 0;
   do {
     n_of_repairs_needed_for_feasible++;
-    if (timer.check_time_limit()) {
+    if (stop_requested() || timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("Time limit is reached in repair loop!");
       f_t repair_end_time = timer.remaining_time();
       repair_stats.total_time_spent_on_repair += repair_start_time - repair_end_time;
@@ -796,7 +796,7 @@ bool constraint_prop_t<i_t, f_t>::run_repair_procedure(problem_t<i_t, f_t>& prob
     bounds_update.settings.time_limit      = timer.remaining_time();
     auto term_crit                         = bounds_update.solve(problem);
     bounds_update.settings.iteration_limit = 50;
-    if (timer.check_time_limit()) {
+    if (stop_requested() || timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("Time limit is reached in repair loop!");
       f_t repair_end_time = timer.remaining_time();
       repair_stats.total_time_spent_on_repair += repair_start_time - repair_end_time;
@@ -866,7 +866,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   multi_probe.settings.iteration_limit = 50;
   multi_probe.settings.time_limit      = max_timer.remaining_time();
   multi_probe.resize(*sol.problem_ptr);
-  if (max_timer.check_time_limit()) {
+  if (stop_requested() || max_timer.check_time_limit()) {
     CUOPT_LOG_DEBUG("Time limit is reached before bounds prop rounding!");
     sol.round_nearest(this->rng.next_u64());
     expand_device_copy(orig_sol.assignment, sol.assignment, sol.handle_ptr->get_stream());
@@ -938,7 +938,7 @@ bool constraint_prop_t<i_t, f_t>::find_integer(
   while (set_count < unset_integer_vars.size()) {
     CUOPT_LOG_TRACE("n_set_vars %d vars to set %lu", set_count, unset_integer_vars.size());
     update_host_assignment(sol);
-    if (max_timer.check_time_limit()) {
+    if (stop_requested() || max_timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("Second time limit is reached returning nearest rounding!");
       collapse_crossing_bounds(*sol.problem_ptr, *orig_sol.problem_ptr, sol.handle_ptr);
       sol.round_nearest(this->rng.next_u64());
@@ -1068,6 +1068,7 @@ bool constraint_prop_t<i_t, f_t>::apply_round(
   std::optional<std::reference_wrapper<probing_config_t<i_t, f_t>>> probing_config)
 {
   raft::common::nvtx::range fun_scope("constraint prop round");
+  if (stop_requested()) { return false; }
   max_timer = timer_t{max_time_for_bounds_prop};
   if (check_brute_force_rounding(sol)) { return true; }
   recovery_mode      = false;

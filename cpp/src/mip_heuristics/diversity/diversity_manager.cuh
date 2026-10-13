@@ -28,6 +28,11 @@
 
 #include <cstdint>
 
+namespace cuopt {
+class mip_green_context_t;
+class mip_gpu_handoff_t;
+}  // namespace cuopt
+
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
@@ -36,6 +41,10 @@ class diversity_manager_t {
   diversity_manager_t(mip_solver_context_t<i_t, f_t>& context);
   bool run_presolve(f_t time_limit, timer_t global_timer);
   solution_t<i_t, f_t> run_solver();
+  void update_gpu_partition(cuopt::mip_green_context_t& partition);
+  void restore_gpu_partition(cuopt::mip_green_context_t& partition);
+  void park_gpu_handoff(cuopt::mip_gpu_handoff_t& handoff);
+  void update_solution_streams();
   void generate_solution(f_t time_limit, bool random_start = true);
   void run_fj_alone(solution_t<i_t, f_t>& solution);
   void run_fp_alone();

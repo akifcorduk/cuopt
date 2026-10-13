@@ -94,6 +94,12 @@ class pdhg_solver_t {
   void compute_At_y();
   void compute_A_x();
 
+  // Uncaptured non-reflected step body, shared with the fused adaptive graph.
+  // Host iteration bookkeeping belongs to the caller, outside graph capture.
+  void enqueue_primal_dual_step(rmm::device_uvector<f_t>& primal_step_size,
+                                rmm::device_uvector<f_t>& dual_step_size,
+                                bool recompute_current_At_y);
+
   void spmvop_At_y();
   void spmvop_A_x();
 

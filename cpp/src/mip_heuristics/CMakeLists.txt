@@ -22,6 +22,8 @@ set(MIP_LP_NECESSARY_FILES
 
 # Files that are MIP-specific and not needed for pure LP
 set(MIP_NON_LP_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu_submip_fp.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu_submip_full_device.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/mip_scaling_strategy.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/solve.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/solver.cu

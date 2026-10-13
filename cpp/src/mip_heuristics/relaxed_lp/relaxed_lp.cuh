@@ -24,6 +24,7 @@ struct relaxed_lp_settings_t {
   bool save_state                   = true;
   bool per_constraint_residual      = true;
   bool has_initial_primal           = true;
+  bool fused_adaptive_step          = false;
   std::atomic<int>* concurrent_halt = nullptr;
 };
 
