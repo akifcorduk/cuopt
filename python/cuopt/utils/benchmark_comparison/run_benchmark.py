@@ -1,10 +1,13 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2021-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import json
+import math
 import multiprocessing
 import os
 import sys
+import time
 from multiprocessing import Process
 
 import bks_vehicle_counts
@@ -25,6 +28,7 @@ def str2bool(v):
 
 def run_single(file, row, gpu, worksheet, args):
     import cudf
+    from scipy.spatial.distance import cdist
 
     import cuopt
     import cuopt.routing.utils as utils
@@ -50,7 +54,7 @@ def run_single(file, row, gpu, worksheet, args):
         fixed_route = False
         df = utils.create_from_file_tsp(abs_path)
     else:
-        fixed_route = True
+        fixed_route = not args.route_minimization_only
         df, vehicle_capacity, fleet_size = utils.create_from_file(
             abs_path, is_pdp
         )
@@ -67,9 +71,15 @@ def run_single(file, row, gpu, worksheet, args):
         n_orders -= 1
 
     d = cuopt.routing.DataModel(nodes, fleet_size, n_orders)
-    matrix = utils.build_matrix(df)
+    coordinates = df[["xcord", "ycord"]].to_pandas().to_numpy()
+    matrix = cdist(coordinates, coordinates)
 
-    d.add_cost_matrix(matrix)
+    d.add_cost_matrix(matrix.astype("float32"))
+    if args.travel_speed != 1.0:
+        d.add_transit_time_matrix(
+            (matrix / args.travel_speed).astype("float32")
+        )
+    del matrix
     if extension != ".tsp":
         utils.fill_demand(df, d, vehicle_capacity, fleet_size, use_order_loc)
         utils.fill_tw(d, df, use_order_loc)
@@ -89,6 +99,8 @@ def run_single(file, row, gpu, worksheet, args):
         d.set_min_vehicles(1)
 
     s.set_time_limit(args.run_time)
+    if args.route_minimization_only:
+        s.set_verbose_mode(True)
     if args.intermediate_output:
         file_w_gpu = file
         if args.wr_improve:
@@ -98,9 +110,31 @@ def run_single(file, row, gpu, worksheet, args):
         )
         s.dump_best_results(intermediate_result_file, 60)
 
+    start = time.perf_counter()
     routing_solution = cuopt.routing.Solve(d, s)
+    elapsed = time.perf_counter() - start
     final_cost = routing_solution.get_total_objective()
     vehicle_count = routing_solution.get_vehicle_count()
+    status = int(routing_solution.get_status())
+    unserviced = len(routing_solution.get_infeasible_orders())
+    routing_solution.get_route().to_pandas().to_csv(
+        os.path.join(args.out_dir, file + ".routes.csv"), index=False
+    )
+    result = {
+        "instance": file,
+        "objective": float(final_cost),
+        "vehicles": int(vehicle_count),
+        "time_limit": args.run_time,
+        "solve_seconds": elapsed,
+        "status": status,
+        "message": routing_solution.get_message(),
+        "unserviced_orders": unserviced,
+        "route_minimization_only": args.route_minimization_only,
+        "travel_speed": args.travel_speed,
+    }
+    with open(os.path.join(args.out_dir, file + ".json"), "w") as output:
+        json.dump(result, output, indent=2)
+    print(json.dumps(result), flush=True)
     col = 0
     worksheet.write(row, col, file)
     col += 1
@@ -109,6 +143,11 @@ def run_single(file, row, gpu, worksheet, args):
     worksheet.write(row, col, int(vehicle_count))
     col += 1
     worksheet.write(row, col, args.run_time)
+    worksheet.write(row, col + 1, status)
+    worksheet.write(row, col + 2, elapsed)
+    worksheet.write(row, col + 3, unserviced)
+    if status != 0 or unserviced:
+        raise RuntimeError(f"{file}: incomplete routing solution: {result}")
 
 
 def run_chunk(files, proc_id, args):
@@ -121,9 +160,11 @@ def run_chunk(files, proc_id, args):
     )
     workbook = xlsxwriter.Workbook(temp_path)
     worksheet = workbook.add_worksheet()
-    for row, file in enumerate(files):
-        run_single(file, row, proc_id, worksheet, args)
-    workbook.close()
+    try:
+        for row, file in enumerate(files):
+            run_single(file, row, proc_id, worksheet, args)
+    finally:
+        workbook.close()
 
 
 def split(a, n):
@@ -230,8 +271,32 @@ def main():
         default=-1,
         type=int,
     )
+    parser.add_argument(
+        "--dataset-path",
+        help="Instance directory (overrides the dataset root)",
+    )
+    parser.add_argument("--files", nargs="+", help="Instance filenames to run")
+    parser.add_argument(
+        "--travel-speed",
+        type=float,
+        default=1.0,
+        help="Coordinate distance units per time unit (750 for Shanghai)",
+    )
+    parser.add_argument(
+        "--route-minimization-only",
+        action="store_true",
+        help="Use the full search budget for vehicle minimization; skip cost improvement",
+    )
 
     args = parser.parse_args()
+    if args.gpu_count < 1 or args.run_time < 1:
+        parser.error("GPU count and run time must be positive")
+    if not math.isfinite(args.travel_speed) or args.travel_speed <= 0:
+        parser.error("Travel speed must be finite and positive")
+    if args.route_minimization_only and args.problem_type == "tsp":
+        parser.error("Route minimization requires cvrptw or pdptw instances")
+    if args.route_minimization_only:
+        os.environ["CUOPT_ROUTE_MINIMIZATION_ONLY"] = "1"
     n_gpus = args.gpu_count
     bks_search = args.bks_search
     only_big = args.only_large
@@ -247,10 +312,11 @@ def main():
         or problem_type == "pdptw"
         or problem_type == "tsp"
     ):
-        args.dataset_path = os.path.join(
-            os.getenv("RAPIDS_DATASET_ROOT_DIR", "../../datasets/"),
-            problem_type,
-        )
+        if args.dataset_path is None:
+            args.dataset_path = os.path.join(
+                os.getenv("RAPIDS_DATASET_ROOT_DIR", "../../datasets/"),
+                problem_type,
+            )
     else:
         sys.exit("Problem type must be one of cvrptw or pdptw!")
 
@@ -375,7 +441,18 @@ def main():
             "R1_4_4.TXT",
         ]
 
+    if args.files:
+        files = args.files
+    if not files or len(set(files)) != len(files):
+        parser.error("Select at least one instance, with no duplicates")
+    for file in files:
+        if os.path.basename(file) != file or not os.path.isfile(
+            os.path.join(args.dataset_path, file)
+        ):
+            parser.error(f"Instance is missing or not a filename: {file}")
+
     num_files = len(files)
+    n_gpus = min(n_gpus, num_files)
     if batch_num != -1:
         files_per_process = list(
             split(
@@ -411,6 +488,11 @@ def main():
 
     for p in processes:
         p.join()
+    failed = [p.pid for p in processes if p.exitcode != 0]
+    if failed:
+        sys.exit(
+            f"Benchmark workers failed: {failed}; see per-instance results"
+        )
 
     all_data = []
     for file_id in range(n_gpus):
@@ -422,6 +504,18 @@ def main():
 
     final_df = pd.concat(all_data, ignore_index=True)
     final_df.to_excel(os.path.join(args.out_dir, "benchmark_homberger.xlsx"))
+    final_df.columns = [
+        "instance",
+        "objective",
+        "vehicles",
+        "time_limit",
+        "status",
+        "solve_seconds",
+        "unserviced_orders",
+    ]
+    final_df.to_csv(
+        os.path.join(args.out_dir, "benchmark_results.csv"), index=False
+    )
     for file_id in range(n_gpus):
         abs_path = os.path.join(
             args.out_dir, f"benchmark_homberger_{file_id}.xlsx"
