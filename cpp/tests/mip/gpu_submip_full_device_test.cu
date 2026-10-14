@@ -358,6 +358,50 @@ TEST_F(GpuSubmipFullDevice, IndependentSingleDescentReturnsWithoutStoppingRoot)
   expect_original_device();
 }
 
+TEST_F(GpuSubmipFullDevice, IndependentJobsExportAndSelectFullCoordinateWarmStarts)
+{
+  options.select_warm_start          = true;
+  options.max_descents               = 1;
+  options.max_projections            = 0;
+  options.fp_config.initial_rounding = true;
+  auto job                           = make_job();
+  std::atomic<int> halt{0};
+  gpu_submip_seed_cache_t<int, double> cache;
+  gpu_submip_device_pool_t pool;
+  const auto publish_candidate = [&](const std::vector<double>& candidate, double objective) {
+    publish(candidate, objective);
+  };
+  ASSERT_TRUE((run_gpu_submip_job_full_device_continuous<int, double>(job,
+                                                                      settings,
+                                                                      &halt,
+                                                                      &halt,
+                                                                      options,
+                                                                      {},
+                                                                      publish_candidate,
+                                                                      target_device,
+                                                                      &pool,
+                                                                      true,
+                                                                      nullptr,
+                                                                      &cache)));
+  ASSERT_NE(cache.find(job), nullptr);
+  job.primal          = {0.4, -0.4};
+  const auto selected = select_gpu_submip_seed(job, 0.49, settings, &cache);
+  EXPECT_STREQ(selected.name, "previous_projection");
+  ASSERT_TRUE((run_gpu_submip_job_full_device_continuous<int, double>(job,
+                                                                      settings,
+                                                                      &halt,
+                                                                      &halt,
+                                                                      options,
+                                                                      {},
+                                                                      publish_candidate,
+                                                                      target_device,
+                                                                      &pool,
+                                                                      true,
+                                                                      nullptr,
+                                                                      &cache)));
+  EXPECT_EQ(halt.load(), 0);
+}
+
 TEST_F(GpuSubmipFullDevice, IndependentProjectionBudgetSpansPerturbedRestarts)
 {
   options.time_limit      = 60.;

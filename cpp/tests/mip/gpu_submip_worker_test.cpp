@@ -49,7 +49,7 @@ class GpuSubmipFpConfig : public ::testing::Test {
     }
   }
 
-  static constexpr std::array<const char*, 10> keys{"CUOPT_CONFIG_ID",
+  static constexpr std::array<const char*, 11> keys{"CUOPT_CONFIG_ID",
                                                     "CUOPT_MAX_CONFIG",
                                                     "CUOPT_GPU_SUBMIP_CONFIG_FAMILY",
                                                     "CUOPT_GPU_SUBMIP_FP_CONFIG",
@@ -58,7 +58,8 @@ class GpuSubmipFpConfig : public ::testing::Test {
                                                     "CUOPT_GPU_SUBMIP_SECONDS",
                                                     "CUOPT_GPU_SUBMIP_MAX_PROJECTIONS",
                                                     "CUOPT_GPU_SUBMIP_MAX_DESCENTS",
-                                                    "CUOPT_GPU_SUBMIP_INITIAL_ROUNDING"};
+                                                    "CUOPT_GPU_SUBMIP_INITIAL_ROUNDING",
+                                                    "CUOPT_GPU_SUBMIP_SELECT_WARM_START"};
   std::array<std::optional<std::string>, keys.size()> saved;
 };
 
@@ -98,10 +99,13 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsRoundingControl
     EXPECT_EQ(options.time_limit, 60.);
     EXPECT_EQ(options.fp_config.initial_alpha, 0.);
     EXPECT_TRUE(options.fp_config.initial_rounding);
+    EXPECT_TRUE(options.select_warm_start);
   }
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "0", 1);
   EXPECT_FALSE(gpu_submip_options_from_environment().fp_config.initial_rounding);
   EXPECT_FALSE(gpu_submip_fp_config_from_environment().initial_rounding);
+  setenv("CUOPT_GPU_SUBMIP_SELECT_WARM_START", "0", 1);
+  EXPECT_FALSE(gpu_submip_options_from_environment().select_warm_start);
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "bad", 1);
   EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
 }
@@ -668,6 +672,66 @@ class GpuSubmipWorker : public ::testing::Test {
   gpu_submip_options_t options;
   std::vector<type_t> types{type_t::BINARY, type_t::BINARY};
 };
+
+TEST_F(GpuSubmipWorker, WarmStartPrefersCompatibleProjectionAndRescoresSiblingBounds)
+{
+  auto job = make_gpu_submip_job(lp, types, {0.5, 0.5, 0.}, {}, 2., options, settings, 1, false);
+  gpu_submip_seed_cache_t<int, double> cache;
+  cache.remember(job, {0., 0., 1.}, {});
+  auto selected = select_gpu_submip_seed(job, 1.9, settings, &cache);
+  EXPECT_STREQ(selected.name, "previous_projection");
+  EXPECT_EQ(selected.values, (std::vector<double>{0., 0., 1.}));
+  // Clamping the old point violates the equality. The feasible CPU seed must win.
+  job.lp.upper[2] = 0.;
+  selected        = select_gpu_submip_seed(job, 1.9, settings, &cache);
+  EXPECT_STREQ(selected.name, "node_primal");
+  EXPECT_EQ(selected.values, job.primal);
+  EXPECT_DOUBLE_EQ(cache.find(job)->projection[2], 1.);
+}
+
+TEST_F(GpuSubmipWorker, WarmStartUsesIncumbentBlendOrPreviousFpSolution)
+{
+  auto job =
+    make_gpu_submip_job(lp, types, {0.5, 0.5, 0.}, {0., 0., 1.}, 2., options, settings, 1, false);
+  gpu_submip_seed_cache_t<int, double> cache;
+  auto selected = select_gpu_submip_seed(job, 1.9, settings, &cache);
+  EXPECT_STREQ(selected.name, "incumbent_guided");
+  EXPECT_EQ(selected.values, (std::vector<double>{0.375, 0.375, 0.25}));
+  cache.remember(job, {}, {0., 0., 1.});
+  selected = select_gpu_submip_seed(job, 1.9, settings, &cache);
+  EXPECT_STREQ(selected.name, "previous_fp_solution");
+  // A tighter objective cutoff must outweigh the old point's integrality.
+  job.lp.objective = {0., 0., 10.};
+  cache.remember(job, {}, {0., 0., 1.});
+  selected = select_gpu_submip_seed(job, 1., settings, &cache);
+  EXPECT_STREQ(selected.name, "node_primal");
+}
+
+TEST_F(GpuSubmipWorker, WarmStartCacheRequiresModelAndSourceIdentityAndIsBounded)
+{
+  auto job = make_gpu_submip_job(lp, types, {0.5, 0.5, 0.}, {}, 2., options, settings, 1, false);
+  gpu_submip_seed_cache_t<int, double> cache;
+  cache.remember(job, {0., 0., 1.}, {});
+  ASSERT_NE(cache.find(job), nullptr);
+  auto changed = job;
+  ++changed.source_id;
+  EXPECT_EQ(cache.find(changed), nullptr);
+  changed           = job;
+  changed.lp.A.x[0] = 2.;
+  EXPECT_EQ(cache.find(changed), nullptr);
+  changed              = job;
+  changed.var_types[0] = type_t::CONTINUOUS;
+  EXPECT_EQ(cache.find(changed), nullptr);
+  cache.remember(job, {std::numeric_limits<double>::quiet_NaN(), 0., 1.}, {});
+  EXPECT_DOUBLE_EQ(cache.find(job)->projection[0], 0.);
+  for (int id = 1; id <= 4; ++id) {
+    changed           = job;
+    changed.source_id = id;
+    cache.remember(changed, {0., 0., 1.}, {});
+  }
+  EXPECT_EQ(cache.find(job), nullptr);
+  EXPECT_NE(cache.find(changed), nullptr);
+}
 
 TEST_F(GpuSubmipWorker, JobOwnsNodeAndMappingAfterProducerExit)
 {

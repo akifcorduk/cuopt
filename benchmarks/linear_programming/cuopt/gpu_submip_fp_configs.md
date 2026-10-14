@@ -11,6 +11,18 @@ inside the job's wall budget and preserves the continuous PDLP seed. A feasible
 initial rounded point returns immediately. `CUOPT_GPU_SUBMIP_INITIAL_ROUNDING=0`
 disables this change for an A/B comparison; it defaults to 1 in this family.
 
+Checkpoint 2 additionally selects the starting point from the supplied CPU seed,
+a 25% incumbent blend, and the previous projection/FP solution for a matching
+model. For a presolved child, the parent LP point and incumbent are mapped into
+the child separately; CPUFJ retains its original starting point. The root GPU
+consumer retains at most four host model histories. Reuse
+requires exact matrix, RHS, objective, type, and source identity; each point is
+clamped and rescored against the current rows and cutoff. No GPU state or dual
+vectors are transferred between different jobs. CPU sub-MIP search is unchanged.
+`CUOPT_GPU_SUBMIP_SELECT_WARM_START=0` disables selection and history updates.
+Explicit cached-primal or incumbent-blend controls take precedence over automatic
+selection. `GpuSubmipWarmStart` logs the choice, cache hit, score, and host cost.
+
 Use the existing benchmark exports at each checkpoint, with numeric suffixes
 representing repetitions:
 
@@ -52,13 +64,14 @@ the search trajectory before the cap is reached.
 
 ## Benchmark setup
 
-Keep the existing benchmark exports, with `n_iters=4` for one run per profile:
+For the legacy effort sweep, use `n_iters=4` for one run per profile:
 
 ```bash
 export CUOPT_GPU_SUBMIP=1
 export CUOPT_SUBMIP_POOL_DIAGNOSTICS=1
 export CUOPT_CONFIG_ID="$repetition_id"
 export CUOPT_MAX_CONFIG="$n_iters"
+export CUOPT_GPU_SUBMIP_CONFIG_FAMILY=effort
 ```
 
 In the effort family, IDs are zero-based, must be less than `CUOPT_MAX_CONFIG`, and cycle modulo four.
@@ -74,7 +87,8 @@ table above to apply:
 ```bash
 unset CUOPT_GPU_SUBMIP_MODE CUOPT_GPU_SUBMIP_LIFETIME
 unset CUOPT_GPU_SUBMIP_MAX_PROJECTIONS CUOPT_GPU_SUBMIP_MAX_DESCENTS
-unset CUOPT_GPU_SUBMIP_SECONDS CUOPT_GPU_SUBMIP_CONFIG_FAMILY
+unset CUOPT_GPU_SUBMIP_SECONDS CUOPT_GPU_SUBMIP_INITIAL_ROUNDING
+unset CUOPT_GPU_SUBMIP_SELECT_WARM_START
 ```
 
 `GpuSubmipFpSelection` identifies the family and profile;

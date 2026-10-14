@@ -2410,7 +2410,8 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   const std::vector<f_t>& seed,
   search_strategy_t strategy,
   i_t structural_columns,
-  fj_cpu_worker_t<i_t, f_t>& cpu_worker)
+  fj_cpu_worker_t<i_t, f_t>& cpu_worker,
+  const std::vector<f_t>& incumbent_seed)
 {
   const auto shared = gpu_submip_shared_;
   if (!shared || shared->options.mode != gpu_submip_mode_t::CPUFJ_FULL_GPU ||
@@ -2444,11 +2445,18 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   }
   const auto job_id       = shared->next_job.fetch_add(1);
   const auto mip_settings = gpu_submip_settings_;
+  std::vector<f_t> warm_incumbent;
+  if (shared->options.select_warm_start && incumbent_seed.size() == seed.size() &&
+      std::all_of(incumbent_seed.begin(), incumbent_seed.end(), [](f_t value) {
+        return std::isfinite(value);
+      })) {
+    warm_incumbent = incumbent_seed;
+  }
   auto owned_job =
     std::make_unique<gpu_submip_job_t<i_t, f_t>>(make_gpu_submip_job(lp,
                                                                      types,
                                                                      seed,
-                                                                     std::vector<f_t>{},
+                                                                     warm_incumbent,
                                                                      upper_bound_.load(),
                                                                      shared->options,
                                                                      *mip_settings,
@@ -2733,6 +2741,7 @@ void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker_impl()
   scope_guard release([this]() { release_gpu_submip_worker(); });
   configure_gpu_submip_host_thread();
   const auto shared = gpu_submip_shared_;
+  gpu_submip_seed_cache_t<i_t, f_t> seed_cache;
   if (shared->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU) {
     CUOPT_LOG_INFO(
       "GpuSubmipIndependentConfig seconds=%.6f max_projections=%d max_descents=%d "
@@ -2773,7 +2782,9 @@ void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker_impl()
                                                               shared->publish,
                                                               gpu_submip_device_id(handle),
                                                               shared->device_pool.get(),
-                                                              true);
+                                                              true,
+                                                              nullptr,
+                                                              &seed_cache);
         if (valid) { stats.valid.fetch_add(1, std::memory_order_relaxed); }
         CUOPT_LOG_INFO("GpuSubmipIndependentEnd job=%llu elapsed=%.6f seconds=%.6f valid=%d",
                        (unsigned long long)job->job_id,
@@ -2806,7 +2817,12 @@ void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker_impl()
       shared->options,
       [this]() { return compute_user_objective(original_lp_, upper_bound_.load()); },
       [this](const std::vector<f_t>& candidate, f_t) { publish_gpu_submip_solution(candidate); },
-      &session);
+      &session,
+      nullptr,
+      "perturbed_projection",
+      nullptr,
+      0,
+      &seed_cache);
     if (valid) { source_stats.valid.fetch_add(1, std::memory_order_relaxed); }
   }
 }
@@ -3130,6 +3146,15 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   if (settings_.submip_settings.enable_cpufj) {
     // Since we do not have an incumbent, use the LP solution of the last round of variable fixing
     // in RENS.
+    std::vector<f_t> gpu_incumbent;
+    if (gpu_submip_shared_ && gpu_submip_shared_->options.select_warm_start &&
+        !presolved_incumbent.empty()) {
+      crush_primal_solution(submip_problem,
+                            submip_bnb.original_lp_,
+                            presolved_incumbent,
+                            submip_bnb.new_slacks_,
+                            gpu_incumbent);
+    }
     if (worker->search_strategy == search_strategy_t::RENS) {
       presolver.crush_primal_solution(submip_problem, worker->leaf_solution.x, presolved_incumbent);
     }
@@ -3146,6 +3171,20 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
                           submip_bnb.new_slacks_,
                           initial_guess);
 
+    // CPUFJ keeps its existing incumbent seed. The independent GPU experiment
+    // also has the parent's LP point mapped into this child's exact coordinates.
+    std::vector<f_t> gpu_lp_seed;
+    if (gpu_submip_shared_ && gpu_submip_shared_->options.select_warm_start &&
+        worker->search_strategy != search_strategy_t::RENS) {
+      std::vector<f_t> presolved_lp_seed;
+      presolver.crush_primal_solution(submip_problem, worker->leaf_solution.x, presolved_lp_seed);
+      crush_primal_solution(submip_problem,
+                            submip_bnb.original_lp_,
+                            presolved_lp_seed,
+                            submip_bnb.new_slacks_,
+                            gpu_lp_seed);
+    }
+
     submip_fj_cpu_worker.improvement_callback =
       [&submip_bnb](f_t obj, const std::vector<f_t>& solution, double work_units) {
         submip_bnb.set_solution_from_cpu_fj(obj, solution, work_units);
@@ -3160,12 +3199,14 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
                                        submip_bnb.settings_,
                                        std::format("{} [CPU FJ]", log_prefix),
                                        worker->rng.next_i64());
-    gpu_cpufj_pair = submip_bnb.launch_gpu_submip_cpufj(submip_bnb.original_lp_,
-                                                        submip_bnb.var_types_,
-                                                        initial_guess,
-                                                        worker->search_strategy,
-                                                        submip_bnb.original_problem_.num_cols,
-                                                        submip_fj_cpu_worker);
+    gpu_cpufj_pair =
+      submip_bnb.launch_gpu_submip_cpufj(submip_bnb.original_lp_,
+                                         submip_bnb.var_types_,
+                                         gpu_lp_seed.empty() ? initial_guess : gpu_lp_seed,
+                                         worker->search_strategy,
+                                         submip_bnb.original_problem_.num_cols,
+                                         submip_fj_cpu_worker,
+                                         gpu_incumbent);
     submip_fj_cpu_worker.run_async(time_limit, work_limit);
   }
 
@@ -3524,7 +3565,8 @@ void branch_and_bound_t<i_t, f_t>::mutation(diving_worker_t<i_t, f_t>* worker,
                                                worker->leaf_solution.x,
                                                worker->search_strategy,
                                                original_problem_.num_cols,
-                                               submip_fj_cpu_worker);
+                                               submip_fj_cpu_worker,
+                                               worker->current_incumbent);
       submip_fj_cpu_worker.run_sync(time_limit, work_limit);
     }
 
@@ -3846,7 +3888,8 @@ void branch_and_bound_t<i_t, f_t>::recursive_submip(
                                                    worker->leaf_solution.x,
                                                    worker->search_strategy,
                                                    original_problem_.num_cols,
-                                                   submip_fj_cpu_worker);
+                                                   submip_fj_cpu_worker,
+                                                   worker->current_incumbent);
           submip_fj_cpu_worker.run_sync(time_limit, work_limit);
         }
 

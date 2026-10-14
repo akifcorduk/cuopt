@@ -22,6 +22,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 
 namespace cuopt::mathematical_optimization::mip {
 namespace {
@@ -82,6 +83,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     options.max_descents               = 1;
     options.fp_config                  = gpu_submip_fp_config_from_name("distance");
     options.fp_config.initial_rounding = true;
+    options.select_warm_start          = true;
   }
   if (std::getenv("CUOPT_CONFIG_ID") != nullptr) {
     const size_t preset_count = family == "checkpoint" ? 1 : fp_config_names.size();
@@ -94,7 +96,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     const auto preset_id = config_id % preset_count;
     const char* profile;
     if (family == "checkpoint") {
-      profile = "single_descent_initial_rounding";
+      profile = "single_descent_warm_start";
     } else if (family == "effort") {
       const auto& effort      = fp_effort_configs[preset_id];
       profile                 = effort.name;
@@ -212,14 +214,16 @@ gpu_submip_options_t gpu_submip_options_from_environment()
   options.fix_rate = experiment_option("CUOPT_GPU_SUBMIP_FIX_RATE", 0.25, 0, 0.99);
   options.time_limit =
     experiment_option("CUOPT_GPU_SUBMIP_SECONDS", options.time_limit, 0.01, 86400);
-  options.node_stride     = experiment_option("CUOPT_GPU_SUBMIP_STRIDE", 8, 1, 1000000);
-  options.min_depth       = experiment_option("CUOPT_GPU_SUBMIP_MIN_DEPTH", 0, 0, 1000000);
-  options.max_fractional  = experiment_option("CUOPT_GPU_SUBMIP_MAX_FRACTIONAL",
+  options.node_stride    = experiment_option("CUOPT_GPU_SUBMIP_STRIDE", 8, 1, 1000000);
+  options.min_depth      = experiment_option("CUOPT_GPU_SUBMIP_MIN_DEPTH", 0, 0, 1000000);
+  options.max_fractional = experiment_option("CUOPT_GPU_SUBMIP_MAX_FRACTIONAL",
                                              std::numeric_limits<int>::max(),
                                              0,
                                              std::numeric_limits<int>::max());
-  options.initial_calls   = experiment_option("CUOPT_GPU_SUBMIP_INITIAL_CALLS", 4, 0, 1000000);
-  options.cached_primal   = experiment_option("CUOPT_GPU_SUBMIP_CACHED_PRIMAL", 0, 0, 1) != 0;
+  options.initial_calls  = experiment_option("CUOPT_GPU_SUBMIP_INITIAL_CALLS", 4, 0, 1000000);
+  options.cached_primal  = experiment_option("CUOPT_GPU_SUBMIP_CACHED_PRIMAL", 0, 0, 1) != 0;
+  options.select_warm_start =
+    experiment_option("CUOPT_GPU_SUBMIP_SELECT_WARM_START", options.select_warm_start, 0, 1) != 0;
   options.enable_fp       = experiment_option("CUOPT_GPU_SUBMIP_DISABLE_FP", 0, 0, 1) == 0;
   options.compact_fixed   = experiment_option("CUOPT_GPU_SUBMIP_COMPACT", 1, 0, 1) != 0;
   options.fused_pdlp      = experiment_option("CUOPT_GPU_SUBMIP_FUSED_PDLP", 1, 0, 1) != 0;
@@ -227,7 +231,7 @@ gpu_submip_options_t gpu_submip_options_from_environment()
   CUOPT_LOG_INFO(
     "GpuSubmipEffectiveConfig mode=%s lifetime=%s fp_config=%s max_projections=%d "
     "max_descents=%d seconds=%.6f alpha=%.6f pdlp_seconds=%.6f rounding_seconds=%.6f "
-    "propagation_seconds=%.6f initial_rounding=%d",
+    "propagation_seconds=%.6f initial_rounding=%d select_warm_start=%d",
     options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? "cpufj" : "node",
     options.independent ? "independent" : "paired",
     options.fp_config.name.c_str(),
@@ -238,7 +242,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     options.fp_config.pdlp_seconds,
     options.fp_config.rounding_seconds,
     options.fp_config.propagation_seconds,
-    int(options.fp_config.initial_rounding));
+    int(options.fp_config.initial_rounding),
+    int(options.select_warm_start));
   return options;
 }
 
@@ -324,6 +329,140 @@ gpu_submip_job_t<i_t, f_t> make_gpu_submip_job(
 }
 
 template <typename i_t, typename f_t>
+const typename gpu_submip_seed_cache_t<i_t, f_t>::entry_t* gpu_submip_seed_cache_t<i_t, f_t>::find(
+  const gpu_submip_job_t<i_t, f_t>& job) const
+{
+  for (const auto& entry : entries_) {
+    const auto& lp = entry.lp;
+    if (entry.source_id == job.source_id && entry.types == job.var_types &&
+        lp.num_cols == job.lp.num_cols && lp.num_rows == job.lp.num_rows &&
+        lp.A.col_start == job.lp.A.col_start && lp.A.i == job.lp.A.i && lp.A.x == job.lp.A.x &&
+        lp.rhs == job.lp.rhs && lp.objective == job.lp.objective &&
+        lp.obj_scale == job.lp.obj_scale && lp.obj_constant == job.lp.obj_constant) {
+      return &entry;
+    }
+  }
+  return nullptr;
+}
+
+template <typename i_t, typename f_t>
+void gpu_submip_seed_cache_t<i_t, f_t>::remember(const gpu_submip_job_t<i_t, f_t>& job,
+                                                 std::vector<f_t> projection,
+                                                 std::vector<f_t> candidate)
+{
+  const auto finite = [&](const std::vector<f_t>& point) {
+    return point.size() == static_cast<size_t>(job.lp.num_cols) &&
+           std::all_of(point.begin(), point.end(), [](f_t x) { return std::isfinite(x); });
+  };
+  if (!finite(projection)) { projection.clear(); }
+  if (!finite(candidate)) { candidate.clear(); }
+  if (projection.empty() && candidate.empty()) { return; }
+  const auto* match = find(job);
+  if (match) {
+    const auto index = match - entries_.data();
+    std::rotate(entries_.begin() + index, entries_.begin() + index + 1, entries_.end());
+    if (!projection.empty()) { entries_.back().projection = std::move(projection); }
+    if (!candidate.empty()) { entries_.back().candidate = std::move(candidate); }
+  } else {
+    constexpr size_t capacity = 4;
+    if (entries_.size() == capacity) { entries_.erase(entries_.begin()); }
+    entries_.push_back(
+      {job.lp, job.var_types, job.source_id, std::move(projection), std::move(candidate)});
+  }
+}
+
+namespace {
+template <typename i_t, typename f_t>
+std::array<f_t, 4> score_gpu_submip_seed(const gpu_submip_job_t<i_t, f_t>& job,
+                                         const csr_matrix_t<i_t, f_t>& rows,
+                                         f_t target,
+                                         const mip_solver_settings_t<i_t, f_t>& settings,
+                                         std::vector<f_t>& point)
+{
+  const f_t inf = std::numeric_limits<f_t>::infinity();
+  if (point.size() != static_cast<size_t>(job.lp.num_cols)) { return {inf, inf, inf, inf}; }
+  f_t displacement  = 0;
+  f_t fractionality = 0;
+  for (i_t j = 0; j < job.lp.num_cols; ++j) {
+    if (!std::isfinite(point[j])) { return {inf, inf, inf, inf}; }
+    const f_t clamped = std::clamp(point[j], job.lp.lower[j], job.lp.upper[j]);
+    displacement += std::abs(clamped - point[j]) / std::max(f_t(1), std::abs(point[j]));
+    point[j] = clamped;
+    if (static_cast<size_t>(j) < job.var_types.size() &&
+        job.var_types[j] != simplex::variable_type_t::CONTINUOUS) {
+      fractionality += std::abs(point[j] - std::round(point[j]));
+    }
+  }
+  const f_t objective = simplex::compute_objective(job.lp, point);
+  if (!std::isfinite(objective)) { return {inf, inf, inf, inf}; }
+  f_t worst = std::max(f_t(0), objective - target) / std::max(f_t(1), std::abs(target));
+  f_t total = worst;
+  for (i_t i = 0; i < job.lp.num_rows; ++i) {
+    const f_t activity =
+      compensated_dot2_csr(rows.row_start.data(), rows.j.data(), rows.x.data(), point.data(), i);
+    if (!std::isfinite(activity)) { return {inf, inf, inf, inf}; }
+    const f_t allowed = settings.tolerances.absolute_tolerance +
+                        settings.tolerances.relative_tolerance *
+                          std::max(std::abs(activity), std::abs(job.lp.rhs[i]));
+    const f_t excess = std::max(f_t(0), std::abs(activity - job.lp.rhs[i]) - allowed) /
+                       std::max(f_t(1), std::abs(job.lp.rhs[i]));
+    worst = std::max(worst, excess);
+    total += excess;
+  }
+  // Prefer row/cutoff feasibility, then closeness to integrality. Clamping alone
+  // is never treated as restoration of LP feasibility.
+  return {worst, total, fractionality, displacement};
+}
+}  // namespace
+
+template <typename i_t, typename f_t>
+gpu_submip_seed_t<i_t, f_t> select_gpu_submip_seed(const gpu_submip_job_t<i_t, f_t>& job,
+                                                   f_t target,
+                                                   const mip_solver_settings_t<i_t, f_t>& settings,
+                                                   const gpu_submip_seed_cache_t<i_t, f_t>* history)
+{
+  const double started = tic();
+  csr_matrix_t<i_t, f_t> rows(job.lp.num_rows, job.lp.num_cols, job.lp.A.nnz());
+  job.lp.A.to_compressed_row(rows);
+  gpu_submip_seed_t<i_t, f_t> best{job.primal, "node_primal"};
+  auto score          = score_gpu_submip_seed(job, rows, target, settings, best.values);
+  int candidates      = 1;
+  const auto consider = [&](std::vector<f_t> point, const char* name) {
+    ++candidates;
+    const auto value = score_gpu_submip_seed(job, rows, target, settings, point);
+    if (value < score) {
+      score = value;
+      best  = {std::move(point), name};
+    }
+  };
+  if (job.incumbent.size() == job.primal.size()) {
+    auto blend = job.primal;
+    for (size_t j = 0; j < blend.size(); ++j) {
+      blend[j] = std::lerp(blend[j], job.incumbent[j], f_t(0.25));
+    }
+    consider(std::move(blend), "incumbent_guided");
+  }
+  const auto* previous = history ? history->find(job) : nullptr;
+  if (previous) {
+    if (!previous->projection.empty()) { consider(previous->projection, "previous_projection"); }
+    if (!previous->candidate.empty()) { consider(previous->candidate, "previous_fp_solution"); }
+  }
+  CUOPT_LOG_INFO(
+    "GpuSubmipWarmStart job=%llu seed=%s candidates=%d cache_hit=%d "
+    "max_excess=%.9g total_excess=%.9g fractionality=%.9g clamp_change=%.9g seconds=%.6f",
+    (unsigned long long)job.job_id,
+    best.name,
+    candidates,
+    int(previous != nullptr),
+    double(score[0]),
+    double(score[1]),
+    double(score[2]),
+    double(score[3]),
+    toc(started));
+  return best;
+}
+
+template <typename i_t, typename f_t>
 i_t perturb_gpu_submip_restart_seed(const simplex::lp_problem_t<i_t, f_t>& lp,
                                     const std::vector<simplex::variable_type_t>& types,
                                     std::vector<f_t>& seed,
@@ -378,7 +517,8 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                         const std::vector<f_t>* primal_seed_override,
                         const char* primal_seed_name_override,
                         gpu_submip_fp_run_info_t* run_info,
-                        int projection_limit)
+                        int projection_limit,
+                        gpu_submip_seed_cache_t<i_t, f_t>* seed_cache)
 {
   if (run_info) { *run_info = {}; }
   if (!options.enable_fp || (halt && halt->load()) || tic() >= job.deadline) { return false; }
@@ -448,10 +588,19 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
   }
   const double setup_seconds = toc(started);
   std::vector<f_t> seed      = primal_seed_override ? *primal_seed_override : job.primal;
+  const char* seed_name      = primal_seed_override ? primal_seed_name_override : "node_primal";
+  const bool select_seed     = options.select_warm_start && !primal_seed_override &&
+                           !options.cached_primal && options.incumbent_blend == 0;
+  if (select_seed) {
+    auto selected = select_gpu_submip_seed(job, target, settings, seed_cache);
+    seed          = std::move(selected.values);
+    seed_name     = selected.name;
+  }
   if (!primal_seed_override && options.incumbent_blend > 0 && job.incumbent.size() == seed.size()) {
     for (size_t j = 0; j < seed.size(); ++j) {
       seed[j] = std::lerp(seed[j], job.incumbent[j], f_t(options.incumbent_blend));
     }
+    seed_name = "incumbent_blend";
   }
   CUOPT_LOG_INFO(
     "GpuSubmipJobStart job=%llu source=%s source_id=%llu tree_node=%d depth=%d "
@@ -478,12 +627,16 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                                   halt,
                                   candidate,
                                   !primal_seed_override && options.cached_primal,
-                                  primal_seed_override          ? primal_seed_name_override
-                                  : options.incumbent_blend > 0 ? "incumbent_blend"
-                                                                : "node_primal",
+                                  seed_name,
                                   job.job_id,
                                   projection_limit);
   if (run_info) { *run_info = session->last_run_info(); }
+  if (options.select_warm_start && seed_cache && session->last_run_info().started &&
+      !(halt && halt->load())) {
+    std::vector<f_t> projection;
+    session->get_restart_seed(projection);
+    seed_cache->remember(job, std::move(projection), candidate);
+  }
   bool valid = found && gpu_submip_candidate_is_valid(job.lp, job.var_types, candidate, settings);
   f_t objective = std::numeric_limits<f_t>::infinity();
   if (valid) {
@@ -544,7 +697,15 @@ template bool run_gpu_submip_job<int, double>(
   const std::vector<double>*,
   const char*,
   gpu_submip_fp_run_info_t*,
-  int);
+  int,
+  gpu_submip_seed_cache_t<int, double>*);
+
+template class gpu_submip_seed_cache_t<int, double>;
+template gpu_submip_seed_t<int, double> select_gpu_submip_seed(
+  const gpu_submip_job_t<int, double>&,
+  double,
+  const mip_solver_settings_t<int, double>&,
+  const gpu_submip_seed_cache_t<int, double>*);
 
 template int perturb_gpu_submip_restart_seed<int, double>(
   const simplex::lp_problem_t<int, double>&,

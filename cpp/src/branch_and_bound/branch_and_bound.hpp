@@ -364,7 +364,8 @@ class branch_and_bound_t {
     const std::vector<f_t>& seed,
     search_strategy_t strategy,
     i_t structural_columns,
-    fj_cpu_worker_t<i_t, f_t>& cpu_worker);
+    fj_cpu_worker_t<i_t, f_t>& cpu_worker,
+    const std::vector<f_t>& incumbent_seed = {});
   bool is_root_solution_set{false};
   bool has_initial_pseudocost_{false};
 

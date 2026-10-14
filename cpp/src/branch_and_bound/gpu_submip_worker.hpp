@@ -38,6 +38,7 @@ struct gpu_submip_options_t {
   int max_fractional{std::numeric_limits<int>::max()};
   int initial_calls{4};
   bool cached_primal{false};
+  bool select_warm_start{false};
   bool enable_fp{true};
   bool compact_fixed{true};
   bool fused_pdlp{true};
@@ -96,6 +97,40 @@ struct gpu_submip_job_t {
   std::function<bool(const std::vector<f_t>&, std::vector<f_t>&)> to_user;
 };
 
+// Host-only, bounded history. Exact model/source matching keeps column identities
+// intact; bounds may change because every selected point is clamped and rescored.
+template <typename i_t, typename f_t>
+class gpu_submip_seed_cache_t {
+ public:
+  struct entry_t {
+    simplex::lp_problem_t<i_t, f_t> lp;
+    std::vector<simplex::variable_type_t> types;
+    uint64_t source_id;
+    std::vector<f_t> projection;
+    std::vector<f_t> candidate;
+  };
+  const entry_t* find(const gpu_submip_job_t<i_t, f_t>& job) const;
+  void remember(const gpu_submip_job_t<i_t, f_t>& job,
+                std::vector<f_t> projection,
+                std::vector<f_t> candidate);
+
+ private:
+  std::vector<entry_t> entries_;
+};
+
+template <typename i_t, typename f_t>
+struct gpu_submip_seed_t {
+  std::vector<f_t> values;
+  const char* name{"node_primal"};
+};
+
+template <typename i_t, typename f_t>
+gpu_submip_seed_t<i_t, f_t> select_gpu_submip_seed(
+  const gpu_submip_job_t<i_t, f_t>& job,
+  f_t target,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  const gpu_submip_seed_cache_t<i_t, f_t>* history);
+
 template <typename i_t, typename f_t>
 gpu_submip_job_t<i_t, f_t> make_gpu_submip_job(
   const simplex::lp_problem_t<i_t, f_t>& lp,
@@ -138,8 +173,9 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                         std::function<void(const std::vector<f_t>&, f_t)> publish,
                         std::unique_ptr<gpu_submip_fp_t<i_t, f_t>>* session_cache = nullptr,
                         const std::vector<f_t>* primal_seed_override              = nullptr,
-                        const char* primal_seed_name_override = "perturbed_projection",
-                        gpu_submip_fp_run_info_t* run_info    = nullptr,
-                        int projection_limit                  = 0);
+                        const char* primal_seed_name_override         = "perturbed_projection",
+                        gpu_submip_fp_run_info_t* run_info            = nullptr,
+                        int projection_limit                          = 0,
+                        gpu_submip_seed_cache_t<i_t, f_t>* seed_cache = nullptr);
 
 }  // namespace cuopt::mathematical_optimization::mip

@@ -207,7 +207,8 @@ bool run_gpu_submip_job_full_device_continuous(
   int device,
   gpu_submip_device_pool_t* device_pool,
   bool bounded_effort,
-  gpu_submip_session_info_t* session_info)
+  gpu_submip_session_info_t* session_info,
+  gpu_submip_seed_cache_t<i_t, f_t>* seed_cache)
 {
   if (session_info) { *session_info = {}; }
   paired_cancel_t cancellation(root_halt, pair_halt);
@@ -282,7 +283,8 @@ bool run_gpu_submip_job_full_device_continuous(
         restarting ? &restart_seed : nullptr,
         "perturbed_projection",
         &info,
-        bounded_effort && options.max_projections > 0 ? options.max_projections - projections : 0);
+        bounded_effort && options.max_projections > 0 ? options.max_projections - projections : 0,
+        seed_cache);
       projections += info.projections;
       published_any = published_any || published;
       CUOPT_LOG_INFO(
@@ -385,6 +387,7 @@ template bool run_gpu_submip_job_full_device_continuous<int, double>(
   int,
   gpu_submip_device_pool_t*,
   bool,
-  gpu_submip_session_info_t*);
+  gpu_submip_session_info_t*,
+  gpu_submip_seed_cache_t<int, double>*);
 
 }  // namespace cuopt::mathematical_optimization::mip

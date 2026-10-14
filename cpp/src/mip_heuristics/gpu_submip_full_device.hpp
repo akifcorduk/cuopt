@@ -64,8 +64,9 @@ bool run_gpu_submip_job_full_device_continuous(
   std::function<f_t()> current_user_cutoff,
   std::function<void(const std::vector<f_t>&, f_t)> publish,
   int device,
-  gpu_submip_device_pool_t* device_pool   = nullptr,
-  bool bounded_effort                     = false,
-  gpu_submip_session_info_t* session_info = nullptr);
+  gpu_submip_device_pool_t* device_pool         = nullptr,
+  bool bounded_effort                           = false,
+  gpu_submip_session_info_t* session_info       = nullptr,
+  gpu_submip_seed_cache_t<i_t, f_t>* seed_cache = nullptr);
 
 }  // namespace cuopt::mathematical_optimization::mip
