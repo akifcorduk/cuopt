@@ -326,6 +326,7 @@ class branch_and_bound_t {
     std::function<void(const std::vector<f_t>&, f_t)> publish;
     std::atomic<int>* root_halt{nullptr};
     double root_start{0};
+    f_t user_root_lower_bound{std::numeric_limits<f_t>::quiet_NaN()};
     std::mutex error_mutex;
     std::exception_ptr async_error;
     std::atomic<uint64_t> paired_started{0};

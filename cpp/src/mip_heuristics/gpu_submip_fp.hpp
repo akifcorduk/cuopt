@@ -42,8 +42,8 @@ struct gpu_submip_fp_config_t {
 };
 
 gpu_submip_fp_config_t gpu_submip_fp_config_from_name(std::string_view name);
-// CUOPT_CONFIG_ID selects a preset modulo four, validated against CUOPT_MAX_CONFIG (default four).
-// Numeric IDs override the legacy named environment selector; neither changes the solver seed.
+// CUOPT_CONFIG_ID repeats checkpoint defaults or cycles legacy presets, validated against
+// CUOPT_MAX_CONFIG (default four). Numeric IDs override names; neither changes the solver seed.
 gpu_submip_fp_config_t gpu_submip_fp_config_from_environment();
 
 struct gpu_submip_fp_run_info_t {

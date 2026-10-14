@@ -205,6 +205,12 @@ int run_worker_replay(const argparse::ArgumentParser& program,
                                                 program.get<unsigned>("--job-id"),
                                                 options.fix_rate > 0);
   // Audit against the exact executed job, including optional additional RINS fixings.
+  if (program.is_used("--objective-lower-bound")) {
+    job.proven_lower_bound = program.get<double>("--objective-lower-bound");
+    if (!std::isfinite(job.proven_lower_bound) || job.proven_lower_bound > job.cutoff) {
+      throw std::runtime_error("Replay objective lower bound must be finite and <= cutoff");
+    }
+  }
   replay_audit_t node_audit(job.lp, job.var_types, mip_settings, job.cutoff);
   const bool session     = options.mode == mip::gpu_submip_mode_t::CPUFJ_FULL_GPU;
   const bool independent = session && options.independent;
@@ -363,6 +369,9 @@ int main(int argc, char** argv)
   program.add_argument("--time-limit").scan<'g', double>().default_value(60.0);
   program.add_argument("--seed").scan<'i', int>().default_value(0);
   program.add_argument("--job-id").scan<'u', unsigned>().default_value(0u);
+  program.add_argument("--objective-lower-bound")
+    .help("valid lower bound in snapshot LP objective coordinates; omitted means unknown")
+    .scan<'g', double>();
   program.add_argument("--cached-primal").flag();
   program.add_argument("--disable-fp").flag();
   program.add_argument("--fp-config")

@@ -34,6 +34,20 @@ workers remain independent, and every handoff drains the GPU stream first.
 initial regular turn can be set with that variable and
 `CUOPT_GPU_SUBMIP_REGULAR_SECONDS`. `GpuSubmipRegularTurn` logs actual handoffs.
 
+Checkpoint 4 targets improvement of 0.1% of the gap between the current incumbent
+and the frozen valid outer-root LP bound. The bound is converted into each
+child's minimization objective coordinates, including offset and scale. Without
+a valid bound, the target is a 1e-6 relative improvement in the user objective.
+The existing strict-improvement margin and known objective lattice still apply.
+This cutoff restricts only the GPU heuristic: it never changes the global bound,
+CPU search, or candidate validation tolerances.
+`CUOPT_GPU_SUBMIP_MIN_IMPROVE=0` restores the previous strict cutoff;
+positive values set the gap fraction (default 0.001). `GpuSubmipJobStart` records
+the proof bound, target, and cutoff basis. Existing snapshots do not store a proof
+bound: replay uses the relative fallback unless `--objective-lower-bound` supplies
+the logged bound in snapshot LP coordinates. The snapshot seed objective is not
+used as a bound.
+
 Use the existing benchmark exports at each checkpoint, with numeric suffixes
 representing repetitions:
 
@@ -101,6 +115,7 @@ unset CUOPT_GPU_SUBMIP_MAX_PROJECTIONS CUOPT_GPU_SUBMIP_MAX_DESCENTS
 unset CUOPT_GPU_SUBMIP_SECONDS CUOPT_GPU_SUBMIP_INITIAL_ROUNDING
 unset CUOPT_GPU_SUBMIP_SELECT_WARM_START
 unset CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS CUOPT_GPU_SUBMIP_REGULAR_SECONDS
+unset CUOPT_GPU_SUBMIP_MIN_IMPROVE
 ```
 
 `GpuSubmipFpSelection` identifies the family and profile;
@@ -128,7 +143,7 @@ profile, supply the saved job and `--full-gpu`; the selected independent mode an
 budgets apply automatically:
 
 ```bash
-CUOPT_CONFIG_ID=2 CUOPT_MAX_CONFIG=4 \
+CUOPT_CONFIG_ID=2 CUOPT_MAX_CONFIG=4 CUOPT_GPU_SUBMIP_CONFIG_FAMILY=effort \
   solve_GPU_SUBMIP_REPLAY cpu_submip.bin --full-gpu --seed 42 --job-id 1
 ```
 

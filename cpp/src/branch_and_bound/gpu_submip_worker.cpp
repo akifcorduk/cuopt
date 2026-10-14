@@ -85,6 +85,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     options.fp_config.initial_rounding = true;
     options.select_warm_start          = true;
     options.unproductive_seconds       = 15.;
+    options.min_improve                = 0.001;
   }
   if (std::getenv("CUOPT_CONFIG_ID") != nullptr) {
     const size_t preset_count = family == "checkpoint" ? 1 : fp_config_names.size();
@@ -97,7 +98,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     const auto preset_id = config_id % preset_count;
     const char* profile;
     if (family == "checkpoint") {
-      profile = "single_descent_gpu_schedule";
+      profile = "single_descent_improvement_target";
     } else if (family == "effort") {
       const auto& effort      = fp_effort_configs[preset_id];
       profile                 = effort.name;
@@ -229,6 +230,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     "CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS", options.unproductive_seconds, 0, 86400);
   options.regular_gpu_seconds =
     experiment_option("CUOPT_GPU_SUBMIP_REGULAR_SECONDS", options.regular_gpu_seconds, 0.01, 60);
+  options.min_improve =
+    experiment_option("CUOPT_GPU_SUBMIP_MIN_IMPROVE", options.min_improve, 0, 1);
   options.enable_fp       = experiment_option("CUOPT_GPU_SUBMIP_DISABLE_FP", 0, 0, 1) == 0;
   options.compact_fixed   = experiment_option("CUOPT_GPU_SUBMIP_COMPACT", 1, 0, 1) != 0;
   options.fused_pdlp      = experiment_option("CUOPT_GPU_SUBMIP_FUSED_PDLP", 1, 0, 1) != 0;
@@ -237,7 +240,7 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     "GpuSubmipEffectiveConfig mode=%s lifetime=%s fp_config=%s max_projections=%d "
     "max_descents=%d seconds=%.6f alpha=%.6f pdlp_seconds=%.6f rounding_seconds=%.6f "
     "propagation_seconds=%.6f initial_rounding=%d select_warm_start=%d "
-    "unproductive_seconds=%.6f regular_gpu_seconds=%.6f",
+    "unproductive_seconds=%.6f regular_gpu_seconds=%.6f min_improve=%.9g",
     options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? "cpufj" : "node",
     options.independent ? "independent" : "paired",
     options.fp_config.name.c_str(),
@@ -251,7 +254,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     int(options.fp_config.initial_rounding),
     int(options.select_warm_start),
     options.unproductive_seconds,
-    options.regular_gpu_seconds);
+    options.regular_gpu_seconds,
+    options.min_improve);
   return options;
 }
 
@@ -305,8 +309,8 @@ gpu_submip_job_t<i_t, f_t> make_gpu_submip_job(
       !std::all_of(incumbent.begin(), incumbent.end(), [](f_t x) { return std::isfinite(x); })) {
     throw std::invalid_argument("GPU job requires finite seeds in exact LP coordinates");
   }
-  gpu_submip_job_t<i_t, f_t> job{
-    lp, var_types, primal, incumbent, cutoff, simplex::compute_objective(lp, primal)};
+  // A supplied primal is a seed, never a proof of a lower bound.
+  gpu_submip_job_t<i_t, f_t> job{lp, var_types, primal, incumbent, cutoff};
   job.job_id = job_id;
   job.var_types.resize(primal.size(), simplex::variable_type_t::CONTINUOUS);
   if (!apply_rins || incumbent.empty() || options.fix_rate == 0) { return job; }
@@ -514,6 +518,48 @@ i_t perturb_gpu_submip_restart_seed(const simplex::lp_problem_t<i_t, f_t>& lp,
 }
 
 template <typename i_t, typename f_t>
+gpu_submip_cutoff_t<f_t> gpu_submip_improving_cutoff(
+  const gpu_submip_job_t<i_t, f_t>& job,
+  f_t cutoff,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  const gpu_submip_options_t& options)
+{
+  if (!std::isfinite(cutoff)) { return {cutoff, "unavailable"}; }
+  const f_t margin   = std::max(f_t(settings.tolerances.absolute_tolerance),
+                              f_t(1e-8) * std::max(f_t(1), std::abs(cutoff)));
+  f_t target         = cutoff - margin;
+  const bool stepped = job.lp.objective_step.has_step() || job.lp.objective_is_integral;
+  const f_t step     = job.lp.objective_step.has_step() ? job.lp.objective_step.step_size : f_t(1);
+  const f_t bias     = job.lp.objective_step.has_step() ? job.lp.objective_step.bias : f_t(0);
+  if (stepped) {
+    const f_t k = std::ceil((cutoff - bias) / step - settings.tolerances.integrality_tolerance);
+    target      = (k - 1) * step + bias;
+  }
+  if (options.min_improve == 0) { return {target, "strict"}; }
+  const char* basis = "strict";
+  f_t requested     = target;
+  if (std::isfinite(job.proven_lower_bound) && job.proven_lower_bound <= cutoff) {
+    requested = std::lerp(cutoff, job.proven_lower_bound, f_t(options.min_improve));
+    basis     = "root_gap";
+  } else {
+    // Objective constants and maximization scaling must not change the relative
+    // target. Convert a small user-space improvement back to local minimization.
+    const f_t user_cutoff = simplex::compute_user_objective(job.lp, cutoff);
+    const f_t scale       = std::abs(job.lp.obj_scale);
+    if (std::isfinite(user_cutoff) && std::isfinite(scale) && scale > 0) {
+      requested = cutoff - f_t(1e-6) * std::max(f_t(1), std::abs(user_cutoff)) / scale;
+      basis     = "relative_objective";
+    }
+  }
+  if (stepped) {
+    requested =
+      std::floor((requested - bias) / step + settings.tolerances.integrality_tolerance) * step +
+      bias;
+  }
+  return {std::min(target, requested), basis};
+}
+
+template <typename i_t, typename f_t>
 bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                         const mip_solver_settings_t<i_t, f_t>& settings,
                         const raft::handle_t* handle,
@@ -541,15 +587,8 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     return false;
   }
   if (std::isnan(cutoff)) { return false; }
-  const f_t margin = std::max(f_t(settings.tolerances.absolute_tolerance),
-                              f_t(1e-8) * std::max(f_t(1), std::abs(cutoff)));
-  f_t target       = std::isfinite(cutoff) ? cutoff - margin : cutoff;
-  if (std::isfinite(cutoff) && (job.lp.objective_step.has_step() || job.lp.objective_is_integral)) {
-    const f_t step = job.lp.objective_step.has_step() ? job.lp.objective_step.step_size : f_t(1);
-    const f_t bias = job.lp.objective_step.has_step() ? job.lp.objective_step.bias : f_t(0);
-    const f_t k    = std::ceil((cutoff - bias) / step - settings.tolerances.integrality_tolerance);
-    target         = (k - 1) * step + bias;
-  }
+  const auto improving_cutoff = gpu_submip_improving_cutoff(job, cutoff, settings, options);
+  const f_t target            = improving_cutoff.target;
   const auto snapshot_path =
     gpu_submip_job_snapshot_path(job.source,
                                  std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT"),
@@ -613,7 +652,8 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
   CUOPT_LOG_INFO(
     "GpuSubmipJobStart job=%llu source=%s source_id=%llu tree_node=%d depth=%d "
     "fractional=%d fixed=%d seconds=%.6f session_reused=%d strategy=%d cpu_lp_solves=0 "
-    "fp_config=%s cutoff=%.17g target_cutoff=%.17g",
+    "fp_config=%s cutoff=%.17g target_cutoff=%.17g proven_lower_bound=%.17g "
+    "cutoff_basis=%s requested_improvement=%.9g",
     (unsigned long long)job.job_id,
     gpu_submip_source_name(job.source),
     (unsigned long long)job.source_id,
@@ -626,7 +666,10 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     static_cast<int>(job.strategy),
     options.fp_config.name.c_str(),
     double(cutoff),
-    double(target));
+    double(target),
+    double(job.proven_lower_bound),
+    improving_cutoff.basis,
+    double(cutoff - target));
   std::vector<f_t> candidate;
   const bool found = session->run(job.lp,
                                   seed,
@@ -707,6 +750,12 @@ template bool run_gpu_submip_job<int, double>(
   gpu_submip_fp_run_info_t*,
   int,
   gpu_submip_seed_cache_t<int, double>*);
+
+template gpu_submip_cutoff_t<double> gpu_submip_improving_cutoff(
+  const gpu_submip_job_t<int, double>&,
+  double,
+  const mip_solver_settings_t<int, double>&,
+  const gpu_submip_options_t&);
 
 template class gpu_submip_seed_cache_t<int, double>;
 template gpu_submip_seed_t<int, double> select_gpu_submip_seed(

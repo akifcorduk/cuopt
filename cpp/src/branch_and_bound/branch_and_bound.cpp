@@ -2398,6 +2398,9 @@ void branch_and_bound_t<i_t, f_t>::enqueue_gpu_submip_job(const lp_problem_t<i_t
   job->fractional = fractional;
   job->deadline   = shared->deadline;
   job->to_user    = gpu_submip_to_user_;
+  if (std::isfinite(shared->user_root_lower_bound)) {
+    job->proven_lower_bound = compute_presolved_objective(lp, shared->user_root_lower_bound);
+  }
   if (reservation.publish(std::move(job))) {
     source_stats.enqueued.fetch_add(1, std::memory_order_relaxed);
   } else {
@@ -2474,6 +2477,9 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   job->fractional = fractional_variables(settings_, seed, types, fractional);
   job->deadline   = shared->deadline;
   job->to_user    = gpu_submip_to_user_;
+  if (std::isfinite(shared->user_root_lower_bound)) {
+    job->proven_lower_bound = compute_presolved_objective(lp, shared->user_root_lower_bound);
+  }
   if (shared->options.independent) {
     job->enqueued_at            = tic();
     const auto source_id        = job->source_id;
@@ -5429,13 +5435,19 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   if (gpu_submip_handle_ && !settings_.inside_submip && !settings_.deterministic) {
     gpu_submip_shared_ = std::make_shared<gpu_submip_shared_t>(
       gpu_submip_options_from_environment(), exploration_stats_.start_time + settings_.time_limit);
-    gpu_submip_shared_->ready_handle        = gpu_submip_handle_;
-    gpu_submip_shared_->demand_acquire      = gpu_submip_demand_acquire_;
-    gpu_submip_shared_->demand_release      = gpu_submip_demand_release_;
-    gpu_submip_shared_->fatal_cancel        = gpu_submip_fatal_cancel_;
-    gpu_submip_shared_->regular_turn        = gpu_submip_regular_turn_;
-    gpu_submip_shared_->root_halt           = &node_concurrent_halt_;
-    gpu_submip_shared_->root_start          = exploration_stats_.start_time;
+    gpu_submip_shared_->ready_handle   = gpu_submip_handle_;
+    gpu_submip_shared_->demand_acquire = gpu_submip_demand_acquire_;
+    gpu_submip_shared_->demand_release = gpu_submip_demand_release_;
+    gpu_submip_shared_->fatal_cancel   = gpu_submip_fatal_cancel_;
+    gpu_submip_shared_->regular_turn   = gpu_submip_regular_turn_;
+    gpu_submip_shared_->root_halt      = &node_concurrent_halt_;
+    gpu_submip_shared_->root_start     = exploration_stats_.start_time;
+    // Freeze the valid outer-root bound after cuts and strong branching. Every
+    // restricted child inherits this proof after objective-space conversion.
+    if (std::isfinite(root_objective_)) {
+      gpu_submip_shared_->user_root_lower_bound =
+        compute_user_objective(original_lp_, root_objective_);
+    }
     gpu_submip_shared_->device_pool         = std::make_shared<gpu_submip_device_pool_t>();
     gpu_submip_shared_->current_user_cutoff = [this]() {
       return compute_user_objective(original_lp_, upper_bound_.load());

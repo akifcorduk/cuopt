@@ -49,7 +49,7 @@ class GpuSubmipFpConfig : public ::testing::Test {
     }
   }
 
-  static constexpr std::array<const char*, 13> keys{"CUOPT_CONFIG_ID",
+  static constexpr std::array<const char*, 14> keys{"CUOPT_CONFIG_ID",
                                                     "CUOPT_MAX_CONFIG",
                                                     "CUOPT_GPU_SUBMIP_CONFIG_FAMILY",
                                                     "CUOPT_GPU_SUBMIP_FP_CONFIG",
@@ -61,7 +61,8 @@ class GpuSubmipFpConfig : public ::testing::Test {
                                                     "CUOPT_GPU_SUBMIP_INITIAL_ROUNDING",
                                                     "CUOPT_GPU_SUBMIP_SELECT_WARM_START",
                                                     "CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS",
-                                                    "CUOPT_GPU_SUBMIP_REGULAR_SECONDS"};
+                                                    "CUOPT_GPU_SUBMIP_REGULAR_SECONDS",
+                                                    "CUOPT_GPU_SUBMIP_MIN_IMPROVE"};
   std::array<std::optional<std::string>, keys.size()> saved;
 };
 
@@ -104,6 +105,7 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsRoundingControl
     EXPECT_TRUE(options.select_warm_start);
     EXPECT_EQ(options.unproductive_seconds, 15.);
     EXPECT_EQ(options.regular_gpu_seconds, 5.);
+    EXPECT_EQ(options.min_improve, 0.001);
   }
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "0", 1);
   EXPECT_FALSE(gpu_submip_options_from_environment().fp_config.initial_rounding);
@@ -112,6 +114,8 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsRoundingControl
   EXPECT_FALSE(gpu_submip_options_from_environment().select_warm_start);
   setenv("CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS", "0", 1);
   EXPECT_EQ(gpu_submip_options_from_environment().unproductive_seconds, 0.);
+  setenv("CUOPT_GPU_SUBMIP_MIN_IMPROVE", "0", 1);
+  EXPECT_EQ(gpu_submip_options_from_environment().min_improve, 0.);
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "bad", 1);
   EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
 }
@@ -706,6 +710,54 @@ class GpuSubmipWorker : public ::testing::Test {
   gpu_submip_options_t options;
   std::vector<type_t> types{type_t::BINARY, type_t::BINARY};
 };
+
+TEST_F(GpuSubmipWorker, ImprovementTargetUsesOnlyAnExplicitProofBound)
+{
+  auto job = make_gpu_submip_job(lp, types, {0.5, 0.5, 0.}, {}, 2., options, settings, 1, false);
+  EXPECT_EQ(job.proven_lower_bound, -std::numeric_limits<double>::infinity());
+  options.min_improve = 0.001;
+  auto target         = gpu_submip_improving_cutoff(job, 2., settings, options);
+  EXPECT_STREQ(target.basis, "relative_objective");
+  job.proven_lower_bound = 0.;
+  target                 = gpu_submip_improving_cutoff(job, 2., settings, options);
+  EXPECT_STREQ(target.basis, "root_gap");
+  EXPECT_NEAR(target.target, 1.998, 1e-12);
+  job.proven_lower_bound = -200.;
+  EXPECT_NEAR(gpu_submip_improving_cutoff(job, -100., settings, options).target, -100.1, 1e-12);
+  options.min_improve = 0.;
+  target              = gpu_submip_improving_cutoff(job, 2., settings, options);
+  EXPECT_STREQ(target.basis, "strict");
+  EXPECT_NEAR(target.target, 2. - settings.tolerances.absolute_tolerance, 1e-12);
+}
+
+TEST_F(GpuSubmipWorker, RelativeImprovementPreservesObjectiveConversion)
+{
+  auto job = make_gpu_submip_job(lp, types, {0.5, 0.5, 0.}, {}, 2., options, settings, 1, false);
+  options.min_improve = 0.001;
+  const auto first    = gpu_submip_improving_cutoff(job, 2., settings, options);
+  EXPECT_NEAR(first.target, 2. - 9e-6, 1e-12);
+  const double first_user = simplex::compute_user_objective(job.lp, first.target);
+  job.lp.obj_constant += 63.;
+  const auto shifted = gpu_submip_improving_cutoff(job, 2. - 63., settings, options);
+  EXPECT_NEAR(simplex::compute_user_objective(job.lp, shifted.target), first_user, 1e-10);
+  job.proven_lower_bound = 3.;  // Incompatible bound must not drive the target.
+  EXPECT_STREQ(gpu_submip_improving_cutoff(job, 2., settings, options).basis, "relative_objective");
+}
+
+TEST_F(GpuSubmipWorker, ImprovementTargetRespectsObjectiveLatticeAndLegacyCutoff)
+{
+  auto job = make_gpu_submip_job(lp, types, {0.5, 0.5, 0.}, {}, 100., options, settings, 1, false);
+  job.proven_lower_bound       = 0.;
+  job.lp.objective_is_integral = true;
+  options.min_improve          = 0.025;
+  EXPECT_DOUBLE_EQ(gpu_submip_improving_cutoff(job, 100., settings, options).target, 97.);
+  options.min_improve = 0.;
+  EXPECT_DOUBLE_EQ(gpu_submip_improving_cutoff(job, 100., settings, options).target, 99.);
+  job.lp.objective_step = {0.5, 0.25};
+  EXPECT_DOUBLE_EQ(gpu_submip_improving_cutoff(job, 10.25, settings, options).target, 9.75);
+  options.min_improve = 0.1;
+  EXPECT_DOUBLE_EQ(gpu_submip_improving_cutoff(job, 10.25, settings, options).target, 8.75);
+}
 
 TEST_F(GpuSubmipWorker, WarmStartPrefersCompatibleProjectionAndRescoresSiblingBounds)
 {

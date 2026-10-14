@@ -42,6 +42,7 @@ struct gpu_submip_options_t {
   bool select_warm_start{false};
   double unproductive_seconds{0.};  // Zero keeps uninterrupted sub-MIP ownership.
   double regular_gpu_seconds{5.};
+  double min_improve{0.};  // Fraction of the valid objective gap; zero retains strict cutoff only.
   bool enable_fp{true};
   bool compact_fixed{true};
   bool fused_pdlp{true};
@@ -120,7 +121,7 @@ struct gpu_submip_job_t {
   std::vector<f_t> primal;
   std::vector<f_t> incumbent;
   f_t cutoff;
-  f_t lower_bound;
+  f_t proven_lower_bound{-std::numeric_limits<f_t>::infinity()};
   uint64_t job_id{0};
   uint64_t source_id{0};
   i_t tree_node{0};
@@ -133,6 +134,19 @@ struct gpu_submip_job_t {
   double enqueued_at{0.};
   std::function<bool(const std::vector<f_t>&, std::vector<f_t>&)> to_user;
 };
+
+template <typename f_t>
+struct gpu_submip_cutoff_t {
+  f_t target;
+  const char* basis;
+};
+
+template <typename i_t, typename f_t>
+gpu_submip_cutoff_t<f_t> gpu_submip_improving_cutoff(
+  const gpu_submip_job_t<i_t, f_t>& job,
+  f_t cutoff,
+  const mip_solver_settings_t<i_t, f_t>& settings,
+  const gpu_submip_options_t& options);
 
 // Host-only, bounded history. Exact model/source matching keeps column identities
 // intact; bounds may change because every selected point is clamped and rescored.
