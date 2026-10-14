@@ -105,7 +105,7 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsRoundingControl
     EXPECT_TRUE(options.select_warm_start);
     EXPECT_EQ(options.unproductive_seconds, 15.);
     EXPECT_EQ(options.regular_gpu_seconds, 5.);
-    EXPECT_EQ(options.min_improve, 0.001);
+    EXPECT_EQ(options.min_improve, 0.);
   }
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "0", 1);
   EXPECT_FALSE(gpu_submip_options_from_environment().fp_config.initial_rounding);
@@ -114,8 +114,8 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsRoundingControl
   EXPECT_FALSE(gpu_submip_options_from_environment().select_warm_start);
   setenv("CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS", "0", 1);
   EXPECT_EQ(gpu_submip_options_from_environment().unproductive_seconds, 0.);
-  setenv("CUOPT_GPU_SUBMIP_MIN_IMPROVE", "0", 1);
-  EXPECT_EQ(gpu_submip_options_from_environment().min_improve, 0.);
+  setenv("CUOPT_GPU_SUBMIP_MIN_IMPROVE", "0.001", 1);
+  EXPECT_EQ(gpu_submip_options_from_environment().min_improve, 0.001);
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "bad", 1);
   EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
 }

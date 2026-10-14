@@ -296,7 +296,7 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
     const auto verification_begin = fp.total_verification_time;
     const auto verifies_before    = fp.n_verification_calls;
     run_info.started              = true;
-    const bool found              = fp.run_single_fp_descent(solution);
+    const bool found              = fp.run_single_fp_descent(solution, local_cutoff);
     run_info.projections          = fp.n_lp_calls - projections_before;
     run_info.exit_reason          = fp.diagnostics.exit_reason;
     const double descent_seconds  = fp.timer.elapsed_time() - descent_begin;
@@ -316,7 +316,8 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
       "rounding_prop_seconds=%.6f fj_seconds=%.6f exit=%s free_integer=%d "
       "last_projection_fractional=%d best_projection_fractional=%d last_checked_distance=%.9g "
       "end_fractional=%d end_total_excess=%.9g end_max_row_violation=%.9g "
-      "end_max_bound_violation=%.9g end_cutoff_excess=%.9g fp_found=%d",
+      "end_max_bound_violation=%.9g end_cutoff_excess=%.9g fp_found=%d "
+      "initial_rounding_cutoff_rejected=%d",
       (unsigned long long)job_id,
       config.name.c_str(),
       cached_seed ? "previous_projection" : primal_seed_name,
@@ -337,7 +338,8 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
       double(max_row_violation),
       double(max_bound_violation),
       std::max(0., double(solution.get_objective() - local_cutoff)),
-      int(found));
+      int(found),
+      int(fp.diagnostics.initial_rounding_cutoff_rejected));
     if (!found || !final_feasible || solution.get_objective() > local_cutoff ||
         max_bound_violation > problem.tolerances.absolute_tolerance) {
       return false;

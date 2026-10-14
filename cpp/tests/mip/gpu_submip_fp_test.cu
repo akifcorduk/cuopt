@@ -124,6 +124,54 @@ TEST_F(GpuSubmipFp, InitialRoundingFindsFeasibilityBeforeProjectionAndHonorsCuto
   EXPECT_TRUE(candidate.empty());
 }
 
+TEST_F(GpuSubmipFp, InitialRoundingChecksExactCutoffInReducedObjectiveCoordinates)
+{
+  // x + s = 0, with a fixed third column contributing 6 to the objective.
+  // The seed meets the cutoff row within feasibility tolerance, but misses
+  // the exact objective target. It must reach PDLP instead of spending the
+  // only descent on a point the session will reject.
+  simplex::lp_problem_t<int, double> shifted_lp(&handle, 1, 3, 2);
+  shifted_lp.A.col_start  = {0, 1, 2, 2};
+  shifted_lp.A.i          = {0, 0};
+  shifted_lp.A.x          = {1., 1.};
+  shifted_lp.rhs          = {0.};
+  shifted_lp.objective    = {1., 0., 3.};
+  shifted_lp.lower        = {0., -1., 2.};
+  shifted_lp.upper        = {1., 0., 2.};
+  shifted_lp.obj_scale    = 1.;
+  shifted_lp.obj_constant = 1000.;
+  auto shifted_types      = types;
+  shifted_types.push_back(simplex::variable_type_t::INTEGER);
+  auto config             = gpu_submip_fp_config_from_name("distance");
+  config.initial_rounding = true;
+  const double margin     = settings.tolerances.absolute_tolerance / 4.;
+  for (bool compact : {false, true}) {
+    SCOPED_TRACE(compact);
+    gpu_submip_fp_t<int, double> session(
+      &handle, shifted_lp, shifted_types, settings, compact, true, config);
+    std::vector<double> candidate;
+    for (double cutoff : {6., 6. - margin, 6. + margin}) {
+      SCOPED_TRACE(cutoff);
+      const bool found = session.run(shifted_lp, {0., 0., 2.}, cutoff, 10., nullptr, candidate);
+      if (cutoff < 6.) {
+        EXPECT_GT(session.last_run_info().projections, 0);
+        EXPECT_STRNE(session.last_run_info().exit_reason, "feasible_initial_rounding");
+      } else {
+        EXPECT_TRUE(found);
+        EXPECT_EQ(session.last_run_info().projections, 0);
+        EXPECT_STREQ(session.last_run_info().exit_reason, "feasible_initial_rounding");
+      }
+      if (found) {
+        ASSERT_EQ(candidate.size(), 3);
+        EXPECT_EQ(candidate[2], 2.);
+        EXPECT_LE(candidate[0] + 3. * candidate[2], cutoff);
+      } else {
+        EXPECT_TRUE(candidate.empty());
+      }
+    }
+  }
+}
+
 TEST_F(GpuSubmipFp, UnlimitedDeadlineRetainsFiniteTimingAndExportsRestartProjection)
 {
   lp.lower[1] = -0.49;

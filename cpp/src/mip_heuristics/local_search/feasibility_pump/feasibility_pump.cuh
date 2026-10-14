@@ -140,6 +140,7 @@ struct fp_descent_diagnostics_t {
   double cutoff{std::numeric_limits<double>::infinity()};
   double rounding_seconds{0};
   double fj_seconds{0};
+  bool initial_rounding_cutoff_rejected{false};
 };
 
 template <typename i_t, typename f_t>
@@ -162,7 +163,8 @@ class feasibility_pump_t {
 
   void perturbate(solution_t<i_t, f_t>& solution);
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
-  bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
+  bool run_single_fp_descent(solution_t<i_t, f_t>& solution,
+                             f_t initial_rounding_cutoff = std::numeric_limits<f_t>::infinity());
   bool round(solution_t<i_t, f_t>& solution);
   bool handle_cycle(solution_t<i_t, f_t>& solution);
   bool restart_fp(solution_t<i_t, f_t>& solution);

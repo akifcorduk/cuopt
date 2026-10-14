@@ -653,7 +653,8 @@ bool feasibility_pump_t<i_t, f_t>::stop_requested()
 }
 
 template <typename i_t, typename f_t>
-bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& solution)
+bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& solution,
+                                                         f_t initial_rounding_cutoff)
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
   const auto initial_projections = n_lp_calls;
@@ -663,7 +664,15 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     // the integer target, using the same rounding limits and descent deadline.
     const bool feasible = round(solution);
     if (stop_requested()) { return false; }
-    if (feasible) { return finish_descent(true, "feasible_initial_rounding"); }
+    if (feasible) {
+      // Propagation tolerates small cutoff-row violations. A sub-MIP session
+      // requires the exact objective target, so keep projecting if it would
+      // reject this point. The objective was already refreshed by round().
+      if (solution.get_objective() <= initial_rounding_cutoff) {
+        return finish_descent(true, "feasible_initial_rounding");
+      }
+      diagnostics.initial_rounding_cutoff_rejected = true;
+    }
   }
   // start by doing nearest rounding
   solution.round_nearest(rng());

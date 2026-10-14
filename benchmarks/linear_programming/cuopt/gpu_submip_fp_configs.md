@@ -5,10 +5,22 @@ config 0 policy (one independent distance-FP descent, unlimited projections,
 60 s wall cap). IDs no longer select the old effort variants unless the family
 is explicitly set to `effort`. The solver seed is unchanged by the ID.
 
+The current checkpoint (`single_descent_rounding_cutoff_fix`) keeps scheduling,
+initial propagation rounding, and warm-start selection, with the stronger cutoff
+disabled (`min_improve=0`). Initial rounding may finish a descent only if its
+objective meets the exact GPU-session target in reduced model coordinates. A
+point that passes row feasibility tolerances but misses that target continues to
+PDLP within the same descent and budget. `GpuSubmipFpDescent` reports
+`initial_rounding_cutoff_rejected=1` when this happens; this host-side check uses
+the already computed objective and adds no GPU synchronization.
+
+The earlier cumulative checkpoints were:
+
 Checkpoint 1 adds propagation-assisted initial rounding before the first PDLP
 projection. It uses the existing 0.5 s rounding / 0.7 s total propagation limits
 inside the job's wall budget and preserves the continuous PDLP seed. A feasible
-initial rounded point returns immediately. `CUOPT_GPU_SUBMIP_INITIAL_ROUNDING=0`
+initial rounded point meeting the exact cutoff returns immediately.
+`CUOPT_GPU_SUBMIP_INITIAL_ROUNDING=0`
 disables this change for an A/B comparison; it defaults to 1 in this family.
 
 Checkpoint 2 additionally selects the starting point from the supplied CPU seed,
@@ -42,16 +54,21 @@ The existing strict-improvement margin and known objective lattice still apply.
 This cutoff restricts only the GPU heuristic: it never changes the global bound,
 CPU search, or candidate validation tolerances.
 `CUOPT_GPU_SUBMIP_MIN_IMPROVE=0` restores the previous strict cutoff;
-positive values set the gap fraction (default 0.001). `GpuSubmipJobStart` records
+positive values set the gap fraction (0.001 at checkpoint 4, disabled by default
+in the current checkpoint). `GpuSubmipJobStart` records
 the proof bound, target, and cutoff basis. Existing snapshots do not store a proof
 bound: replay uses the relative fallback unless `--objective-lower-bound` supplies
 the logged bound in snapshot LP coordinates. The snapshot seed objective is not
 used as a bound.
 
 Use the existing benchmark exports at each checkpoint, with numeric suffixes
-representing repetitions:
+representing repetitions. Clear earlier policy overrides so the checkpoint's
+defaults apply:
 
 ```bash
+unset CUOPT_GPU_SUBMIP_INITIAL_ROUNDING CUOPT_GPU_SUBMIP_SELECT_WARM_START
+unset CUOPT_GPU_SUBMIP_MIN_IMPROVE
+unset CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS CUOPT_GPU_SUBMIP_REGULAR_SECONDS
 export CUOPT_GPU_SUBMIP=1
 export CUOPT_SUBMIP_POOL_DIAGNOSTICS=1
 export CUOPT_CONFIG_ID="$repetition_id"
