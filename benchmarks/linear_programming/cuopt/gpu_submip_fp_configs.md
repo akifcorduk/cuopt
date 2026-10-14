@@ -5,12 +5,25 @@ config 0 policy (one independent distance-FP descent, unlimited projections,
 60 s wall cap). IDs no longer select the old effort variants unless the family
 is explicitly set to `effort`. The solver seed is unchanged by the ID.
 
-The current checkpoint (`single_descent_rounding_cutoff_fix`) keeps scheduling,
-initial propagation rounding, and warm-start selection, with the stronger cutoff
-disabled (`min_improve=0`). Initial rounding may finish a descent only if its
-objective meets the exact GPU-session target in reduced model coordinates. A
-point that passes row feasibility tolerances but misses that target continues to
-PDLP within the same descent and budget. `GpuSubmipFpDescent` reports
+The current checkpoint (`single_descent_schedule_only`) isolates scheduling with
+the original CPUFJ seed and nearest-rounding policy. Initial propagation rounding
+and automatic warm-start selection are disabled; the stronger cutoff is also
+disabled (`min_improve=0`). The crash fix and distance-only FP remain enabled.
+
+The two follow-up checkpoints compare these policies:
+
+| Policy | `9f0b8625` | Current checkpoint |
+| ------ | ---------- | ------------------ |
+| Initial propagation rounding | On, corrected cutoff exit | Off |
+| Automatic warm-start selection | On | Off |
+| Scheduling | 15 s stall threshold; 5–20 s regular turns | Same |
+| Stronger root-gap cutoff | Off | Off |
+
+Both include the initial-rounding exit fix. When enabled, initial rounding may
+finish a descent only if its objective meets the exact GPU-session target in
+reduced model coordinates. A point that passes row feasibility tolerances but
+misses that target continues to PDLP within the same descent and budget.
+`GpuSubmipFpDescent` reports
 `initial_rounding_cutoff_rejected=1` when this happens; this host-side check uses
 the already computed objective and adds no GPU synchronization.
 
@@ -20,8 +33,8 @@ Checkpoint 1 adds propagation-assisted initial rounding before the first PDLP
 projection. It uses the existing 0.5 s rounding / 0.7 s total propagation limits
 inside the job's wall budget and preserves the continuous PDLP seed. A feasible
 initial rounded point meeting the exact cutoff returns immediately.
-`CUOPT_GPU_SUBMIP_INITIAL_ROUNDING=0`
-disables this change for an A/B comparison; it defaults to 1 in this family.
+`CUOPT_GPU_SUBMIP_INITIAL_ROUNDING=1` enables this change for an A/B comparison;
+it defaults to 0 in the current checkpoint.
 
 Checkpoint 2 additionally selects the starting point from the supplied CPU seed,
 a 25% incumbent blend, and the previous projection/FP solution for a matching
@@ -31,7 +44,8 @@ consumer retains at most four host model histories. Reuse
 requires exact matrix, RHS, objective, type, and source identity; each point is
 clamped and rescored against the current rows and cutoff. No GPU state or dual
 vectors are transferred between different jobs. CPU sub-MIP search is unchanged.
-`CUOPT_GPU_SUBMIP_SELECT_WARM_START=0` disables selection and history updates.
+`CUOPT_GPU_SUBMIP_SELECT_WARM_START=1` enables selection and history updates;
+it defaults to 0 in the current checkpoint.
 Explicit cached-primal or incumbent-blend controls take precedence over automatic
 selection. `GpuSubmipWarmStart` logs the choice, cache hit, score, and host cost.
 

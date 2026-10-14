@@ -82,8 +82,8 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     options.max_projections            = 0;
     options.max_descents               = 1;
     options.fp_config                  = gpu_submip_fp_config_from_name("distance");
-    options.fp_config.initial_rounding = true;
-    options.select_warm_start          = true;
+    options.fp_config.initial_rounding = false;
+    options.select_warm_start          = false;
     options.unproductive_seconds       = 15.;
     options.min_improve                = 0.;
   }
@@ -98,7 +98,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     const auto preset_id = config_id % preset_count;
     const char* profile;
     if (family == "checkpoint") {
-      profile = "single_descent_rounding_cutoff_fix";
+      profile = "single_descent_schedule_only";
     } else if (family == "effort") {
       const auto& effort      = fp_effort_configs[preset_id];
       profile                 = effort.name;
