@@ -578,7 +578,10 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
       branch_and_bound->set_gpu_submip_handoff_callbacks(
         [&]() { return gpu_handoff.acquire(); },
         [&]() { gpu_handoff.release(); },
-        [&]() { context.preempt_heuristic_solver_.store(true, std::memory_order_release); });
+        [&]() { context.preempt_heuristic_solver_.store(true, std::memory_order_release); },
+        [&](double seconds, const std::atomic<int>* halt) {
+          return gpu_handoff.wait_for_regular(seconds, halt);
+        });
       branch_and_bound->set_gpu_submip_configuration(
         [&]() { return gpu_handoff.ready() ? context.handle_ptr : nullptr; }, context.settings);
     } else if (gpu_submip_enabled) {

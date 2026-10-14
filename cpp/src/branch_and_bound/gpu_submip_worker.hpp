@@ -10,6 +10,7 @@
 #include <dual_simplex/presolve.hpp>
 #include <mip_heuristics/gpu_submip_fp.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -39,6 +40,8 @@ struct gpu_submip_options_t {
   int initial_calls{4};
   bool cached_primal{false};
   bool select_warm_start{false};
+  double unproductive_seconds{0.};  // Zero keeps uninterrupted sub-MIP ownership.
+  double regular_gpu_seconds{5.};
   bool enable_fp{true};
   bool compact_fixed{true};
   bool fused_pdlp{true};
@@ -47,6 +50,40 @@ struct gpu_submip_options_t {
 };
 
 gpu_submip_options_t gpu_submip_options_from_environment();
+
+// Observe completed jobs only. Tiny accepted updates do not reset the stall
+// window; useful improvement restores the shortest regular-worker turn.
+class gpu_submip_schedule_t {
+ public:
+  gpu_submip_schedule_t(double stall_seconds, double regular_seconds)
+    : stall_seconds_(stall_seconds), regular_seconds_(regular_seconds), next_turn_(regular_seconds)
+  {
+  }
+  void observe(double seconds, double relative_improvement)
+  {
+    if (relative_improvement >= 1e-6) {
+      stalled_   = 0.;
+      next_turn_ = regular_seconds_;
+    } else {
+      stalled_ += std::max(0., seconds);
+    }
+  }
+  bool should_yield() const { return stall_seconds_ > 0 && stalled_ >= stall_seconds_; }
+  double regular_turn()
+  {
+    const double seconds = next_turn_;
+    next_turn_           = std::min(4 * regular_seconds_, 2 * next_turn_);
+    stalled_             = 0.;
+    return seconds;
+  }
+  double stalled_seconds() const { return stalled_; }
+
+ private:
+  double stall_seconds_;
+  double regular_seconds_;
+  double next_turn_;
+  double stalled_{0.};
+};
 
 enum class gpu_submip_source_t { MAIN_TREE, CPU_SUBMIP, DIVE };
 inline constexpr size_t gpu_submip_source_count = 3;

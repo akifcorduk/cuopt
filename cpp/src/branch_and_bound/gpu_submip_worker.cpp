@@ -84,6 +84,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     options.fp_config                  = gpu_submip_fp_config_from_name("distance");
     options.fp_config.initial_rounding = true;
     options.select_warm_start          = true;
+    options.unproductive_seconds       = 15.;
   }
   if (std::getenv("CUOPT_CONFIG_ID") != nullptr) {
     const size_t preset_count = family == "checkpoint" ? 1 : fp_config_names.size();
@@ -96,7 +97,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     const auto preset_id = config_id % preset_count;
     const char* profile;
     if (family == "checkpoint") {
-      profile = "single_descent_warm_start";
+      profile = "single_descent_gpu_schedule";
     } else if (family == "effort") {
       const auto& effort      = fp_effort_configs[preset_id];
       profile                 = effort.name;
@@ -224,6 +225,10 @@ gpu_submip_options_t gpu_submip_options_from_environment()
   options.cached_primal  = experiment_option("CUOPT_GPU_SUBMIP_CACHED_PRIMAL", 0, 0, 1) != 0;
   options.select_warm_start =
     experiment_option("CUOPT_GPU_SUBMIP_SELECT_WARM_START", options.select_warm_start, 0, 1) != 0;
+  options.unproductive_seconds = experiment_option(
+    "CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS", options.unproductive_seconds, 0, 86400);
+  options.regular_gpu_seconds =
+    experiment_option("CUOPT_GPU_SUBMIP_REGULAR_SECONDS", options.regular_gpu_seconds, 0.01, 60);
   options.enable_fp       = experiment_option("CUOPT_GPU_SUBMIP_DISABLE_FP", 0, 0, 1) == 0;
   options.compact_fixed   = experiment_option("CUOPT_GPU_SUBMIP_COMPACT", 1, 0, 1) != 0;
   options.fused_pdlp      = experiment_option("CUOPT_GPU_SUBMIP_FUSED_PDLP", 1, 0, 1) != 0;
@@ -231,7 +236,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
   CUOPT_LOG_INFO(
     "GpuSubmipEffectiveConfig mode=%s lifetime=%s fp_config=%s max_projections=%d "
     "max_descents=%d seconds=%.6f alpha=%.6f pdlp_seconds=%.6f rounding_seconds=%.6f "
-    "propagation_seconds=%.6f initial_rounding=%d select_warm_start=%d",
+    "propagation_seconds=%.6f initial_rounding=%d select_warm_start=%d "
+    "unproductive_seconds=%.6f regular_gpu_seconds=%.6f",
     options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? "cpufj" : "node",
     options.independent ? "independent" : "paired",
     options.fp_config.name.c_str(),
@@ -243,7 +249,9 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     options.fp_config.rounding_seconds,
     options.fp_config.propagation_seconds,
     int(options.fp_config.initial_rounding),
-    int(options.select_warm_start));
+    int(options.select_warm_start),
+    options.unproductive_seconds,
+    options.regular_gpu_seconds);
   return options;
 }
 

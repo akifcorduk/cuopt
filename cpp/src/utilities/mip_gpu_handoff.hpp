@@ -4,7 +4,9 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -81,6 +83,7 @@ class mip_gpu_handoff_t {
     parked_ = false;
     // This event belongs to the regular worker and precedes any resumed GPU submissions.
     if (!finished_) { notify("resume"); }
+    state_cv_.notify_all();
   }
 
   // The regular solver can return before demand exists. Its owner drains after assigning
@@ -90,6 +93,29 @@ class mip_gpu_handoff_t {
     std::lock_guard<std::mutex> lock(mutex_);
     regular_finished_ = true;
     if (demand_ != 0 && !finished_) { publish_ready(); }
+    state_cv_.notify_all();
+  }
+
+  // Caller has released its drained lease. Count the regular turn only after
+  // the parked worker actually resumes, and never sleep on an idle device when
+  // that worker has finished. Root cancellation is independent of handoff.finish().
+  bool wait_for_regular(double seconds, const std::atomic<int>* halt)
+  {
+    using clock = std::chrono::steady_clock;
+    std::unique_lock<std::mutex> lock(mutex_);
+    const auto stopped = [&]() {
+      return finished_ || regular_finished_ || (halt && halt->load(std::memory_order_acquire));
+    };
+    while (parked_ && !stopped()) {
+      state_cv_.wait_for(lock, std::chrono::milliseconds(10));
+    }
+    if (stopped() || demand_ != 0 || !enabled_) { return false; }
+    const auto deadline = clock::now() + std::chrono::duration<double>(seconds);
+    while (clock::now() < deadline && !stopped() && demand_ == 0) {
+      state_cv_.wait_until(lock,
+                           std::min(deadline, clock::now() + std::chrono::duration<double>(0.01)));
+    }
+    return true;
   }
 
   void finish()

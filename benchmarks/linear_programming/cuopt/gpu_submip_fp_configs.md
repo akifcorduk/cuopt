@@ -23,6 +23,17 @@ vectors are transferred between different jobs. CPU sub-MIP search is unchanged.
 Explicit cached-primal or incumbent-blend controls take precedence over automatic
 selection. `GpuSubmipWarmStart` logs the choice, cache hit, score, and host cost.
 
+Checkpoint 3 yields the full GPU at a completed-job boundary after 15 s of
+sub-MIP work without material accepted progress (relative incumbent improvement
+at least 1e-6). A regular-worker turn starts at 5 s and doubles to at most 20 s
+after repeated stalls; material progress resets this backoff. The turn starts
+after the regular worker resumes and is skipped if that worker has finished.
+Root cancellation interrupts the wait. The pending job stays queued, CPU
+workers remain independent, and every handoff drains the GPU stream first.
+`CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS=0` disables this policy; the threshold and
+initial regular turn can be set with that variable and
+`CUOPT_GPU_SUBMIP_REGULAR_SECONDS`. `GpuSubmipRegularTurn` logs actual handoffs.
+
 Use the existing benchmark exports at each checkpoint, with numeric suffixes
 representing repetitions:
 
@@ -89,6 +100,7 @@ unset CUOPT_GPU_SUBMIP_MODE CUOPT_GPU_SUBMIP_LIFETIME
 unset CUOPT_GPU_SUBMIP_MAX_PROJECTIONS CUOPT_GPU_SUBMIP_MAX_DESCENTS
 unset CUOPT_GPU_SUBMIP_SECONDS CUOPT_GPU_SUBMIP_INITIAL_ROUNDING
 unset CUOPT_GPU_SUBMIP_SELECT_WARM_START
+unset CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS CUOPT_GPU_SUBMIP_REGULAR_SECONDS
 ```
 
 `GpuSubmipFpSelection` identifies the family and profile;

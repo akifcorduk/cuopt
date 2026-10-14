@@ -145,7 +145,9 @@ class branch_and_bound_t {
   }
 
   // Set a solution based on the user problem during the course of the solve
-  bool set_solution_from_heuristics(const std::vector<f_t>& solution, heuristics_origin_t origin);
+  bool set_solution_from_heuristics(const std::vector<f_t>& solution,
+                                    heuristics_origin_t origin,
+                                    f_t* previous_upper = nullptr);
 
   // Apply a solution found by a CPU FJ worker.
   void set_solution_from_cpu_fj(f_t obj, const std::vector<f_t>& assignment, double work_units);
@@ -174,13 +176,16 @@ class branch_and_bound_t {
     gpu_submip_release_  = std::move(release);
   }
 
-  void set_gpu_submip_handoff_callbacks(std::function<bool()> acquire,
-                                        std::function<void()> release,
-                                        std::function<void()> fatal_cancel = {})
+  void set_gpu_submip_handoff_callbacks(
+    std::function<bool()> acquire,
+    std::function<void()> release,
+    std::function<void()> fatal_cancel                                = {},
+    std::function<bool(double, const std::atomic<int>*)> regular_turn = {})
   {
     gpu_submip_demand_acquire_ = std::move(acquire);
     gpu_submip_demand_release_ = std::move(release);
     gpu_submip_fatal_cancel_   = std::move(fatal_cancel);
+    gpu_submip_regular_turn_   = std::move(regular_turn);
   }
 
   // Seed the global upper bound from an external source (e.g., early FJ during presolve).
@@ -298,6 +303,7 @@ class branch_and_bound_t {
   std::function<bool()> gpu_submip_demand_acquire_;
   std::function<void()> gpu_submip_demand_release_;
   std::function<void()> gpu_submip_fatal_cancel_;
+  std::function<bool(double, const std::atomic<int>*)> gpu_submip_regular_turn_;
   std::shared_ptr<mip_solver_settings_t<i_t, f_t>> gpu_submip_settings_;
   struct gpu_submip_shared_t {
     gpu_submip_shared_t(gpu_submip_options_t options_, double deadline_)
@@ -315,6 +321,7 @@ class branch_and_bound_t {
     std::function<bool()> demand_acquire;
     std::function<void()> demand_release;
     std::function<void()> fatal_cancel;
+    std::function<bool(double, const std::atomic<int>*)> regular_turn;
     std::function<f_t()> current_user_cutoff;
     std::function<void(const std::vector<f_t>&, f_t)> publish;
     std::atomic<int>* root_halt{nullptr};
@@ -350,7 +357,7 @@ class branch_and_bound_t {
   void run_gpu_submip_worker_impl();
   bool capture_gpu_submip_snapshot(const char* stage);
   void release_gpu_submip_worker() noexcept;
-  void publish_gpu_submip_solution(const std::vector<f_t>& user_assignment);
+  f_t publish_gpu_submip_solution(const std::vector<f_t>& user_assignment);
   void enqueue_gpu_submip_job(const simplex::lp_problem_t<i_t, f_t>& lp,
                               const std::vector<simplex::variable_type_t>& types,
                               const std::vector<f_t>& relaxation,

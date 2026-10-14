@@ -230,6 +230,58 @@ TEST(MipGpuHandoff, LeaseUnwindReleasesCancelledPendingWork)
   EXPECT_FALSE(handoff.requested());
 }
 
+TEST(MipGpuHandoff, RegularTurnResumesBeforeNextAcquisition)
+{
+  mip_gpu_handoff_t handoff;
+  handoff.enable();
+  ASSERT_TRUE(handoff.acquire());
+  auto worker = std::async(std::launch::async, park_without_work, std::ref(handoff));
+  EXPECT_TRUE(wait_until_ready(handoff));
+  handoff.release();
+  std::atomic<int> halt{0};
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_TRUE(handoff.wait_for_regular(0.03, &halt));
+  EXPECT_GE(std::chrono::steady_clock::now() - started, 25ms);
+  worker.get();
+  EXPECT_FALSE(handoff.ready());
+  ASSERT_TRUE(handoff.acquire());
+  EXPECT_FALSE(handoff.ready());
+  auto next = std::async(std::launch::async, park_without_work, std::ref(handoff));
+  EXPECT_TRUE(wait_until_ready(handoff));
+  handoff.release();
+  next.get();
+}
+
+TEST(MipGpuHandoff, RegularTurnSkipsFinishedWorkerAndObservesRootCancellation)
+{
+  mip_gpu_handoff_t handoff;
+  handoff.enable();
+  std::atomic<int> halt{1};
+  EXPECT_FALSE(handoff.wait_for_regular(60., &halt));
+  halt.store(0);
+  auto turn = std::async(std::launch::async, [&] { return handoff.wait_for_regular(60., &halt); });
+  halt.store(1);
+  EXPECT_EQ(turn.wait_for(1s), std::future_status::ready);
+  turn.get();
+  halt.store(0);
+  handoff.regular_finished();
+  auto finished =
+    std::async(std::launch::async, [&] { return handoff.wait_for_regular(60., &halt); });
+  EXPECT_EQ(finished.wait_for(1s), std::future_status::ready);
+  EXPECT_FALSE(finished.get());
+}
+
+TEST(MipGpuHandoff, FinishingWakesRegularTurn)
+{
+  mip_gpu_handoff_t handoff;
+  handoff.enable();
+  auto turn =
+    std::async(std::launch::async, [&] { return handoff.wait_for_regular(60., nullptr); });
+  handoff.finish();
+  EXPECT_EQ(turn.wait_for(1s), std::future_status::ready);
+  turn.get();
+}
+
 TEST(MipGpuHandoff, DiagnosticFailureDoesNotInterruptOwnershipTransitions)
 {
   mip_gpu_handoff_t handoff;

@@ -49,7 +49,7 @@ class GpuSubmipFpConfig : public ::testing::Test {
     }
   }
 
-  static constexpr std::array<const char*, 11> keys{"CUOPT_CONFIG_ID",
+  static constexpr std::array<const char*, 13> keys{"CUOPT_CONFIG_ID",
                                                     "CUOPT_MAX_CONFIG",
                                                     "CUOPT_GPU_SUBMIP_CONFIG_FAMILY",
                                                     "CUOPT_GPU_SUBMIP_FP_CONFIG",
@@ -59,7 +59,9 @@ class GpuSubmipFpConfig : public ::testing::Test {
                                                     "CUOPT_GPU_SUBMIP_MAX_PROJECTIONS",
                                                     "CUOPT_GPU_SUBMIP_MAX_DESCENTS",
                                                     "CUOPT_GPU_SUBMIP_INITIAL_ROUNDING",
-                                                    "CUOPT_GPU_SUBMIP_SELECT_WARM_START"};
+                                                    "CUOPT_GPU_SUBMIP_SELECT_WARM_START",
+                                                    "CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS",
+                                                    "CUOPT_GPU_SUBMIP_REGULAR_SECONDS"};
   std::array<std::optional<std::string>, keys.size()> saved;
 };
 
@@ -100,12 +102,16 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsRoundingControl
     EXPECT_EQ(options.fp_config.initial_alpha, 0.);
     EXPECT_TRUE(options.fp_config.initial_rounding);
     EXPECT_TRUE(options.select_warm_start);
+    EXPECT_EQ(options.unproductive_seconds, 15.);
+    EXPECT_EQ(options.regular_gpu_seconds, 5.);
   }
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "0", 1);
   EXPECT_FALSE(gpu_submip_options_from_environment().fp_config.initial_rounding);
   EXPECT_FALSE(gpu_submip_fp_config_from_environment().initial_rounding);
   setenv("CUOPT_GPU_SUBMIP_SELECT_WARM_START", "0", 1);
   EXPECT_FALSE(gpu_submip_options_from_environment().select_warm_start);
+  setenv("CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS", "0", 1);
+  EXPECT_EQ(gpu_submip_options_from_environment().unproductive_seconds, 0.);
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "bad", 1);
   EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
 }
@@ -649,6 +655,34 @@ TEST(GpuSubmipPair, CpuLifecycleDiagnosticsCannotInterruptSearch)
   fj_cpu_worker_t<int, double>::notify_lifecycle(callback, false);
   EXPECT_EQ(calls, 2);
   fj_cpu_worker_t<int, double>::notify_lifecycle({}, true);
+}
+
+TEST(GpuSubmipSchedule, MaterialProgressResetsStallAndBackoff)
+{
+  gpu_submip_schedule_t schedule(15., 5.);
+  schedule.observe(10., 0.);
+  EXPECT_FALSE(schedule.should_yield());
+  schedule.observe(5., 1e-9);
+  EXPECT_TRUE(schedule.should_yield());
+  EXPECT_DOUBLE_EQ(schedule.regular_turn(), 5.);
+  EXPECT_FALSE(schedule.should_yield());
+  schedule.observe(15., 0.);
+  EXPECT_DOUBLE_EQ(schedule.regular_turn(), 10.);
+  schedule.observe(15., 0.);
+  EXPECT_DOUBLE_EQ(schedule.regular_turn(), 20.);
+  schedule.observe(15., 0.);
+  EXPECT_DOUBLE_EQ(schedule.regular_turn(), 20.);
+  schedule.observe(1., 1e-5);
+  EXPECT_FALSE(schedule.should_yield());
+  schedule.observe(15., 0.);
+  EXPECT_DOUBLE_EQ(schedule.regular_turn(), 5.);
+}
+
+TEST(GpuSubmipSchedule, DisabledPolicyNeverYields)
+{
+  gpu_submip_schedule_t schedule(0., 5.);
+  schedule.observe(600., 0.);
+  EXPECT_FALSE(schedule.should_yield());
 }
 
 class GpuSubmipWorker : public ::testing::Test {
