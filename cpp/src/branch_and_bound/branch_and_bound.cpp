@@ -2428,26 +2428,67 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
       seed.size());
     return {};
   }
+  auto& stats = shared->source_stats[static_cast<size_t>(gpu_submip_source_t::CPU_SUBMIP)];
+  typename gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>>::reservation_t reservation;
+  if (shared->options.independent) {
+    stats.callbacks.fetch_add(1, std::memory_order_relaxed);
+    // Leave the regular GPU worker running until an improving cutoff is available.
+    if (!std::isfinite(upper_bound_.load())) { return {}; }
+    stats.eligible.fetch_add(1, std::memory_order_relaxed);
+    reservation = shared->queue.try_reserve(false);
+    if (!reservation) {
+      stats.enqueue_failed.fetch_add(1, std::memory_order_relaxed);
+      return {};
+    }
+    stats.selected.fetch_add(1, std::memory_order_relaxed);
+  }
   const auto job_id       = shared->next_job.fetch_add(1);
   const auto mip_settings = gpu_submip_settings_;
-  auto job                = std::make_shared<gpu_submip_job_t<i_t, f_t>>(make_gpu_submip_job(lp,
-                                                                              types,
-                                                                              seed,
-                                                                              std::vector<f_t>{},
-                                                                              upper_bound_.load(),
-                                                                              shared->options,
-                                                                              *mip_settings,
-                                                                              job_id,
-                                                                              false));
-  job->source             = gpu_submip_source_t::CPU_SUBMIP;
-  job->source_id          = gpu_submip_source_id_;
-  job->strategy           = strategy;
-  job->tree_node          = -1;
-  job->depth              = -1;
+  auto owned_job =
+    std::make_unique<gpu_submip_job_t<i_t, f_t>>(make_gpu_submip_job(lp,
+                                                                     types,
+                                                                     seed,
+                                                                     std::vector<f_t>{},
+                                                                     upper_bound_.load(),
+                                                                     shared->options,
+                                                                     *mip_settings,
+                                                                     job_id,
+                                                                     false));
+  auto* job      = owned_job.get();
+  job->source    = gpu_submip_source_t::CPU_SUBMIP;
+  job->source_id = gpu_submip_source_id_;
+  job->strategy  = strategy;
+  job->tree_node = -1;
+  job->depth     = -1;
   std::vector<i_t> fractional;
   job->fractional = fractional_variables(settings_, seed, types, fractional);
   job->deadline   = shared->deadline;
   job->to_user    = gpu_submip_to_user_;
+  if (shared->options.independent) {
+    job->enqueued_at            = tic();
+    const auto source_id        = job->source_id;
+    const auto fractional_count = job->fractional;
+    if (reservation.publish(std::move(owned_job))) {
+      stats.enqueued.fetch_add(1, std::memory_order_relaxed);
+      CUOPT_LOG_INFO(
+        "GpuSubmipIndependentEnqueue job=%llu source_id=%llu strategy=%d rows=%d columns=%d "
+        "structural_columns=%d fractional=%d elapsed=%.6f",
+        (unsigned long long)job_id,
+        (unsigned long long)source_id,
+        static_cast<int>(strategy),
+        lp.num_rows,
+        lp.num_cols,
+        structural_columns,
+        fractional_count,
+        toc(shared->root_start));
+    } else {
+      stats.enqueue_failed.fetch_add(1, std::memory_order_relaxed);
+    }
+    // The root-owned queue/consumer now owns every model and postsolve dependency.
+    // There is no CPU-scope cancellation token, GPU join, or delayed pool return.
+    return {};
+  }
+  const auto paired_job = std::shared_ptr<gpu_submip_job_t<i_t, f_t>>(std::move(owned_job));
   const auto demand =
     std::make_shared<gpu_submip_demand_t>(shared->demand_acquire, shared->demand_release);
   if (!*demand) {
@@ -2493,7 +2534,7 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   };
   try {
     return std::make_unique<gpu_submip_pair_t>(
-      [shared, mip_settings, job, demand, report_error](std::atomic<int>* pair_halt) {
+      [shared, mip_settings, job = paired_job, demand, report_error](std::atomic<int>* pair_halt) {
         // This scope ends after the executor drains its stream and returns its resource lease.
         // Release also covers cancellation before readiness and every exceptional exit.
         scope_guard release_demand([&]() { demand->release(); });
@@ -2682,6 +2723,7 @@ void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker() noexcept
   } catch (...) {
     gpu_submip_exception_ = std::current_exception();
     request_halt();
+    if (gpu_submip_fatal_cancel_) { gpu_submip_fatal_cancel_(); }
   }
 }
 
@@ -2691,6 +2733,58 @@ void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker_impl()
   scope_guard release([this]() { release_gpu_submip_worker(); });
   configure_gpu_submip_host_thread();
   const auto shared = gpu_submip_shared_;
+  if (shared->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU) {
+    CUOPT_LOG_INFO(
+      "GpuSubmipIndependentConfig seconds=%.6f max_projections=%d max_descents=%d "
+      "pending_capacity=1",
+      shared->options.time_limit,
+      shared->options.max_projections,
+      shared->options.max_descents);
+    while (!node_concurrent_halt_.load(std::memory_order_acquire) && !shared->queue.closed() &&
+           tic() < shared->deadline) {
+      auto job = shared->queue.pop_for(std::chrono::milliseconds(50));
+      if (!job) { continue; }
+      gpu_submip_demand_t demand(shared->demand_acquire, shared->demand_release);
+      if (!demand) { break; }
+      const raft::handle_t* handle = nullptr;
+      while (!node_concurrent_halt_.load(std::memory_order_acquire) && tic() < shared->deadline) {
+        handle = shared->ready_handle();
+        if (handle) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      // Keep the regular worker parked across queued jobs; release demand only
+      // after the executor has drained its stream and returned its resource lease.
+      while (job && handle && !node_concurrent_halt_.load(std::memory_order_acquire) &&
+             !shared->queue.closed() && tic() < shared->deadline) {
+        auto& stats = shared->source_stats[static_cast<size_t>(job->source)];
+        stats.dequeued.fetch_add(1, std::memory_order_relaxed);
+        const double started = tic();
+        CUOPT_LOG_INFO("GpuSubmipIndependentStart job=%llu elapsed=%.6f queue_seconds=%.6f",
+                       (unsigned long long)job->job_id,
+                       started - shared->root_start,
+                       started - job->enqueued_at);
+        const bool valid =
+          run_gpu_submip_job_full_device_continuous<i_t, f_t>(*job,
+                                                              *gpu_submip_settings_,
+                                                              shared->root_halt,
+                                                              shared->root_halt,
+                                                              shared->options,
+                                                              shared->current_user_cutoff,
+                                                              shared->publish,
+                                                              gpu_submip_device_id(handle),
+                                                              shared->device_pool.get(),
+                                                              true);
+        if (valid) { stats.valid.fetch_add(1, std::memory_order_relaxed); }
+        CUOPT_LOG_INFO("GpuSubmipIndependentEnd job=%llu elapsed=%.6f seconds=%.6f valid=%d",
+                       (unsigned long long)job->job_id,
+                       toc(shared->root_start),
+                       toc(started),
+                       int(valid));
+        job = shared->queue.pop_for(std::chrono::milliseconds(0));
+      }
+    }
+    return;
+  }
   // This thread only consumes immutable jobs. Existing CPU workers own every tree and LP solve.
   std::unique_ptr<gpu_submip_fp_t<i_t, f_t>> session;
   while (!node_concurrent_halt_.load(std::memory_order_acquire) && !shared->queue.closed() &&
@@ -5286,7 +5380,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     stop_and_join_gpu_submip(gpu_submip_thread, node_concurrent_halt_);
   });
   if (gpu_submip_handle_ && !settings_.inside_submip && !settings_.deterministic &&
-      gpu_submip_shared_->options.mode == gpu_submip_mode_t::NODE_QUEUE) {
+      (gpu_submip_shared_->options.mode == gpu_submip_mode_t::NODE_QUEUE ||
+       gpu_submip_shared_->options.independent)) {
     gpu_submip_thread = std::thread(&branch_and_bound_t::run_gpu_submip_worker, this);
   }
   scope_guard close_submip_pool_diagnostics(
@@ -5364,7 +5459,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   if (gpu_submip_shared_ && gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
   stop_and_join_gpu_submip(gpu_submip_thread, node_concurrent_halt_);
   if (gpu_submip_shared_ && gpu_submip_handle_ &&
-      gpu_submip_shared_->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU) {
+      gpu_submip_shared_->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU &&
+      !gpu_submip_shared_->options.independent) {
     const auto shared = gpu_submip_shared_;
     CUOPT_LOG_INFO(
       "GpuSubmipPairSummary launched=%llu gpu_started=%llu completed=%llu valid=%llu "
@@ -5378,7 +5474,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     if (shared->async_error) { std::rethrow_exception(shared->async_error); }
   }
   if (gpu_submip_shared_ && gpu_submip_handle_ &&
-      gpu_submip_shared_->options.mode == gpu_submip_mode_t::NODE_QUEUE) {
+      (gpu_submip_shared_->options.mode == gpu_submip_mode_t::NODE_QUEUE ||
+       gpu_submip_shared_->options.independent)) {
     for (size_t source = 0; source < gpu_submip_source_count; ++source) {
       const auto& stats   = gpu_submip_shared_->source_stats[source];
       const auto enqueued = stats.enqueued.load();

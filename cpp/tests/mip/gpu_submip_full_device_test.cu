@@ -328,6 +328,141 @@ TEST_F(GpuSubmipFullDevice, ConcurrentCallsKeepBoundsAndSettingsIndependent)
   expect_original_device();
 }
 
+TEST_F(GpuSubmipFullDevice, IndependentSingleDescentReturnsWithoutStoppingRoot)
+{
+  options.time_limit      = 60.;
+  options.max_descents    = 1;
+  options.max_projections = 0;
+  std::atomic<int> halt{0};
+  gpu_submip_session_info_t info;
+  int publications = 0;
+  EXPECT_TRUE((run_gpu_submip_job_full_device_continuous<int, double>(
+    make_job(),
+    settings,
+    &halt,
+    &halt,
+    options,
+    {},
+    [&](const std::vector<double>& candidate, double objective) {
+      publish(candidate, objective);
+      ++publications;
+    },
+    target_device,
+    nullptr,
+    true,
+    &info)));
+  EXPECT_EQ(publications, 1);
+  EXPECT_EQ(info.descents, 1);
+  EXPECT_STREQ(info.exit_reason, "descent_limit");
+  EXPECT_EQ(halt.load(), 0);
+  expect_original_device();
+}
+
+TEST_F(GpuSubmipFullDevice, IndependentProjectionBudgetSpansPerturbedRestarts)
+{
+  options.time_limit      = 60.;
+  options.max_projections = 2;
+  std::atomic<int> halt{0};
+  gpu_submip_session_info_t info;
+  int publications = 0;
+  EXPECT_TRUE((run_gpu_submip_job_full_device_continuous<int, double>(
+    make_job(),
+    settings,
+    &halt,
+    &halt,
+    options,
+    {},
+    [&](const std::vector<double>&, double) { ++publications; },
+    target_device,
+    nullptr,
+    true,
+    &info)));
+  EXPECT_EQ(info.projections, 2);
+  EXPECT_EQ(info.descents, 2);
+  EXPECT_EQ(publications, 2);
+  EXPECT_STREQ(info.exit_reason, "projection_limit");
+  EXPECT_EQ(halt.load(), 0);
+}
+
+TEST_F(GpuSubmipFullDevice, IndependentProjectionBudgetInterruptsAnUnfinishedDescent)
+{
+  auto job = make_job();
+  // x + slack = 0, slack fixed to -0.5, and x integer: LP feasible, MIP infeasible.
+  job.lp.lower[1] = job.lp.upper[1] = -0.5;
+  job.primal                        = {0.5, -0.5};
+  job.cutoff                        = 2.;
+  options.time_limit                = 60.;
+  options.max_projections           = 1;
+  std::atomic<int> halt{0};
+  gpu_submip_session_info_t info;
+  EXPECT_FALSE((run_gpu_submip_job_full_device_continuous<int, double>(
+    job, settings, &halt, &halt, options, {}, {}, target_device, nullptr, true, &info)));
+  EXPECT_EQ(info.projections, 1);
+  EXPECT_EQ(info.descents, 1);
+  EXPECT_STREQ(info.exit_reason, "projection_limit");
+  EXPECT_EQ(halt.load(), 0);
+}
+
+TEST_F(GpuSubmipFullDevice, IndependentRootCancellationStillInterruptsRestartLoop)
+{
+  options.time_limit = 60.;
+  std::atomic<int> halt{0};
+  gpu_submip_session_info_t info;
+  EXPECT_TRUE((run_gpu_submip_job_full_device_continuous<int, double>(
+    make_job(),
+    settings,
+    &halt,
+    &halt,
+    options,
+    {},
+    [&](const std::vector<double>&, double) { halt.store(1); },
+    target_device,
+    nullptr,
+    true,
+    &info)));
+  EXPECT_EQ(info.descents, 1);
+  EXPECT_STREQ(info.exit_reason, "root_cancel");
+}
+
+TEST_F(GpuSubmipFullDevice, IndependentSessionDoesNotWaitWithoutAnIncumbent)
+{
+  auto job           = make_job();
+  job.cutoff         = std::numeric_limits<double>::infinity();
+  options.time_limit = 60.;
+  std::atomic<int> halt{0};
+  gpu_submip_session_info_t info;
+  EXPECT_FALSE((run_gpu_submip_job_full_device_continuous<int, double>(
+    job, settings, &halt, &halt, options, {}, {}, target_device, nullptr, true, &info)));
+  EXPECT_EQ(info.projections, 0);
+  EXPECT_STREQ(info.exit_reason, "no_incumbent");
+  EXPECT_EQ(halt.load(), 0);
+}
+
+TEST_F(GpuSubmipFullDevice, IndependentTimeBudgetDoesNotRestartAfterExpiry)
+{
+  options.time_limit      = 0.5;
+  options.max_projections = 0;
+  std::atomic<int> halt{0};
+  gpu_submip_session_info_t info;
+  run_gpu_submip_job_full_device_continuous<int, double>(
+    make_job(),
+    settings,
+    &halt,
+    &halt,
+    options,
+    {},
+    [&](const std::vector<double>&, double) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(510));
+    },
+    target_device,
+    nullptr,
+    true,
+    &info);
+  EXPECT_EQ(info.descents, 1);
+  EXPECT_STREQ(info.exit_reason, "time_limit");
+  EXPECT_EQ(halt.load(), 0);
+}
+
 TEST_F(GpuSubmipFullDevice, ContinuousSessionRestartsAfterSuccessAndStopsOnPairCancellation)
 {
   auto job     = make_job();

@@ -75,13 +75,13 @@ class gpu_submip_queue_t {
     if (capacity == 0) { throw std::invalid_argument("GPU job queue capacity must be positive"); }
   }
 
-  reservation_t try_reserve()
+  reservation_t try_reserve(bool replace_pending = true)
   {
     std::unique_lock lock(state_->mutex, std::try_to_lock);
     if (!lock.owns_lock() || state_->closed) { return {}; }
     std::unique_ptr<Job> replaced;
     if (state_->reserved + state_->pending.size() == state_->capacity) {
-      if (state_->pending.empty()) { return {}; }
+      if (!replace_pending || state_->pending.empty()) { return {}; }
       replaced = std::move(state_->pending.front());
       state_->pending.pop_front();
     }

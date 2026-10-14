@@ -48,8 +48,12 @@ class GpuSubmipFpConfig : public ::testing::Test {
     }
   }
 
-  static constexpr std::array<const char*, 3> keys{
-    "CUOPT_CONFIG_ID", "CUOPT_MAX_CONFIG", "CUOPT_GPU_SUBMIP_FP_CONFIG"};
+  static constexpr std::array<const char*, 6> keys{"CUOPT_CONFIG_ID",
+                                                   "CUOPT_MAX_CONFIG",
+                                                   "CUOPT_GPU_SUBMIP_FP_CONFIG",
+                                                   "CUOPT_GPU_SUBMIP_LIFETIME",
+                                                   "CUOPT_GPU_SUBMIP_MAX_PROJECTIONS",
+                                                   "CUOPT_GPU_SUBMIP_MAX_DESCENTS"};
   std::array<std::optional<std::string>, keys.size()> saved;
 };
 
@@ -134,6 +138,46 @@ TEST_F(GpuSubmipFpConfig, RejectsMalformedNegativeOverflowingAndOutOfRangeIds)
     setenv("CUOPT_MAX_CONFIG", count, 1);
     EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
   }
+}
+
+TEST_F(GpuSubmipFpConfig, IndependentEffortDoesNotChangeDistancePreset)
+{
+  setenv("CUOPT_CONFIG_ID", "3", 1);
+  auto options = gpu_submip_options_from_environment();
+  EXPECT_TRUE(options.independent);
+  EXPECT_EQ(options.max_projections, 20);
+  EXPECT_EQ(options.max_descents, 0);
+  setenv("CUOPT_GPU_SUBMIP_MAX_PROJECTIONS", "100", 1);
+  setenv("CUOPT_GPU_SUBMIP_MAX_DESCENTS", "1", 1);
+  setenv("CUOPT_GPU_SUBMIP_LIFETIME", "paired", 1);
+  options = gpu_submip_options_from_environment();
+  EXPECT_FALSE(options.independent);
+  EXPECT_EQ(options.max_projections, 100);
+  EXPECT_EQ(options.max_descents, 1);
+  EXPECT_EQ(options.fp_config, gpu_submip_fp_config_from_name("distance"));
+  for (const char* key : {"CUOPT_GPU_SUBMIP_MAX_PROJECTIONS", "CUOPT_GPU_SUBMIP_MAX_DESCENTS"}) {
+    for (const char* value : {"-1", "1.5", "bad", "2147483648"}) {
+      setenv(key, value, 1);
+      EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
+    }
+    unsetenv(key);
+  }
+  setenv("CUOPT_GPU_SUBMIP_LIFETIME", "invalid", 1);
+  EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
+}
+
+TEST(GpuSubmipQueue, IndependentAdmissionBoundsCopiesAndDoesNotCancelPoppedJob)
+{
+  gpu_submip_queue_t<int> queue(1);
+  ASSERT_TRUE(queue.try_reserve(false).publish(std::make_unique<int>(1)));
+  auto active = queue.pop_for(0ms);
+  ASSERT_TRUE(active);
+  ASSERT_TRUE(queue.try_reserve(false).publish(std::make_unique<int>(2)));
+  EXPECT_FALSE(queue.try_reserve(false));
+  EXPECT_EQ(*active, 1);
+  EXPECT_EQ(*queue.pop_for(0ms), 2);
+  queue.close();
+  EXPECT_EQ(*active, 1);
 }
 
 TEST(GpuSubmipQueue, ReservationsBoundConstructionAndReleaseUnusedSlots)

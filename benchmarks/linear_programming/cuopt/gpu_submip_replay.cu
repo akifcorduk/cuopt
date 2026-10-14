@@ -216,28 +216,35 @@ int run_worker_replay(const argparse::ArgumentParser& program,
             << " incumbent_blend=" << options.incumbent_blend
             << " fp_config=" << options.fp_config.name
             << " continuous=" << program.get<bool>("--continuous")
+            << " independent=" << program.get<bool>("--independent")
+            << " max_projections=" << options.max_projections
+            << " max_descents=" << options.max_descents
             << " initial_cutoff=" << snapshot.upper_bound << " setup_seconds="
             << std::chrono::duration<double>(clock_type::now() - replay_start).count()
             << " budget_domain="
-            << (program.get<bool>("--continuous") ? "paired_session_including_construction"
-                                                  : "single_descent_including_session_construction")
+            << (program.get<bool>("--independent") ? "independent_session_including_construction"
+                : program.get<bool>("--continuous")
+                  ? "paired_session_including_construction"
+                  : "single_descent_including_session_construction")
             << " cpu_node_solves=0\n";
   node_audit.start();
   const auto publish = [&node_audit](const std::vector<f_t>& candidate, f_t objective) {
     node_audit.publish(candidate, objective);
   };
-  if (program.get<bool>("--continuous")) {
+  if (program.get<bool>("--continuous") || program.get<bool>("--independent")) {
     job.deadline = opt::tic() + options.time_limit;
     std::atomic<int> pair_halt{0};
     mip::run_gpu_submip_job_full_device_continuous<i_t, f_t>(
       job,
       mip_settings,
       &halt,
-      &pair_halt,
+      program.get<bool>("--independent") ? &halt : &pair_halt,
       options,
       [&node_audit] { return node_audit.best_user_objective(); },
       publish,
-      mip::gpu_submip_device_id(worker_handle));
+      mip::gpu_submip_device_id(worker_handle),
+      nullptr,
+      program.get<bool>("--independent"));
   } else {
     mip::run_gpu_submip_job<i_t, f_t>(
       job, mip_settings, worker_handle, &halt, options, {}, publish);
@@ -251,6 +258,8 @@ int run_replay(const argparse::ArgumentParser& program)
   const auto snapshot =
     mip::read_post_root_snapshot<i_t, f_t>(program.get<std::string>("snapshot"));
   mip::gpu_submip_options_t options;
+  options.max_projections = program.get<int>("--max-projections");
+  options.max_descents    = program.get<int>("--max-descents");
   options.fix_rate        = program.get<double>("--fix-rate");
   options.time_limit      = program.get<double>("--time-limit");
   options.cached_primal   = program.get<bool>("--cached-primal");
@@ -262,8 +271,13 @@ int run_replay(const argparse::ArgumentParser& program)
     program.is_used("--fp-config")
       ? mip::gpu_submip_fp_config_from_name(program.get<std::string>("--fp-config"))
       : mip::gpu_submip_fp_config_from_environment();
-  if (program.get<bool>("--continuous") && !program.get<bool>("--full-gpu")) {
-    throw std::runtime_error("Continuous paired-session replay requires --full-gpu");
+  if ((program.get<bool>("--continuous") || program.get<bool>("--independent")) &&
+      !program.get<bool>("--full-gpu")) {
+    throw std::runtime_error("Session replay requires --full-gpu");
+  }
+  if ((program.get<bool>("--continuous") && program.get<bool>("--independent")) ||
+      options.max_projections < 0 || options.max_descents < 0) {
+    throw std::runtime_error("Choose one session mode and nonnegative effort limits");
   }
   if (!std::isfinite(options.fix_rate) || options.fix_rate < 0 || options.fix_rate >= 1 ||
       !std::isfinite(options.time_limit) || options.time_limit <= 0 ||
@@ -351,6 +365,11 @@ int main(int argc, char** argv)
     .help(
       "restart descents until --time-limit, simulating a paired CPU lifetime; requires --full-gpu")
     .flag();
+  program.add_argument("--independent")
+    .help("run an independently bounded FP session; requires --full-gpu")
+    .flag();
+  program.add_argument("--max-projections").scan<'i', int>().default_value(20);
+  program.add_argument("--max-descents").scan<'i', int>().default_value(0);
   program.add_argument("--no-compact-fixed").flag();
   program.add_argument("--incumbent-blend").scan<'g', double>().default_value(0.0);
   program.add_argument("--no-fused-pdlp")

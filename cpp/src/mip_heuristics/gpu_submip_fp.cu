@@ -210,7 +210,8 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
            std::vector<f_t>& candidate,
            bool use_cached_primal,
            const char* primal_seed_name,
-           uint64_t job_id)
+           uint64_t job_id,
+           int projection_limit)
   {
     run_info = {};
     candidate.clear();
@@ -230,6 +231,7 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
       return false;
     }
 
+    fp.config.projection_limit      = projection_limit;
     fp.timer                        = timer_t(remaining_time);
     fp.concurrent_halt              = halt;
     fj.concurrent_halt              = halt;
@@ -434,7 +436,8 @@ bool gpu_submip_fp_t<i_t, f_t>::run(const simplex::lp_problem_t<i_t, f_t>& node_
                                     std::vector<f_t>& candidate,
                                     bool use_cached_primal,
                                     const char* primal_seed_name,
-                                    uint64_t job_id)
+                                    uint64_t job_id,
+                                    int projection_limit)
 {
   return impl_->run(node_lp,
                     node_primal,
@@ -444,7 +447,8 @@ bool gpu_submip_fp_t<i_t, f_t>::run(const simplex::lp_problem_t<i_t, f_t>& node_
                     candidate,
                     use_cached_primal,
                     primal_seed_name,
-                    job_id);
+                    job_id,
+                    projection_limit);
 }
 
 #if MIP_INSTANTIATE_FLOAT

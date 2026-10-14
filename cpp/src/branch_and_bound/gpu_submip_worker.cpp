@@ -143,6 +143,15 @@ gpu_submip_options_t gpu_submip_options_from_environment()
       throw std::invalid_argument("GPU sub-MIP mode must be node or cpufj");
     }
   }
+  if (const char* lifetime = std::getenv("CUOPT_GPU_SUBMIP_LIFETIME")) {
+    const std::string value(lifetime);
+    if (value != "independent" && value != "paired") {
+      throw std::invalid_argument("GPU sub-MIP lifetime must be independent or paired");
+    }
+    options.independent = value == "independent";
+  }
+  options.max_projections = experiment_integer("CUOPT_GPU_SUBMIP_MAX_PROJECTIONS", 20, 0);
+  options.max_descents    = experiment_integer("CUOPT_GPU_SUBMIP_MAX_DESCENTS", 0, 0);
   options.fix_rate        = experiment_option("CUOPT_GPU_SUBMIP_FIX_RATE", 0.25, 0, 0.99);
   options.time_limit      = experiment_option("CUOPT_GPU_SUBMIP_SECONDS", 60, 0.01, 86400);
   options.node_stride     = experiment_option("CUOPT_GPU_SUBMIP_STRIDE", 8, 1, 1000000);
@@ -296,7 +305,8 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                         std::unique_ptr<gpu_submip_fp_t<i_t, f_t>>* session_cache,
                         const std::vector<f_t>* primal_seed_override,
                         const char* primal_seed_name_override,
-                        gpu_submip_fp_run_info_t* run_info)
+                        gpu_submip_fp_run_info_t* run_info,
+                        int projection_limit)
 {
   if (run_info) { *run_info = {}; }
   if (!options.enable_fp || (halt && halt->load()) || tic() >= job.deadline) { return false; }
@@ -399,7 +409,8 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                                   primal_seed_override          ? primal_seed_name_override
                                   : options.incumbent_blend > 0 ? "incumbent_blend"
                                                                 : "node_primal",
-                                  job.job_id);
+                                  job.job_id,
+                                  projection_limit);
   if (run_info) { *run_info = session->last_run_info(); }
   bool valid = found && gpu_submip_candidate_is_valid(job.lp, job.var_types, candidate, settings);
   f_t objective = std::numeric_limits<f_t>::infinity();
@@ -460,7 +471,8 @@ template bool run_gpu_submip_job<int, double>(
   std::unique_ptr<gpu_submip_fp_t<int, double>>*,
   const std::vector<double>*,
   const char*,
-  gpu_submip_fp_run_info_t*);
+  gpu_submip_fp_run_info_t*,
+  int);
 
 template int perturb_gpu_submip_restart_seed<int, double>(
   const simplex::lp_problem_t<int, double>&,

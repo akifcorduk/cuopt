@@ -656,6 +656,7 @@ template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& solution)
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
+  const auto initial_projections = n_lp_calls;
   // start by doing nearest rounding
   solution.round_nearest(rng());
   raft::copy(last_rounding.data(),
@@ -663,6 +664,11 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
   while (true) {
+    // Complete rounding and feasibility checks for the last permitted projection.
+    if (config.projection_limit > 0 &&
+        n_lp_calls - initial_projections >= config.projection_limit) {
+      return finish_descent(false, "projection_limit");
+    }
     if (stop_requested()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");
       if (context.diversity_manager_ptr != nullptr) { round(solution); }

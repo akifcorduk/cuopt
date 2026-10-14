@@ -41,11 +41,19 @@ bool run_gpu_submip_job_full_device(const gpu_submip_job_t<i_t, f_t>& job,
                                     std::function<void(const std::vector<f_t>&, f_t)> publish,
                                     int device);
 
+struct gpu_submip_session_info_t {
+  uint64_t descents{0};
+  int projections{0};
+  const char* exit_reason{"not_started"};
+};
+
 // Retain one stream/model across descents until the paired CPU sub-MIP ends.
 // pair_halt must remain alive through this call; root cancellation is mirrored
 // into it without ever resetting it. Each descent refreshes the live cutoff.
 // options.time_limit is a single-job replay limit and is ignored in this mode;
 // job.deadline and the two cancellation tokens govern the paired session.
+// With bounded_effort, honor options.time_limit/max_descents/max_projections instead;
+// pass root_halt as both tokens to run independently of any CPU producer's lifetime.
 template <typename i_t, typename f_t>
 bool run_gpu_submip_job_full_device_continuous(
   const gpu_submip_job_t<i_t, f_t>& job,
@@ -56,6 +64,8 @@ bool run_gpu_submip_job_full_device_continuous(
   std::function<f_t()> current_user_cutoff,
   std::function<void(const std::vector<f_t>&, f_t)> publish,
   int device,
-  gpu_submip_device_pool_t* device_pool = nullptr);
+  gpu_submip_device_pool_t* device_pool   = nullptr,
+  bool bounded_effort                     = false,
+  gpu_submip_session_info_t* session_info = nullptr);
 
 }  // namespace cuopt::mathematical_optimization::mip

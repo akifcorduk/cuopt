@@ -95,7 +95,8 @@ class gpu_submip_fp_t {
            std::vector<f_t>& candidate,
            bool use_cached_primal       = false,
            const char* primal_seed_name = "node_primal",
-           uint64_t job_id              = 0);
+           uint64_t job_id              = 0,
+           int projection_limit         = 0);
 
  private:
   struct impl_t;

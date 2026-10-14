@@ -301,10 +301,12 @@ class branch_and_bound_t {
   std::shared_ptr<mip_solver_settings_t<i_t, f_t>> gpu_submip_settings_;
   struct gpu_submip_shared_t {
     gpu_submip_shared_t(gpu_submip_options_t options_, double deadline_)
-      : options(std::move(options_)), deadline(deadline_)
+      : queue(options_.independent && options_.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? 1 : 2),
+        options(std::move(options_)),
+        deadline(deadline_)
     {
     }
-    gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>> queue{2};
+    gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>> queue;
     const gpu_submip_options_t options;
     const double deadline;
     std::atomic<uint64_t> next_job{0};

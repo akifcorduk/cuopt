@@ -30,6 +30,9 @@ struct gpu_submip_options_t {
   gpu_submip_mode_t mode{gpu_submip_mode_t::NODE_QUEUE};
   double fix_rate{0.25};
   double time_limit{60.0};
+  bool independent{true};
+  int max_projections{20};  // Total across perturbed descents; zero disables the limit.
+  int max_descents{0};      // Zero disables the limit; one runs a single descent.
   int node_stride{8};
   int min_depth{0};
   int max_fractional{std::numeric_limits<int>::max()};
@@ -89,6 +92,7 @@ struct gpu_submip_job_t {
   gpu_submip_source_t source{gpu_submip_source_t::MAIN_TREE};
   search_strategy_t strategy{search_strategy_t::BEST_FIRST};
   double deadline{std::numeric_limits<double>::infinity()};
+  double enqueued_at{0.};
   std::function<bool(const std::vector<f_t>&, std::vector<f_t>&)> to_user;
 };
 
@@ -135,6 +139,7 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                         std::unique_ptr<gpu_submip_fp_t<i_t, f_t>>* session_cache = nullptr,
                         const std::vector<f_t>* primal_seed_override              = nullptr,
                         const char* primal_seed_name_override = "perturbed_projection",
-                        gpu_submip_fp_run_info_t* run_info    = nullptr);
+                        gpu_submip_fp_run_info_t* run_info    = nullptr,
+                        int projection_limit                  = 0);
 
 }  // namespace cuopt::mathematical_optimization::mip

@@ -101,6 +101,7 @@ struct fp_config_t {
   double initial_alpha = default_alpha;
   // Zero retains the ordinary FP projection scheduling. Sub-MIP sessions set a hard cap.
   double projection_time_limit           = 0.;
+  int projection_limit                   = 0;
   double rounding_time_limit             = 0.5;
   double propagation_time_limit          = 0.7;
   double alpha_decrease_factor           = 0.9;

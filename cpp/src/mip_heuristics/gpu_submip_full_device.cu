@@ -58,7 +58,7 @@ class paired_cancel_t {
   paired_cancel_t(std::atomic<int>* root, std::atomic<int>* pair) : root_(root), pair_(pair)
   {
     if (!pair_) { throw std::invalid_argument("Continuous GPU FP requires a pair halt token"); }
-    if (root_ && !cancelled()) {
+    if (root_ && root_ != pair_ && !cancelled()) {
       watcher_ = std::thread([this] { watch_root(); });
     }
   }
@@ -205,8 +205,11 @@ bool run_gpu_submip_job_full_device_continuous(
   std::function<f_t()> current_user_cutoff,
   std::function<void(const std::vector<f_t>&, f_t)> publish,
   int device,
-  gpu_submip_device_pool_t* device_pool)
+  gpu_submip_device_pool_t* device_pool,
+  bool bounded_effort,
+  gpu_submip_session_info_t* session_info)
 {
+  if (session_info) { *session_info = {}; }
   paired_cancel_t cancellation(root_halt, pair_halt);
   raft::device_setter device_guard(device);
   gpu_submip_device_pool_t local_pool;
@@ -216,6 +219,11 @@ bool run_gpu_submip_job_full_device_continuous(
   bool published_any   = false;
   uint64_t descent     = 0;
   const double started = tic();
+  const double deadline =
+    bounded_effort ? std::min(job.deadline, started + options.time_limit) : job.deadline;
+  int projections        = 0;
+  const char* end_reason = nullptr;
+  const char* lifetime   = bounded_effort ? "Independent" : "Pair";
   {
     std::unique_ptr<gpu_submip_fp_t<i_t, f_t>> session;
     const auto base_seed = get_base_seed(settings.seed);
@@ -231,12 +239,23 @@ bool run_gpu_submip_job_full_device_continuous(
                    device,
                    reinterpret_cast<void*>(handle.get_stream().get()),
                    handle.get_device_properties().multiProcessorCount);
-    while (!cancellation.cancelled() && tic() < job.deadline) {
+    while (!cancellation.cancelled() && tic() < deadline) {
+      if (bounded_effort && options.max_descents > 0 &&
+          descent >= static_cast<uint64_t>(options.max_descents)) {
+        end_reason = "descent_limit";
+        break;
+      }
+      if (bounded_effort && options.max_projections > 0 && projections >= options.max_projections) {
+        end_reason = "projection_limit";
+        break;
+      }
+      continuous_options.time_limit = deadline - tic();
       ++descent;
       const bool restarting = !restart_seed.empty();
       CUOPT_LOG_INFO(
-        "GpuSubmipPairDescent job=%llu descent=%llu phase=start restart_reason=%s "
+        "GpuSubmip%sDescent job=%llu descent=%llu phase=start restart_reason=%s "
         "seed=%s perturbed=%d",
+        lifetime,
         (unsigned long long)job.job_id,
         (unsigned long long)descent,
         restart_reason,
@@ -246,41 +265,50 @@ bool run_gpu_submip_job_full_device_continuous(
       const double descent_start = tic();
       bool published             = false;
       const auto guarded_publish = [&](const std::vector<f_t>& candidate, f_t objective) {
-        if (!cancellation.cancelled() && tic() < job.deadline && publish) {
+        if (!cancellation.cancelled() && tic() < deadline && publish) {
           publish(candidate, objective);
           published = true;
         }
       };
-      run_gpu_submip_job<i_t, f_t>(job,
-                                   settings,
-                                   &handle,
-                                   pair_halt,
-                                   continuous_options,
-                                   current_user_cutoff,
-                                   guarded_publish,
-                                   &session,
-                                   restarting ? &restart_seed : nullptr,
-                                   "perturbed_projection",
-                                   &info);
+      run_gpu_submip_job<i_t, f_t>(
+        job,
+        settings,
+        &handle,
+        pair_halt,
+        continuous_options,
+        current_user_cutoff,
+        guarded_publish,
+        &session,
+        restarting ? &restart_seed : nullptr,
+        "perturbed_projection",
+        &info,
+        bounded_effort && options.max_projections > 0 ? options.max_projections - projections : 0);
+      projections += info.projections;
       published_any = published_any || published;
       CUOPT_LOG_INFO(
-        "GpuSubmipPairDescent job=%llu descent=%llu phase=end seconds=%.6f "
+        "GpuSubmip%sDescent job=%llu descent=%llu phase=end seconds=%.6f "
         "exit=%s projections=%d published=%d",
+        lifetime,
         (unsigned long long)job.job_id,
         (unsigned long long)descent,
         toc(descent_start),
         info.exit_reason,
         info.projections,
         int(published));
-      if (cancellation.cancelled() || tic() >= job.deadline) { break; }
+      if (cancellation.cancelled() || tic() >= deadline) { break; }
+      if (bounded_effort && !info.started) {
+        end_reason = info.exit_reason;
+        break;
+      }
       if (!info.started && std::strcmp(info.exit_reason, "no_incumbent") == 0) {
-        CUOPT_LOG_INFO("GpuSubmipPairIdle job=%llu descent=%llu reason=await_incumbent",
+        CUOPT_LOG_INFO("GpuSubmip%sIdle job=%llu descent=%llu reason=await_incumbent",
+                       lifetime,
                        (unsigned long long)job.job_id,
                        (unsigned long long)descent);
         // An incumbent may arrive from the still-running CPU solve. Wait without
         // rebuilding the session, flooding logs, or replacing the initial seed.
-        while (!cancellation.cancelled() && tic() < job.deadline) {
-          cancellation.wait_until(std::min(job.deadline, tic() + 0.05));
+        while (!cancellation.cancelled() && tic() < deadline) {
+          cancellation.wait_until(std::min(deadline, tic() + 0.05));
           if (current_user_cutoff && std::isfinite(current_user_cutoff())) { break; }
         }
         continue;
@@ -296,30 +324,43 @@ bool run_gpu_submip_job_full_device_continuous(
         if (perturbed == 0) { idle_reason = "no_perturbable_integer"; }
       }
       if (idle_reason) {
-        CUOPT_LOG_INFO("GpuSubmipPairIdle job=%llu descent=%llu reason=%s",
+        CUOPT_LOG_INFO("GpuSubmip%sIdle job=%llu descent=%llu reason=%s",
+                       lifetime,
                        (unsigned long long)job.job_id,
                        (unsigned long long)descent,
                        idle_reason);
+        if (bounded_effort) {
+          end_reason = idle_reason;
+          break;
+        }
         // Keep ownership until CPU completion even when no useful restart exists.
-        cancellation.wait_until(job.deadline);
+        cancellation.wait_until(deadline);
         break;
       }
       if (info.projections == 0) {
-        CUOPT_LOG_INFO(
-          "GpuSubmipPairBackoff job=%llu descent=%llu reason=no_projection seconds=0.05",
-          (unsigned long long)job.job_id,
-          (unsigned long long)descent);
-        cancellation.wait_until(std::min(job.deadline, tic() + 0.05));
+        CUOPT_LOG_INFO("GpuSubmip%sBackoff job=%llu descent=%llu reason=no_projection seconds=0.05",
+                       lifetime,
+                       (unsigned long long)job.job_id,
+                       (unsigned long long)descent);
+        cancellation.wait_until(std::min(deadline, tic() + 0.05));
       }
     }
   }
   drain.synchronize();
+  if (cancellation.cancelled()) { end_reason = cancellation.end_reason(); }
+  if (!end_reason) {
+    end_reason = bounded_effort && deadline < job.deadline ? "time_limit" : "deadline";
+  }
+  if (session_info) { *session_info = {descent, projections, end_reason}; }
   CUOPT_LOG_INFO(
-    "GpuSubmipPairSessionEnd job=%llu descents=%llu seconds=%.6f reason=%s published=%d",
+    "GpuSubmip%sSessionEnd job=%llu descents=%llu projections=%d seconds=%.6f reason=%s "
+    "published=%d",
+    lifetime,
     (unsigned long long)job.job_id,
     (unsigned long long)descent,
+    projections,
     toc(started),
-    cancellation.end_reason(),
+    end_reason,
     int(published_any));
   return published_any;
 }
@@ -342,6 +383,8 @@ template bool run_gpu_submip_job_full_device_continuous<int, double>(
   std::function<double()>,
   std::function<void(const std::vector<double>&, double)>,
   int,
-  gpu_submip_device_pool_t*);
+  gpu_submip_device_pool_t*,
+  bool,
+  gpu_submip_session_info_t*);
 
 }  // namespace cuopt::mathematical_optimization::mip
