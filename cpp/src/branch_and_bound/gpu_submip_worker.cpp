@@ -28,6 +28,20 @@ namespace {
 constexpr std::array<std::string_view, 4> fp_config_names{
   "baseline", "round_long", "pdlp_long", "distance"};
 
+struct fp_effort_config_t {
+  const char* name;
+  int max_projections;
+  int max_descents;
+  double seconds;
+};
+
+constexpr std::array<fp_effort_config_t, 4> fp_effort_configs{{
+  {"single_descent", 0, 1, 60.},
+  {"p20_t60", 20, 0, 60.},
+  {"p100_t10", 100, 0, 10.},
+  {"p100_t60", 100, 0, 60.},
+}};
+
 int experiment_integer(const char* name, int fallback, int lower)
 {
   const char* text = std::getenv(name);
@@ -51,6 +65,53 @@ double experiment_option(const char* name, double fallback, double lower, double
     throw std::invalid_argument(std::string("Invalid GPU sub-MIP option: ") + name);
   }
   return value;
+}
+
+gpu_submip_options_t benchmark_defaults_from_environment()
+{
+  gpu_submip_options_t options;
+  const char* requested_family  = std::getenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY");
+  const std::string_view family = requested_family ? requested_family : "effort";
+  if (family != "effort" && family != "fp") {
+    throw std::invalid_argument("GPU sub-MIP config family must be effort or fp");
+  }
+  if (std::getenv("CUOPT_CONFIG_ID") != nullptr) {
+    const auto preset_count =
+      family == "effort" ? fp_effort_configs.size() : fp_config_names.size();
+    const int config_id  = experiment_integer("CUOPT_CONFIG_ID", 0, 0);
+    const int max_config = experiment_integer("CUOPT_MAX_CONFIG", preset_count, 1);
+    if (config_id >= max_config) {
+      throw std::invalid_argument("CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
+    }
+    // Benchmark repetitions cycle through the fixed preset order without changing the RNG seed.
+    const auto preset_id = config_id % preset_count;
+    const char* profile;
+    if (family == "effort") {
+      const auto& effort      = fp_effort_configs[preset_id];
+      profile                 = effort.name;
+      options.mode            = gpu_submip_mode_t::CPUFJ_FULL_GPU;
+      options.independent     = true;
+      options.max_projections = effort.max_projections;
+      options.max_descents    = effort.max_descents;
+      options.time_limit      = effort.seconds;
+      options.fp_config       = gpu_submip_fp_config_from_name("distance");
+    } else {
+      profile           = fp_config_names[preset_id].data();
+      options.fp_config = gpu_submip_fp_config_from_name(profile);
+    }
+    CUOPT_LOG_INFO(
+      "GpuSubmipFpSelection config_id=%d max_config=%d preset_id=%zu name=%s family=%s profile=%s",
+      config_id,
+      max_config,
+      preset_id,
+      options.fp_config.name.c_str(),
+      family.data(),
+      profile);
+  } else if (const char* name = std::getenv("CUOPT_GPU_SUBMIP_FP_CONFIG")) {
+    // Numeric benchmark IDs take precedence over the legacy named FP configuration.
+    options.fp_config = gpu_submip_fp_config_from_name(name);
+  }
+  return options;
 }
 
 }  // namespace
@@ -109,37 +170,19 @@ gpu_submip_fp_config_t gpu_submip_fp_config_from_name(std::string_view name)
 
 gpu_submip_fp_config_t gpu_submip_fp_config_from_environment()
 {
-  if (std::getenv("CUOPT_CONFIG_ID") != nullptr) {
-    const int config_id  = experiment_integer("CUOPT_CONFIG_ID", 0, 0);
-    const int max_config = experiment_integer("CUOPT_MAX_CONFIG", fp_config_names.size(), 1);
-    if (config_id >= max_config) {
-      throw std::invalid_argument("CUOPT_CONFIG_ID must be in [0, CUOPT_MAX_CONFIG)");
-    }
-    // Benchmark repetitions cycle through the fixed preset order without changing the RNG seed.
-    const auto preset_id = config_id % fp_config_names.size();
-    auto config          = gpu_submip_fp_config_from_name(fp_config_names[preset_id]);
-    CUOPT_LOG_INFO("GpuSubmipFpSelection config_id=%d max_config=%d preset_id=%zu name=%s",
-                   config_id,
-                   max_config,
-                   preset_id,
-                   config.name.c_str());
-    return config;
-  }
-  // Keep saved named-config experiments reproducible; numeric benchmark IDs take precedence.
-  if (const char* name = std::getenv("CUOPT_GPU_SUBMIP_FP_CONFIG")) {
-    return gpu_submip_fp_config_from_name(name);
-  }
-  return {};
+  return benchmark_defaults_from_environment().fp_config;
 }
 
 gpu_submip_options_t gpu_submip_options_from_environment()
 {
-  gpu_submip_options_t options;
+  auto options     = benchmark_defaults_from_environment();
   const char* mode = std::getenv("CUOPT_GPU_SUBMIP_MODE");
   if (mode != nullptr) {
     if (std::string(mode) == "cpufj") {
       options.mode = gpu_submip_mode_t::CPUFJ_FULL_GPU;
-    } else if (std::string(mode) != "node") {
+    } else if (std::string(mode) == "node") {
+      options.mode = gpu_submip_mode_t::NODE_QUEUE;
+    } else {
       throw std::invalid_argument("GPU sub-MIP mode must be node or cpufj");
     }
   }
@@ -150,10 +193,13 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     }
     options.independent = value == "independent";
   }
-  options.max_projections = experiment_integer("CUOPT_GPU_SUBMIP_MAX_PROJECTIONS", 20, 0);
-  options.max_descents    = experiment_integer("CUOPT_GPU_SUBMIP_MAX_DESCENTS", 0, 0);
-  options.fix_rate        = experiment_option("CUOPT_GPU_SUBMIP_FIX_RATE", 0.25, 0, 0.99);
-  options.time_limit      = experiment_option("CUOPT_GPU_SUBMIP_SECONDS", 60, 0.01, 86400);
+  options.max_projections =
+    experiment_integer("CUOPT_GPU_SUBMIP_MAX_PROJECTIONS", options.max_projections, 0);
+  options.max_descents =
+    experiment_integer("CUOPT_GPU_SUBMIP_MAX_DESCENTS", options.max_descents, 0);
+  options.fix_rate = experiment_option("CUOPT_GPU_SUBMIP_FIX_RATE", 0.25, 0, 0.99);
+  options.time_limit =
+    experiment_option("CUOPT_GPU_SUBMIP_SECONDS", options.time_limit, 0.01, 86400);
   options.node_stride     = experiment_option("CUOPT_GPU_SUBMIP_STRIDE", 8, 1, 1000000);
   options.min_depth       = experiment_option("CUOPT_GPU_SUBMIP_MIN_DEPTH", 0, 0, 1000000);
   options.max_fractional  = experiment_option("CUOPT_GPU_SUBMIP_MAX_FRACTIONAL",
@@ -166,7 +212,20 @@ gpu_submip_options_t gpu_submip_options_from_environment()
   options.compact_fixed   = experiment_option("CUOPT_GPU_SUBMIP_COMPACT", 1, 0, 1) != 0;
   options.fused_pdlp      = experiment_option("CUOPT_GPU_SUBMIP_FUSED_PDLP", 1, 0, 1) != 0;
   options.incumbent_blend = experiment_option("CUOPT_GPU_SUBMIP_INCUMBENT_BLEND", 0, 0, 1);
-  options.fp_config       = gpu_submip_fp_config_from_environment();
+  CUOPT_LOG_INFO(
+    "GpuSubmipEffectiveConfig mode=%s lifetime=%s fp_config=%s max_projections=%d "
+    "max_descents=%d seconds=%.6f alpha=%.6f pdlp_seconds=%.6f rounding_seconds=%.6f "
+    "propagation_seconds=%.6f",
+    options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? "cpufj" : "node",
+    options.independent ? "independent" : "paired",
+    options.fp_config.name.c_str(),
+    options.max_projections,
+    options.max_descents,
+    options.time_limit,
+    options.fp_config.initial_alpha,
+    options.fp_config.pdlp_seconds,
+    options.fp_config.rounding_seconds,
+    options.fp_config.propagation_seconds);
   return options;
 }
 

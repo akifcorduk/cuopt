@@ -206,6 +206,8 @@ int run_worker_replay(const argparse::ArgumentParser& program,
                                                 options.fix_rate > 0);
   // Audit against the exact executed job, including optional additional RINS fixings.
   replay_audit_t node_audit(job.lp, job.var_types, mip_settings, job.cutoff);
+  const bool session     = options.mode == mip::gpu_submip_mode_t::CPUFJ_FULL_GPU;
+  const bool independent = session && options.independent;
   std::cout << std::setprecision(17) << "REPLAY_START mode=direct_fp_job partition="
             << (program.get<bool>("--full-gpu") ? "full" : "40_percent_requested")
             << " regular_partition=idle rows=" << snapshot.num_rows << " cols=" << snapshot.num_cols
@@ -215,36 +217,34 @@ int run_worker_replay(const argparse::ArgumentParser& program,
             << " compact_fixed=" << options.compact_fixed
             << " incumbent_blend=" << options.incumbent_blend
             << " fp_config=" << options.fp_config.name
-            << " continuous=" << program.get<bool>("--continuous")
-            << " independent=" << program.get<bool>("--independent")
+            << " continuous=" << (session && !independent) << " independent=" << independent
             << " max_projections=" << options.max_projections
             << " max_descents=" << options.max_descents
             << " initial_cutoff=" << snapshot.upper_bound << " setup_seconds="
             << std::chrono::duration<double>(clock_type::now() - replay_start).count()
             << " budget_domain="
-            << (program.get<bool>("--independent") ? "independent_session_including_construction"
-                : program.get<bool>("--continuous")
-                  ? "paired_session_including_construction"
-                  : "single_descent_including_session_construction")
+            << (independent ? "independent_session_including_construction"
+                : session   ? "paired_session_including_construction"
+                            : "single_descent_including_session_construction")
             << " cpu_node_solves=0\n";
   node_audit.start();
   const auto publish = [&node_audit](const std::vector<f_t>& candidate, f_t objective) {
     node_audit.publish(candidate, objective);
   };
-  if (program.get<bool>("--continuous") || program.get<bool>("--independent")) {
+  if (session) {
     job.deadline = opt::tic() + options.time_limit;
     std::atomic<int> pair_halt{0};
     mip::run_gpu_submip_job_full_device_continuous<i_t, f_t>(
       job,
       mip_settings,
       &halt,
-      program.get<bool>("--independent") ? &halt : &pair_halt,
+      independent ? &halt : &pair_halt,
       options,
       [&node_audit] { return node_audit.best_user_objective(); },
       publish,
       mip::gpu_submip_device_id(worker_handle),
       nullptr,
-      program.get<bool>("--independent"));
+      independent);
   } else {
     mip::run_gpu_submip_job<i_t, f_t>(
       job, mip_settings, worker_handle, &halt, options, {}, publish);
@@ -254,25 +254,33 @@ int run_worker_replay(const argparse::ArgumentParser& program,
 
 int run_replay(const argparse::ArgumentParser& program)
 {
+  cuopt::init_logger_t log_guard("", true);
   const auto replay_start = clock_type::now();
   const auto snapshot =
     mip::read_post_root_snapshot<i_t, f_t>(program.get<std::string>("snapshot"));
-  mip::gpu_submip_options_t options;
-  options.max_projections = program.get<int>("--max-projections");
-  options.max_descents    = program.get<int>("--max-descents");
+  auto options = mip::gpu_submip_options_from_environment();
+  if (program.is_used("--max-projections")) {
+    options.max_projections = program.get<int>("--max-projections");
+  }
+  if (program.is_used("--max-descents")) {
+    options.max_descents = program.get<int>("--max-descents");
+  }
+  if (program.is_used("--time-limit")) { options.time_limit = program.get<double>("--time-limit"); }
+  if (program.get<bool>("--continuous") || program.get<bool>("--independent")) {
+    options.mode        = mip::gpu_submip_mode_t::CPUFJ_FULL_GPU;
+    options.independent = program.get<bool>("--independent");
+  }
   options.fix_rate        = program.get<double>("--fix-rate");
-  options.time_limit      = program.get<double>("--time-limit");
   options.cached_primal   = program.get<bool>("--cached-primal");
   options.enable_fp       = !program.get<bool>("--disable-fp");
   options.compact_fixed   = !program.get<bool>("--no-compact-fixed");
   options.incumbent_blend = program.get<double>("--incumbent-blend");
   options.fused_pdlp      = !program.get<bool>("--no-fused-pdlp");
-  options.fp_config =
-    program.is_used("--fp-config")
-      ? mip::gpu_submip_fp_config_from_name(program.get<std::string>("--fp-config"))
-      : mip::gpu_submip_fp_config_from_environment();
-  if ((program.get<bool>("--continuous") || program.get<bool>("--independent")) &&
-      !program.get<bool>("--full-gpu")) {
+  if (program.is_used("--fp-config")) {
+    options.fp_config =
+      mip::gpu_submip_fp_config_from_name(program.get<std::string>("--fp-config"));
+  }
+  if (options.mode == mip::gpu_submip_mode_t::CPUFJ_FULL_GPU && !program.get<bool>("--full-gpu")) {
     throw std::runtime_error("Session replay requires --full-gpu");
   }
   if ((program.get<bool>("--continuous") && program.get<bool>("--independent")) ||
@@ -285,7 +293,6 @@ int run_replay(const argparse::ArgumentParser& program)
       options.incumbent_blend > 1) {
     throw std::runtime_error("Invalid replay fixing fraction, time limit, or incumbent blend");
   }
-  cuopt::init_logger_t log_guard("", true);
   auto previous_resource =
     rmm::mr::set_current_device_resource(rmm::mr::cuda_async_memory_resource{});
   cuopt::scope_guard restore_resource([&previous_resource]() noexcept {

@@ -48,10 +48,13 @@ class GpuSubmipFpConfig : public ::testing::Test {
     }
   }
 
-  static constexpr std::array<const char*, 6> keys{"CUOPT_CONFIG_ID",
+  static constexpr std::array<const char*, 9> keys{"CUOPT_CONFIG_ID",
                                                    "CUOPT_MAX_CONFIG",
+                                                   "CUOPT_GPU_SUBMIP_CONFIG_FAMILY",
                                                    "CUOPT_GPU_SUBMIP_FP_CONFIG",
+                                                   "CUOPT_GPU_SUBMIP_MODE",
                                                    "CUOPT_GPU_SUBMIP_LIFETIME",
+                                                   "CUOPT_GPU_SUBMIP_SECONDS",
                                                    "CUOPT_GPU_SUBMIP_MAX_PROJECTIONS",
                                                    "CUOPT_GPU_SUBMIP_MAX_DESCENTS"};
   std::array<std::optional<std::string>, keys.size()> saved;
@@ -92,6 +95,7 @@ TEST_F(GpuSubmipFpConfig, EnvironmentUsesTheSharedValidatedParser)
 
 TEST_F(GpuSubmipFpConfig, BenchmarkIdsSelectPresetsAndRepeatAcrossIterations)
 {
+  setenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY", "fp", 1);
   constexpr std::array<const char*, 4> names{"baseline", "round_long", "pdlp_long", "distance"};
   setenv("CUOPT_MAX_CONFIG", "8", 1);
   for (int id = 0; id < 8; ++id) {
@@ -105,6 +109,7 @@ TEST_F(GpuSubmipFpConfig, BenchmarkIdsSelectPresetsAndRepeatAcrossIterations)
 
 TEST_F(GpuSubmipFpConfig, NumericIdOverridesLegacyNameAndDefaultsToFourConfigurations)
 {
+  setenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY", "fp", 1);
   setenv("CUOPT_CONFIG_ID", "2", 1);
   setenv("CUOPT_GPU_SUBMIP_FP_CONFIG", "unknown", 1);
   EXPECT_EQ(gpu_submip_options_from_environment().fp_config,
@@ -119,7 +124,7 @@ TEST_F(GpuSubmipFpConfig, MaximumConfigurationCountValidatesPartialSweeps)
   EXPECT_EQ(gpu_submip_options_from_environment().fp_config, gpu_submip_fp_config_t{});
   setenv("CUOPT_CONFIG_ID", "1", 1);
   EXPECT_EQ(gpu_submip_options_from_environment().fp_config,
-            gpu_submip_fp_config_from_name("round_long"));
+            gpu_submip_fp_config_from_name("distance"));
   setenv("CUOPT_CONFIG_ID", "2", 1);
   EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
 }
@@ -142,7 +147,7 @@ TEST_F(GpuSubmipFpConfig, RejectsMalformedNegativeOverflowingAndOutOfRangeIds)
 
 TEST_F(GpuSubmipFpConfig, IndependentEffortDoesNotChangeDistancePreset)
 {
-  setenv("CUOPT_CONFIG_ID", "3", 1);
+  setenv("CUOPT_CONFIG_ID", "1", 1);
   auto options = gpu_submip_options_from_environment();
   EXPECT_TRUE(options.independent);
   EXPECT_EQ(options.max_projections, 20);
@@ -164,6 +169,64 @@ TEST_F(GpuSubmipFpConfig, IndependentEffortDoesNotChangeDistancePreset)
   }
   setenv("CUOPT_GPU_SUBMIP_LIFETIME", "invalid", 1);
   EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
+}
+
+TEST_F(GpuSubmipFpConfig, EffortSweepUsesIndependentDistanceFpAndRepeatsEveryFourIds)
+{
+  constexpr std::array<int, 4> projections{0, 20, 100, 100};
+  constexpr std::array<int, 4> descents{1, 0, 0, 0};
+  constexpr std::array<double, 4> seconds{60., 60., 10., 60.};
+  setenv("CUOPT_MAX_CONFIG", "8", 1);
+  // Numeric selection wins over stale named FP settings, as in the original sweep.
+  setenv("CUOPT_GPU_SUBMIP_FP_CONFIG", "unknown", 1);
+  for (int id = 0; id < 8; ++id) {
+    SCOPED_TRACE(id);
+    setenv("CUOPT_CONFIG_ID", std::to_string(id).c_str(), 1);
+    const auto options = gpu_submip_options_from_environment();
+    EXPECT_EQ(options.mode, gpu_submip_mode_t::CPUFJ_FULL_GPU);
+    EXPECT_TRUE(options.independent);
+    EXPECT_EQ(options.max_projections, projections[id % 4]);
+    EXPECT_EQ(options.max_descents, descents[id % 4]);
+    EXPECT_EQ(options.time_limit, seconds[id % 4]);
+    EXPECT_EQ(options.fp_config, gpu_submip_fp_config_from_name("distance"));
+    EXPECT_EQ(gpu_submip_fp_config_from_environment(), options.fp_config);
+  }
+}
+
+TEST_F(GpuSubmipFpConfig, ExplicitEffortAndModeOverridesTakePrecedenceOverPresetDefaults)
+{
+  setenv("CUOPT_CONFIG_ID", "2", 1);
+  setenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY", "effort", 1);
+  auto options = gpu_submip_options_from_environment();
+  EXPECT_EQ(options.time_limit, 10.);
+  setenv("CUOPT_GPU_SUBMIP_SECONDS", "7.5", 1);
+  setenv("CUOPT_GPU_SUBMIP_MAX_PROJECTIONS", "37", 1);
+  setenv("CUOPT_GPU_SUBMIP_MAX_DESCENTS", "3", 1);
+  setenv("CUOPT_GPU_SUBMIP_LIFETIME", "paired", 1);
+  setenv("CUOPT_GPU_SUBMIP_MODE", "node", 1);
+  options = gpu_submip_options_from_environment();
+  EXPECT_EQ(options.mode, gpu_submip_mode_t::NODE_QUEUE);
+  EXPECT_FALSE(options.independent);
+  EXPECT_EQ(options.max_projections, 37);
+  EXPECT_EQ(options.max_descents, 3);
+  EXPECT_EQ(options.time_limit, 7.5);
+  EXPECT_EQ(options.fp_config, gpu_submip_fp_config_from_name("distance"));
+}
+
+TEST_F(GpuSubmipFpConfig, RejectsUnknownFamiliesAndInvalidEffortTimes)
+{
+  setenv("CUOPT_CONFIG_ID", "2", 1);
+  for (const char* family : {"", "unknown"}) {
+    setenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY", family, 1);
+    EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
+    EXPECT_THROW(gpu_submip_fp_config_from_environment(), std::invalid_argument);
+  }
+  setenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY", "effort", 1);
+  for (const char* value : {"", "-1", "0", "nan", "inf", "bad", "10tail"}) {
+    SCOPED_TRACE(value);
+    setenv("CUOPT_GPU_SUBMIP_SECONDS", value, 1);
+    EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
+  }
 }
 
 TEST(GpuSubmipQueue, IndependentAdmissionBoundsCopiesAndDoesNotCancelPoppedJob)
