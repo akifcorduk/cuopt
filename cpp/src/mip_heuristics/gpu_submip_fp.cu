@@ -125,19 +125,21 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
                     config.propagation_seconds >= config.rounding_seconds,
                   error_type_t::ValidationError,
                   "Invalid GPU FP configuration");
-    fp.config.initial_alpha          = config.initial_alpha;
-    fp.config.projection_time_limit  = config.pdlp_seconds;
-    fp.config.rounding_time_limit    = config.rounding_seconds;
-    fp.config.propagation_time_limit = config.propagation_seconds;
+    fp.config.initial_alpha              = config.initial_alpha;
+    fp.config.projection_time_limit      = config.pdlp_seconds;
+    fp.config.rounding_time_limit        = config.rounding_seconds;
+    fp.config.propagation_time_limit     = config.propagation_seconds;
+    fp.config.propagate_initial_rounding = config.initial_rounding;
     CUOPT_LOG_INFO(
       "GpuSubmipFpConfig name=%s initial_alpha=%.9g pdlp_seconds=%.9g "
       "rounding_seconds=%.9g propagation_seconds=%.9g projection_cap=hard "
-      "rounding_schedule=remaining_time_div_10",
+      "rounding_schedule=remaining_time_div_10 initial_rounding=%d",
       config.name.c_str(),
       config.initial_alpha,
       config.pdlp_seconds,
       config.rounding_seconds,
-      config.propagation_seconds);
+      config.propagation_seconds,
+      int(config.initial_rounding));
     // The retained simplex columns bypass GPU preprocessing. FP's integer-fixed
     // verification LP needs identity maps in these compact GPU coordinates.
     problem.presolve_data.initialize_var_mapping(problem, handle);

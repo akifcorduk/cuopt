@@ -109,9 +109,10 @@ struct fp_config_t {
   int first_stage_kk                     = 70;
   double cycle_distance_reduction_ration = 0.1;
   // Keep the continuous projection seed separate from the rounded distance target.
-  bool use_projection_warm_start = false;
-  bool log_descent_diagnostics   = false;
-  bool fused_adaptive_step       = false;
+  bool use_projection_warm_start  = false;
+  bool propagate_initial_rounding = false;
+  bool log_descent_diagnostics    = false;
+  bool fused_adaptive_step        = false;
 };
 
 template <typename i_t, typename f_t>

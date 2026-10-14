@@ -35,6 +35,7 @@ class GpuSubmipFpConfig : public ::testing::Test {
       if (const char* value = std::getenv(keys[i])) { saved[i] = value; }
       unsetenv(keys[i]);
     }
+    setenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY", "effort", 1);
   }
 
   void TearDown() override
@@ -48,15 +49,16 @@ class GpuSubmipFpConfig : public ::testing::Test {
     }
   }
 
-  static constexpr std::array<const char*, 9> keys{"CUOPT_CONFIG_ID",
-                                                   "CUOPT_MAX_CONFIG",
-                                                   "CUOPT_GPU_SUBMIP_CONFIG_FAMILY",
-                                                   "CUOPT_GPU_SUBMIP_FP_CONFIG",
-                                                   "CUOPT_GPU_SUBMIP_MODE",
-                                                   "CUOPT_GPU_SUBMIP_LIFETIME",
-                                                   "CUOPT_GPU_SUBMIP_SECONDS",
-                                                   "CUOPT_GPU_SUBMIP_MAX_PROJECTIONS",
-                                                   "CUOPT_GPU_SUBMIP_MAX_DESCENTS"};
+  static constexpr std::array<const char*, 10> keys{"CUOPT_CONFIG_ID",
+                                                    "CUOPT_MAX_CONFIG",
+                                                    "CUOPT_GPU_SUBMIP_CONFIG_FAMILY",
+                                                    "CUOPT_GPU_SUBMIP_FP_CONFIG",
+                                                    "CUOPT_GPU_SUBMIP_MODE",
+                                                    "CUOPT_GPU_SUBMIP_LIFETIME",
+                                                    "CUOPT_GPU_SUBMIP_SECONDS",
+                                                    "CUOPT_GPU_SUBMIP_MAX_PROJECTIONS",
+                                                    "CUOPT_GPU_SUBMIP_MAX_DESCENTS",
+                                                    "CUOPT_GPU_SUBMIP_INITIAL_ROUNDING"};
   std::array<std::optional<std::string>, keys.size()> saved;
 };
 
@@ -80,6 +82,28 @@ TEST_F(GpuSubmipFpConfig, PresetsChangeOnlyTheirNamedFactors)
   EXPECT_EQ(gpu_submip_fp_config_from_name("distance"), expected);
   EXPECT_THROW(gpu_submip_fp_config_from_name(""), std::invalid_argument);
   EXPECT_THROW(gpu_submip_fp_config_from_name("pdlp-long"), std::invalid_argument);
+}
+
+TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsRoundingControl)
+{
+  unsetenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY");
+  setenv("CUOPT_MAX_CONFIG", "8", 1);
+  for (int id = 0; id < 8; ++id) {
+    setenv("CUOPT_CONFIG_ID", std::to_string(id).c_str(), 1);
+    const auto options = gpu_submip_options_from_environment();
+    EXPECT_EQ(options.mode, gpu_submip_mode_t::CPUFJ_FULL_GPU);
+    EXPECT_TRUE(options.independent);
+    EXPECT_EQ(options.max_descents, 1);
+    EXPECT_EQ(options.max_projections, 0);
+    EXPECT_EQ(options.time_limit, 60.);
+    EXPECT_EQ(options.fp_config.initial_alpha, 0.);
+    EXPECT_TRUE(options.fp_config.initial_rounding);
+  }
+  setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "0", 1);
+  EXPECT_FALSE(gpu_submip_options_from_environment().fp_config.initial_rounding);
+  EXPECT_FALSE(gpu_submip_fp_config_from_environment().initial_rounding);
+  setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "bad", 1);
+  EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
 }
 
 TEST_F(GpuSubmipFpConfig, EnvironmentUsesTheSharedValidatedParser)

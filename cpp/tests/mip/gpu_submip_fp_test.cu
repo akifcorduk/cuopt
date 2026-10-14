@@ -108,6 +108,22 @@ TEST_F(GpuSubmipFp, DoesNotReturnNonImprovingNodeSolution)
   EXPECT_TRUE(candidate.empty());
 }
 
+TEST_F(GpuSubmipFp, InitialRoundingFindsFeasibilityBeforeProjectionAndHonorsCutoff)
+{
+  auto config             = gpu_submip_fp_config_from_name("distance");
+  config.initial_rounding = true;
+  gpu_submip_fp_t<int, double> session(&handle, lp, types, settings, true, true, config);
+  std::vector<double> candidate;
+  ASSERT_TRUE(session.run(lp, {0., 0.}, 0.25, 10., nullptr, candidate));
+  EXPECT_EQ(session.last_run_info().projections, 0);
+  EXPECT_STREQ(session.last_run_info().exit_reason, "feasible_initial_rounding");
+  ASSERT_EQ(candidate.size(), 2);
+  EXPECT_NEAR(candidate[0], 0., 1e-6);
+  EXPECT_NEAR(candidate[1], 0., 1e-6);
+  EXPECT_FALSE(session.run(lp, {0., 0.}, -0.25, 0.1, nullptr, candidate));
+  EXPECT_TRUE(candidate.empty());
+}
+
 TEST_F(GpuSubmipFp, UnlimitedDeadlineRetainsFiniteTimingAndExportsRestartProjection)
 {
   lp.lower[1] = -0.49;

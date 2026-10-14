@@ -657,6 +657,14 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
 {
   raft::common::nvtx::range fun_scope("run_single_fp_descent");
   const auto initial_projections = n_lp_calls;
+  if (stop_requested()) { return false; }
+  if (config.propagate_initial_rounding) {
+    // Keep last_projection as the continuous LP seed. Propagation changes only
+    // the integer target, using the same rounding limits and descent deadline.
+    const bool feasible = round(solution);
+    if (stop_requested()) { return false; }
+    if (feasible) { return finish_descent(true, "feasible_initial_rounding"); }
+  }
   // start by doing nearest rounding
   solution.round_nearest(rng());
   raft::copy(last_rounding.data(),

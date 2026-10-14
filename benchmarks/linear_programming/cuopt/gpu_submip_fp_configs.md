@@ -1,6 +1,30 @@
-# GPU sub-MIP FP effort configurations
+# GPU sub-MIP FP benchmark checkpoints
 
-With `CUOPT_CONFIG_ID` set, the default configuration family is `effort`:
+The default family is now `checkpoint`: every numeric ID repeats the chosen
+config 0 policy (one independent distance-FP descent, unlimited projections,
+60 s wall cap). IDs no longer select the old effort variants unless the family
+is explicitly set to `effort`. The solver seed is unchanged by the ID.
+
+Checkpoint 1 adds propagation-assisted initial rounding before the first PDLP
+projection. It uses the existing 0.5 s rounding / 0.7 s total propagation limits
+inside the job's wall budget and preserves the continuous PDLP seed. A feasible
+initial rounded point returns immediately. `CUOPT_GPU_SUBMIP_INITIAL_ROUNDING=0`
+disables this change for an A/B comparison; it defaults to 1 in this family.
+
+Use the existing benchmark exports at each checkpoint, with numeric suffixes
+representing repetitions:
+
+```bash
+export CUOPT_GPU_SUBMIP=1
+export CUOPT_SUBMIP_POOL_DIAGNOSTICS=1
+export CUOPT_CONFIG_ID="$repetition_id"
+export CUOPT_MAX_CONFIG="$n_iters"
+export CUOPT_GPU_SUBMIP_CONFIG_FAMILY=checkpoint
+```
+
+## Earlier effort configurations
+
+With `CUOPT_GPU_SUBMIP_CONFIG_FAMILY=effort`, IDs retain the earlier mapping:
 
 | ID | Profile | Total projections per job | Descents per job | Wall cap per job |
 | -- | ------- | ------------------------- | ---------------- | ---------------- |
@@ -37,7 +61,7 @@ export CUOPT_CONFIG_ID="$repetition_id"
 export CUOPT_MAX_CONFIG="$n_iters"
 ```
 
-IDs are zero-based, must be less than `CUOPT_MAX_CONFIG`, and cycle modulo four.
+In the effort family, IDs are zero-based, must be less than `CUOPT_MAX_CONFIG`, and cycle modulo four.
 For example, eight iterations run profiles 0, 1, 2, 3 twice. `CUOPT_MAX_CONFIG`
 defaults to four and does not alter the RNG seed.
 
@@ -66,9 +90,10 @@ Set `CUOPT_GPU_SUBMIP_CONFIG_FAMILY=fp` for the earlier ID mapping:
 FP settings; set the mode and lifetime explicitly when reproducing an older
 paired-worker experiment.
 
-Without `CUOPT_CONFIG_ID`, the existing named `CUOPT_GPU_SUBMIP_FP_CONFIG`
-selector and default worker settings are unchanged. A numeric ID takes
-precedence over that named FP selector.
+Without `CUOPT_CONFIG_ID`, the checkpoint defaults still apply. The existing
+named `CUOPT_GPU_SUBMIP_FP_CONFIG` selector overrides the FP preset; a numeric ID
+takes precedence over that named selector. Select `effort` or `fp` explicitly
+when reproducing the previous default worker settings.
 
 ## Saved-job replay
 

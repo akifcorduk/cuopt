@@ -36,6 +36,7 @@ struct gpu_submip_fp_config_t {
   double pdlp_seconds{1.};
   double rounding_seconds{0.5};
   double propagation_seconds{0.7};
+  bool initial_rounding{false};
 
   bool operator==(const gpu_submip_fp_config_t&) const = default;
 };
