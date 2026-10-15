@@ -105,10 +105,12 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsPolicyOverrides
     EXPECT_FALSE(options.fp_config.initial_rounding);
     EXPECT_FALSE(options.select_warm_start);
     EXPECT_EQ(options.unproductive_seconds, 15.);
-    EXPECT_EQ(options.regular_gpu_seconds, 5.);
+    EXPECT_EQ(options.regular_gpu_seconds, 10.);
     EXPECT_EQ(options.min_improve, 0.);
-    EXPECT_EQ(options.pending_max_age, 15.);
+    EXPECT_EQ(options.pending_max_age, 0.);
   }
+  setenv("CUOPT_GPU_SUBMIP_REGULAR_SECONDS", "3", 1);
+  EXPECT_EQ(gpu_submip_options_from_environment().regular_gpu_seconds, 3.);
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "1", 1);
   EXPECT_TRUE(gpu_submip_options_from_environment().fp_config.initial_rounding);
   EXPECT_TRUE(gpu_submip_fp_config_from_environment().initial_rounding);
@@ -273,7 +275,7 @@ TEST_F(GpuSubmipFpConfig, PendingAgeDefaultCanBeOverriddenAndIsValidated)
 {
   EXPECT_EQ(gpu_submip_options_from_environment().pending_max_age, 0.);
   setenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY", "checkpoint", 1);
-  EXPECT_EQ(gpu_submip_options_from_environment().pending_max_age, 15.);
+  EXPECT_EQ(gpu_submip_options_from_environment().pending_max_age, 0.);
   setenv("CUOPT_GPU_SUBMIP_PENDING_MAX_AGE", "0", 1);
   EXPECT_EQ(gpu_submip_options_from_environment().pending_max_age, 0.);
   setenv("CUOPT_GPU_SUBMIP_PENDING_MAX_AGE", "15", 1);
