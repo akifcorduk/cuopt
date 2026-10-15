@@ -31,6 +31,7 @@ unset CUOPT_GPU_SUBMIP_MIN_IMPROVE CUOPT_GPU_SUBMIP_DISABLE_FP
 unset CUOPT_GPU_SUBMIP_COMPACT CUOPT_GPU_SUBMIP_FUSED_PDLP
 unset CUOPT_GPU_SUBMIP_JOB_SNAPSHOT CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_DIR
 unset CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_SOURCE
+unset CUOPT_GPU_SUBMIP_JOB_COLLECTION_DIR
 export CUOPT_GPU_SUBMIP=1
 export CUOPT_SUBMIP_POOL_DIAGNOSTICS=1
 export CUOPT_GPU_SUBMIP_CONFIG_FAMILY=checkpoint
@@ -74,9 +75,8 @@ instances optimal in both current runs, and per-instance optimal frequencies
 reaching the reference objective alone is not an optimality proof. The final CSV
 schema already includes this flag and is unchanged.
 
-Saved-job capture remains opt-in for separate replay collection. The existing
-directory mode captures one job per source, so it is not yet a representative
-neighborhood collection. Keep it disabled for this scored benchmark.
+Saved-job capture remains opt-in for separate replay collection. Keep it disabled
+for this scored benchmark; collection writes can change timing and interleaving.
 
 ## Previous checkpoints
 
@@ -238,6 +238,30 @@ takes precedence over that named selector. Select `effort` or `fp` explicitly
 when reproducing the previous default worker settings.
 
 ## Saved-job replay
+
+For collection runs, set `CUOPT_GPU_SUBMIP_JOB_COLLECTION_DIR` to a new directory
+for each instance and repetition. The collector saves the first executed job in
+each solve-time/size stratum, before observing its FP result: twelve equal
+intervals of the original solve limit, crossed with free integer counts
+0–128, 129–512, 513–2048, and above 2048. It stores at most 48 jobs per source;
+empty strata stay empty. This is a stratified sample of executed jobs, not a
+random sample of every neighborhood the CPU workers generated. Parent diversity
+must be checked from the logged source IDs; it is not guaranteed by the sampler.
+
+Collection takes precedence over the legacy single-job/directory capture options.
+It records the raw supplied primal, full local LP and domains, optional incumbent,
+and the refreshed cutoff. `GpuSubmipJobSnapshot` records job/source IDs, strategy,
+solve elapsed time, available budget, capture cost, dimensions, solver seed, and
+the effective target. Join this with `GpuSubmipJobStart`/`End` and FP diagnostics.
+Use the recorded seed and IDs for replay; they are provenance, not tuning knobs.
+`--source cpu_submip --source-id N` preserves source labels in replay logs.
+
+Replay budgets should be capped by the recorded available budget. A replay does
+not restore the CPU tree, concurrent incumbent changes/cancellation, or an earlier
+GPU session's state. The current single-descent CPUFJ policy constructs a fresh
+FP session for each job; automatic seed history and cached-primal reuse are off.
+Compare replay results against the original job and report any differences.
+Capture runs are diagnostic and must not be pooled into scored full benchmarks.
 
 The replay executable shares the environment configuration parser. For an effort
 profile, supply the saved job and `--full-gpu`; the selected independent mode and

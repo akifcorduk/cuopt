@@ -195,7 +195,7 @@ int run_worker_replay(const argparse::ArgumentParser& program,
   // bounds. The captured incumbent is an optional warm-start seed, not a proof.
   std::cout << "REPLAY_INITIAL cutoff=" << snapshot.upper_bound
             << " incumbent_seed=" << !snapshot.incumbent.empty() << '\n';
-  auto job = mip::make_gpu_submip_job<i_t, f_t>(base_lp,
+  auto job          = mip::make_gpu_submip_job<i_t, f_t>(base_lp,
                                                 types,
                                                 snapshot.root_primal,
                                                 snapshot.incumbent,
@@ -204,6 +204,15 @@ int run_worker_replay(const argparse::ArgumentParser& program,
                                                 mip_settings,
                                                 program.get<unsigned>("--job-id"),
                                                 options.fix_rate > 0);
+  const auto source = program.get<std::string>("--source");
+  if (source == "cpu_submip") {
+    job.source = mip::gpu_submip_source_t::CPU_SUBMIP;
+  } else if (source == "dive") {
+    job.source = mip::gpu_submip_source_t::DIVE;
+  } else if (source != "main_tree") {
+    throw std::runtime_error("Replay source must be main_tree, cpu_submip, or dive");
+  }
+  job.source_id = program.get<unsigned>("--source-id");
   // Audit against the exact executed job, including optional additional RINS fixings.
   if (program.is_used("--objective-lower-bound")) {
     job.proven_lower_bound = program.get<double>("--objective-lower-bound");
@@ -369,6 +378,8 @@ int main(int argc, char** argv)
   program.add_argument("--time-limit").scan<'g', double>().default_value(60.0);
   program.add_argument("--seed").scan<'i', int>().default_value(0);
   program.add_argument("--job-id").scan<'u', unsigned>().default_value(0u);
+  program.add_argument("--source").default_value(std::string{"main_tree"});
+  program.add_argument("--source-id").scan<'u', unsigned>().default_value(0u);
   program.add_argument("--objective-lower-bound")
     .help("valid lower bound in snapshot LP objective coordinates; omitted means unknown")
     .scan<'g', double>();

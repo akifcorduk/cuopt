@@ -2390,14 +2390,15 @@ void branch_and_bound_t<i_t, f_t>::enqueue_gpu_submip_job(const lp_problem_t<i_t
                         *gpu_submip_settings_,
                         shared->next_job.fetch_add(1),
                         gpu_submip_source_applies_rins(source)));
-  job->source_id  = gpu_submip_source_id_;
-  job->source     = source;
-  job->strategy   = strategy;
-  job->tree_node  = tree_node;
-  job->depth      = depth;
-  job->fractional = fractional;
-  job->deadline   = shared->deadline;
-  job->to_user    = gpu_submip_to_user_;
+  job->source_id   = gpu_submip_source_id_;
+  job->source      = source;
+  job->strategy    = strategy;
+  job->tree_node   = tree_node;
+  job->depth       = depth;
+  job->fractional  = fractional;
+  job->deadline    = shared->deadline;
+  job->solve_start = shared->root_start;
+  job->to_user     = gpu_submip_to_user_;
   if (std::isfinite(shared->user_root_lower_bound)) {
     job->proven_lower_bound = compute_presolved_objective(lp, shared->user_root_lower_bound);
   }
@@ -2474,9 +2475,10 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   job->tree_node = -1;
   job->depth     = -1;
   std::vector<i_t> fractional;
-  job->fractional = fractional_variables(settings_, seed, types, fractional);
-  job->deadline   = shared->deadline;
-  job->to_user    = gpu_submip_to_user_;
+  job->fractional  = fractional_variables(settings_, seed, types, fractional);
+  job->deadline    = shared->deadline;
+  job->solve_start = shared->root_start;
+  job->to_user     = gpu_submip_to_user_;
   if (std::isfinite(shared->user_root_lower_bound)) {
     job->proven_lower_bound = compute_presolved_objective(lp, shared->user_root_lower_bound);
   }

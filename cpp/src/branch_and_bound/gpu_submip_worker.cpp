@@ -165,6 +165,29 @@ std::string gpu_submip_job_snapshot_path(gpu_submip_source_t source,
   return matches ? path : "";
 }
 
+std::string gpu_submip_job_collection_path(gpu_submip_source_t source,
+                                           const char* directory,
+                                           double elapsed,
+                                           double solve_seconds,
+                                           int free_integers)
+{
+  if (!directory || !*directory) { return {}; }
+  if (!std::isfinite(elapsed) || elapsed < 0 || !std::isfinite(solve_seconds) ||
+      solve_seconds <= 0 || free_integers < 0) {
+    throw std::invalid_argument("GPU job collection requires a finite outer-solve clock and size");
+  }
+  if (elapsed >= solve_seconds) { return {}; }
+  const int time_bin = std::min(11, int(12 * (elapsed / solve_seconds)));
+  const int size_bin = free_integers <= 128    ? 0
+                       : free_integers <= 512  ? 1
+                       : free_integers <= 2048 ? 2
+                                               : 3;
+  return (std::filesystem::path(directory) /
+          (std::string(gpu_submip_source_name(source)) + "_t" + std::to_string(time_bin) + "_s" +
+           std::to_string(size_bin) + ".bin"))
+    .string();
+}
+
 gpu_submip_fp_config_t gpu_submip_fp_config_from_name(std::string_view name)
 {
   gpu_submip_fp_config_t config;
@@ -595,17 +618,36 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
   if (std::isnan(cutoff)) { return false; }
   const auto improving_cutoff = gpu_submip_improving_cutoff(job, cutoff, settings, options);
   const f_t target            = improving_cutoff.target;
+  // Count inherited CPU sub-MIP fixings as well as any additional GPU RINS fixings.
+  i_t integer_columns = 0, free_integer_columns = 0, fixed_columns = 0;
+  for (i_t j = 0; j < job.lp.num_cols; ++j) {
+    const bool fixed = job.lp.lower[j] == job.lp.upper[j];
+    fixed_columns += fixed;
+    if (j < static_cast<i_t>(job.var_types.size()) &&
+        job.var_types[j] != simplex::variable_type_t::CONTINUOUS) {
+      ++integer_columns;
+      free_integer_columns += !fixed;
+    }
+  }
+  const char* collection_directory = std::getenv("CUOPT_GPU_SUBMIP_JOB_COLLECTION_DIR");
+  const bool collection            = collection_directory && *collection_directory;
   const auto snapshot_path =
-    gpu_submip_job_snapshot_path(job.source,
-                                 std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT"),
-                                 std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_SOURCE"),
-                                 std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_DIR"));
+    collection ? gpu_submip_job_collection_path(job.source,
+                                                collection_directory,
+                                                started - job.solve_start,
+                                                job.deadline - job.solve_start,
+                                                free_integer_columns)
+               : gpu_submip_job_snapshot_path(job.source,
+                                              std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT"),
+                                              std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_SOURCE"),
+                                              std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_DIR"));
   if (!snapshot_path.empty()) {
     static std::mutex snapshot_mutex;
     static std::set<std::string> captured_paths;
     std::lock_guard lock(snapshot_mutex);
     if (!captured_paths.contains(snapshot_path)) {
-      const auto parent = std::filesystem::path(snapshot_path).parent_path();
+      const double capture_started = tic();
+      const auto parent            = std::filesystem::path(snapshot_path).parent_path();
       if (!parent.empty()) { std::filesystem::create_directories(parent); }
       // This is a warm seed and may violate the selected node's bounds. Retain it so replay
       // applies the same incumbent blend and the session's identical bound clamping.
@@ -615,7 +657,9 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
       captured_paths.insert(snapshot_path);
       CUOPT_LOG_INFO(
         "GpuSubmipJobSnapshot path=%s job=%llu source=%s strategy=%d tree_node=%d "
-        "depth=%d fractional=%d fixed=%d",
+        "depth=%d fractional=%d fixed=%d collection=%d source_id=%llu "
+        "elapsed=%.9f solve_seconds=%.9f budget_seconds=%.9f capture_seconds=%.9f "
+        "free_integer=%d rows=%d columns=%d nnz=%zu seed=%d cutoff=%.17g target_cutoff=%.17g",
         snapshot_path.c_str(),
         (unsigned long long)job.job_id,
         gpu_submip_source_name(job.source),
@@ -623,7 +667,20 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
         job.tree_node,
         job.depth,
         job.fractional,
-        job.fixed);
+        job.fixed,
+        int(collection),
+        (unsigned long long)job.source_id,
+        started - job.solve_start,
+        job.deadline - job.solve_start,
+        budget,
+        toc(capture_started),
+        int(free_integer_columns),
+        int(job.lp.num_rows),
+        int(job.lp.num_cols),
+        size_t(job.lp.A.nnz()),
+        int(settings.seed),
+        double(cutoff),
+        double(target));
     }
   }
   std::unique_ptr<gpu_submip_fp_t<i_t, f_t>> local_session;
@@ -654,18 +711,6 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
       seed[j] = std::lerp(seed[j], job.incumbent[j], f_t(options.incumbent_blend));
     }
     seed_name = "incumbent_blend";
-  }
-  // Count the actual job domains, including inherited CPU sub-MIP fixings. job.fixed
-  // counts only additional GPU-side RINS fixings, which are absent in CPUFJ mode.
-  i_t integer_columns = 0, free_integer_columns = 0, fixed_columns = 0;
-  for (i_t j = 0; j < job.lp.num_cols; ++j) {
-    const bool fixed = job.lp.lower[j] == job.lp.upper[j];
-    fixed_columns += fixed;
-    if (j < static_cast<i_t>(job.var_types.size()) &&
-        job.var_types[j] != simplex::variable_type_t::CONTINUOUS) {
-      ++integer_columns;
-      free_integer_columns += !fixed;
-    }
   }
   CUOPT_LOG_INFO(
     "GpuSubmipJobStart job=%llu source=%s source_id=%llu tree_node=%d depth=%d "

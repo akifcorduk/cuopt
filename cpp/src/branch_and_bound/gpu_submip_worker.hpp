@@ -111,6 +111,12 @@ std::string gpu_submip_job_snapshot_path(gpu_submip_source_t source,
                                          const char* path,
                                          const char* source_filter,
                                          const char* directory);
+// Outcome-independent collection: one job per solve-time/size stratum and source.
+std::string gpu_submip_job_collection_path(gpu_submip_source_t source,
+                                           const char* directory,
+                                           double elapsed,
+                                           double solve_seconds,
+                                           int free_integers);
 
 template <typename i_t, typename f_t>
 struct gpu_submip_job_t {
@@ -132,6 +138,7 @@ struct gpu_submip_job_t {
   search_strategy_t strategy{search_strategy_t::BEST_FIRST};
   double deadline{std::numeric_limits<double>::infinity()};
   double enqueued_at{0.};
+  double solve_start{0.};  // Shared outer-solve clock, used only by opt-in collection.
   std::function<bool(const std::vector<f_t>&, std::vector<f_t>&)> to_user;
 };
 

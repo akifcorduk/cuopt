@@ -267,6 +267,41 @@ TEST_F(GpuSubmipFpConfig, RejectsUnknownFamiliesAndInvalidEffortTimes)
   }
 }
 
+TEST(GpuSubmipCollection, StratifiesBySolveTimeAndFreeIntegerCount)
+{
+  const auto source = gpu_submip_source_t::CPU_SUBMIP;
+  EXPECT_EQ(gpu_submip_job_collection_path(source, nullptr, 0., 0., -1), "");
+  EXPECT_EQ(gpu_submip_job_collection_path(source, "/jobs", 0., 600., 128),
+            "/jobs/cpu_submip_t0_s0.bin");
+  EXPECT_EQ(gpu_submip_job_collection_path(source, "/jobs", 49.9, 600., 129),
+            "/jobs/cpu_submip_t0_s1.bin");
+  EXPECT_EQ(gpu_submip_job_collection_path(source, "/jobs", 50., 600., 512),
+            "/jobs/cpu_submip_t1_s1.bin");
+  EXPECT_EQ(gpu_submip_job_collection_path(source, "/jobs", 300., 600., 513),
+            "/jobs/cpu_submip_t6_s2.bin");
+  EXPECT_EQ(gpu_submip_job_collection_path(source, "/jobs", 599.9, 600., 2048),
+            "/jobs/cpu_submip_t11_s2.bin");
+  EXPECT_EQ(gpu_submip_job_collection_path(source, "/jobs", 599.9, 600., 2049),
+            "/jobs/cpu_submip_t11_s3.bin");
+  EXPECT_EQ(gpu_submip_job_collection_path(source, "/jobs", 600., 600., 1), "");
+  EXPECT_NE(
+    gpu_submip_job_collection_path(source, "/jobs", 100., 600., 10),
+    gpu_submip_job_collection_path(gpu_submip_source_t::MAIN_TREE, "/jobs", 100., 600., 10));
+}
+
+TEST(GpuSubmipCollection, RejectsUnknownClockAndInvalidSize)
+{
+  const auto source = gpu_submip_source_t::CPU_SUBMIP;
+  EXPECT_THROW(gpu_submip_job_collection_path(source, "/jobs", 0., 0., 1), std::invalid_argument);
+  EXPECT_THROW(gpu_submip_job_collection_path(source, "/jobs", -1., 600., 1),
+               std::invalid_argument);
+  EXPECT_THROW(gpu_submip_job_collection_path(source, "/jobs", 0., 600., -1),
+               std::invalid_argument);
+  EXPECT_THROW(
+    gpu_submip_job_collection_path(source, "/jobs", 0., std::numeric_limits<double>::infinity(), 1),
+    std::invalid_argument);
+}
+
 TEST(GpuSubmipQueue, IndependentAdmissionBoundsCopiesAndDoesNotCancelPoppedJob)
 {
   gpu_submip_queue_t<int> queue(1);
