@@ -5,7 +5,7 @@ config 0 policy (one independent distance-FP descent, unlimited projections,
 60 s wall cap). IDs no longer select the old effort variants unless the family
 is explicitly set to `effort`. The solver seed is unchanged by the ID.
 
-The current checkpoint (`single_descent_handoff_fix`) isolates scheduling with
+The current checkpoint (`single_descent_pending_refresh15`) isolates scheduling with
 the original CPUFJ seed and nearest-rounding policy. Initial propagation rounding
 and automatic warm-start selection are disabled; the stronger cutoff is also
 disabled (`min_improve=0`). The crash fix and distance-only FP remain enabled.
@@ -20,10 +20,12 @@ and fallback to the supplied incumbent are preserved. FP, starting-point
 selection, seed, neighborhood generation, CPU workers, and effort limits are
 unchanged. No additional GPU synchronization or snapshot writes are enabled.
 
-This is the shared control for the pending-refresh and longer-regular-turn
-experiments. Its pending maximum age is 0 (refresh disabled), and regular turns
-start at 5 s and back off to 10/20 s. Each experiment changes one policy from
-this control; use the effective config to verify the defaults.
+This experiment changes only pending admission relative to the shared handoff-fix
+control `02819d18`: an incoming eligible neighborhood can replace the queued job
+once its age reaches 15 s. Active jobs continue unchanged. Regular turns still
+start at 5 s and back off to 10/20 s. This is a selection hypothesis, not a proven
+performance improvement. Compare both repetitions against the control as well
+as the historical original runs.
 
 Set `n_iters=2` in the existing benchmark launcher. Inside its repetition loop
 (`repetition_id=0`, then `1`), use:
@@ -50,11 +52,11 @@ export CUOPT_MAX_CONFIG="$n_iters"
 
 Keep the usual 600-second solve limit, hardware class, thread count, logging, and
 incumbent CSV collection. Both IDs must log `preset_id=0`, `family=checkpoint`,
-and `profile=single_descent_handoff_fix`. Their `GpuSubmipEffectiveConfig` lines
+and `profile=single_descent_pending_refresh15`. Their `GpuSubmipEffectiveConfig` lines
 must match: independent CPUFJ mode, distance FP, one descent, no projection-count
 cap, 60 s per job, PDLP/rounding/propagation caps 1/0.5/0.7 s, initial rounding and
 automatic warm-start selection off, 15 s stall threshold, initial 5 s regular
-turn, pending refresh disabled, strict cutoff, and FP enabled. IDs do not change
+turn, `pending_max_age=15`, strict cutoff, and FP enabled. IDs do not change
 the solver's seed.
 
 All solver diagnostics use `CUOPT_LOG_INFO` in the existing log:
@@ -103,7 +105,7 @@ for this scored benchmark; collection writes can change timing and interleaving.
 
 `CUOPT_GPU_SUBMIP_PENDING_MAX_AGE=15` allows an incoming CPUFJ neighborhood to
 replace the pending GPU job once that pending job has waited at least 15 seconds.
-The default is 0, which preserves the current admission policy. This option
+The shared control defaults to 0; this experimental checkpoint defaults to 15. This option
 applies only to independent CPUFJ mode. An active GPU job is never replaced, and
 an old pending job is retained when no newer eligible job arrives. CPU workers,
 FP, starting points, cutoff rules, and effort limits remain unchanged.

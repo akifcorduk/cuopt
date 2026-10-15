@@ -86,6 +86,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     options.select_warm_start          = false;
     options.unproductive_seconds       = 15.;
     options.min_improve                = 0.;
+    options.pending_max_age            = 15.;
   }
   if (std::getenv("CUOPT_CONFIG_ID") != nullptr) {
     const size_t preset_count = family == "checkpoint" ? 1 : fp_config_names.size();
@@ -98,7 +99,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     const auto preset_id = config_id % preset_count;
     const char* profile;
     if (family == "checkpoint") {
-      profile = "single_descent_handoff_fix";
+      profile = "single_descent_pending_refresh15";
     } else if (family == "effort") {
       const auto& effort      = fp_effort_configs[preset_id];
       profile                 = effort.name;
