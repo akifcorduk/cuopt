@@ -10,6 +10,76 @@ the original CPUFJ seed and nearest-rounding policy. Initial propagation roundin
 and automatic warm-start selection are disabled; the stronger cutoff is also
 disabled (`min_improve=0`). The crash fix and distance-only FP remain enabled.
 
+## Current two-repetition benchmark
+
+Run the current policy twice against the four historical original runs. This
+checkpoint adds host-side INFO diagnostics; FP, starting-point selection, seed,
+neighborhood generation, CPU workers, effort limits, and scheduling are unchanged.
+No additional GPU synchronization or snapshot writes are enabled.
+
+Set `n_iters=2` in the existing benchmark launcher. Inside its repetition loop
+(`repetition_id=0`, then `1`), use:
+
+```bash
+unset CUOPT_GPU_SUBMIP_MODE CUOPT_GPU_SUBMIP_LIFETIME
+unset CUOPT_GPU_SUBMIP_MAX_PROJECTIONS CUOPT_GPU_SUBMIP_MAX_DESCENTS
+unset CUOPT_GPU_SUBMIP_SECONDS CUOPT_GPU_SUBMIP_FP_CONFIG
+unset CUOPT_GPU_SUBMIP_INITIAL_ROUNDING CUOPT_GPU_SUBMIP_SELECT_WARM_START
+unset CUOPT_GPU_SUBMIP_CACHED_PRIMAL CUOPT_GPU_SUBMIP_INCUMBENT_BLEND
+unset CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS CUOPT_GPU_SUBMIP_REGULAR_SECONDS
+unset CUOPT_GPU_SUBMIP_MIN_IMPROVE CUOPT_GPU_SUBMIP_DISABLE_FP
+unset CUOPT_GPU_SUBMIP_COMPACT CUOPT_GPU_SUBMIP_FUSED_PDLP
+unset CUOPT_GPU_SUBMIP_JOB_SNAPSHOT CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_DIR
+unset CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_SOURCE
+export CUOPT_GPU_SUBMIP=1
+export CUOPT_SUBMIP_POOL_DIAGNOSTICS=1
+export CUOPT_GPU_SUBMIP_CONFIG_FAMILY=checkpoint
+export CUOPT_CONFIG_ID="$repetition_id"
+export CUOPT_MAX_CONFIG="$n_iters"
+```
+
+Keep the usual 600-second solve limit, hardware class, thread count, logging, and
+incumbent CSV collection. Both IDs must log `preset_id=0`, `family=checkpoint`,
+and `profile=single_descent_schedule_only`. Their `GpuSubmipEffectiveConfig` lines
+must match: independent CPUFJ mode, distance FP, one descent, no projection-count
+cap, 60 s per job, PDLP/rounding/propagation caps 1/0.5/0.7 s, initial rounding and
+automatic warm-start selection off, 15 s stall threshold, initial 5 s regular
+turn, strict cutoff, and FP enabled. IDs do not change the solver's seed.
+
+All solver diagnostics use `CUOPT_LOG_INFO` in the existing log:
+
+- `GpuSubmipIndependentEnqueue`, `GpuSubmipIndependentStart`, and
+  `GpuSubmipJobStart` join by job ID. They identify parent source, strategy,
+  elapsed solve time, queue-to-execution delay, dimensions, free integer count,
+  and cutoff changes while queued. The start delay includes GPU handoff. The
+  free integer count uses unequal variable bounds; `fixed_columns` includes
+  inherited fixed columns, while the older `fixed` field counts only additional
+  GPU-side RINS fixings. Presolved-away columns are absent from both counts.
+- `GpuSubmipJobEnd` records the rejection stage, candidate objective when
+  evaluated, and the latest cutoff when checked for publication. `fp_not_found`
+  includes candidates rejected by the enclosing FP session; join with
+  `GpuSubmipFpDescent` to inspect its raw found flag and cutoff excess.
+  `valid=1` means the worker invoked publication, not that the global incumbent
+  improved or the benchmark callback passed validation. Use root acceptance
+  logs and incumbent CSVs for those outcomes.
+- Existing FP projection/rounding/exit, queue, regular-worker handoff, GPU
+  ownership, and CPU pool summaries remain enabled. Ownership is wall time,
+  not measured SM utilization; pool-slot availability is not CPU-thread idleness.
+
+Report each repetition and the pooled canonical PI against all four historical
+baseline repetitions. Freeze the stable-instance screen from the baseline.
+Also report final feasibility, objective/gap, and proven-optimal counts per run,
+instances optimal in both current runs, and per-instance optimal frequencies
+(0/2, 1/2, 2/2 versus 0/4 through 4/4). Use the final CSV's `is_optimal` flag;
+reaching the reference objective alone is not an optimality proof. The final CSV
+schema already includes this flag and is unchanged.
+
+Saved-job capture remains opt-in for separate replay collection. The existing
+directory mode captures one job per source, so it is not yet a representative
+neighborhood collection. Keep it disabled for this scored benchmark.
+
+## Previous checkpoints
+
 The two follow-up checkpoints compare these policies:
 
 | Policy | `9f0b8625` | Current checkpoint |

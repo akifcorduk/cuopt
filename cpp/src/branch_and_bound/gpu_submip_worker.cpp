@@ -240,7 +240,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     "GpuSubmipEffectiveConfig mode=%s lifetime=%s fp_config=%s max_projections=%d "
     "max_descents=%d seconds=%.6f alpha=%.6f pdlp_seconds=%.6f rounding_seconds=%.6f "
     "propagation_seconds=%.6f initial_rounding=%d select_warm_start=%d "
-    "unproductive_seconds=%.6f regular_gpu_seconds=%.6f min_improve=%.9g",
+    "unproductive_seconds=%.6f regular_gpu_seconds=%.6f min_improve=%.9g "
+    "fp_enabled=%d cached_primal=%d incumbent_blend=%.9g compact_fixed=%d fused_pdlp=%d",
     options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? "cpufj" : "node",
     options.independent ? "independent" : "paired",
     options.fp_config.name.c_str(),
@@ -255,7 +256,12 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     int(options.select_warm_start),
     options.unproductive_seconds,
     options.regular_gpu_seconds,
-    options.min_improve);
+    options.min_improve,
+    int(options.enable_fp),
+    int(options.cached_primal),
+    options.incumbent_blend,
+    int(options.compact_fixed),
+    int(options.fused_pdlp));
   return options;
 }
 
@@ -649,11 +655,25 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     }
     seed_name = "incumbent_blend";
   }
+  // Count the actual job domains, including inherited CPU sub-MIP fixings. job.fixed
+  // counts only additional GPU-side RINS fixings, which are absent in CPUFJ mode.
+  i_t integer_columns = 0, free_integer_columns = 0, fixed_columns = 0;
+  for (i_t j = 0; j < job.lp.num_cols; ++j) {
+    const bool fixed = job.lp.lower[j] == job.lp.upper[j];
+    fixed_columns += fixed;
+    if (j < static_cast<i_t>(job.var_types.size()) &&
+        job.var_types[j] != simplex::variable_type_t::CONTINUOUS) {
+      ++integer_columns;
+      free_integer_columns += !fixed;
+    }
+  }
   CUOPT_LOG_INFO(
     "GpuSubmipJobStart job=%llu source=%s source_id=%llu tree_node=%d depth=%d "
     "fractional=%d fixed=%d seconds=%.6f session_reused=%d strategy=%d cpu_lp_solves=0 "
     "fp_config=%s cutoff=%.17g target_cutoff=%.17g proven_lower_bound=%.17g "
-    "cutoff_basis=%s requested_improvement=%.9g",
+    "cutoff_basis=%s requested_improvement=%.9g "
+    "rows=%d columns=%d nnz=%zu integer_columns=%d free_integer=%d fixed_columns=%d "
+    "enqueued_cutoff=%.17g cutoff_refreshed=%d seed=%s",
     (unsigned long long)job.job_id,
     gpu_submip_source_name(job.source),
     (unsigned long long)job.source_id,
@@ -669,7 +689,16 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     double(target),
     double(job.proven_lower_bound),
     improving_cutoff.basis,
-    double(cutoff - target));
+    double(cutoff - target),
+    int(job.lp.num_rows),
+    int(job.lp.num_cols),
+    size_t(job.lp.A.nnz()),
+    int(integer_columns),
+    int(free_integer_columns),
+    int(fixed_columns),
+    double(job.cutoff),
+    int(cutoff < job.cutoff),
+    seed_name);
   std::vector<f_t> candidate;
   const bool found = session->run(job.lp,
                                   seed,
@@ -689,24 +718,34 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     seed_cache->remember(job, std::move(projection), candidate);
   }
   bool valid = found && gpu_submip_candidate_is_valid(job.lp, job.var_types, candidate, settings);
-  f_t objective = std::numeric_limits<f_t>::infinity();
+  const char* rejection_reason = !found ? "fp_not_found" : valid ? "none" : "local_validation";
+  f_t objective                = std::numeric_limits<f_t>::infinity();
   if (valid) {
     objective = simplex::compute_objective(job.lp, candidate);
     valid     = std::isfinite(objective) && objective < cutoff;
+    if (!valid) { rejection_reason = "not_improving_at_start"; }
   }
   std::vector<f_t> user_candidate;
-  if (valid && job.to_user) { valid = job.to_user(candidate, user_candidate); }
+  if (valid && job.to_user) {
+    valid = job.to_user(candidate, user_candidate);
+    if (!valid) { rejection_reason = "postsolve_mapping"; }
+  }
+  f_t publish_cutoff = cutoff;
   if (valid && current_user_cutoff) {
-    valid = objective < simplex::compute_presolved_objective(job.lp, current_user_cutoff());
+    publish_cutoff = simplex::compute_presolved_objective(job.lp, current_user_cutoff());
+    valid          = objective < publish_cutoff;
+    if (!valid) { rejection_reason = "incumbent_advanced"; }
   }
   if (valid && !(halt && halt->load()) && tic() < job.deadline && publish) {
     publish(job.to_user ? user_candidate : candidate, objective);
   } else {
+    if (valid) { rejection_reason = "publication_unavailable"; }
     valid = false;
   }
   CUOPT_LOG_INFO(
     "GpuSubmipJobEnd job=%llu source=%s seconds=%.6f setup_seconds=%.6f "
-    "fp_found=%d valid=%d tree_node=%d depth=%d fractional=%d cpu_lp_solves=0",
+    "fp_found=%d valid=%d tree_node=%d depth=%d fractional=%d cpu_lp_solves=0 "
+    "rejection_reason=%s candidate_objective=%.17g publish_cutoff=%.17g",
     (unsigned long long)job.job_id,
     gpu_submip_source_name(job.source),
     toc(started),
@@ -715,7 +754,10 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     int(valid),
     job.tree_node,
     job.depth,
-    job.fractional);
+    job.fractional,
+    rejection_reason,
+    double(objective),
+    double(publish_cutoff));
   return valid;
 }
 
