@@ -27,6 +27,7 @@ unset CUOPT_GPU_SUBMIP_SECONDS CUOPT_GPU_SUBMIP_FP_CONFIG
 unset CUOPT_GPU_SUBMIP_INITIAL_ROUNDING CUOPT_GPU_SUBMIP_SELECT_WARM_START
 unset CUOPT_GPU_SUBMIP_CACHED_PRIMAL CUOPT_GPU_SUBMIP_INCUMBENT_BLEND
 unset CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS CUOPT_GPU_SUBMIP_REGULAR_SECONDS
+unset CUOPT_GPU_SUBMIP_PENDING_MAX_AGE
 unset CUOPT_GPU_SUBMIP_MIN_IMPROVE CUOPT_GPU_SUBMIP_DISABLE_FP
 unset CUOPT_GPU_SUBMIP_COMPACT CUOPT_GPU_SUBMIP_FUSED_PDLP
 unset CUOPT_GPU_SUBMIP_JOB_SNAPSHOT CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_DIR
@@ -79,6 +80,27 @@ Saved-job capture remains opt-in for separate replay collection. Keep it disable
 for this scored benchmark; collection writes can change timing and interleaving.
 
 ## Previous checkpoints
+
+### Optional pending-neighborhood refresh experiment
+
+`CUOPT_GPU_SUBMIP_PENDING_MAX_AGE=15` allows an incoming CPUFJ neighborhood to
+replace the pending GPU job once that pending job has waited at least 15 seconds.
+The default is 0, which preserves the current admission policy. This option
+applies only to independent CPUFJ mode. An active GPU job is never replaced, and
+an old pending job is retained when no newer eligible job arrives. CPU workers,
+FP, starting points, cutoff rules, and effort limits remain unchanged.
+
+The pending capacity stays one. Producers reserve without waiting; only one
+producer can construct a replacement at a time, and the displaced model is
+destroyed outside the queue lock. `GpuSubmipPendingReplacement` logs the old job's
+age and incoming source. `GpuSubmipQueueSummary.replaced_pending` counts these
+replacements, which are included in `unexecuted`. The effective config logs
+`pending_max_age`; repetition IDs still repeat one policy.
+
+This is an experimental selection policy, not an established performance win.
+Historical queue-age/productivity correlations motivate it but do not show how
+the unseen replacement neighborhoods would perform. Use two repetitions with
+the same age setting and compare against the unchanged current policy.
 
 The two follow-up checkpoints compare these policies:
 

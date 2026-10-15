@@ -42,6 +42,7 @@ struct gpu_submip_options_t {
   bool select_warm_start{false};
   double unproductive_seconds{0.};  // Zero keeps uninterrupted sub-MIP ownership.
   double regular_gpu_seconds{5.};
+  double pending_max_age{0.};  // Zero preserves the existing pending-job admission policy.
   double min_improve{0.};  // Fraction of the valid objective gap; zero retains strict cutoff only.
   bool enable_fp{true};
   bool compact_fixed{true};

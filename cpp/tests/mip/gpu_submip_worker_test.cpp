@@ -49,7 +49,7 @@ class GpuSubmipFpConfig : public ::testing::Test {
     }
   }
 
-  static constexpr std::array<const char*, 14> keys{"CUOPT_CONFIG_ID",
+  static constexpr std::array<const char*, 15> keys{"CUOPT_CONFIG_ID",
                                                     "CUOPT_MAX_CONFIG",
                                                     "CUOPT_GPU_SUBMIP_CONFIG_FAMILY",
                                                     "CUOPT_GPU_SUBMIP_FP_CONFIG",
@@ -62,7 +62,8 @@ class GpuSubmipFpConfig : public ::testing::Test {
                                                     "CUOPT_GPU_SUBMIP_SELECT_WARM_START",
                                                     "CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS",
                                                     "CUOPT_GPU_SUBMIP_REGULAR_SECONDS",
-                                                    "CUOPT_GPU_SUBMIP_MIN_IMPROVE"};
+                                                    "CUOPT_GPU_SUBMIP_MIN_IMPROVE",
+                                                    "CUOPT_GPU_SUBMIP_PENDING_MAX_AGE"};
   std::array<std::optional<std::string>, keys.size()> saved;
 };
 
@@ -106,6 +107,7 @@ TEST_F(GpuSubmipFpConfig, CheckpointRepeatsSingleDescentAndAllowsPolicyOverrides
     EXPECT_EQ(options.unproductive_seconds, 15.);
     EXPECT_EQ(options.regular_gpu_seconds, 5.);
     EXPECT_EQ(options.min_improve, 0.);
+    EXPECT_EQ(options.pending_max_age, 0.);
   }
   setenv("CUOPT_GPU_SUBMIP_INITIAL_ROUNDING", "1", 1);
   EXPECT_TRUE(gpu_submip_options_from_environment().fp_config.initial_rounding);
@@ -267,6 +269,17 @@ TEST_F(GpuSubmipFpConfig, RejectsUnknownFamiliesAndInvalidEffortTimes)
   }
 }
 
+TEST_F(GpuSubmipFpConfig, PendingAgeIsOptInAndValidated)
+{
+  EXPECT_EQ(gpu_submip_options_from_environment().pending_max_age, 0.);
+  setenv("CUOPT_GPU_SUBMIP_PENDING_MAX_AGE", "15", 1);
+  EXPECT_EQ(gpu_submip_options_from_environment().pending_max_age, 15.);
+  for (const char* value : {"-1", "nan", "inf", "bad"}) {
+    setenv("CUOPT_GPU_SUBMIP_PENDING_MAX_AGE", value, 1);
+    EXPECT_THROW(gpu_submip_options_from_environment(), std::invalid_argument);
+  }
+}
+
 TEST(GpuSubmipCollection, StratifiesBySolveTimeAndFreeIntegerCount)
 {
   const auto source = gpu_submip_source_t::CPU_SUBMIP;
@@ -314,6 +327,36 @@ TEST(GpuSubmipQueue, IndependentAdmissionBoundsCopiesAndDoesNotCancelPoppedJob)
   EXPECT_EQ(*queue.pop_for(0ms), 2);
   queue.close();
   EXPECT_EQ(*active, 1);
+}
+
+TEST(GpuSubmipQueue, ConditionalReplacementPreservesYoungAndActiveJobs)
+{
+  struct timed_job_t {
+    int id;
+    double enqueued_at;
+  };
+  gpu_submip_queue_t<timed_job_t> queue(1);
+  ASSERT_TRUE(queue.try_reserve(false).publish(std::make_unique<timed_job_t>(1, 0.)));
+  auto active = queue.pop_for(0ms);
+  ASSERT_TRUE(queue.try_reserve(false).publish(std::make_unique<timed_job_t>(2, 10.)));
+  double now       = 24.;
+  const auto stale = [&now](const timed_job_t& job) { return now - job.enqueued_at >= 15.; };
+  bool replaced    = true;
+  EXPECT_FALSE(queue.try_reserve_if(stale, &replaced));
+  EXPECT_FALSE(replaced);
+  now              = 25.;
+  auto reservation = queue.try_reserve_if(stale, &replaced);
+  ASSERT_TRUE(reservation);
+  EXPECT_TRUE(replaced);
+  EXPECT_EQ(active->id, 1);
+  // An in-flight construction cannot be evicted by a newer producer.
+  EXPECT_FALSE(queue.try_reserve_if(stale, &replaced));
+  EXPECT_FALSE(replaced);
+  ASSERT_TRUE(reservation.publish(std::make_unique<timed_job_t>(3, now)));
+  EXPECT_EQ(queue.pop_for(0ms)->id, 3);
+  EXPECT_FALSE(queue.pop_for(0ms));
+  queue.close();
+  EXPECT_EQ(active->id, 1);
 }
 
 TEST(GpuSubmipQueue, ReservationsBoundConstructionAndReleaseUnusedSlots)

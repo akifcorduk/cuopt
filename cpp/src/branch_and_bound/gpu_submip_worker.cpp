@@ -253,6 +253,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     "CUOPT_GPU_SUBMIP_UNPRODUCTIVE_SECONDS", options.unproductive_seconds, 0, 86400);
   options.regular_gpu_seconds =
     experiment_option("CUOPT_GPU_SUBMIP_REGULAR_SECONDS", options.regular_gpu_seconds, 0.01, 60);
+  options.pending_max_age =
+    experiment_option("CUOPT_GPU_SUBMIP_PENDING_MAX_AGE", options.pending_max_age, 0, 86400);
   options.min_improve =
     experiment_option("CUOPT_GPU_SUBMIP_MIN_IMPROVE", options.min_improve, 0, 1);
   options.enable_fp       = experiment_option("CUOPT_GPU_SUBMIP_DISABLE_FP", 0, 0, 1) == 0;
@@ -264,7 +266,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     "max_descents=%d seconds=%.6f alpha=%.6f pdlp_seconds=%.6f rounding_seconds=%.6f "
     "propagation_seconds=%.6f initial_rounding=%d select_warm_start=%d "
     "unproductive_seconds=%.6f regular_gpu_seconds=%.6f min_improve=%.9g "
-    "fp_enabled=%d cached_primal=%d incumbent_blend=%.9g compact_fixed=%d fused_pdlp=%d",
+    "fp_enabled=%d cached_primal=%d incumbent_blend=%.9g compact_fixed=%d fused_pdlp=%d "
+    "pending_max_age=%.6f",
     options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? "cpufj" : "node",
     options.independent ? "independent" : "paired",
     options.fp_config.name.c_str(),
@@ -284,7 +287,8 @@ gpu_submip_options_t gpu_submip_options_from_environment()
     int(options.cached_primal),
     options.incumbent_blend,
     int(options.compact_fixed),
-    int(options.fused_pdlp));
+    int(options.fused_pdlp),
+    options.pending_max_age);
   return options;
 }
 

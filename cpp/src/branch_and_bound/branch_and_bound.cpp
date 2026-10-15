@@ -2442,7 +2442,32 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
     // Leave the regular GPU worker running until an improving cutoff is available.
     if (!std::isfinite(upper_bound_.load())) { return {}; }
     stats.eligible.fetch_add(1, std::memory_order_relaxed);
-    reservation = shared->queue.try_reserve(false);
+    if (shared->options.pending_max_age > 0) {
+      const double now       = tic();
+      bool replaced          = false;
+      uint64_t replaced_job  = 0;
+      double replaced_age    = 0.;
+      const auto replace_old = [&](const auto& pending) {
+        if (now - pending.enqueued_at < shared->options.pending_max_age) { return false; }
+        replaced_job = pending.job_id;
+        replaced_age = now - pending.enqueued_at;
+        return true;
+      };
+      reservation = shared->queue.try_reserve_if(replace_old, &replaced);
+      if (replaced) {
+        stats.replaced_pending.fetch_add(1, std::memory_order_relaxed);
+        CUOPT_LOG_INFO(
+          "GpuSubmipPendingReplacement job=%llu age_seconds=%.6f incoming_source_id=%llu "
+          "incoming_strategy=%d elapsed=%.6f",
+          (unsigned long long)replaced_job,
+          replaced_age,
+          (unsigned long long)gpu_submip_source_id_,
+          static_cast<int>(strategy),
+          now - shared->root_start);
+      }
+    } else {
+      reservation = shared->queue.try_reserve(false);
+    }
     if (!reservation) {
       stats.enqueue_failed.fetch_add(1, std::memory_order_relaxed);
       return {};
@@ -5578,7 +5603,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       // Valid counts audited publication attempts; global acceptance is logged separately.
       CUOPT_LOG_INFO(
         "GpuSubmipQueueSummary source=%s callbacks=%llu eligible=%llu selected=%llu "
-        "enqueued=%llu enqueue_failed=%llu dequeued=%llu valid=%llu unexecuted=%llu",
+        "enqueued=%llu enqueue_failed=%llu dequeued=%llu valid=%llu unexecuted=%llu "
+        "replaced_pending=%llu",
         gpu_submip_source_name(static_cast<gpu_submip_source_t>(source)),
         (unsigned long long)stats.callbacks.load(),
         (unsigned long long)stats.eligible.load(),
@@ -5587,7 +5613,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         (unsigned long long)stats.enqueue_failed.load(),
         (unsigned long long)dequeued,
         (unsigned long long)stats.valid.load(),
-        (unsigned long long)(enqueued - dequeued));
+        (unsigned long long)(enqueued - dequeued),
+        (unsigned long long)stats.replaced_pending.load());
     }
   }
   if (gpu_submip_exception_) { std::rethrow_exception(gpu_submip_exception_); }

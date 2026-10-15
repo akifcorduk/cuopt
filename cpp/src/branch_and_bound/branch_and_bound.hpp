@@ -342,6 +342,7 @@ class branch_and_bound_t {
       std::atomic<uint64_t> selected{0};
       std::atomic<uint64_t> enqueued{0};
       std::atomic<uint64_t> enqueue_failed{0};
+      std::atomic<uint64_t> replaced_pending{0};
       std::atomic<uint64_t> dequeued{0};
       std::atomic<uint64_t> valid{0};
     };

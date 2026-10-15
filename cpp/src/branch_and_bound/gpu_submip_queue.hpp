@@ -77,13 +77,23 @@ class gpu_submip_queue_t {
 
   reservation_t try_reserve(bool replace_pending = true)
   {
+    return try_reserve_if([replace_pending](const Job&) { return replace_pending; });
+  }
+
+  // The predicate inspects only pending work under the metadata lock. It must be
+  // cheap and must not reenter the queue. Popped jobs are never replaced.
+  template <typename Predicate>
+  reservation_t try_reserve_if(Predicate replace_pending, bool* did_replace = nullptr)
+  {
+    if (did_replace) { *did_replace = false; }
     std::unique_lock lock(state_->mutex, std::try_to_lock);
     if (!lock.owns_lock() || state_->closed) { return {}; }
     std::unique_ptr<Job> replaced;
     if (state_->reserved + state_->pending.size() == state_->capacity) {
-      if (!replace_pending || state_->pending.empty()) { return {}; }
+      if (state_->pending.empty() || !replace_pending(*state_->pending.front())) { return {}; }
       replaced = std::move(state_->pending.front());
       state_->pending.pop_front();
+      if (did_replace) { *did_replace = true; }
     }
     ++state_->reserved;
     lock.unlock();
