@@ -34,6 +34,21 @@ workers remain independent, and every handoff drains the GPU stream first.
 initial regular turn can be set with that variable and
 `CUOPT_GPU_SUBMIP_REGULAR_SECONDS`. `GpuSubmipRegularTurn` logs actual handoffs.
 
+The handoff overhead checkpoint retains initial rounding, automatic warm-start
+selection, and the same 15 s stall threshold with 5/10/20 s regular-worker turns.
+Initial-incumbent polishing LPs and regular propagation now honor a pending
+handoff request. Imports yield between candidates after validating the polished
+point or falling back to the supplied incumbent. GPU ownership still transfers
+only after all streams drain.
+
+`GpuSubmipHandoff` INFO events separate request-to-`safe_point` response,
+`safe_point`-to-`drain_begin` queued-incumbent ingestion, and
+`drain_begin`-to-`drain_end` CUDA drain time. `GpuSubmipInitialPolish` records
+per-candidate polishing duration and whether a handoff was requested at exit.
+These wall times measure ownership and response latency; they do not measure
+GPU utilization or CPU thread idleness. No FP effort limit or search policy
+changes in this checkpoint.
+
 Use the existing benchmark exports at each checkpoint, with numeric suffixes
 representing repetitions:
 

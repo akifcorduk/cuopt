@@ -70,9 +70,11 @@ class mip_gpu_handoff_t {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (finished_ || demand_ == 0) { return; }
+      notify("drain_begin");
     }
     drain();
     std::unique_lock<std::mutex> lock(mutex_);
+    notify("drain_end");
     if (finished_ || demand_ == 0) { return; }
     parked_ = true;
     publish_ready();
@@ -92,6 +94,7 @@ class mip_gpu_handoff_t {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     regular_finished_ = true;
+    notify("regular_finished");
     if (demand_ != 0 && !finished_) { publish_ready(); }
     state_cv_.notify_all();
   }
@@ -134,6 +137,14 @@ class mip_gpu_handoff_t {
   bool ready() const { return ready_.load(std::memory_order_acquire); }
   bool requested() const { return requested_.load(std::memory_order_acquire) != 0; }
   std::atomic<int>* halt_flag() { return &requested_; }
+
+  // Called before flushing queued incumbents. Separate that work from the CUDA drain
+  // so a delayed handoff can be attributed without adding a synchronization point.
+  void observe_safe_point()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!finished_ && demand_ != 0) { notify("safe_point"); }
+  }
 
  private:
   void notify(const char* phase) noexcept

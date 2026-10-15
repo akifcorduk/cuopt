@@ -114,9 +114,13 @@ TEST(MipGpuHandoff, ANewBurstAfterResumeRequiresAnotherDrain)
   }
   const std::vector<event_t> expected{{"tree", 0, 0},
                                       {"request", 1, 1},
+                                      {"drain_begin", 1, 1},
+                                      {"drain_end", 1, 1},
                                       {"ready", 1, 1},
                                       {"resume", 1, 0},
                                       {"request", 2, 1},
+                                      {"drain_begin", 2, 1},
+                                      {"drain_end", 2, 1},
                                       {"ready", 2, 1},
                                       {"resume", 2, 0}};
   EXPECT_EQ(events, expected);
@@ -145,6 +149,32 @@ TEST(MipGpuHandoff, ConsecutiveDemandAroundWakeNeverUsesStaleReadiness)
   regular.get();
   EXPECT_EQ(overlap.load(), 0);
   EXPECT_EQ(handoff.halt_flag()->load(), 0);
+}
+
+TEST(MipGpuHandoff, SafePointObservationDoesNotGrantOwnership)
+{
+  mip_gpu_handoff_t handoff;
+  std::vector<event_t> events;
+  handoff.set_observer([&](const char* phase, uint64_t generation, uint64_t demand) {
+    events.emplace_back(phase, generation, demand);
+  });
+  handoff.enable();
+  handoff.observe_safe_point();  // No pending request: no event.
+  ASSERT_TRUE(handoff.acquire());
+  handoff.observe_safe_point();
+  EXPECT_FALSE(handoff.ready());
+  handoff.regular_finished();
+  EXPECT_TRUE(handoff.ready());
+  handoff.release();
+  handoff.finish();
+  handoff.observe_safe_point();  // Cancellation must not look like a new handoff.
+  const std::vector<event_t> expected{{"tree", 0, 0},
+                                      {"request", 1, 1},
+                                      {"safe_point", 1, 1},
+                                      {"regular_finished", 1, 1},
+                                      {"ready", 1, 1},
+                                      {"finished", 1, 0}};
+  EXPECT_EQ(events, expected);
 }
 
 TEST(MipGpuHandoff, FinishedRegularWorkerStillWaitsForActualDemand)

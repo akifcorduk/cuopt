@@ -317,8 +317,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     context.gpu_handoff_host_solution = [&](const std::vector<f_t>& assignment, bool accepted) {
       return publish_handoff_host_solution(context, gpu_handoff, assignment, accepted);
     };
-    dm.ls.fp.concurrent_halt = gpu_handoff.halt_flag();
-    dm.ls.fj.concurrent_halt = gpu_handoff.halt_flag();
+    dm.ls.fp.concurrent_halt              = gpu_handoff.halt_flag();
+    dm.ls.fj.concurrent_halt              = gpu_handoff.halt_flag();
+    dm.ls.constraint_prop.concurrent_halt = gpu_handoff.halt_flag();
   } else if (gpu_submip_enabled) {
     context.gpu_partition_safe_point = [&]() { dm.update_gpu_partition(gpu_partition); };
   }
