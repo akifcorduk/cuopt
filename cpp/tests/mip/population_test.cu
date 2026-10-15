@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <tuple>
@@ -99,6 +100,36 @@ class origin_callback_t : public cuopt::internals::get_solution_callback_with_da
 };
 
 }  // namespace
+
+TEST(Population, InitialIncumbentImportsYieldAndObserveCancellationBetweenCandidates)
+{
+  raft::handle_t handle;
+  opt::optimization_problem_t<int, double> op(&handle);
+  init_population_test_problem(op);
+  opt::mip_solver_settings_t<int, double> settings;
+  const std::vector<double> assignment{0, 0};
+  for (int i = 0; i < 2; ++i) {
+    settings.initial_solutions.emplace_back(std::make_shared<rmm::device_uvector<double>>(
+      cuopt::device_copy(assignment, handle.get_stream())));
+  }
+  mip::problem_t<int, double> problem(op, settings.get_tolerances());
+  problem.preprocess_problem();
+  mip::mip_solver_context_t<int, double> context(&handle, &problem, settings);
+  mip::diversity_manager_t<int, double> dm(context);
+  dm.timer = cuopt::timer_t(30.);
+  dm.population.initialize_population();
+  dm.population.allocate_solutions();
+  int safe_points                  = 0;
+  context.gpu_partition_safe_point = [&]() {
+    if (++safe_points == 2) { context.preempt_heuristic_solver_ = true; }
+  };
+  std::vector<mip::solution_t<int, double>> imported;
+  dm.add_user_given_solutions(imported);
+  EXPECT_EQ(safe_points, 2);
+  ASSERT_EQ(imported.size(), 1);
+  EXPECT_TRUE(imported.front().compute_feasibility());
+  EXPECT_EQ(imported.front().get_host_assignment(), assignment);
+}
 
 TEST(Population, ExplicitLnsOriginSurvivesPublicationAndQueueDrain)
 {

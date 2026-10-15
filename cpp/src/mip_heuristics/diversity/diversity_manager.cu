@@ -239,11 +239,28 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
       lp_settings.tolerance             = problem_ptr->tolerances.absolute_tolerance;
       lp_settings.save_state            = false;
       lp_settings.return_first_feasible = true;
+      // Initial incumbents can each spend 60 seconds in polishing. They must honor
+      // the same cooperative handoff request as the regular worker's FP projections.
+      lp_settings.concurrent_halt = ls.fp.concurrent_halt;
+      const double polish_start   = timer.elapsed_time();
+      if (lp_settings.concurrent_halt) {
+        CUOPT_LOG_INFO(
+          "GpuSubmipInitialPolish phase=begin candidate=%zu elapsed=%.6f", sol_idx, polish_start);
+      }
       run_lp_with_vars_fixed(*problem_ptr,
                              sol,
                              problem_ptr->integer_indices,
                              lp_settings,
                              static_cast<bound_presolve_t<i_t, f_t>*>(nullptr));
+      if (lp_settings.concurrent_halt) {
+        CUOPT_LOG_INFO(
+          "GpuSubmipInitialPolish phase=end candidate=%zu elapsed=%.6f seconds=%.6f "
+          "handoff_requested=%d",
+          sol_idx,
+          timer.elapsed_time(),
+          timer.elapsed_time() - polish_start,
+          lp_settings.concurrent_halt->load(std::memory_order_acquire));
+      }
       bool is_feasible = sol.compute_feasibility();
       if (!is_feasible) {
         raft::copy(sol.assignment.data(),
@@ -268,14 +285,22 @@ void diversity_manager_t<i_t, f_t>::add_user_given_solutions(
         init_sol_assignment.size());
     }
   };
-  const auto stream = problem_ptr->handle_ptr->get_stream();
+  const auto ready_for_import = [&]() {
+    // Yield between complete imports, before allocating the next candidate. A cancelled
+    // polishing LP still validates/falls back to the supplied incumbent above.
+    if (context.gpu_partition_safe_point) { context.gpu_partition_safe_point(); }
+    return !context.preempt_heuristic_solver_.load() && !timer.check_time_limit();
+  };
   for (size_t sol_idx = 0; sol_idx < context.settings.initial_solutions.size(); ++sol_idx) {
-    if (timer.check_time_limit()) { return; }
+    if (!ready_for_import()) { return; }
     add_original_space_solution(
-      rmm::device_uvector<f_t>(*context.settings.initial_solutions[sol_idx], stream), sol_idx);
+      rmm::device_uvector<f_t>(*context.settings.initial_solutions[sol_idx],
+                               problem_ptr->handle_ptr->get_stream()),
+      sol_idx);
   }
-  if (context.initial_incumbent_from_papilo_model && !timer.check_time_limit()) {
-    add_original_space_solution(cuopt::device_copy(context.initial_incumbent_assignment, stream),
+  if (context.initial_incumbent_from_papilo_model && ready_for_import()) {
+    add_original_space_solution(cuopt::device_copy(context.initial_incumbent_assignment,
+                                                   problem_ptr->handle_ptr->get_stream()),
                                 context.settings.initial_solutions.size());
   }
 }
@@ -475,6 +500,7 @@ template <typename i_t, typename f_t>
 void diversity_manager_t<i_t, f_t>::park_gpu_handoff(cuopt::mip_gpu_handoff_t& handoff)
 {
   if (!handoff.requested()) { return; }
+  handoff.observe_safe_point();
   // Publish candidates queued before the host-only CPUFJ delivery path became active.
   population.add_external_solutions_to_population();
   // FJ has auxiliary streams, so draining only the main RAFT stream is insufficient.

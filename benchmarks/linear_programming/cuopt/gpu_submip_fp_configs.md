@@ -5,7 +5,7 @@ config 0 policy (one independent distance-FP descent, unlimited projections,
 60 s wall cap). IDs no longer select the old effort variants unless the family
 is explicitly set to `effort`. The solver seed is unchanged by the ID.
 
-The current checkpoint (`single_descent_schedule_only`) isolates scheduling with
+The current checkpoint (`single_descent_handoff_fix`) isolates scheduling with
 the original CPUFJ seed and nearest-rounding policy. Initial propagation rounding
 and automatic warm-start selection are disabled; the stronger cutoff is also
 disabled (`min_improve=0`). The crash fix and distance-only FP remain enabled.
@@ -13,9 +13,17 @@ disabled (`min_improve=0`). The crash fix and distance-only FP remain enabled.
 ## Current two-repetition benchmark
 
 Run the current policy twice against the four historical original runs. This
-checkpoint adds host-side INFO diagnostics; FP, starting-point selection, seed,
-neighborhood generation, CPU workers, effort limits, and scheduling are unchanged.
-No additional GPU synchronization or snapshot writes are enabled.
+checkpoint fixes cooperative GPU handoff during initial-incumbent import: its
+polishing LP observes the handoff flag, imports yield between candidates, and
+regular propagation rounding receives the existing cancellation flag. Validation
+and fallback to the supplied incumbent are preserved. FP, starting-point
+selection, seed, neighborhood generation, CPU workers, and effort limits are
+unchanged. No additional GPU synchronization or snapshot writes are enabled.
+
+This is the shared control for the pending-refresh and longer-regular-turn
+experiments. Its pending maximum age is 0 (refresh disabled), and regular turns
+start at 5 s and back off to 10/20 s. Each experiment changes one policy from
+this control; use the effective config to verify the defaults.
 
 Set `n_iters=2` in the existing benchmark launcher. Inside its repetition loop
 (`repetition_id=0`, then `1`), use:
@@ -42,14 +50,24 @@ export CUOPT_MAX_CONFIG="$n_iters"
 
 Keep the usual 600-second solve limit, hardware class, thread count, logging, and
 incumbent CSV collection. Both IDs must log `preset_id=0`, `family=checkpoint`,
-and `profile=single_descent_schedule_only`. Their `GpuSubmipEffectiveConfig` lines
+and `profile=single_descent_handoff_fix`. Their `GpuSubmipEffectiveConfig` lines
 must match: independent CPUFJ mode, distance FP, one descent, no projection-count
 cap, 60 s per job, PDLP/rounding/propagation caps 1/0.5/0.7 s, initial rounding and
 automatic warm-start selection off, 15 s stall threshold, initial 5 s regular
-turn, strict cutoff, and FP enabled. IDs do not change the solver's seed.
+turn, pending refresh disabled, strict cutoff, and FP enabled. IDs do not change
+the solver's seed.
 
 All solver diagnostics use `CUOPT_LOG_INFO` in the existing log:
 
+- `GpuSubmipHandoff` now distinguishes `request`, `safe_point` (before queued
+  incumbent ingestion), `drain_begin`, `drain_end`, and `ready`. Request to safe
+  point measures cooperative response latency; safe point to drain begin
+  includes population ingestion; drain begin to end measures the existing
+  device drain. `regular_finished` records the final drained worker return.
+  Join by generation and retain cancellation events when diagnosing incomplete
+  handoffs. These intervals are host wall times, not GPU utilization.
+- `GpuSubmipInitialPolish` records each imported candidate's LP start/end,
+  elapsed time, and whether a handoff was requested at return.
 - `GpuSubmipIndependentEnqueue`, `GpuSubmipIndependentStart`, and
   `GpuSubmipJobStart` join by job ID. They identify parent source, strategy,
   elapsed solve time, queue-to-execution delay, dimensions, free integer count,
