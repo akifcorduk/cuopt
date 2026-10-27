@@ -118,7 +118,7 @@ struct simplex_solver_settings_t {
       mip_batch_pdlp_strong_branching(0),
       mip_batch_pdlp_reliability_branching(0),
       strong_branching_simplex_iteration_limit(-1),
-      strong_branching_bounds(0),
+      strong_branching_bounds(2),
       random_seed(0),
       bnb_steal_chance(-1),
       bnb_nodes_per_steal(-1),

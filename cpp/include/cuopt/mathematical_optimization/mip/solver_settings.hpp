@@ -147,7 +147,7 @@ class mip_solver_settings_t {
   i_t mip_batch_pdlp_reliability_branching{
     0};  // 0 = DS only, 1 = cooperative DS + PDLP, 2 = batch PDLP only
   i_t strong_branching_simplex_iteration_limit = -1;
-  i_t strong_branching_bounds = 0;  // 0 = off, 1 = global lower bound, 2 = bound + fixings
+  i_t strong_branching_bounds = 2;  // 0 = off, 1 = global lower bound, 2 = bound + fixings
   i_t num_gpus                = 1;
   method_t method{method_t::Concurrent};
   i_t large_nnz_threshold{50'000'000};
