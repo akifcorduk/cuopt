@@ -128,6 +128,7 @@ struct simplex_solver_settings_t {
       inside_root_node(0),
       solution_callback(nullptr),
       heuristic_preemption_callback(nullptr),
+      heuristic_pause_callback(nullptr),
       dual_simplex_objective_callback(nullptr),
       concurrent_halt(nullptr)
   {
@@ -277,6 +278,7 @@ struct simplex_solver_settings_t {
 
   std::function<void(std::vector<f_t>&, f_t)> solution_callback;
   std::function<void()> heuristic_preemption_callback;
+  std::function<void(bool)> heuristic_pause_callback;
   std::function<void(std::vector<f_t>&, std::vector<f_t>&, f_t)> set_simplex_solution_callback;
   std::function<void(f_t)> dual_simplex_objective_callback;  // Called with current dual obj
   mutable logger_t log;
