@@ -431,6 +431,7 @@ void diversity_manager_t<i_t, f_t>::generate_quick_feasible_solution()
 template <typename i_t, typename f_t>
 bool diversity_manager_t<i_t, f_t>::check_b_b_preemption()
 {
+  context.wait_while_gpu_heuristics_paused();
   if (context.preempt_heuristic_solver_.load()) {
     if (population.current_size() == 0) { population.allocate_solutions(); }
     population.add_external_solutions_to_population();

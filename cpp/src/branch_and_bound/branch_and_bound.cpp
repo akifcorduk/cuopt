@@ -2584,6 +2584,7 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   }
 
   submip_settings.heuristic_preemption_callback   = nullptr;
+  submip_settings.heuristic_pause_callback        = nullptr;
   submip_settings.dual_simplex_objective_callback = nullptr;
   submip_settings.set_simplex_solution_callback   = nullptr;
   submip_settings.solution_callback =
