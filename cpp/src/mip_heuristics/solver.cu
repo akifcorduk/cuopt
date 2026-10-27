@@ -427,6 +427,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
                 std::placeholders::_1,
                 std::placeholders::_2,
                 std::placeholders::_3);
+    branch_and_bound_settings.heuristic_pause_callback = [ctx = &context](bool pause) {
+      ctx->pause_gpu_heuristics_.store(pause);
+    };
   }
 
   // Create the branch and bound object

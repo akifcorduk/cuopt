@@ -1178,21 +1178,32 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
   } else {
     if (effective_batch_pdlp != 0) {
 #pragma omp task default(shared) priority(CUOPT_HIGH_TASK_PRIORITY)
-      batch_pdlp_strong_branching_task(settings,
-                                       effective_batch_pdlp,
-                                       start_time,
-                                       concurrent_halt,
-                                       original_lp,
-                                       new_slacks,
-                                       root_solution.x,
-                                       fractional,
-                                       root_obj,
-                                       pc,
-                                       sb_view,
-                                       pdlp_obj_down,
-                                       pdlp_obj_up,
-                                       pdlp_lagrangian_bound,
-                                       pdlp_reported_dual_obj);
+      {
+        const bool pause_heuristics = settings.heuristic_pause_callback != nullptr;
+        f_t pause_start             = tic();
+        if (pause_heuristics) { settings.heuristic_pause_callback(true); }
+        batch_pdlp_strong_branching_task(settings,
+                                         effective_batch_pdlp,
+                                         start_time,
+                                         concurrent_halt,
+                                         original_lp,
+                                         new_slacks,
+                                         root_solution.x,
+                                         fractional,
+                                         root_obj,
+                                         pc,
+                                         sb_view,
+                                         pdlp_obj_down,
+                                         pdlp_obj_up,
+                                         pdlp_lagrangian_bound,
+                                         pdlp_reported_dual_obj);
+        if (pause_heuristics) {
+          settings.heuristic_pause_callback(false);
+          settings.log.printf(
+            "GPU heuristics paused for %.2fs during batch PDLP strong branching\n",
+            toc(pause_start));
+        }
+      }
     }
 
     if (effective_batch_pdlp != 2) {
