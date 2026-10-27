@@ -859,6 +859,7 @@ i_t fj_t<i_t, f_t>::host_loop(solution_t<i_t, f_t>& solution,
   for (steps = 0; steps < std::numeric_limits<i_t>::max(); steps += iterations_per_graph) {
     // to actualize time limit
     handle_ptr->sync_stream();
+    context.wait_while_gpu_heuristics_paused();
     if (timer.check_time_limit() || steps >= settings.iteration_limit ||
         context.preempt_heuristic_solver_.load()) {
       limit_reached = true;
