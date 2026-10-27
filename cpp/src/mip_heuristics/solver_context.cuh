@@ -14,9 +14,11 @@
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
+#include <chrono>
 #include <exception>
 #include <limits>
 #include <memory>
+#include <thread>
 
 #pragma once
 
@@ -64,6 +66,16 @@ struct mip_solver_context_t {
   problem_t<i_t, f_t>* problem_ptr;
   diversity_manager_t<i_t, f_t>* diversity_manager_ptr{nullptr};
   std::atomic<bool> preempt_heuristic_solver_ = false;
+  // Set by B&B while batch PDLP strong branching owns the GPU.
+  std::atomic<bool> pause_gpu_heuristics_ = false;
+
+  void wait_while_gpu_heuristics_paused() const
+  {
+    while (pause_gpu_heuristics_.load() && !preempt_heuristic_solver_.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+
   // Owned by solve_mip and rethrown after its OpenMP team joins. Tasks write it inside
   // omp critical(cuopt_mip_task_exception).
   std::exception_ptr* task_exception{nullptr};
