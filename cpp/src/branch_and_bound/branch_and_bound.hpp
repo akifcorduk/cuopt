@@ -292,6 +292,23 @@ class branch_and_bound_t {
   omp_atomic_t<f_t> lower_bound_numerical_{std::numeric_limits<f_t>::infinity()};
   std::function<void(f_t)> user_bound_callback_;
 
+  // Global lower bound proven by root strong branching. Set once before the tree search starts.
+  f_t strong_branching_lower_bound_{-std::numeric_limits<f_t>::infinity()};
+
+  // Child bounds are only valid for solutions better than the incumbent, hence the clamp.
+  f_t apply_strong_branching_floor(f_t lower_bound) const
+  {
+    return std::max(lower_bound, std::min(strong_branching_lower_bound_, upper_bound_.load()));
+  }
+
+  f_t snap_bound_to_lattice(const simplex::lp_problem_t<i_t, f_t>& lp, f_t bound) const;
+
+  // Returns UNSET when the tree search should proceed.
+  mip_status_t apply_strong_branching_bounds(const strong_branching_bounds_t<i_t, f_t>& sb_bounds,
+                                             std::vector<i_t>& fractional,
+                                             i_t& num_fractional,
+                                             simplex::mip_solution_t<i_t, f_t>& solution);
+
   void print_table_header();
   void report_heuristic(f_t obj, heuristics_origin_t origin);
   void report(const simplex::lp_problem_t<i_t, f_t>& lp,

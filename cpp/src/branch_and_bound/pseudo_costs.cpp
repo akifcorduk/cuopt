@@ -299,12 +299,54 @@ f_t objective_upper_bound(const lp_problem_t<i_t, f_t>& lp, f_t upper_bound, f_t
   return cut_off;
 }
 
+// Lagrangian lower bound b^T y + sum_j min(r_j l_j, r_j u_j) with r = c - A^T y. Valid for any y,
+// so it also certifies children that stopped at the iteration limit or with perturbed costs.
+// y is first projected so that no slack has a reduced cost pointing at an infinite bound.
+template <typename i_t, typename f_t>
+f_t lagrangian_lower_bound(const lp_problem_t<i_t, f_t>& lp,
+                           const simplex_solver_settings_t<i_t, f_t>& settings,
+                           const std::vector<i_t>& new_slacks,
+                           std::vector<f_t> y,
+                           std::vector<f_t>& reduced_cost)
+{
+  for (i_t j : new_slacks) {
+    const i_t p     = lp.A.col_start[j];
+    const i_t i     = lp.A.i[p];
+    const f_t sigma = lp.A.x[p];
+    const f_t r     = lp.objective[j] - sigma * y[i];
+    if ((r < 0 && lp.upper[j] == inf) || (r > 0 && lp.lower[j] == -inf)) {
+      y[i] = lp.objective[j] / sigma;
+    }
+  }
+  reduced_cost = lp.objective;
+  matrix_transpose_vector_multiply(lp.A, -1.0, y, 1.0, reduced_cost);
+  f_t bound     = 0;
+  f_t magnitude = 0;
+  for (i_t i = 0; i < lp.num_rows; ++i) {
+    bound += lp.rhs[i] * y[i];
+    magnitude += std::abs(lp.rhs[i] * y[i]);
+  }
+  for (i_t j = 0; j < lp.num_cols; ++j) {
+    const f_t r = reduced_cost[j];
+    if (r == 0) { continue; }
+    const f_t bound_j = r > 0 ? lp.lower[j] : lp.upper[j];
+    if (std::isinf(bound_j)) {
+      if (std::abs(r) <= settings.zero_tol) { continue; }
+      return -inf;
+    }
+    bound += r * bound_j;
+    magnitude += std::abs(r * bound_j);
+  }
+  return bound - 1e-9 * magnitude;
+}
+
 template <typename i_t, typename f_t>
 void strong_branch_helper(i_t start,
                           i_t end,
                           f_t start_time,
                           const lp_problem_t<i_t, f_t>& original_lp,
                           const simplex_solver_settings_t<i_t, f_t>& settings,
+                          const std::vector<i_t>& new_slacks,
                           const std::vector<variable_type_t>& var_types,
                           const std::vector<i_t>& fractional,
                           const std::vector<f_t>& root_soln,
@@ -319,11 +361,14 @@ void strong_branch_helper(i_t start,
                           std::vector<f_t>& dual_simplex_obj_up,
                           std::vector<dual_status_t>& dual_simplex_status_down,
                           std::vector<dual_status_t>& dual_simplex_status_up,
+                          std::vector<f_t>& dual_simplex_bound_down,
+                          std::vector<f_t>& dual_simplex_bound_up,
                           shared_strong_branching_context_view_t<i_t, f_t>& sb_view,
                           omp_atomic_t<i_t>& num_strong_branches_completed)
 {
   raft::common::nvtx::range scope("BB::strong_branch_helper");
   lp_problem_t child_problem = original_lp;
+  std::vector<f_t> reduced_cost;
 
   constexpr bool verbose = false;
   f_t last_log           = tic();
@@ -396,6 +441,21 @@ void strong_branch_helper(i_t start,
                            j,
                            branch,
                            status);
+      }
+
+      if (settings.strong_branching_bounds != 0) {
+        f_t child_bound = -inf;
+        if (status == dual_status_t::DUAL_UNBOUNDED) {
+          child_bound = inf;
+        } else if (status == dual_status_t::OPTIMAL || status == dual_status_t::ITERATION_LIMIT) {
+          child_bound =
+            lagrangian_lower_bound(child_problem, settings, new_slacks, solution.y, reduced_cost);
+        } else if (status == dual_status_t::CUTOFF) {
+          child_bound = std::max(
+            lagrangian_lower_bound(child_problem, settings, new_slacks, solution.y, reduced_cost),
+            child_settings.cut_off);
+        }
+        (branch == 0 ? dual_simplex_bound_down : dual_simplex_bound_up)[k] = child_bound;
       }
 
       if (branch == 0) {
@@ -722,7 +782,9 @@ static void batch_pdlp_strong_branching_task(
   pseudo_costs_t<i_t, f_t>& pc,
   shared_strong_branching_context_view_t<i_t, f_t>& sb_view,
   std::vector<f_t>& pdlp_obj_down,
-  std::vector<f_t>& pdlp_obj_up)
+  std::vector<f_t>& pdlp_obj_up,
+  std::vector<f_t>& pdlp_lagrangian_bound,
+  std::vector<f_t>& pdlp_reported_dual_obj)
 {
   constexpr bool verbose = false;
 
@@ -837,6 +899,10 @@ static void batch_pdlp_strong_branching_task(
     pdlp_settings.concurrent_halt  = &concurrent_halt;
     pdlp_settings.shared_sb_solved = sb_view.solved;
   }
+  if (settings.strong_branching_bounds != 0) {
+    pdlp_settings.batch_lagrangian_bounds =
+      cuda::std::span<f_t>(pdlp_lagrangian_bound.data(), pdlp_lagrangian_bound.size());
+  }
 
   batch_elapsed_time = toc(start_time);
   const f_t batch_remaining_time =
@@ -888,6 +954,12 @@ static void batch_pdlp_strong_branching_task(
       amount_done,
       fractional.size() * 2,
       max_iterations);
+  }
+
+  for (i_t k = 0; k < 2 * (i_t)fractional.size(); k++) {
+    if (solutions.get_termination_status(k) == pdlp_termination_status_t::Optimal) {
+      pdlp_reported_dual_obj[k] = solutions.get_dual_objective_value(k);
+    }
   }
 
   for (i_t k = 0; k < fractional.size(); k++) {
@@ -1028,13 +1100,17 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                               basis_update_mpf_t<i_t, f_t>& basis_factors,
                               std::vector<f_t>& strong_branch_down,
                               std::vector<f_t>& strong_branch_up,
-                              pseudo_costs_t<i_t, f_t>& pc)
+                              pseudo_costs_t<i_t, f_t>& pc,
+                              strong_branching_bounds_t<i_t, f_t>& sb_bounds)
 {
   raft::common::nvtx::range scope("BB::strong_branching");
 
   pc.resize(original_lp.num_cols);
   strong_branch_down.assign(fractional.size(), std::numeric_limits<f_t>::quiet_NaN());
   strong_branch_up.assign(fractional.size(), std::numeric_limits<f_t>::quiet_NaN());
+  sb_bounds.variables = fractional;
+  sb_bounds.down.assign(fractional.size(), -inf);
+  sb_bounds.up.assign(fractional.size(), -inf);
   omp_atomic_t<i_t> num_strong_branches_completed = 0;
 
   const f_t elapsed_time = toc(start_time);
@@ -1079,6 +1155,11 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
   std::vector<dual_status_t> dual_simplex_status_up(fractional.size(), dual_status_t::UNSET);
   std::vector<f_t> dual_simplex_obj_down(fractional.size(), std::numeric_limits<f_t>::quiet_NaN());
   std::vector<f_t> dual_simplex_obj_up(fractional.size(), std::numeric_limits<f_t>::quiet_NaN());
+  std::vector<f_t> dual_simplex_bound_down(fractional.size(), -inf);
+  std::vector<f_t> dual_simplex_bound_up(fractional.size(), -inf);
+  std::vector<f_t> pdlp_lagrangian_bound(2 * fractional.size(), -inf);
+  std::vector<f_t> pdlp_reported_dual_obj(2 * fractional.size(),
+                                          std::numeric_limits<f_t>::quiet_NaN());
   f_t strong_branching_start_time = tic();
   i_t simplex_iteration_limit     = settings.strong_branching_simplex_iteration_limit;
 
@@ -1109,7 +1190,9 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                                        pc,
                                        sb_view,
                                        pdlp_obj_down,
-                                       pdlp_obj_up);
+                                       pdlp_obj_up,
+                                       pdlp_lagrangian_bound,
+                                       pdlp_reported_dual_obj);
     }
 
     if (effective_batch_pdlp != 2) {
@@ -1135,6 +1218,7 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                              start_time,
                              original_lp,
                              settings,
+                             new_slacks,
                              var_types,
                              fractional,
                              root_solution.x,
@@ -1149,6 +1233,8 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                              dual_simplex_obj_up,
                              dual_simplex_status_down,
                              dual_simplex_status_up,
+                             dual_simplex_bound_down,
+                             dual_simplex_bound_up,
                              sb_view,
                              num_strong_branches_completed);
       }
@@ -1267,6 +1353,42 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
         solved_by_both);
     }
   }
+
+  if (settings.strong_branching_bounds != 0) {
+    const i_t num_candidates = fractional.size();
+    for (i_t k = 0; k < 2 * num_candidates; k++) {
+      const bool is_down = k < num_candidates;
+      const i_t c        = is_down ? k : k - num_candidates;
+      const f_t ds       = is_down ? dual_simplex_bound_down[c] : dual_simplex_bound_up[c];
+      const f_t pdlp     = pdlp_lagrangian_bound[k];
+      (is_down ? sb_bounds.down : sb_bounds.up)[c] = std::max(ds, pdlp);
+      if (ds > -inf) { sb_bounds.num_from_dual_simplex++; }
+      if (pdlp > -inf) { sb_bounds.num_pdlp_finite++; }
+      if (pdlp > ds && pdlp > root_obj) {
+        sb_bounds.num_from_pdlp++;
+        if (ds > -inf) { sb_bounds.num_pdlp_tighter++; }
+        if (ds == -inf) { sb_bounds.num_pdlp_rescued++; }
+      }
+      const dual_status_t ds_status =
+        is_down ? dual_simplex_status_down[c] : dual_simplex_status_up[c];
+      if (ds_status == dual_status_t::OPTIMAL) {
+        const f_t ds_optimal =
+          root_obj + (is_down ? dual_simplex_obj_down[c] : dual_simplex_obj_up[c]);
+        sb_bounds.num_dual_simplex_optimal++;
+        sb_bounds.max_dual_simplex_bound_minus_optimal =
+          std::max(sb_bounds.max_dual_simplex_bound_minus_optimal, ds - ds_optimal);
+        sb_bounds.max_pdlp_bound_minus_optimal =
+          std::max(sb_bounds.max_pdlp_bound_minus_optimal, pdlp - ds_optimal);
+      }
+      if (!std::isnan(pdlp_reported_dual_obj[k])) {
+        sb_bounds.num_pdlp_optimal++;
+        if (pdlp > -inf) {
+          sb_bounds.max_pdlp_reported_minus_lagrangian = std::max(
+            sb_bounds.max_pdlp_reported_minus_lagrangian, pdlp_reported_dual_obj[k] - pdlp);
+        }
+      }
+    }
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -1285,7 +1407,8 @@ void strong_branching(const lp_problem_t<i_t, f_t>& original_lp,
                       const std::vector<i_t>& nonbasic_list,
                       basis_update_mpf_t<i_t, f_t>& basis_factors,
                       mip_symmetry_t<i_t, f_t>* symmetry,
-                      pseudo_costs_t<i_t, f_t>& pc)
+                      pseudo_costs_t<i_t, f_t>& pc,
+                      strong_branching_bounds_t<i_t, f_t>& sb_bounds)
 {
   std::vector<f_t> strong_branch_down;
   std::vector<f_t> strong_branch_up;
@@ -1306,7 +1429,8 @@ void strong_branching(const lp_problem_t<i_t, f_t>& original_lp,
                              basis_factors,
                              strong_branch_down,
                              strong_branch_up,
-                             pc);
+                             pc,
+                             sb_bounds);
     pc.update_pseudo_costs_from_strong_branching(
       fractional, strong_branch_down, strong_branch_up, root_solution.x);
   } else {
@@ -1350,7 +1474,8 @@ void strong_branching(const lp_problem_t<i_t, f_t>& original_lp,
                              basis_factors,
                              strong_branch_down,
                              strong_branch_up,
-                             pc);
+                             pc,
+                             sb_bounds);
 
     // Map strong-branch results from "reduced_fractional" indexing back
     // to per-fractional indexing using each variable's orbit delegate.
@@ -2072,7 +2197,8 @@ template void strong_branching<int, double>(const lp_problem_t<int, double>& ori
                                             const std::vector<int>& nonbasic_list,
                                             basis_update_mpf_t<int, double>& basis_factors,
                                             mip_symmetry_t<int, double>* symmetry,
-                                            pseudo_costs_t<int, double>& pc);
+                                            pseudo_costs_t<int, double>& pc,
+                                            strong_branching_bounds_t<int, double>& sb_bounds);
 
 #endif
 

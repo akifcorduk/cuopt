@@ -385,6 +385,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     context.settings.mip_batch_pdlp_strong_branching;
   branch_and_bound_settings.mip_batch_pdlp_reliability_branching =
     context.settings.mip_batch_pdlp_reliability_branching;
+  branch_and_bound_settings.strong_branching_bounds = context.settings.strong_branching_bounds;
 
   branch_and_bound_settings.strong_branching_simplex_iteration_limit =
     context.settings.strong_branching_simplex_iteration_limit < 0

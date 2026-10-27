@@ -993,6 +993,24 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
   // would index past the end of the active arrays. Read with the active index `i`, write with
   // the original index.
   for (size_t i = 0; i < climber_strategies_.size(); ++i) {
+    const size_t original_index = climber_strategies_[i].original_index;
+    raft::copy(
+      batch_solution_to_return_.get_primal_solution().data() + original_index * primal_size_h_,
+      pdhg_solver_.get_potential_next_primal_solution().data() + i * primal_size_h_,
+      primal_size_h_,
+      stream_view_);
+    raft::copy(batch_solution_to_return_.get_dual_solution().data() + original_index * dual_size_h_,
+               pdhg_solver_.get_potential_next_dual_solution().data() + i * dual_size_h_,
+               dual_size_h_,
+               stream_view_);
+    raft::copy(
+      batch_solution_to_return_.get_reduced_cost().data() + original_index * primal_size_h_,
+      current_termination_strategy_.get_convergence_information().get_reduced_cost().data() +
+        i * primal_size_h_,
+      primal_size_h_,
+      stream_view_);
+  }
+  for (size_t i = 0; i < climber_strategies_.size(); ++i) {
     if (!current_termination_strategy_.is_done(
           current_termination_strategy_.get_termination_status(i), accept_pf)) {
       const auto original_index = climber_strategies_[i].original_index;

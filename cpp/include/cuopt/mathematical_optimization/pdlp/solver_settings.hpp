@@ -382,6 +382,10 @@ class pdlp_solver_settings_t {
   // By default to save memory and speed we don't store and copy each climber's primal and dual
   // solutions We only retrieve termination statistics and the objective values
   bool generate_batch_primal_dual_solution{false};
+  // Splitting path only: when non-empty (size = batch size), receives for each climber a valid
+  // lower bound on its LP objective, computed as the Lagrangian bound of the final dual iterate.
+  // Valid whether or not the climber converged; -inf when no finite bound could be derived.
+  cuda::std::span<f_t> batch_lagrangian_bounds;
   // Used to force batch PDLP to solve a subbatch of the problems at a time
   // The 0 default value will make the solver use its heuristic to determine the subbatch size
   i_t fixed_batch_size{0};

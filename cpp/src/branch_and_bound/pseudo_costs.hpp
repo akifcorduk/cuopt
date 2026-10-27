@@ -88,6 +88,27 @@ struct batch_pdlp_warm_cache_t {
   bool populated{false};
 };
 
+// Valid lower bounds on the LP objective of the down and up children of each strong branching
+// candidate (-inf when unknown, +inf when the child is infeasible).
+template <typename i_t, typename f_t>
+struct strong_branching_bounds_t {
+  std::vector<i_t> variables;
+  std::vector<f_t> down;
+  std::vector<f_t> up;
+
+  i_t num_from_dual_simplex{0};
+  i_t num_from_pdlp{0};
+  i_t num_pdlp_tighter{0};
+  i_t num_pdlp_rescued{0};
+  i_t num_pdlp_finite{0};
+  i_t num_pdlp_optimal{0};
+  f_t max_pdlp_reported_minus_lagrangian{0};
+  // Validity check against children solved to optimality by dual simplex (should be <= ~0)
+  i_t num_dual_simplex_optimal{0};
+  f_t max_dual_simplex_bound_minus_optimal{-std::numeric_limits<f_t>::infinity()};
+  f_t max_pdlp_bound_minus_optimal{-std::numeric_limits<f_t>::infinity()};
+};
+
 template <typename i_t, typename f_t>
 struct pseudo_cost_update_t {
   i_t variable;
@@ -333,6 +354,7 @@ void strong_branching(const simplex::lp_problem_t<i_t, f_t>& original_lp,
                       const std::vector<i_t>& nonbasic_list,
                       simplex::basis_update_mpf_t<i_t, f_t>& basis_factors,
                       mip_symmetry_t<i_t, f_t>* symmetry,
-                      pseudo_costs_t<i_t, f_t>& pc);
+                      pseudo_costs_t<i_t, f_t>& pc,
+                      strong_branching_bounds_t<i_t, f_t>& sb_bounds);
 
 }  // namespace cuopt::mathematical_optimization::mip

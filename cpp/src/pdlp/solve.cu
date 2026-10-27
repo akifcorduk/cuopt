@@ -61,6 +61,7 @@
 #include <rmm/cuda_stream.hpp>
 
 #include <thrust/iterator/counting_iterator.h>
+#include <cub/block/block_reduce.cuh>
 #include <cub/device/device_transform.cuh>
 
 #include <omp.h>
@@ -1416,6 +1417,121 @@ static size_t max_memory_batch_size(const optimization_problem_t<i_t, f_t>& prob
   return memory_max_batch_size;
 }
 
+template <typename f_t>
+__device__ f_t project_dual_to_row_bounds(f_t y, f_t lower, f_t upper)
+{
+  if (y > 0 && lower == -std::numeric_limits<f_t>::infinity()) { return 0; }
+  if (y < 0 && upper == std::numeric_limits<f_t>::infinity()) { return 0; }
+  return y;
+}
+
+// One block per climber. For lb <= Ax <= ub, l <= x <= u and any y, with r = c - A^T y:
+// c^T x >= sum_i min(y_i lb_i, y_i ub_i) + sum_j min(r_j l_j, r_j u_j).
+template <typename i_t, typename f_t, typename f_t2, int block_size>
+__global__ void batch_lagrangian_bound_kernel(const i_t* reverse_offsets,
+                                              const i_t* reverse_constraints,
+                                              const f_t* reverse_coefficients,
+                                              const f_t* objective,
+                                              const f_t2* variable_bounds,
+                                              const f_t* constraint_lower,
+                                              const f_t* constraint_upper,
+                                              const f_t* dual,
+                                              const i_t* branch_var,
+                                              const f_t* branch_lower,
+                                              const f_t* branch_upper,
+                                              i_t n_variables,
+                                              i_t n_constraints,
+                                              f_t* bounds)
+{
+  using block_reduce_t = cub::BlockReduce<f_t, block_size>;
+  __shared__ typename block_reduce_t::TempStorage temp_storage;
+
+  const i_t climber = blockIdx.x;
+  const f_t* y      = dual + (size_t)climber * n_constraints;
+  f_t sum           = 0;
+  f_t magnitude     = 0;
+  for (i_t i = threadIdx.x; i < n_constraints; i += block_size) {
+    const f_t y_i = project_dual_to_row_bounds(y[i], constraint_lower[i], constraint_upper[i]);
+    if (y_i == 0) { continue; }
+    const f_t term = y_i * (y_i > 0 ? constraint_lower[i] : constraint_upper[i]);
+    sum += term;
+    magnitude += abs(term);
+  }
+  for (i_t j = threadIdx.x; j < n_variables; j += block_size) {
+    f_t r = objective[j];
+    for (i_t p = reverse_offsets[j]; p < reverse_offsets[j + 1]; ++p) {
+      const i_t i = reverse_constraints[p];
+      r -= reverse_coefficients[p] *
+           project_dual_to_row_bounds(y[i], constraint_lower[i], constraint_upper[i]);
+    }
+    if (r == 0) { continue; }
+    f_t lower = get_lower(variable_bounds[j]);
+    f_t upper = get_upper(variable_bounds[j]);
+    if (j == branch_var[climber]) {
+      lower = branch_lower[climber];
+      upper = branch_upper[climber];
+    }
+    const f_t bound_j = r > 0 ? lower : upper;
+    if (isinf(bound_j)) {
+      sum = -std::numeric_limits<f_t>::infinity();
+      continue;
+    }
+    sum += r * bound_j;
+    magnitude += abs(r * bound_j);
+  }
+  sum = block_reduce_t(temp_storage).Sum(sum);
+  __syncthreads();
+  magnitude = block_reduce_t(temp_storage).Sum(magnitude);
+  if (threadIdx.x == 0) { bounds[climber] = sum - f_t(1e-9) * magnitude; }
+}
+
+template <typename i_t, typename f_t>
+static void compute_batch_lagrangian_bounds(
+  const mip::problem_t<i_t, f_t>& problem,
+  const rmm::device_uvector<f_t>& dual,
+  const std::vector<std::tuple<i_t, i_t, f_t, f_t>>& new_bounds,
+  cuda::std::span<f_t> bounds)
+{
+  auto stream            = problem.handle_ptr->get_stream();
+  const size_t n_climber = new_bounds.size();
+  cuopt_assert(bounds.size() == n_climber, "One Lagrangian bound per climber");
+  cuopt_assert(dual.size() == n_climber * problem.n_constraints, "Dual size mismatch");
+
+  std::vector<i_t> h_var(n_climber);
+  std::vector<f_t> h_lower(n_climber);
+  std::vector<f_t> h_upper(n_climber);
+  for (size_t c = 0; c < n_climber; ++c) {
+    cuopt_assert(std::get<0>(new_bounds[c]) == (i_t)c, "new_bounds must be sorted by climber");
+    h_var[c]   = std::get<1>(new_bounds[c]);
+    h_lower[c] = std::get<2>(new_bounds[c]);
+    h_upper[c] = std::get<3>(new_bounds[c]);
+  }
+  auto d_var   = cuopt::device_copy(h_var, stream);
+  auto d_lower = cuopt::device_copy(h_lower, stream);
+  auto d_upper = cuopt::device_copy(h_upper, stream);
+  rmm::device_uvector<f_t> d_bounds(n_climber, stream);
+
+  constexpr int block_size = 256;
+  batch_lagrangian_bound_kernel<i_t, f_t, typename type_2<f_t>::type, block_size>
+    <<<n_climber, block_size, 0, stream.get()>>>(problem.reverse_offsets.data(),
+                                                 problem.reverse_constraints.data(),
+                                                 problem.reverse_coefficients.data(),
+                                                 problem.objective_coefficients.data(),
+                                                 problem.variable_bounds.data(),
+                                                 problem.constraint_lower_bounds.data(),
+                                                 problem.constraint_upper_bounds.data(),
+                                                 dual.data(),
+                                                 d_var.data(),
+                                                 d_lower.data(),
+                                                 d_upper.data(),
+                                                 problem.n_variables,
+                                                 problem.n_constraints,
+                                                 d_bounds.data());
+  RAFT_CUDA_TRY(cudaPeekAtLastError());
+  raft::copy(bounds.data(), d_bounds.data(), n_climber, stream);
+  stream.sync();
+}
+
 // Splitting-path helper: strong-branching flow.
 // By default will try to run with the full batch size
 // If the memory is too high, it will use the optimal batch size heuristic and split the batch into
@@ -1510,6 +1626,19 @@ static optimization_problem_solution_t<i_t, f_t> run_batch_pdlp_splitting(
   const auto original_new_bounds                  = batch_settings.new_bounds;
   apply_batch_settings_overrides(settings, batch_settings);
 
+  const bool compute_lagrangian_bounds = !settings.batch_lagrangian_bounds.empty();
+  cuopt_assert(
+    !compute_lagrangian_bounds || settings.batch_lagrangian_bounds.size() == max_batch_size,
+    "One Lagrangian bound per climber");
+  batch_settings.batch_lagrangian_bounds = {};
+  std::optional<mip::problem_t<i_t, f_t>> lagrangian_problem;
+  if (compute_lagrangian_bounds) {
+    lagrangian_problem.emplace(problem,
+                               typename mip_solver_settings_t<i_t, f_t>::tolerances_t{},
+                               /*deterministic=*/false,
+                               /*allocate_mip_workspace=*/false);
+  }
+
   for (size_t i = 0; i < max_batch_size; i += optimal_batch_size) {
     const size_t current_batch_size = std::min(optimal_batch_size, max_batch_size - i);
     batch_settings.new_bounds.clear();
@@ -1535,6 +1664,14 @@ static optimization_problem_solution_t<i_t, f_t> run_batch_pdlp_splitting(
     // solution. If we kept aggregating, the final batched solution we build below would be
     // constructed without forwarding that error_status, silently dropping the error
     if (sol.get_error_status().get_error_type() != error_type_t::Success) { return sol; }
+
+    if (compute_lagrangian_bounds) {
+      compute_batch_lagrangian_bounds(
+        *lagrangian_problem,
+        sol.get_dual_solution(),
+        batch_settings.new_bounds,
+        settings.batch_lagrangian_bounds.subspan(i, current_batch_size));
+    }
 
     if (collect_solutions) {
       raft::copy(full_primal_solution.data() + i * problem.get_n_variables(),

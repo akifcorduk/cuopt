@@ -208,6 +208,7 @@ solver_settings_t<i_t, f_t>::solver_settings_t() : pdlp_settings(), mip_settings
     {CUOPT_MIP_BATCH_PDLP_STRONG_BRANCHING, &mip_settings.mip_batch_pdlp_strong_branching, 0, 2, 0},
     {CUOPT_MIP_BATCH_PDLP_RELIABILITY_BRANCHING, &mip_settings.mip_batch_pdlp_reliability_branching, 0, 2, 0},
     {CUOPT_MIP_STRONG_BRANCHING_SIMPLEX_ITERATION_LIMIT, &mip_settings.strong_branching_simplex_iteration_limit, -1,std::numeric_limits<i_t>::max(), -1},
+    {CUOPT_MIP_HYPER_STRONG_BRANCHING_BOUNDS, &mip_settings.strong_branching_bounds, 0, 2, 0, "root strong branching dual bounds: 0 off, 1 global lower bound, 2 global lower bound and variable fixings"},
     {CUOPT_PRESOLVE, reinterpret_cast<int*>(&pdlp_settings.presolver), CUOPT_PRESOLVE_DEFAULT, CUOPT_PRESOLVE_PSLP, CUOPT_PRESOLVE_DEFAULT},
     {CUOPT_PRESOLVE, reinterpret_cast<int*>(&mip_settings.presolver), CUOPT_PRESOLVE_DEFAULT, CUOPT_PRESOLVE_PSLP, CUOPT_PRESOLVE_DEFAULT},
     {CUOPT_MULTIGPU_PDLP_PARTITIONER, reinterpret_cast<int*>(&pdlp_settings.multigpu_pdlp_partitioner), CUOPT_MULTIGPU_PDLP_PARTITIONER_AUTO, CUOPT_MULTIGPU_PDLP_PARTITIONER_ROUND_ROBIN, CUOPT_MULTIGPU_PDLP_PARTITIONER_AUTO},

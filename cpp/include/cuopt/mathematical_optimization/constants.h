@@ -145,6 +145,9 @@
 #define CUOPT_MIP_HYPER_DIVING_BACKTRACK_LIMIT        "mip_hyper_diving_backtrack_limit"
 /* @brief Show per-strategy diving symbol in logs instead of a generic 'D' */
 #define CUOPT_MIP_HYPER_DIVING_SHOW_TYPE "mip_hyper_diving_show_type"
+/* @brief Use root strong branching child bounds as dual bounds: 0 off, 1 global bound, 2 + fixings
+ */
+#define CUOPT_MIP_HYPER_STRONG_BRANCHING_BOUNDS "mip_hyper_strong_branching_bounds"
 
 /* @brief Recursive sub-MIP (RINS) hyper-parameters */
 #define CUOPT_MIP_HYPER_SUBMIP_BASE_TARGET_FIXRATE    "mip_hyper_submip_base_target_fixrate"

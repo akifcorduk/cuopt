@@ -320,9 +320,9 @@ f_t branch_and_bound_t<i_t, f_t>::get_lower_bound()
   }
 
   if (std::isfinite(lower_bound)) {
-    return lower_bound;
+    return apply_strong_branching_floor(lower_bound);
   } else if (std::isfinite(root_objective_)) {
-    return root_objective_;
+    return apply_strong_branching_floor(root_objective_);
   } else {
     return -inf;
   }
@@ -1349,19 +1349,165 @@ struct deterministic_diving_policy_t
 // We use the lower bound to decide if we should fathom the
 // node or branch.
 template <typename i_t, typename f_t>
-void branch_and_bound_t<i_t, f_t>::snap_to_lattice(const lp_problem_t<i_t, f_t>& lp,
-                                                   mip_node_t<i_t, f_t>* node_ptr,
-                                                   f_t leaf_obj)
+f_t branch_and_bound_t<i_t, f_t>::snap_bound_to_lattice(const lp_problem_t<i_t, f_t>& lp,
+                                                        f_t bound) const
 {
   if (lp.objective_step.has_step()) {
     f_t step = lp.objective_step.step_size;
     f_t bias = lp.objective_step.bias;
-    // Round up to next value on the lattice: k * step + bias >= leaf_obj
-    f_t k                 = std::ceil((leaf_obj - bias) / step - settings_.integer_tol);
-    node_ptr->lower_bound = k * step + bias;
+    // Round up to next value on the lattice: k * step + bias >= bound
+    f_t k = std::ceil((bound - bias) / step - settings_.integer_tol);
+    return k * step + bias;
   } else if (lp.objective_is_integral) {
-    node_ptr->lower_bound = std::ceil(leaf_obj - settings_.integer_tol);
+    return std::ceil(bound - settings_.integer_tol);
   }
+  return bound;
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::snap_to_lattice(const lp_problem_t<i_t, f_t>& lp,
+                                                   mip_node_t<i_t, f_t>* node_ptr,
+                                                   f_t leaf_obj)
+{
+  node_ptr->lower_bound = snap_bound_to_lattice(lp, leaf_obj);
+}
+
+template <typename i_t, typename f_t>
+mip_status_t branch_and_bound_t<i_t, f_t>::apply_strong_branching_bounds(
+  const strong_branching_bounds_t<i_t, f_t>& sb_bounds,
+  std::vector<i_t>& fractional,
+  i_t& num_fractional,
+  mip_solution_t<i_t, f_t>& solution)
+{
+  const f_t abs_fathom_tol = settings_.absolute_mip_gap_tol / 10;
+  const f_t upper_bound    = upper_bound_.load();
+  const i_t num_candidates = sb_bounds.variables.size();
+  const bool apply_fixings = settings_.strong_branching_bounds >= 2;
+
+  std::vector<f_t> lower = original_lp_.lower;
+  std::vector<f_t> upper = original_lp_.upper;
+  std::vector<bool> tightened(original_lp_.num_cols, false);
+  f_t sb_bound              = -inf;
+  i_t sb_bound_var          = -1;
+  i_t num_down_pruned       = 0;
+  i_t num_up_pruned         = 0;
+  i_t num_infeasible        = 0;
+  i_t num_fixings           = 0;
+  i_t num_above_root        = 0;
+  bool both_children_pruned = false;
+  for (i_t k = 0; k < num_candidates; ++k) {
+    const i_t j     = sb_bounds.variables[k];
+    const f_t down  = snap_bound_to_lattice(original_lp_, sb_bounds.down[k]);
+    const f_t up    = snap_bound_to_lattice(original_lp_, sb_bounds.up[k]);
+    const f_t child = std::min(down, up);
+    if (child > sb_bound) {
+      sb_bound     = child;
+      sb_bound_var = j;
+    }
+    if (child > root_objective_) { num_above_root++; }
+    num_infeasible += (down == inf) + (up == inf);
+    const bool down_pruned = down == inf || down > upper_bound + abs_fathom_tol;
+    const bool up_pruned   = up == inf || up > upper_bound + abs_fathom_tol;
+    num_down_pruned += down_pruned;
+    num_up_pruned += up_pruned;
+    if (down_pruned && up_pruned) {
+      both_children_pruned = true;
+    } else if (apply_fixings && (down_pruned || up_pruned)) {
+      const f_t x = root_relax_soln_.x[j];
+      if (down_pruned) { lower[j] = std::max(lower[j], std::ceil(x)); }
+      if (up_pruned) { upper[j] = std::min(upper[j], std::floor(x)); }
+      tightened[j] = true;
+      num_fixings++;
+    }
+  }
+
+  strong_branching_lower_bound_ = std::max(sb_bound, root_objective_);
+  const f_t root_bound          = apply_strong_branching_floor(root_objective_);
+
+  settings_.log.printf(
+    "Strong branching bounds: %d candidates, %d dual simplex bounds, %d finite PDLP bounds "
+    "(%d PDLP optimal, max reported - Lagrangian %.2e), PDLP tighter on %d, PDLP only on %d\n",
+    num_candidates,
+    sb_bounds.num_from_dual_simplex,
+    sb_bounds.num_pdlp_finite,
+    sb_bounds.num_pdlp_optimal,
+    sb_bounds.max_pdlp_reported_minus_lagrangian,
+    sb_bounds.num_pdlp_tighter,
+    sb_bounds.num_pdlp_rescued);
+  settings_.log.printf(
+    "Strong branching bounds: on %d children solved to optimality by dual simplex, max bound - "
+    "optimal objective is %.2e (dual simplex) and %.2e (PDLP)\n",
+    sb_bounds.num_dual_simplex_optimal,
+    sb_bounds.max_dual_simplex_bound_minus_optimal,
+    sb_bounds.max_pdlp_bound_minus_optimal);
+  const f_t root_gap = upper_bound - root_objective_;
+  settings_.log.printf(
+    "Strong branching bounds: root LP %+.10e, root bound %+.10e (variable %d), "
+    "%d candidates above the root LP, gap closed %.2f%%\n",
+    compute_user_objective(original_lp_, root_objective_),
+    compute_user_objective(original_lp_, root_bound),
+    sb_bound_var,
+    num_above_root,
+    std::isfinite(root_gap) && root_gap > 0 ? 100.0 * (root_bound - root_objective_) / root_gap
+                                            : 0.0);
+  settings_.log.printf(
+    "Strong branching bounds: %d down and %d up children pruned (%d infeasible), %d fixings%s\n",
+    num_down_pruned,
+    num_up_pruned,
+    num_infeasible,
+    num_fixings,
+    both_children_pruned ? ", both children pruned for some variable" : "");
+
+  if (upper_bound == inf && root_bound == inf) {
+    settings_.log.printf("Strong branching proved the problem infeasible\n");
+    solver_status_ = mip_status_t::INFEASIBLE;
+    set_final_solution(solution, root_bound);
+    return solver_status_;
+  }
+
+  f_t abs_gap = compute_user_abs_gap(original_lp_, upper_bound, root_bound);
+  f_t rel_gap = user_relative_gap(compute_user_objective(original_lp_, upper_bound),
+                                  compute_user_objective(original_lp_, root_bound));
+  if (abs_gap <= settings_.absolute_mip_gap_tol || rel_gap <= settings_.relative_mip_gap_tol) {
+    settings_.log.printf("Strong branching closed the gap at the root\n");
+    solver_status_ = mip_status_t::OPTIMAL;
+    set_final_solution(solution, root_bound);
+    return solver_status_;
+  }
+
+  if (num_fixings == 0) { return mip_status_t::UNSET; }
+
+  std::vector<bool> bounds_changed(original_lp_.num_cols, true);
+  std::vector<char> row_sense;
+  bounds_strengthening_t<i_t, f_t> node_presolve(original_lp_, Arow_, row_sense, var_types_);
+  mutex_original_lp_.lock();
+  original_lp_.lower  = lower;
+  original_lp_.upper  = upper;
+  const bool feasible = node_presolve.bounds_strengthening(
+    settings_, bounds_changed, original_lp_.lower, original_lp_.upper);
+  mutex_original_lp_.unlock();
+  if (!feasible) {
+    settings_.log.printf("Bound strengthening after strong branching fixings is infeasible\n");
+    solver_status_ = upper_bound == inf ? mip_status_t::INFEASIBLE : mip_status_t::OPTIMAL;
+    set_final_solution(solution, upper_bound);
+    return solver_status_;
+  }
+
+  std::vector<i_t> remaining;
+  remaining.reserve(fractional.size());
+  for (i_t j : fractional) {
+    const bool fixed =
+      std::abs(original_lp_.upper[j] - original_lp_.lower[j]) < settings_.fixed_tol;
+    if (!fixed && !tightened[j]) { remaining.push_back(j); }
+  }
+  settings_.log.printf("Strong branching fixings removed %d of %d branching candidates\n",
+                       (i_t)(fractional.size() - remaining.size()),
+                       (i_t)fractional.size());
+  if (!remaining.empty()) {
+    fractional     = std::move(remaining);
+    num_fractional = fractional.size();
+  }
+  return mip_status_t::UNSET;
 }
 
 template <typename i_t, typename f_t>
@@ -4508,6 +4654,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   pc_.resize(original_lp_.num_cols);
   pc_.Arow = Arow_;
 
+  strong_branching_bounds_t<i_t, f_t> sb_bounds;
   if (!has_initial_pseudocost_) {
     raft::common::nvtx::range scope_sb("BB::strong_branching");
     strong_branching<i_t, f_t>(original_lp_,
@@ -4525,7 +4672,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                nonbasic_list,
                                basis_update,
                                symmetry_,
-                               pc_);
+                               pc_,
+                               sb_bounds);
   }
 
   if (received_halt_signal()) {
@@ -4538,6 +4686,12 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     solver_status_ = mip_status_t::TIME_LIMIT;
     set_final_solution(solution, root_objective_);
     return solver_status_;
+  }
+
+  if (settings_.strong_branching_bounds != 0 && !sb_bounds.variables.empty()) {
+    mip_status_t sb_status =
+      apply_strong_branching_bounds(sb_bounds, fractional, num_fractional, solution);
+    if (sb_status != mip_status_t::UNSET) { return sb_status; }
   }
 
   if (settings_.reduced_cost_strengthening >= 2 &&
@@ -4725,6 +4879,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
 
     if (!std::isfinite(lower_bound)) { lower_bound = search_tree_.root.lower_bound; }
   }
+  lower_bound = apply_strong_branching_floor(lower_bound);
 
   DEBUG_SUBMIP("RINS: success={}, infeasible={}, empty={}, calls={}",
                rins_stats_.total_success.load(),
@@ -5699,7 +5854,7 @@ f_t branch_and_bound_t<i_t, f_t>::deterministic_compute_lower_bound()
     lower_bound = upper_bound_.load();
   }
 
-  return lower_bound;
+  return apply_strong_branching_floor(lower_bound);
 }
 
 template <typename i_t, typename f_t>

@@ -118,6 +118,7 @@ struct simplex_solver_settings_t {
       mip_batch_pdlp_strong_branching(0),
       mip_batch_pdlp_reliability_branching(0),
       strong_branching_simplex_iteration_limit(-1),
+      strong_branching_bounds(0),
       random_seed(0),
       bnb_steal_chance(-1),
       bnb_nodes_per_steal(-1),
@@ -251,6 +252,9 @@ struct simplex_solver_settings_t {
   // 0, 1 - estimate the objective change using a single pivot of dual simplex
   // >1 - set as the iteration limit in dual simplex
   i_t strong_branching_simplex_iteration_limit;
+  // 0 = off, 1 = use root strong branching child bounds as a global lower bound,
+  // 2 = also fix variables whose strong branching child exceeds the incumbent
+  i_t strong_branching_bounds;
 
   mip_diving_hyper_params_t<i_t, f_t> diving_settings;  // Settings for the diving heuristics
 
