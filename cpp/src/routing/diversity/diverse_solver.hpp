@@ -684,6 +684,7 @@ struct solve {
       target_vehicle_ids_.resize(target_vehicles_);
       std::iota(target_vehicle_ids_.begin(), target_vehicle_ids_.end(), 0);
     }
+    detail::set_if_env_set(from_dir, "CUOPT_SOL_FROM_DIR");
     bool route_minimization_only = false;
     detail::set_if_env_set(route_minimization_only, "CUOPT_ROUTE_MINIMIZATION_ONLY");
     if (route_minimization_only) {
@@ -1330,8 +1331,8 @@ struct solve {
         continue;
       }
     }
-    // TODO read this with an env var or something like that
     bool load_bks = true;
+    detail::set_if_env_set(load_bks, "CUOPT_LOAD_BKS");
     if (load_bks) {
       detail::set_if_env_set(sol_dir, "CUOPT_BKS_INPUT_DIR");
       printf("Env to read CUOPT_BKS_INPUT_DIR . Reading BKS from dir: %s\n", sol_dir.c_str());

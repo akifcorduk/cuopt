@@ -26,6 +26,12 @@ def str2bool(v):
         raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
+def initial_population_path(args, file):
+    return os.path.join(
+        args.initial_population_dir, os.path.splitext(file)[0].lower()
+    )
+
+
 def run_single(file, row, gpu, worksheet, args):
     import cudf
     from scipy.spatial.distance import cdist
@@ -33,9 +39,12 @@ def run_single(file, row, gpu, worksheet, args):
     import cuopt
     import cuopt.routing.utils as utils
 
-    os.environ["CUOPT_SOL_INPUT_DIR"] = os.path.join(
-        "/acoerduek-lustre/solution_dir", file
-    )
+    if args.initial_population_dir:
+        os.environ["CUOPT_SOL_INPUT_DIR"] = initial_population_path(args, file)
+    else:
+        os.environ["CUOPT_SOL_INPUT_DIR"] = os.path.join(
+            "/acoerduek-lustre/solution_dir", file
+        )
     os.environ["CUOPT_BKS_INPUT_DIR"] = os.path.join(
         "/acoerduek-lustre/bks_dir/", file
     )
@@ -130,6 +139,9 @@ def run_single(file, row, gpu, worksheet, args):
         "message": routing_solution.get_message(),
         "unserviced_orders": unserviced,
         "route_minimization_only": args.route_minimization_only,
+        "initial_population_dir": os.environ["CUOPT_SOL_INPUT_DIR"]
+        if args.initial_population_dir
+        else None,
         "travel_speed": args.travel_speed,
     }
     with open(os.path.join(args.out_dir, file + ".json"), "w") as output:
@@ -287,6 +299,11 @@ def main():
         action="store_true",
         help="Use the full search budget for vehicle minimization; skip cost improvement",
     )
+    parser.add_argument(
+        "--initial-population-dir",
+        help="Start the search from the solutions in <dir>/<lowercase instance stem>; "
+        "skips construction and route minimization",
+    )
 
     args = parser.parse_args()
     if args.gpu_count < 1 or args.run_time < 1:
@@ -297,6 +314,13 @@ def main():
         parser.error("Route minimization requires cvrptw or pdptw instances")
     if args.route_minimization_only:
         os.environ["CUOPT_ROUTE_MINIMIZATION_ONLY"] = "1"
+    if args.initial_population_dir:
+        if args.route_minimization_only:
+            parser.error(
+                "Initial population and route minimization only are exclusive"
+            )
+        os.environ["CUOPT_SOL_FROM_DIR"] = "1"
+        os.environ["CUOPT_LOAD_BKS"] = "0"
     n_gpus = args.gpu_count
     bks_search = args.bks_search
     only_big = args.only_large
@@ -450,6 +474,12 @@ def main():
             os.path.join(args.dataset_path, file)
         ):
             parser.error(f"Instance is missing or not a filename: {file}")
+        if args.initial_population_dir and not os.path.isdir(
+            initial_population_path(args, file)
+        ):
+            parser.error(
+                f"Initial population missing: {initial_population_path(args, file)}"
+            )
 
     num_files = len(files)
     n_gpus = min(n_gpus, num_files)
