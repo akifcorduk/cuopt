@@ -27,6 +27,7 @@
 #include <rmm/mr/pool_memory_resource.hpp>
 #include <rmm/mr/tracking_resource_adaptor.hpp>
 
+#include <execinfo.h>
 #include <fcntl.h>
 #include <omp.h>
 #include <sys/file.h>
@@ -34,6 +35,7 @@
 #include <unistd.h>
 #include <argparse/argparse.hpp>
 #include <cmath>
+#include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -435,6 +437,29 @@ int run_single_file(std::string file_path,
   }
 }
 
+static char crash_file_name[512];
+
+static void crash_signal_handler(int sig)
+{
+  char msg[640];
+  const int len =
+    snprintf(msg, sizeof(msg), "Fatal signal %d while solving %s\n", sig, crash_file_name);
+  if (len > 0) { (void)!write(STDERR_FILENO, msg, len); }
+  void* frames[64];
+  const int n_frames = backtrace(frames, 64);
+  backtrace_symbols_fd(frames, n_frames, STDERR_FILENO);
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
+static void install_crash_handler(const std::string& file_path)
+{
+  snprintf(crash_file_name, sizeof(crash_file_name), "%s", file_path.c_str());
+  for (int sig : {SIGSEGV, SIGBUS, SIGFPE, SIGILL}) {
+    signal(sig, crash_signal_handler);
+  }
+}
+
 void run_single_file_mp(std::string file_path,
                         int device,
                         int batch_id,
@@ -450,6 +475,7 @@ void run_single_file_mp(std::string file_path,
                         bool deterministic)
 {
   std::cout << "running file " << file_path << " on gpu : " << device << std::endl;
+  install_crash_handler(file_path);
   auto memory_resource = make_async();
   rmm::mr::set_current_device_resource(memory_resource);
   int sol_found = run_single_file(file_path,

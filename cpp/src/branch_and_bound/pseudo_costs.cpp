@@ -21,8 +21,12 @@
 
 #include <utilities/copy_helpers.hpp>
 #include <utilities/macros.cuh>
+#include <utilities/scope_guard.hpp>
 
 #include <raft/core/nvtx.hpp>
+#include <raft/util/cudart_utils.hpp>
+
+#include <atomic>
 
 #include <omp.h>
 
@@ -798,6 +802,9 @@ static void batch_pdlp_strong_branching_task(
                         ? "Batch PDLP only for strong branching\n"
                         : "Cooperative batch PDLP and Dual Simplex for strong branching\n");
 
+  settings.log.printf("Batch PDLP SB diag: thread device %d, solver device %d\n",
+                      raft::device_setter::get_current_device(),
+                      pc.pdlp_warm_cache->device_id);
   raft::device_setter device_guard(pc.pdlp_warm_cache->device_id);
   f_t start_batch = tic();
   std::vector<f_t> original_root_soln_x;
@@ -1029,7 +1036,31 @@ static void batch_pdlp_reliability_branching_task(
                          : "RB cooperative batch PDLP and DS for %d candidates\n",
             num_candidates);
 
+  const int thread_device = raft::device_setter::get_current_device();
   raft::device_setter device_guard(pdlp_warm_cache->device_id);
+  static std::atomic<int> rb_calls{0};
+  static std::atomic<int> rb_active{0};
+  static std::atomic<int> rb_max_active{0};
+  const int rb_call = rb_calls.fetch_add(1);
+  const int rb_now  = rb_active.fetch_add(1) + 1;
+  int rb_prev_max   = rb_max_active.load();
+  while (rb_now > rb_prev_max && !rb_max_active.compare_exchange_weak(rb_prev_max, rb_now)) {}
+  cuopt::scope_guard rb_active_guard([] { rb_active.fetch_sub(1); });
+  if (rb_call < 3 || rb_now > rb_prev_max) {
+    size_t free_bytes  = 0;
+    size_t total_bytes = 0;
+    RAFT_CUDA_TRY(cudaMemGetInfo(&free_bytes, &total_bytes));
+    settings.log.printf(
+      "RB batch PDLP diag: call %d, %d candidates, thread device %d, solver device %d, %d "
+      "concurrent, GPU free %.1f/%.1f GiB\n",
+      rb_call,
+      num_candidates,
+      thread_device,
+      pdlp_warm_cache->device_id,
+      rb_now,
+      free_bytes / 1073741824.0,
+      total_bytes / 1073741824.0);
+  }
   f_t start_batch = tic();
 
   std::vector<f_t> original_soln_x;
@@ -1086,10 +1117,12 @@ static void batch_pdlp_reliability_branching_task(
 
   if (concurrent_halt.load() == 1) { return; }
 
+  settings.log.printf("RB batch PDLP diag: begin %d\n", rb_call);
   const auto solutions =
     batch_pdlp_solve(&batch_pdlp_handle, mps_model, candidate_vars, fraction_values, pdlp_settings);
 
   f_t batch_pdlp_time = toc(start_batch);
+  settings.log.printf("RB batch PDLP diag: end %d (%.2fs)\n", rb_call, batch_pdlp_time);
 
   if (solutions.get_additional_termination_informations().size() !=
       static_cast<size_t>(num_candidates) * 2) {
