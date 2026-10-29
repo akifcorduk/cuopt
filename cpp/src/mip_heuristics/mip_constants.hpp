@@ -32,7 +32,7 @@
 /* @brief Root batch PDLP strong branching. Below the candidate threshold the fixed PDLP setup
  * cost exceeds dual simplex strong branching. The tolerance must be tight enough that the
  * objective error (~tol * |obj|) stays below typical strong branching deltas. */
-#define CUOPT_MIP_BATCH_PDLP_SB_MIN_CANDIDATES  200
+#define CUOPT_MIP_BATCH_PDLP_SB_MIN_CANDIDATES  0
 #define CUOPT_MIP_BATCH_PDLP_SB_ITERATION_LIMIT 4000
 #define CUOPT_MIP_BATCH_PDLP_SB_TOLERANCE       1e-6
 
