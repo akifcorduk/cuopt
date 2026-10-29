@@ -727,8 +727,8 @@ enum class sb_source_t { DUAL_SIMPLEX, PDLP, NONE };
 // Merge a single strong branching result from Dual Simplex and PDLP.
 // Rules:
 //   1. If both found optimal   -> keep DS (higher quality vertex solution)
-//   2. Else if Dual Simplex found infeasible -> declare infeasible
-//   3. Else if one is optimal -> keep the optimal one
+//   2. Else if Dual Simplex found infeasible -> declare infeasible, if cutoff -> keep DS
+//   3. Else if one is optimal -> keep the optimal one (PDLP "optimal" = has an estimate)
 //   4. Else if Dual Simplex hit iteration limit -> keep DS
 //   5. Else if none converged -> NaN (original objective)
 template <typename i_t, typename f_t>
@@ -747,6 +747,9 @@ static std::pair<f_t, sb_source_t> merge_sb_result(f_t dual_simplex_val,
   // Rule 2: Dual Simplex found infeasible -> declare infeasible
   if (dual_simplex_status == dual_status_t::DUAL_UNBOUNDED) {
     return {std::numeric_limits<f_t>::infinity(), sb_source_t::DUAL_SIMPLEX};
+  }
+  if (dual_simplex_status == dual_status_t::CUTOFF) {
+    return {dual_simplex_val, sb_source_t::DUAL_SIMPLEX};
   }
 
   // Rule 3: Only one converged -> keep that
@@ -822,6 +825,9 @@ static void batch_pdlp_strong_branching_task(
 
   assert(!pc.pdlp_warm_cache->populated && "PDLP warm cache should not be populated at this point");
 
+  constexpr f_t pdlp_tolerance = CUOPT_MIP_BATCH_PDLP_SB_TOLERANCE;
+  // Children are measured against the PDLP root objective so that the tolerance bias cancels
+  f_t pdlp_root_obj = root_obj;
   if (!pc.pdlp_warm_cache->populated) {
     pdlp_solver_settings_t<i_t, f_t> ws_settings;
     ws_settings.method               = method_t::PDLP;
@@ -834,7 +840,6 @@ static void batch_pdlp_strong_branching_task(
     constexpr int warm_start_iteration_limit         = 500000;
     ws_settings.iteration_limit                      = warm_start_iteration_limit;
     ws_settings.time_limit                           = warm_start_remaining_time;
-    constexpr f_t pdlp_tolerance                     = 1e-4;
     ws_settings.tolerances.relative_dual_tolerance   = pdlp_tolerance;
     ws_settings.tolerances.absolute_dual_tolerance   = pdlp_tolerance;
     ws_settings.tolerances.relative_primal_tolerance = pdlp_tolerance;
@@ -872,6 +877,7 @@ static void batch_pdlp_strong_branching_task(
       cache->primal_weight  = ws_solution.get_pdlp_warm_start_data().initial_primal_weight_;
       cache->pdlp_iteration = ws_solution.get_pdlp_warm_start_data().total_pdlp_iterations_;
       cache->populated      = true;
+      pdlp_root_obj         = ws_solution.get_dual_objective_value();
 
       if (verbose) {
         settings.log.printf(
@@ -899,10 +905,15 @@ static void batch_pdlp_strong_branching_task(
     pdlp_settings.concurrent_halt  = &concurrent_halt;
     pdlp_settings.shared_sb_solved = sb_view.solved;
   }
-  if (settings.strong_branching_bounds != 0) {
-    pdlp_settings.batch_lagrangian_bounds =
-      cuda::std::span<f_t>(pdlp_lagrangian_bound.data(), pdlp_lagrangian_bound.size());
-  }
+  pdlp_settings.batch_lagrangian_bounds =
+    cuda::std::span<f_t>(pdlp_lagrangian_bound.data(), pdlp_lagrangian_bound.size());
+  pdlp_settings.iteration_limit                      = CUOPT_MIP_BATCH_PDLP_SB_ITERATION_LIMIT;
+  pdlp_settings.tolerances.relative_dual_tolerance   = pdlp_tolerance;
+  pdlp_settings.tolerances.absolute_dual_tolerance   = pdlp_tolerance;
+  pdlp_settings.tolerances.relative_primal_tolerance = pdlp_tolerance;
+  pdlp_settings.tolerances.absolute_primal_tolerance = pdlp_tolerance;
+  pdlp_settings.tolerances.relative_gap_tolerance    = pdlp_tolerance;
+  pdlp_settings.tolerances.absolute_gap_tolerance    = pdlp_tolerance;
 
   batch_elapsed_time = toc(start_time);
   const f_t batch_remaining_time =
@@ -962,15 +973,23 @@ static void batch_pdlp_strong_branching_task(
     }
   }
 
-  for (i_t k = 0; k < fractional.size(); k++) {
-    if (solutions.get_termination_status(k) == pdlp_termination_status_t::Optimal) {
-      pdlp_obj_down[k] = std::max(solutions.get_dual_objective_value(k) - root_obj, f_t(0.0));
+  // Iteration-limited children still carry a usable estimate; the Lagrangian bound is a valid
+  // floor that also flags cutoff and infeasible children, which PDLP cannot detect here.
+  const i_t n_frac = fractional.size();
+  for (i_t c = 0; c < 2 * n_frac; c++) {
+    const auto status = solutions.get_termination_status(c);
+    if (status != pdlp_termination_status_t::Optimal &&
+        status != pdlp_termination_status_t::IterationLimit) {
+      continue;
     }
-    if (solutions.get_termination_status(k + fractional.size()) ==
-        pdlp_termination_status_t::Optimal) {
-      pdlp_obj_up[k] =
-        std::max(solutions.get_dual_objective_value(k + fractional.size()) - root_obj, f_t(0.0));
+    const f_t estimate = std::max(solutions.get_dual_objective_value(c) - pdlp_root_obj, f_t(0.0));
+    const f_t value    = std::max(estimate, pdlp_lagrangian_bound[c] - root_obj);
+    if (c < n_frac) {
+      pdlp_obj_down[c] = value;
+    } else {
+      pdlp_obj_up[c - n_frac] = value;
     }
+    if (effective_batch_pdlp == 1) { sb_view.mark_solved(c); }
   }
 }
 
@@ -1131,6 +1150,8 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
   if (omp_get_num_threads() < CUOPT_MIP_BATCH_PDLP_REQUIRED_THREAD_COUNT) {
     effective_batch_pdlp = 0;
   }
+
+  if ((i_t)fractional.size() < CUOPT_MIP_BATCH_PDLP_SB_MIN_CANDIDATES) { effective_batch_pdlp = 0; }
 
   if (settings.mip_batch_pdlp_strong_branching != 0 &&
       (settings.inside_submip || settings.deterministic)) {
