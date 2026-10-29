@@ -37,7 +37,7 @@
 #define CUOPT_MIP_BATCH_PDLP_SB_TOLERANCE       1e-6
 /* @brief In cooperative mode, dual simplex re-solves an iteration-limited PDLP child when its
  * primal-dual gap exceeds this multiple of its estimated delta. Negative: trust every estimate. */
-#define CUOPT_MIP_BATCH_PDLP_SB_DS_GAP_RATIO -1.0
+#define CUOPT_MIP_BATCH_PDLP_SB_DS_GAP_RATIO 1.0
 
 /* @brief Minimum capacity the early CPUFJ portfolio leaves to the rest of the team. Callers may
  * reserve more. Every lane holds its own host copy and an OMP task for the whole of presolve. */
