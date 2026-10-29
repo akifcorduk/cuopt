@@ -787,7 +787,9 @@ static void batch_pdlp_strong_branching_task(
   std::vector<f_t>& pdlp_obj_down,
   std::vector<f_t>& pdlp_obj_up,
   std::vector<f_t>& pdlp_lagrangian_bound,
-  std::vector<f_t>& pdlp_reported_dual_obj)
+  std::vector<f_t>& pdlp_reported_dual_obj,
+  f_t upper_bound,
+  std::vector<int>& pdlp_state)
 {
   constexpr bool verbose = false;
 
@@ -989,7 +991,17 @@ static void batch_pdlp_strong_branching_task(
     } else {
       pdlp_obj_up[c - n_frac] = value;
     }
-    if (effective_batch_pdlp == 1) { sb_view.mark_solved(c); }
+    const bool converged = status == pdlp_termination_status_t::Optimal;
+    const bool proven_cutoff =
+      std::isfinite(upper_bound) && pdlp_lagrangian_bound[c] >= upper_bound;
+    const auto& ti      = solutions.get_additional_termination_information(c);
+    const f_t abs_gap   = std::abs(ti.primal_objective - ti.dual_objective);
+    const f_t max_ratio = CUOPT_MIP_BATCH_PDLP_SB_DS_GAP_RATIO;
+    const bool trusted =
+      converged || proven_cutoff || max_ratio < 0 ||
+      abs_gap <= max_ratio * std::max(estimate, f_t(1e-6) * (1 + std::abs(root_obj)));
+    pdlp_state[c] = converged ? 1 : (proven_cutoff ? 3 : (trusted ? 2 : 4));
+    if (effective_batch_pdlp == 1 && trusted) { sb_view.mark_solved(c); }
   }
 }
 
@@ -1181,6 +1193,7 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
   std::vector<f_t> pdlp_lagrangian_bound(2 * fractional.size(), -inf);
   std::vector<f_t> pdlp_reported_dual_obj(2 * fractional.size(),
                                           std::numeric_limits<f_t>::quiet_NaN());
+  std::vector<int> pdlp_state(2 * fractional.size(), 0);
   f_t strong_branching_start_time = tic();
   i_t simplex_iteration_limit     = settings.strong_branching_simplex_iteration_limit;
 
@@ -1217,7 +1230,9 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                                          pdlp_obj_down,
                                          pdlp_obj_up,
                                          pdlp_lagrangian_bound,
-                                         pdlp_reported_dual_obj);
+                                         pdlp_reported_dual_obj,
+                                         upper_bound,
+                                         pdlp_state);
         if (pause_heuristics) {
           settings.heuristic_pause_callback(false);
           settings.log.printf(
@@ -1371,6 +1386,17 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
       }
     }
 
+    i_t n_state[5] = {0, 0, 0, 0, 0};
+    for (int st : pdlp_state) {
+      n_state[st]++;
+    }
+    settings.log.printf(
+      "Batch PDLP strong branching: %d converged, %d estimated, %d Lagrangian cutoff, %d left to "
+      "dual simplex\n",
+      n_state[1],
+      n_state[2],
+      n_state[3],
+      n_state[4]);
     pc.pdlp_warm_cache->percent_solved_by_batch_pdlp_at_root =
       (f_t(merged_from_pdlp) / f_t(fractional.size() * 2)) * 100.0;
     if (verbose) {
