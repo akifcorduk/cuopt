@@ -797,6 +797,7 @@ static void batch_pdlp_strong_branching_task(
                         ? "Batch PDLP only for strong branching\n"
                         : "Cooperative batch PDLP and Dual Simplex for strong branching\n");
 
+  raft::device_setter device_guard(pc.pdlp_warm_cache->device_id);
   f_t start_batch = tic();
   std::vector<f_t> original_root_soln_x;
 
@@ -1027,6 +1028,7 @@ static void batch_pdlp_reliability_branching_task(
                          : "RB cooperative batch PDLP and DS for %d candidates\n",
             num_candidates);
 
+  raft::device_setter device_guard(pdlp_warm_cache->device_id);
   f_t start_batch = tic();
 
   std::vector<f_t> original_soln_x;

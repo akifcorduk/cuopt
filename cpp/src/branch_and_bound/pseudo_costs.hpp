@@ -19,6 +19,7 @@
 #include <utilities/pcgenerator.hpp>
 
 #include <cmath>
+#include <raft/core/device_setter.hpp>
 #include <rmm/device_uvector.hpp>
 
 #include <algorithm>
@@ -78,6 +79,8 @@ struct branch_variable_t {
 
 template <typename i_t, typename f_t>
 struct batch_pdlp_warm_cache_t {
+  // OMP pool threads start on device 0, so batch PDLP tasks must switch to the solver's device.
+  const int device_id{raft::device_setter::get_current_device()};
   const raft::handle_t batch_pdlp_handle{};
   rmm::device_uvector<f_t> initial_primal{0, batch_pdlp_handle.get_stream()};
   rmm::device_uvector<f_t> initial_dual{0, batch_pdlp_handle.get_stream()};
