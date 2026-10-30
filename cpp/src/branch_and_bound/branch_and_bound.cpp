@@ -246,6 +246,12 @@ std::string to_percentage(f_t value)
   return std::format("{:5.2f}%", value * 100);
 }
 
+template <typename i_t>
+i_t num_best_first_workers(i_t num_workers)
+{
+  return std::max<i_t>(num_workers / 2, 1);
+}
+
 }  // namespace
 
 template <typename i_t, typename f_t>
@@ -270,6 +276,11 @@ branch_and_bound_t<i_t, f_t>::branch_and_bound_t(
     solver_status_(mip_status_t::UNSET)
 {
   exploration_stats_.start_time = start_time;
+  const bool batch_pdlp_reliability_branching =
+    settings_.reliability_branching != 0 && settings_.mip_batch_pdlp_reliability_branching != 0;
+  pc_.pdlp_warm_cache->create_library_handles(
+    settings_.mip_batch_pdlp_strong_branching != 0 && settings_.inside_submip == 0,
+    batch_pdlp_reliability_branching ? num_best_first_workers(settings_.num_threads) : 0);
 #ifdef PRINT_CONSTRAINT_MATRIX
   settings_.log.printf("A");
   original_problem_.A.print_matrix();
@@ -4799,7 +4810,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       run_deterministic_coordinator(Arow_);
     } else {
       const i_t num_workers        = settings_.num_threads;
-      const i_t num_bfs_workers    = std::max(num_workers / 2, 1);
+      const i_t num_bfs_workers    = num_best_first_workers(num_workers);
       const i_t num_submip_workers = std::max(num_workers / 8, 1);
       const i_t num_diving_workers = std::max(num_workers - num_bfs_workers, 1);
       bfs_worker_pool_.init(num_bfs_workers,

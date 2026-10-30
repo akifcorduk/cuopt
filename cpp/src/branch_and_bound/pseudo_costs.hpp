@@ -25,6 +25,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -89,6 +91,23 @@ struct batch_pdlp_warm_cache_t {
   i_t pdlp_iteration{-1};
   f_t percent_solved_by_batch_pdlp_at_root{f_t(0.0)};
   bool populated{false};
+  // Creating or destroying a cuBLAS handle while another thread captures a CUDA graph can crash
+  // the driver, so all handles are created before the GPU heuristics start and are reused.
+  std::vector<std::unique_ptr<raft::handle_t>> reliability_branching_handles;
+
+  void create_library_handles(bool strong_branching, i_t num_reliability_branching_workers)
+  {
+    if (strong_branching) {
+      batch_pdlp_handle.get_cublas_handle();
+      batch_pdlp_handle.get_cusparse_handle();
+    }
+    for (i_t i = 0; i < num_reliability_branching_workers; ++i) {
+      const auto& handle =
+        reliability_branching_handles.emplace_back(std::make_unique<raft::handle_t>());
+      handle->get_cublas_handle();
+      handle->get_cusparse_handle();
+    }
+  }
 };
 
 // Valid lower bounds on the LP objective of the down and up children of each strong branching
