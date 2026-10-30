@@ -20,6 +20,7 @@
 #include <cuopt/mathematical_optimization/solve.hpp>
 
 #include <utilities/copy_helpers.hpp>
+#include <utilities/macros.cuh>
 
 #include <raft/core/nvtx.hpp>
 
@@ -1046,8 +1047,11 @@ static void batch_pdlp_reliability_branching_task(
     std::max(static_cast<f_t>(0.0), settings.time_limit - batch_elapsed_time);
   if (batch_remaining_time <= 0.0) { return; }
 
-  // One handle per batch PDLP since there can be concurrent calls
-  const raft::handle_t batch_pdlp_handle;
+  // One handle per worker since there can be concurrent calls
+  cuopt_assert(worker->worker_id < (i_t)pdlp_warm_cache->reliability_branching_handles.size(),
+               "Reliability branching handle missing for this worker");
+  const raft::handle_t& batch_pdlp_handle =
+    *pdlp_warm_cache->reliability_branching_handles[worker->worker_id];
 
   pdlp_solver_settings_t<i_t, f_t> pdlp_settings;
   if (rb_mode == 1) {
