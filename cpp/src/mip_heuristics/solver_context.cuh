@@ -15,6 +15,7 @@
 #include <utilities/work_unit_scheduler.hpp>
 
 #include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 
@@ -94,6 +95,10 @@ struct mip_solver_context_t {
   // Set when heuristics on the Papilo model improved the incumbent. Those runs start after
   // the earlier incumbents were copied into settings.initial_solutions.
   bool initial_incumbent_from_papilo_model{false};
+  // Papilo-model incumbents are kept in presolved space while the early heuristics run, since
+  // uncrushing every improvement serializes the reporting lanes. This uncrushes the latest one into
+  // initial_incumbent_assignment and must run before that field is read.
+  std::function<void()> flush_early_incumbent{};
 
   // Symmetry information for orbital fixing during B&B. Null if no exploitable symmetry.
   std::unique_ptr<mip::mip_symmetry_t<i_t, f_t>> symmetry;

@@ -235,6 +235,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
         context.early_structural_ptr->get_best_user_objective());
     }
   }
+  if (context.flush_early_incumbent) { context.flush_early_incumbent(); }
 
   if (!presolve_success) {
     CUOPT_LOG_INFO("Problem proven infeasible in presolve");
