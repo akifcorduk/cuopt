@@ -138,6 +138,7 @@ class pdlp_solver_t {
     const pdlp_termination_status_t& termination_status,
     bool is_average = false);
   std::optional<optimization_problem_solution_t<i_t, f_t>> check_termination(const timer_t& timer);
+  void flag_struggling_climbers();
   std::optional<optimization_problem_solution_t<i_t, f_t>> check_batch_termination(
     const timer_t& timer);
   // Snapshot the current iterate of climber `i` (batch-local index) into
@@ -180,7 +181,10 @@ class pdlp_solver_t {
   cuda::stream_ref stream_view_;
   // Intentionnaly take a copy to avoid an unintentional modification in the calling context
   const pdlp_solver_settings_t<i_t, f_t> settings_;
-  mip::shared_strong_branching_context_view_t<i_t, f_t> sb_view_{settings_.shared_sb_solved};
+  mip::shared_strong_branching_context_view_t<i_t, f_t> sb_view_{
+    settings_.shared_sb_solved, settings_.shared_sb_struggling, settings_.shared_sb_num_struggling};
+  std::vector<f_t> struggling_last_kkt_;
+  i_t struggling_last_iteration_{0};
 
   mip::problem_t<i_t, f_t>* problem_ptr;
   // Combined bounds in op_problem_scaled_ will only be scaled if

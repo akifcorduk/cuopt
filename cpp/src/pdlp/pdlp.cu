@@ -1040,6 +1040,43 @@ pdlp_solver_t<i_t, f_t>::finalize_batch_return_with_limit_reached(
     std::move(batch_solution_to_return_.get_terminations_status())};
 }
 
+// Flags climbers whose KKT error, at the convergence rate since the last estimate, would not reach
+// the tolerance before the iteration limit
+template <typename i_t, typename f_t>
+void pdlp_solver_t<i_t, f_t>::flag_struggling_climbers()
+{
+  raft::common::nvtx::range fun_scope("flag_struggling_climbers");
+  const bool accept_primal_feasible =
+    settings_.first_primal_feasible || settings_.all_primal_feasible;
+  current_termination_strategy_.fill_gpu_terms_stats(total_pdlp_iterations_, true);
+  const auto& stats = current_termination_strategy_.get_gpu_terms_stats();
+  if (struggling_last_kkt_.empty()) { struggling_last_kkt_.assign(original_batch_size_, f_t(0)); }
+  const f_t target         = std::min({settings_.tolerances.relative_primal_tolerance,
+                                       settings_.tolerances.relative_dual_tolerance,
+                                       settings_.tolerances.relative_gap_tolerance});
+  const f_t estimates_left = f_t(settings_.iteration_limit - internal_solver_iterations_) /
+                             f_t(internal_solver_iterations_ - struggling_last_iteration_);
+  for (size_t i = 0; i < climber_strategies_.size(); ++i) {
+    if (current_termination_strategy_.is_done(
+          current_termination_strategy_.get_termination_status(i), accept_primal_feasible)) {
+      continue;
+    }
+    const i_t idx             = climber_strategies_[i].original_index;
+    const f_t primal_residual = stats.l2_relative_primal_residual[idx];
+    const f_t dual_residual   = stats.l2_relative_dual_residual[idx];
+    const f_t relative_gap    = stats.relative_gap[idx];
+    const f_t kkt             = std::max({primal_residual, dual_residual, relative_gap});
+    const f_t last            = struggling_last_kkt_[idx];
+    struggling_last_kkt_[idx] = kkt;
+    if (last <= 0 || kkt <= target || sb_view_.is_struggling(idx)) { continue; }
+    const f_t rate = kkt / last;
+    if (rate >= 1 || std::log(target / kkt) / std::log(rate) > estimates_left) {
+      sb_view_.mark_struggling(idx);
+    }
+  }
+  struggling_last_iteration_ = internal_solver_iterations_;
+}
+
 template <typename i_t, typename f_t>
 std::optional<optimization_problem_solution_t<i_t, f_t>>
 pdlp_solver_t<i_t, f_t>::check_batch_termination(const timer_t& timer)
@@ -1084,6 +1121,11 @@ pdlp_solver_t<i_t, f_t>::check_batch_termination(const timer_t& timer)
 #endif
       }
     }
+  }
+
+  if (sb_view_.tracks_struggling() && internal_solver_iterations_ - struggling_last_iteration_ >=
+                                        CUOPT_MIP_BATCH_PDLP_SB_STRUGGLING_CHECK_INTERVAL) {
+    flag_struggling_climbers();
   }
 
   // first_primal_feasible: stop the whole batch as soon as any climber becomes primal feasible

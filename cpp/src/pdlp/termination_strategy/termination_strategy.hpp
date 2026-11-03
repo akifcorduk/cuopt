@@ -157,6 +157,10 @@ class pdlp_termination_strategy_t {
   // `resize_context`, otherwise the underlying device-side stats arrays get permuted/truncated
   // and the corresponding climber's numbers are lost.
   void fill_gpu_terms_stats(i_t number_of_iterations, bool force_all = false);
+  const gpu_batch_additional_termination_information_t& get_gpu_terms_stats() const
+  {
+    return gpu_batch_additional_termination_information_;
+  }
 
   // Bulk-copy the pinned `gpu_batch_additional_termination_information_` mirror into the user-
   // facing host vector `additional_termination_informations`, slot-by-slot.

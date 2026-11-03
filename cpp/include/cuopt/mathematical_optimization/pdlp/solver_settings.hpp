@@ -372,6 +372,9 @@ class pdlp_solver_settings_t {
   std::atomic<int>* concurrent_halt{nullptr};
   // Shared strong branching solved flags for cooperative DS + PDLP
   cuda::std::span<std::atomic<int>> shared_sb_solved;
+  // Batch PDLP flags subproblems projected to miss its iteration limit; empty disables it
+  cuda::std::span<std::atomic<int>> shared_sb_struggling;
+  std::atomic<int>* shared_sb_num_struggling{nullptr};
   static constexpr f_t minimal_absolute_tolerance = 1.0e-12;
   pdlp::pdlp_hyper_params_t hyper_params;
   // Holds per-climber variable-bound overrides in the format:

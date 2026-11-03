@@ -1653,6 +1653,10 @@ static optimization_problem_solution_t<i_t, f_t> run_batch_pdlp_splitting(
     if (!settings.shared_sb_solved.empty()) {
       batch_settings.shared_sb_solved = settings.shared_sb_solved.subspan(i, current_batch_size);
     }
+    if (!settings.shared_sb_struggling.empty()) {
+      batch_settings.shared_sb_struggling =
+        settings.shared_sb_struggling.subspan(i, current_batch_size);
+    }
 
     auto sol = solve_lp(problem,
                         batch_settings,

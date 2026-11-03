@@ -42,6 +42,9 @@
 /* @brief In cooperative mode, dual simplex re-solves the iteration-limited PDLP children of the
  * top ranked candidates; all other PDLP estimates are trusted. */
 #define CUOPT_MIP_BATCH_PDLP_SB_DS_RESOLVE_TOP_K 10
+/* @brief Batch PDLP iterations between convergence rate estimates used to hand subproblems
+ * projected to miss the iteration limit to dual simplex first. */
+#define CUOPT_MIP_BATCH_PDLP_SB_STRUGGLING_CHECK_INTERVAL 500
 
 /* @brief Minimum capacity the early CPUFJ portfolio leaves to the rest of the team. Callers may
  * reserve more. Every lane holds its own host copy and an OMP task for the whole of presolve. */
