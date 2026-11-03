@@ -847,26 +847,37 @@ static std::pair<f_t, sb_source_t> merge_sb_result(f_t dual_simplex_val,
 }
 
 template <typename i_t, typename f_t>
+struct dual_simplex_sb_progress_t {
+  f_t start_time;
+  const omp_atomic_t<i_t>& num_completed;
+  i_t num_candidates;
+  // The batch PDLP task holds one thread
+  i_t num_workers;
+
+  // Candidates in flight are credited as done, so a slow first round does not project infinity
+  f_t projected_remaining_time() const
+  {
+    const i_t completed = num_completed.load();
+    return toc(start_time) * (num_candidates - completed) / (completed + num_workers);
+  }
+};
+
+template <typename i_t, typename f_t>
 static bool wait_for_slow_dual_simplex(const simplex_solver_settings_t<i_t, f_t>& settings,
                                        f_t start_time,
-                                       f_t strong_branching_start_time,
                                        const std::atomic<int>& concurrent_halt,
-                                       const omp_atomic_t<i_t>& num_strong_branches_completed,
-                                       i_t num_candidates)
+                                       const dual_simplex_sb_progress_t<i_t, f_t>& progress)
 {
   while (concurrent_halt.load() == 0 && toc(start_time) < settings.time_limit) {
-    const f_t elapsed = toc(strong_branching_start_time);
-    if (elapsed >= CUOPT_MIP_BATCH_PDLP_SB_PROBE_TIME) {
-      const i_t completed = num_strong_branches_completed.load();
-      const f_t remaining = completed == 0 ? std::numeric_limits<f_t>::infinity()
-                                           : elapsed * (num_candidates - completed) / completed;
+    if (toc(progress.start_time) >= CUOPT_MIP_BATCH_PDLP_SB_PROBE_TIME) {
+      const f_t remaining = progress.projected_remaining_time();
       if (remaining >= CUOPT_MIP_BATCH_PDLP_SB_MIN_DS_REMAINING_TIME) {
         settings.log.printf(
           "Dual simplex strong branching: %d of %d candidates in %.2fs, projected %.1fs "
           "remaining\n",
-          completed,
-          num_candidates,
-          elapsed,
+          progress.num_completed.load(),
+          progress.num_candidates,
+          toc(progress.start_time),
           remaining);
         return true;
       }
@@ -896,7 +907,8 @@ static void batch_pdlp_strong_branching_task(
   const std::vector<f_t>& dual_simplex_obj_down,
   const std::vector<f_t>& dual_simplex_obj_up,
   f_t upper_bound,
-  std::vector<int>& pdlp_state)
+  std::vector<int>& pdlp_state,
+  const dual_simplex_sb_progress_t<i_t, f_t>& ds_progress)
 {
   constexpr bool verbose = false;
 
@@ -947,9 +959,13 @@ static void batch_pdlp_strong_branching_task(
     // Since the warm start will be used over and over again we want to maximize the chance of
     // convergeance Batch PDLP is very compute intensive so we want to minimize the number of
     // iterations
-    constexpr int warm_start_iteration_limit         = 500000;
-    ws_settings.iteration_limit                      = warm_start_iteration_limit;
-    ws_settings.time_limit                           = warm_start_remaining_time;
+    constexpr int warm_start_iteration_limit = 500000;
+    ws_settings.iteration_limit              = warm_start_iteration_limit;
+    // A warm start slower than the rest of dual simplex strong branching cannot pay off
+    ws_settings.time_limit =
+      effective_batch_pdlp == 1
+        ? std::min(warm_start_remaining_time, ds_progress.projected_remaining_time())
+        : warm_start_remaining_time;
     ws_settings.tolerances.relative_dual_tolerance   = pdlp_tolerance;
     ws_settings.tolerances.absolute_dual_tolerance   = pdlp_tolerance;
     ws_settings.tolerances.relative_primal_tolerance = pdlp_tolerance;
@@ -960,8 +976,13 @@ static void batch_pdlp_strong_branching_task(
     if (effective_batch_pdlp == 1) { ws_settings.concurrent_halt = &concurrent_halt; }
 
     auto pdlp_start_time = std::chrono::high_resolution_clock::now();
+    const f_t ws_start   = tic();
 
     auto ws_solution = solve_lp(&pc.pdlp_warm_cache->batch_pdlp_handle, mps_model, ws_settings);
+    settings.log.printf("Batch PDLP warm start: %s in %.2fs (limit %.2fs)\n",
+                        ws_solution.get_termination_status_string().c_str(),
+                        toc(ws_start),
+                        ws_settings.time_limit);
 
     if (verbose) {
       auto pdlp_end_time = std::chrono::high_resolution_clock::now();
@@ -1009,6 +1030,14 @@ static void batch_pdlp_strong_branching_task(
   }
 
   if (concurrent_halt.load() == 1) { return; }
+
+  if (effective_batch_pdlp == 1 &&
+      ds_progress.projected_remaining_time() < CUOPT_MIP_BATCH_PDLP_SB_MIN_DS_REMAINING_TIME) {
+    settings.log.printf(
+      "Skipping batch PDLP: dual simplex strong branching projected to finish in %.1fs\n",
+      ds_progress.projected_remaining_time());
+    return;
+  }
 
   pdlp_solver_settings_t<i_t, f_t> pdlp_settings;
   if (effective_batch_pdlp == 1) {
@@ -1332,7 +1361,12 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                                           std::numeric_limits<f_t>::quiet_NaN());
   std::vector<int> pdlp_state(2 * fractional.size(), 0);
   f_t strong_branching_start_time = tic();
-  i_t simplex_iteration_limit     = settings.strong_branching_simplex_iteration_limit;
+  const dual_simplex_sb_progress_t<i_t, f_t> ds_progress{
+    strong_branching_start_time,
+    num_strong_branches_completed,
+    (i_t)fractional.size(),
+    std::max<i_t>(settings.num_threads - 1, 1)};
+  i_t simplex_iteration_limit = settings.strong_branching_simplex_iteration_limit;
 
   if (simplex_iteration_limit < 1) {
     initialize_pseudo_costs_with_estimate(original_lp,
@@ -1349,12 +1383,8 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
   } else {
     if (effective_batch_pdlp != 0) {
 #pragma omp task default(shared) priority(CUOPT_HIGH_TASK_PRIORITY)
-      if (effective_batch_pdlp == 2 || wait_for_slow_dual_simplex(settings,
-                                                                  start_time,
-                                                                  strong_branching_start_time,
-                                                                  concurrent_halt,
-                                                                  num_strong_branches_completed,
-                                                                  (i_t)fractional.size())) {
+      if (effective_batch_pdlp == 2 ||
+          wait_for_slow_dual_simplex(settings, start_time, concurrent_halt, ds_progress)) {
         batch_pdlp_launched         = true;
         const bool pause_heuristics = settings.heuristic_pause_callback != nullptr;
         f_t pause_start             = tic();
@@ -1377,7 +1407,8 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                                          dual_simplex_obj_down,
                                          dual_simplex_obj_up,
                                          upper_bound,
-                                         pdlp_state);
+                                         pdlp_state,
+                                         ds_progress);
         if (pause_heuristics) {
           settings.heuristic_pause_callback(false);
           settings.log.printf(
