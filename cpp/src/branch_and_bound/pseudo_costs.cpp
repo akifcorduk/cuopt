@@ -349,10 +349,10 @@ f_t lagrangian_lower_bound(const lp_problem_t<i_t, f_t>& lp,
 // first; the rest are taken from the end because batch PDLP works through its sub-batches from the
 // front.
 template <typename i_t, typename f_t>
-class cooperative_strong_branching_queue_t {
+class strong_branching_queue_t {
  public:
-  cooperative_strong_branching_queue_t(i_t num_candidates,
-                                       const shared_strong_branching_context_view_t<i_t, f_t>& view)
+  strong_branching_queue_t(i_t num_candidates,
+                           const shared_strong_branching_context_view_t<i_t, f_t>& view)
     : num_candidates_(num_candidates), sb_view_(view), claimed_(num_candidates)
   {
     for (auto& c : claimed_) {
@@ -364,7 +364,7 @@ class cooperative_strong_branching_queue_t {
 
   class cursor_t {
    public:
-    explicit cursor_t(cooperative_strong_branching_queue_t& queue) : queue_(queue) {}
+    explicit cursor_t(strong_branching_queue_t& queue) : queue_(queue) {}
 
     i_t operator()()
     {
@@ -395,7 +395,7 @@ class cooperative_strong_branching_queue_t {
     }
 
    private:
-    cooperative_strong_branching_queue_t& queue_;
+    strong_branching_queue_t& queue_;
     std::vector<i_t> struggling_;
     i_t seen_struggling_{0};
   };
@@ -1445,41 +1445,18 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                                        sb_view,
                                        num_strong_branches_completed);
       };
-      if (effective_batch_pdlp == 1) {
-        cooperative_strong_branching_queue_t<i_t, f_t> queue(fractional.size(), sb_view);
-        i_t n = std::min<i_t>(settings.num_threads, fractional.size());
+      strong_branching_queue_t<i_t, f_t> queue(fractional.size(), sb_view);
+      i_t n = std::min<i_t>(settings.num_threads, fractional.size());
 #pragma omp taskloop num_tasks(n) default(shared) priority(CUOPT_DEFAULT_TASK_PRIORITY)
-        for (i_t t = 0; t < n; ++t) {
-          typename cooperative_strong_branching_queue_t<i_t, f_t>::cursor_t cursor(queue);
-          run_dual_simplex(cursor);
-        }
-        // DS done: signal PDLP to stop (time-limit or all work done) and wait
-        concurrent_halt.store(1);
-        if (queue.num_struggling_claimed() > 0) {
-          settings.log.printf("Dual simplex strong branching took %d struggling candidates first\n",
-                              queue.num_struggling_claimed());
-        }
-      } else {
-        i_t n = std::min<i_t>(4 * settings.num_threads, fractional.size());
-// Here we are creating more tasks than the number of threads
-// such that they can be scheduled dynamically to the threads.
-#pragma omp taskloop num_tasks(n) default(shared) priority(CUOPT_DEFAULT_TASK_PRIORITY)
-        for (i_t k = 0; k < n; ++k) {
-          auto [start, end] = calculate_index_range(k, fractional.size(), n);
-
-          constexpr bool verbose = false;
-          if (verbose) {
-            settings.log.printf("Thread id %d task id %d start %d end %d. size %d\n",
-                                omp_get_thread_num(),
-                                k,
-                                start,
-                                end,
-                                end - start);
-          }
-
-          run_dual_simplex(
-            [next = start, last = end]() mutable { return next < last ? next++ : -1; });
-        }
+      for (i_t t = 0; t < n; ++t) {
+        typename strong_branching_queue_t<i_t, f_t>::cursor_t cursor(queue);
+        run_dual_simplex(cursor);
+      }
+      // DS done: signal PDLP to stop (time-limit or all work done) and wait
+      if (effective_batch_pdlp == 1) { concurrent_halt.store(1); }
+      if (queue.num_struggling_claimed() > 0) {
+        settings.log.printf("Dual simplex strong branching took %d struggling candidates first\n",
+                            queue.num_struggling_claimed());
       }
     }
 
