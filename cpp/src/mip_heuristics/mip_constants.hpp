@@ -35,9 +35,13 @@
 #define CUOPT_MIP_BATCH_PDLP_SB_MIN_CANDIDATES  200
 #define CUOPT_MIP_BATCH_PDLP_SB_ITERATION_LIMIT 4000
 #define CUOPT_MIP_BATCH_PDLP_SB_TOLERANCE       1e-6
-/* @brief In cooperative mode, dual simplex re-solves an iteration-limited PDLP child when its
- * primal-dual gap exceeds this multiple of its estimated delta. Negative: trust every estimate. */
-#define CUOPT_MIP_BATCH_PDLP_SB_DS_GAP_RATIO -1.0
+/* @brief In cooperative mode batch PDLP starts only once dual simplex has run for the probe time
+ * and its projected remaining strong branching time exceeds the threshold (seconds). */
+#define CUOPT_MIP_BATCH_PDLP_SB_PROBE_TIME            2.0
+#define CUOPT_MIP_BATCH_PDLP_SB_MIN_DS_REMAINING_TIME 25.0
+/* @brief In cooperative mode, dual simplex re-solves the iteration-limited PDLP children of the
+ * top ranked candidates; all other PDLP estimates are trusted. */
+#define CUOPT_MIP_BATCH_PDLP_SB_DS_RESOLVE_TOP_K 10
 
 /* @brief Minimum capacity the early CPUFJ portfolio leaves to the rest of the team. Callers may
  * reserve more. Every lane holds its own host copy and an OMP task for the whole of presolve. */

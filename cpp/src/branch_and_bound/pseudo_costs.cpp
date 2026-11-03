@@ -26,6 +26,10 @@
 
 #include <omp.h>
 
+#include <chrono>
+#include <numeric>
+#include <thread>
+
 namespace cuopt::mathematical_optimization::mip {
 
 using simplex::basis_update_mpf_t;
@@ -773,6 +777,36 @@ static std::pair<f_t, sb_source_t> merge_sb_result(f_t dual_simplex_val,
 }
 
 template <typename i_t, typename f_t>
+static bool wait_for_slow_dual_simplex(const simplex_solver_settings_t<i_t, f_t>& settings,
+                                       f_t start_time,
+                                       f_t strong_branching_start_time,
+                                       const std::atomic<int>& concurrent_halt,
+                                       const omp_atomic_t<i_t>& num_strong_branches_completed,
+                                       i_t num_candidates)
+{
+  while (concurrent_halt.load() == 0 && toc(start_time) < settings.time_limit) {
+    const f_t elapsed = toc(strong_branching_start_time);
+    if (elapsed >= CUOPT_MIP_BATCH_PDLP_SB_PROBE_TIME) {
+      const i_t completed = num_strong_branches_completed.load();
+      const f_t remaining = completed == 0 ? std::numeric_limits<f_t>::infinity()
+                                           : elapsed * (num_candidates - completed) / completed;
+      if (remaining >= CUOPT_MIP_BATCH_PDLP_SB_MIN_DS_REMAINING_TIME) {
+        settings.log.printf(
+          "Dual simplex strong branching: %d of %d candidates in %.2fs, projected %.1fs "
+          "remaining\n",
+          completed,
+          num_candidates,
+          elapsed,
+          remaining);
+        return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+template <typename i_t, typename f_t>
 static void batch_pdlp_strong_branching_task(
   const simplex_solver_settings_t<i_t, f_t>& settings,
   i_t effective_batch_pdlp,
@@ -789,6 +823,8 @@ static void batch_pdlp_strong_branching_task(
   std::vector<f_t>& pdlp_obj_up,
   std::vector<f_t>& pdlp_lagrangian_bound,
   std::vector<f_t>& pdlp_reported_dual_obj,
+  const std::vector<f_t>& dual_simplex_obj_down,
+  const std::vector<f_t>& dual_simplex_obj_up,
   f_t upper_bound,
   std::vector<int>& pdlp_state)
 {
@@ -980,8 +1016,13 @@ static void batch_pdlp_strong_branching_task(
   // Iteration-limited children still carry a usable estimate; the Lagrangian bound is a valid
   // floor that also flags cutoff and infeasible children, which PDLP cannot detect here.
   const i_t n_frac = fractional.size();
+  std::vector<f_t> rank_value(2 * n_frac, 0.0);
   for (i_t c = 0; c < 2 * n_frac; c++) {
     const auto status = solutions.get_termination_status(c);
+    if (status == pdlp_termination_status_t::ConcurrentLimit && sb_view.is_solved(c)) {
+      const f_t ds_obj = c < n_frac ? dual_simplex_obj_down[c] : dual_simplex_obj_up[c - n_frac];
+      if (!std::isnan(ds_obj)) { rank_value[c] = ds_obj; }
+    }
     if (status != pdlp_termination_status_t::Optimal &&
         status != pdlp_termination_status_t::IterationLimit) {
       continue;
@@ -993,17 +1034,30 @@ static void batch_pdlp_strong_branching_task(
     } else {
       pdlp_obj_up[c - n_frac] = value;
     }
+    rank_value[c]        = value;
     const bool converged = status == pdlp_termination_status_t::Optimal;
     const bool proven_cutoff =
       std::isfinite(upper_bound) && pdlp_lagrangian_bound[c] >= upper_bound;
-    const auto& ti      = solutions.get_additional_termination_information(c);
-    const f_t abs_gap   = std::abs(ti.primal_objective - ti.dual_objective);
-    const f_t max_ratio = CUOPT_MIP_BATCH_PDLP_SB_DS_GAP_RATIO;
-    const bool trusted =
-      converged || proven_cutoff || max_ratio < 0 ||
-      abs_gap <= max_ratio * std::max(estimate, f_t(1e-6) * (1 + std::abs(root_obj)));
-    pdlp_state[c] = converged ? 1 : (proven_cutoff ? 3 : (trusted ? 2 : 4));
-    if (effective_batch_pdlp == 1 && trusted) { sb_view.mark_solved(c); }
+    pdlp_state[c] = converged ? 1 : (proven_cutoff ? 3 : 2);
+    if (effective_batch_pdlp == 1 && pdlp_state[c] != 2) { sb_view.mark_solved(c); }
+  }
+  if (effective_batch_pdlp != 1) { return; }
+
+  constexpr f_t eps = 1e-6;
+  std::vector<i_t> ranked(n_frac);
+  std::iota(ranked.begin(), ranked.end(), 0);
+  const i_t top_k = std::min<i_t>(CUOPT_MIP_BATCH_PDLP_SB_DS_RESOLVE_TOP_K, n_frac);
+  std::partial_sort(ranked.begin(), ranked.begin() + top_k, ranked.end(), [&](i_t a, i_t b) {
+    return std::max(rank_value[a], eps) * std::max(rank_value[a + n_frac], eps) >
+           std::max(rank_value[b], eps) * std::max(rank_value[b + n_frac], eps);
+  });
+  for (i_t r = 0; r < top_k; r++) {
+    for (i_t c : {ranked[r], ranked[r] + n_frac}) {
+      if (pdlp_state[c] == 2) { pdlp_state[c] = 4; }
+    }
+  }
+  for (i_t c = 0; c < 2 * n_frac; c++) {
+    if (pdlp_state[c] == 2) { sb_view.mark_solved(c); }
   }
 }
 
@@ -1169,7 +1223,10 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
     effective_batch_pdlp = 0;
   }
 
-  if ((i_t)fractional.size() < CUOPT_MIP_BATCH_PDLP_SB_MIN_CANDIDATES) { effective_batch_pdlp = 0; }
+  if (effective_batch_pdlp == 2 &&
+      (i_t)fractional.size() < CUOPT_MIP_BATCH_PDLP_SB_MIN_CANDIDATES) {
+    effective_batch_pdlp = 0;
+  }
 
   if (settings.mip_batch_pdlp_strong_branching != 0 &&
       (settings.inside_submip || settings.deterministic)) {
@@ -1218,7 +1275,12 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
   } else {
     if (effective_batch_pdlp != 0) {
 #pragma omp task default(shared) priority(CUOPT_HIGH_TASK_PRIORITY)
-      {
+      if (effective_batch_pdlp == 2 || wait_for_slow_dual_simplex(settings,
+                                                                  start_time,
+                                                                  strong_branching_start_time,
+                                                                  concurrent_halt,
+                                                                  num_strong_branches_completed,
+                                                                  (i_t)fractional.size())) {
         const bool pause_heuristics = settings.heuristic_pause_callback != nullptr;
         f_t pause_start             = tic();
         if (pause_heuristics) { settings.heuristic_pause_callback(true); }
@@ -1237,6 +1299,8 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
                                          pdlp_obj_up,
                                          pdlp_lagrangian_bound,
                                          pdlp_reported_dual_obj,
+                                         dual_simplex_obj_down,
+                                         dual_simplex_obj_up,
                                          upper_bound,
                                          pdlp_state);
         if (pause_heuristics) {
