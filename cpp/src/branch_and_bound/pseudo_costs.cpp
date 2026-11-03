@@ -976,13 +976,15 @@ static void batch_pdlp_strong_branching_task(
     if (effective_batch_pdlp == 1) { ws_settings.concurrent_halt = &concurrent_halt; }
 
     auto pdlp_start_time = std::chrono::high_resolution_clock::now();
+    const f_t ws_setup   = toc(start_batch);
     const f_t ws_start   = tic();
 
     auto ws_solution = solve_lp(&pc.pdlp_warm_cache->batch_pdlp_handle, mps_model, ws_settings);
-    settings.log.printf("Batch PDLP warm start: %s in %.2fs (limit %.2fs)\n",
+    settings.log.printf("Batch PDLP warm start: %s in %.2fs (limit %.2fs) after %.2fs setup\n",
                         ws_solution.get_termination_status_string().c_str(),
                         toc(ws_start),
-                        ws_settings.time_limit);
+                        ws_settings.time_limit,
+                        ws_setup);
 
     if (verbose) {
       auto pdlp_end_time = std::chrono::high_resolution_clock::now();
