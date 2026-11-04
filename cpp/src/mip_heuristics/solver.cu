@@ -395,7 +395,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     std::getenv("CUOPT_SB_DS_ITERS") != nullptr
       ? std::atoi(std::getenv("CUOPT_SB_DS_ITERS"))
       : (context.settings.strong_branching_simplex_iteration_limit < 0
-           ? 200
+           ? 100000
            : context.settings.strong_branching_simplex_iteration_limit);
 
   branch_and_bound_settings.reduced_cost_strengthening =
