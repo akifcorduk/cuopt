@@ -30,6 +30,7 @@
 #include <raft/core/cusparse_macros.hpp>
 
 #include <cmath>
+#include <cstdlib>
 #include <future>
 #include <memory>
 #include <thread>
@@ -381,16 +382,21 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   // Forward the run-level benchmark_info_t so B&B can publish root LP
   // bounds (before / after cuts) for gap-closed-by-cuts measurement.
   branch_and_bound_settings.benchmark_info_ptr = context.settings.benchmark_info_ptr;
+  // Experiment scaffolding (exp/sb-oracle): local overrides of the strong branching mode and pivot
+  // limit
   branch_and_bound_settings.mip_batch_pdlp_strong_branching =
-    context.settings.mip_batch_pdlp_strong_branching;
+    std::getenv("CUOPT_SB_MODE") != nullptr ? std::atoi(std::getenv("CUOPT_SB_MODE"))
+                                            : context.settings.mip_batch_pdlp_strong_branching;
   branch_and_bound_settings.mip_batch_pdlp_reliability_branching =
     context.settings.mip_batch_pdlp_reliability_branching;
   branch_and_bound_settings.strong_branching_bounds = context.settings.strong_branching_bounds;
 
   branch_and_bound_settings.strong_branching_simplex_iteration_limit =
-    context.settings.strong_branching_simplex_iteration_limit < 0
-      ? 200
-      : context.settings.strong_branching_simplex_iteration_limit;
+    std::getenv("CUOPT_SB_DS_ITERS") != nullptr
+      ? std::atoi(std::getenv("CUOPT_SB_DS_ITERS"))
+      : (context.settings.strong_branching_simplex_iteration_limit < 0
+           ? 200
+           : context.settings.strong_branching_simplex_iteration_limit);
 
   branch_and_bound_settings.reduced_cost_strengthening =
     context.settings.reduced_cost_strengthening == -1 ? 2

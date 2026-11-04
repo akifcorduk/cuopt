@@ -6,6 +6,8 @@
 /* clang-format on */
 #pragma once
 
+#include <utilities/excluded_time.hpp>
+
 #include <chrono>
 #include <string>
 
@@ -21,8 +23,9 @@ class timer_t {
   timer_t(const timer_t&) = default;
   timer_t(double time_limit_)
   {
-    time_limit = time_limit_;
-    begin      = steady_clock::now();
+    time_limit        = time_limit_;
+    begin             = steady_clock::now();
+    excluded_at_begin = excluded_wall_time().load(std::memory_order_relaxed);
   }
 
   void print_debug(std::string msg) const
@@ -40,7 +43,8 @@ class timer_t {
 
   double elapsed_time() const noexcept
   {
-    return std::chrono::duration<double>(steady_clock::now() - begin).count();
+    return std::chrono::duration<double>(steady_clock::now() - begin).count() -
+           (excluded_wall_time().load(std::memory_order_relaxed) - excluded_at_begin);
   }
 
   double remaining_time() const noexcept
@@ -81,12 +85,14 @@ class timer_t {
     double tv_sec  = us_since_epoch.count() / 1000000;
     double tv_usec = us_since_epoch.count() % 1000000;
 
-    return tv_sec + 1e-6 * tv_usec;
+    // Same frame as tic(), which excludes the wall time excluded so far
+    return tv_sec + 1e-6 * tv_usec - excluded_at_begin;
   }
 
  private:
   double time_limit;
   steady_clock::time_point begin;
+  double excluded_at_begin;
 };
 
 }  // namespace cuopt

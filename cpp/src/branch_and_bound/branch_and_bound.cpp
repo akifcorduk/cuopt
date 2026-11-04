@@ -36,6 +36,7 @@
 
 #include <raft/core/nvtx.hpp>
 #include <utilities/circular_deque.hpp>
+#include <utilities/excluded_time.hpp>
 #include <utilities/hashing.hpp>
 
 #include <omp.h>
@@ -4669,8 +4670,22 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   strong_branching_bounds_t<i_t, f_t> sb_bounds;
   if (!has_initial_pseudocost_) {
     raft::common::nvtx::range scope_sb("BB::strong_branching");
+    const char* oracle_env = std::getenv("CUOPT_SB_ORACLE");
+    const bool oracle =
+      (oracle_env != nullptr ? std::atoi(oracle_env) : CUOPT_MIP_SB_ORACLE) != 0 &&
+      settings_.inside_submip == 0;
+    simplex_solver_settings_t<i_t, f_t> sb_settings = settings_;
+    f_t frozen_start                                = 0;
+    if (oracle) {
+      sb_settings.time_limit = inf;
+      cuopt::solver_frozen().store(true);
+      if (settings_.heuristic_pause_callback != nullptr) {
+        settings_.heuristic_pause_callback(true);
+      }
+      frozen_start = tic();
+    }
     strong_branching<i_t, f_t>(original_lp_,
-                               settings_,
+                               sb_settings,
                                exploration_stats_.start_time,
                                new_slacks_,
                                var_types_,
@@ -4686,6 +4701,20 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                symmetry_,
                                pc_,
                                sb_bounds);
+    if (oracle) {
+      const f_t frozen = toc(frozen_start);
+      cuopt::excluded_wall_time().store(cuopt::excluded_wall_time().load() + frozen);
+      cuopt::solver_frozen().store(false);
+      if (settings_.heuristic_pause_callback != nullptr) {
+        settings_.heuristic_pause_callback(false);
+      }
+      settings_.log.printf(
+        "Strong branching oracle: %.2fs excluded from the time limit (batch PDLP mode %d, dual "
+        "simplex pivot limit %d)\n",
+        frozen,
+        sb_settings.mip_batch_pdlp_strong_branching,
+        sb_settings.strong_branching_simplex_iteration_limit);
+    }
   }
 
   if (received_halt_signal()) {

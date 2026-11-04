@@ -46,6 +46,11 @@
  * projected to miss the iteration limit to dual simplex first. */
 #define CUOPT_MIP_BATCH_PDLP_SB_STRUGGLING_CHECK_INTERVAL 500
 
+/* @brief Strong branching oracle experiment: when 1, root strong branching runs to completion while
+ * all heuristics are frozen and its wall time is excluded from every solver clock, as if it were
+ * instant. The strong branching mode and dual simplex pivot limit are the regular settings. */
+#define CUOPT_MIP_SB_ORACLE 0
+
 /* @brief Minimum capacity the early CPUFJ portfolio leaves to the rest of the team. Callers may
  * reserve more. Every lane holds its own host copy and an OMP task for the whole of presolve. */
 #define CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS 4

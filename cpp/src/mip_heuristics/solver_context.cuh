@@ -11,6 +11,7 @@
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
 #include <mip_heuristics/solution_publication.cuh>
+#include <utilities/excluded_time.hpp>
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
@@ -71,7 +72,8 @@ struct mip_solver_context_t {
 
   void wait_while_gpu_heuristics_paused() const
   {
-    while (pause_gpu_heuristics_.load() && !preempt_heuristic_solver_.load()) {
+    while ((pause_gpu_heuristics_.load() || solver_frozen().load()) &&
+           !preempt_heuristic_solver_.load()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }

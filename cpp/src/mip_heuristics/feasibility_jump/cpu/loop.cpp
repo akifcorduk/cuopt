@@ -20,6 +20,7 @@
 #include "starts/starts.hpp"
 
 #include <mip_heuristics/feasibility_jump/fj_cpu_binary.cuh>
+#include <utilities/excluded_time.hpp>
 #include <utilities/scope_guard.hpp>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -264,6 +265,7 @@ void cpufj_solve(fj_cpu_climber_t<i_t, f_t>* fj_cpu, double time_limit, double w
 
   if (fj_cpu->search_started_at == 0) fj_cpu->search_started_at = tic();
   while (!fj_cpu->halted && !fj_cpu->preemption_flag.load()) {
+    cuopt::wait_while_solver_frozen();
     const double elapsed = toc(loop_start);
     if (elapsed > time_limit) {
       CUOPT_LOG_TRACE("%sTime limit of %.4f seconds reached, breaking loop at iteration %d",

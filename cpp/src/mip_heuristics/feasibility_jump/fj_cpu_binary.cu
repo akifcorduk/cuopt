@@ -14,6 +14,7 @@
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/utils.hpp>
 #include <presolve/probing_cache.cuh>
+#include <utilities/excluded_time.hpp>
 
 #include <raft/random/rng_device.cuh>
 
@@ -1479,6 +1480,7 @@ struct fj_bin_engine_t {
                    : std::chrono::milliseconds::zero();
 
     while (!climber.halted && !climber.preemption_flag.load()) {
+      cuopt::wait_while_solver_frozen();
       if (bounded_time && std::chrono::high_resolution_clock::now() - loop_start > limit) break;
       if (iters >= climber.settings.iteration_limit) break;
       if (iters - last_restart_iter >= fj_bin_restart_period) do_restart();

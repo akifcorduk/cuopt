@@ -7,6 +7,8 @@
 
 #include <math_optimization/tic_toc.hpp>
 
+#include <utilities/excluded_time.hpp>
+
 #include <sys/time.h>
 
 namespace cuopt::mathematical_optimization {
@@ -15,7 +17,8 @@ double tic()
 {
   struct timeval time;
   gettimeofday(&time, 0);
-  return time.tv_sec + 1e-6 * time.tv_usec;
+  return time.tv_sec + 1e-6 * time.tv_usec -
+         cuopt::excluded_wall_time().load(std::memory_order_relaxed);
 }
 
 double toc(double start)
