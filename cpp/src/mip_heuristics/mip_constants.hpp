@@ -49,7 +49,7 @@
 /* @brief Strong branching oracle experiment: when 1, root strong branching runs to completion while
  * all heuristics are frozen and its wall time is excluded from every solver clock, as if it were
  * instant. The strong branching mode and dual simplex pivot limit are the regular settings. */
-#define CUOPT_MIP_SB_ORACLE 0
+#define CUOPT_MIP_SB_ORACLE 1
 
 /* @brief Minimum capacity the early CPUFJ portfolio leaves to the rest of the team. Callers may
  * reserve more. Every lane holds its own host copy and an OMP task for the whole of presolve. */
