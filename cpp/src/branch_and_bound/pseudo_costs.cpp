@@ -1388,7 +1388,7 @@ void strong_branching_reduced(const lp_problem_t<i_t, f_t>& original_lp,
       if (effective_batch_pdlp == 2 ||
           wait_for_slow_dual_simplex(settings, start_time, concurrent_halt, ds_progress)) {
         batch_pdlp_launched         = true;
-        const bool pause_heuristics = settings.heuristic_pause_callback != nullptr;
+        const bool pause_heuristics = false;
         f_t pause_start             = tic();
         if (pause_heuristics) { settings.heuristic_pause_callback(true); }
         batch_pdlp_strong_branching_task(settings,
