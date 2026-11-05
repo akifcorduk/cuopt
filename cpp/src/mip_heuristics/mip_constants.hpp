@@ -33,8 +33,12 @@
  * cost exceeds dual simplex strong branching. The tolerance must be tight enough that the
  * objective error (~tol * |obj|) stays below typical strong branching deltas. */
 #define CUOPT_MIP_BATCH_PDLP_SB_MIN_CANDIDATES  200
-#define CUOPT_MIP_BATCH_PDLP_SB_ITERATION_LIMIT 4000
+#define CUOPT_MIP_BATCH_PDLP_SB_ITERATION_LIMIT 1000
 #define CUOPT_MIP_BATCH_PDLP_SB_TOLERANCE       1e-6
+/* @brief Strong branching precision experiment: stopping tolerances of the batch PDLP children
+ * (duality gap, primal / dual residuals); the warm start keeps the tolerance above. */
+#define CUOPT_MIP_BATCH_PDLP_SB_CHILD_GAP_TOL  1e-3
+#define CUOPT_MIP_BATCH_PDLP_SB_CHILD_FEAS_TOL 1e-3
 /* @brief In cooperative mode batch PDLP starts only once dual simplex has run for the probe time
  * and its projected remaining strong branching time exceeds the threshold (seconds). */
 #define CUOPT_MIP_BATCH_PDLP_SB_PROBE_TIME            2.0
