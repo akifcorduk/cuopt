@@ -1051,12 +1051,12 @@ static void batch_pdlp_strong_branching_task(
   pdlp_settings.batch_lagrangian_bounds =
     cuda::std::span<f_t>(pdlp_lagrangian_bound.data(), pdlp_lagrangian_bound.size());
   pdlp_settings.iteration_limit                      = CUOPT_MIP_BATCH_PDLP_SB_ITERATION_LIMIT;
-  pdlp_settings.tolerances.relative_dual_tolerance   = pdlp_tolerance;
-  pdlp_settings.tolerances.absolute_dual_tolerance   = pdlp_tolerance;
-  pdlp_settings.tolerances.relative_primal_tolerance = pdlp_tolerance;
-  pdlp_settings.tolerances.absolute_primal_tolerance = pdlp_tolerance;
-  pdlp_settings.tolerances.relative_gap_tolerance    = pdlp_tolerance;
-  pdlp_settings.tolerances.absolute_gap_tolerance    = pdlp_tolerance;
+  pdlp_settings.tolerances.relative_dual_tolerance   = CUOPT_MIP_BATCH_PDLP_SB_CHILD_FEAS_TOL;
+  pdlp_settings.tolerances.absolute_dual_tolerance   = CUOPT_MIP_BATCH_PDLP_SB_CHILD_FEAS_TOL;
+  pdlp_settings.tolerances.relative_primal_tolerance = CUOPT_MIP_BATCH_PDLP_SB_CHILD_FEAS_TOL;
+  pdlp_settings.tolerances.absolute_primal_tolerance = CUOPT_MIP_BATCH_PDLP_SB_CHILD_FEAS_TOL;
+  pdlp_settings.tolerances.relative_gap_tolerance    = CUOPT_MIP_BATCH_PDLP_SB_CHILD_GAP_TOL;
+  pdlp_settings.tolerances.absolute_gap_tolerance    = CUOPT_MIP_BATCH_PDLP_SB_CHILD_GAP_TOL;
 
   batch_elapsed_time = toc(start_time);
   const f_t batch_remaining_time =
