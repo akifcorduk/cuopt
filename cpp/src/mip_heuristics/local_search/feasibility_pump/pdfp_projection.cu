@@ -302,7 +302,7 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
     auto& p  = problem;
     i_t rows = transpose ? p.n_variables : p.n_constraints;
     if (!rows) return;
-    scaled_spmv<<<(rows + 3) / 4, 128, 0, p.handle_ptr->get_stream()>>>(
+    scaled_spmv<<<(rows + 3) / 4, 128, 0, p.handle_ptr->get_stream().get()>>>(
       rows,
       transpose ? p.reverse_offsets.data() : p.offsets.data(),
       transpose ? p.reverse_constraints.data() : p.variables.data(),
@@ -390,13 +390,13 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     thrust::fill(p.handle_ptr->get_thrust_policy(), s.current.begin(), s.current.end(), 0.);
   if (p.n_variables)
     initialize_projection<i_t, f_t>
-      <<<(p.n_variables + 255) / 256, 256, 0, stream>>>(p.view(),
-                                                        s.col_scale.data(),
-                                                        input.data(),
-                                                        s.target.data(),
-                                                        s.current.data(),
-                                                        f_t(settings.distance_weight),
-                                                        s.cold);
+      <<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(p.view(),
+                                                              s.col_scale.data(),
+                                                              input.data(),
+                                                              s.target.data(),
+                                                              s.current.data(),
+                                                              f_t(settings.distance_weight),
+                                                              s.cold);
   s.cold = false;
   raft::copy(s.anchor.data(), s.current.data(), s.current.size(), stream);
   raft::copy(s.point.data(), s.current.data(), s.current.size(), stream);
@@ -412,27 +412,28 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     s.multiply(s.current.data() + 2 * p.n_variables, s.atz.data(), true);
     if (p.n_variables)
       primal_step<i_t, f_t>
-        <<<(p.n_variables + 255) / 256, 256, 0, stream>>>(p.view(),
-                                                          s.col_scale.data(),
-                                                          s.current.data(),
-                                                          s.atz.data(),
-                                                          s.point.data(),
-                                                          s.reflected_x.data(),
-                                                          s.slack.data(),
-                                                          s.eta / weight,
-                                                          f_t(settings.objective_weight));
+        <<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(p.view(),
+                                                                s.col_scale.data(),
+                                                                s.current.data(),
+                                                                s.atz.data(),
+                                                                s.point.data(),
+                                                                s.reflected_x.data(),
+                                                                s.slack.data(),
+                                                                s.eta / weight,
+                                                                f_t(settings.objective_weight));
     s.multiply(s.reflected_x.data(), s.ax.data(), false);
     if (count)
-      dual_step<i_t, f_t><<<(count + 255) / 256, 256, 0, stream>>>(p.view(),
-                                                                   s.col_scale.data(),
-                                                                   s.row_scale.data(),
-                                                                   s.target.data(),
-                                                                   s.current.data(),
-                                                                   s.reflected_x.data(),
-                                                                   s.ax.data(),
-                                                                   s.point.data(),
-                                                                   s.eta * weight,
-                                                                   f_t(settings.distance_weight));
+      dual_step<i_t, f_t>
+        <<<(count + 255) / 256, 256, 0, stream.get()>>>(p.view(),
+                                                        s.col_scale.data(),
+                                                        s.row_scale.data(),
+                                                        s.target.data(),
+                                                        s.current.data(),
+                                                        s.reflected_x.data(),
+                                                        s.ax.data(),
+                                                        s.point.data(),
+                                                        s.eta * weight,
+                                                        f_t(settings.distance_weight));
     result.iterations = iter;
     bool check =
       inner == 1 || iter % settings.check_interval == 0 || iter == settings.iteration_limit;
@@ -464,7 +465,7 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
       raft::copy(s.anchor.data(), s.point.data(), s.point.size(), stream);
       inner = 0;
     } else if (s.current.size()) {
-      halpern_step<<<(s.current.size() + 255) / 256, 256, 0, stream>>>(
+      halpern_step<<<(s.current.size() + 255) / 256, 256, 0, stream.get()>>>(
         s.current.size(), s.current.data(), s.point.data(), s.anchor.data(), f_t(1.) / (inner + 1));
     }
   }
@@ -473,7 +474,7 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
   output.resize(p.n_variables, stream);
   if (p.n_variables)
-    unscale_output<<<(p.n_variables + 255) / 256, 256, 0, stream>>>(
+    unscale_output<<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(
       p.n_variables, s.point.data(), s.col_scale.data(), output.data());
   RAFT_CUDA_TRY(cudaGetLastError());
   p.handle_ptr->sync_stream();
