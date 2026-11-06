@@ -55,6 +55,7 @@ template <typename i_t, typename f_t>
 __global__ void initialize_projection(typename problem_t<i_t, f_t>::view_t pb,
                                       const f_t* scale,
                                       const f_t* input,
+                                      const f_t* start,
                                       f_t* target,
                                       f_t* current,
                                       f_t distance_weight,
@@ -63,7 +64,7 @@ __global__ void initialize_projection(typename problem_t<i_t, f_t>::view_t pb,
   i_t j = blockIdx.x * blockDim.x + threadIdx.x;
   if (j >= pb.n_variables) return;
   target[j] = input[j] / scale[j];
-  if (cold) current[j] = target[j];
+  if (cold) current[j] = start != nullptr ? start[j] / scale[j] : target[j];
   current[j] = clip(current[j],
                     get_lower(pb.variable_bounds[j]) / scale[j],
                     get_upper(pb.variable_bounds[j]) / scale[j]);
@@ -138,6 +139,7 @@ __global__ void unscale_output(i_t n, const f_t* point, const f_t* scale, f_t* o
 struct metrics_t {
   double primal = 0., dual = 0., gap = 0., objective = 0., target = 0., cost = 0.;
   double dx = 0., dy = 0., cross = 0., anchor_x = 0., anchor_dual = 0.;
+  double primal_sq = 0., primal_sq_scaled = 0., rhs_sq = 0., rhs_sq_scaled = 0.;
 };
 
 struct add_metrics {
@@ -154,6 +156,10 @@ struct add_metrics {
     a.cross += b.cross;
     a.anchor_x += b.anchor_x;
     a.anchor_dual += b.anchor_dual;
+    a.primal_sq += b.primal_sq;
+    a.primal_sq_scaled += b.primal_sq_scaled;
+    a.rhs_sq += b.rhs_sq;
+    a.rhs_sq_scaled += b.rhs_sq_scaled;
     return a;
   }
 };
@@ -191,8 +197,13 @@ struct collect_metrics {
     if (j < pb.n_constraints) {
       f_t activity = ax[j] / row_scale[j];
       f_t l = pb.constraint_lower_bounds[j], u = pb.constraint_upper_bounds[j];
-      r.primal = isfinite(activity) ? abs(activity - clip(activity, l, u)) : INFINITY;
-      f_t z    = point[2 * pb.n_variables + j];
+      r.primal           = isfinite(activity) ? abs(activity - clip(activity, l, u)) : INFINITY;
+      f_t rhs            = max(isfinite(l) ? abs(l) : f_t(0), isfinite(u) ? abs(u) : f_t(0));
+      r.primal_sq        = r.primal * r.primal;
+      r.primal_sq_scaled = r.primal_sq * row_scale[j] * row_scale[j];
+      r.rhs_sq           = rhs * rhs;
+      r.rhs_sq_scaled    = r.rhs_sq * row_scale[j] * row_scale[j];
+      f_t z              = point[2 * pb.n_variables + j];
       // The zero case avoids multiplying an infinite row bound by zero.
       f_t support = z > 0 ? z * u * row_scale[j] : z < 0 ? z * l * row_scale[j] : 0.;
       r.gap += z * ax[j] - support;
@@ -213,15 +224,19 @@ void update_result(pdfp_projection_result_t& result,
                    const metrics_t& metrics,
                    const pdfp_projection_settings_t& settings)
 {
-  result.primal_residual = metrics.primal;
-  result.dual_residual   = std::sqrt(metrics.dual) / (1. + std::sqrt(metrics.cost));
-  result.relative_gap    = std::abs(metrics.gap) / (1. + metrics.target);
-  result.objective       = metrics.objective;
+  result.primal_residual =
+    !settings.relative_primal ? metrics.primal
+    : settings.original_units
+      ? std::sqrt(metrics.primal_sq) / (1. + std::sqrt(metrics.rhs_sq))
+      : std::sqrt(metrics.primal_sq_scaled) / (1. + std::sqrt(metrics.rhs_sq_scaled));
+  result.dual_residual = std::sqrt(metrics.dual) / (1. + std::sqrt(metrics.cost));
+  result.relative_gap  = std::abs(metrics.gap) / (1. + metrics.target);
+  result.objective     = metrics.objective;
   result.converged =
     result.iterations > 0 && std::isfinite(result.objective) && std::isfinite(metrics.cost) &&
     std::isfinite(metrics.target) && std::isfinite(result.primal_residual) &&
     std::isfinite(result.dual_residual) && std::isfinite(result.relative_gap) &&
-    result.primal_residual <= .1 * settings.tolerance &&
+    result.primal_residual <= settings.primal_ratio * settings.tolerance &&
     result.dual_residual <= settings.tolerance && result.relative_gap <= settings.tolerance;
 }
 
@@ -231,11 +246,11 @@ template <typename i_t, typename f_t>
 struct pdfp_projection_t<i_t, f_t>::impl_t {
   problem_t<i_t, f_t>& problem;
   rmm::device_uvector<f_t> col_scale, row_scale, current, point, anchor, target;
-  rmm::device_uvector<f_t> ax, atz, atz_point, reflected_x, slack;
+  rmm::device_uvector<f_t> ax, atz, atz_point, reflected_x, slack, start;
   f_t eta;
   bool cold = true;
 
-  explicit impl_t(problem_t<i_t, f_t>& p)
+  impl_t(problem_t<i_t, f_t>& p, bool spectral_step)
     : problem(p),
       col_scale(p.n_variables, p.handle_ptr->get_stream()),
       row_scale(p.n_constraints, p.handle_ptr->get_stream()),
@@ -247,7 +262,8 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
       atz(p.n_variables, p.handle_ptr->get_stream()),
       atz_point(p.n_variables, p.handle_ptr->get_stream()),
       reflected_x(p.n_variables, p.handle_ptr->get_stream()),
-      slack(p.n_variables, p.handle_ptr->get_stream())
+      slack(p.n_variables, p.handle_ptr->get_stream()),
+      start(0, p.handle_ptr->get_stream())
   {
     auto offsets = cuopt::host_copy(p.offsets, p.handle_ptr->get_stream());
     auto indices = cuopt::host_copy(p.variables, p.handle_ptr->get_stream());
@@ -291,7 +307,7 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
     }
     for (auto a : cm)
       col_norm = std::max(col_norm, a);
-    eta = .998 / std::sqrt(1. + row_norm * col_norm);
+    eta = .998 / std::sqrt(1. + (spectral_step ? 1. : row_norm * col_norm));
     raft::copy(row_scale.data(), rs.data(), rs.size(), p.handle_ptr->get_stream());
     raft::copy(col_scale.data(), cs.data(), cs.size(), p.handle_ptr->get_stream());
     p.handle_ptr->sync_stream();
@@ -341,9 +357,18 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
 };
 
 template <typename i_t, typename f_t>
-pdfp_projection_t<i_t, f_t>::pdfp_projection_t(problem_t<i_t, f_t>& problem)
-  : impl_(std::make_unique<impl_t>(problem))
+pdfp_projection_t<i_t, f_t>::pdfp_projection_t(problem_t<i_t, f_t>& problem, bool spectral_step)
+  : impl_(std::make_unique<impl_t>(problem, spectral_step))
 {
+}
+
+template <typename i_t, typename f_t>
+void pdfp_projection_t<i_t, f_t>::set_cold_start(const rmm::device_uvector<f_t>& primal)
+{
+  auto& p = impl_->problem;
+  cuopt_assert(primal.size() == size_t(p.n_variables), "Cold start size must match the model");
+  impl_->start.resize(primal.size(), p.handle_ptr->get_stream());
+  raft::copy(impl_->start.data(), primal.data(), primal.size(), p.handle_ptr->get_stream());
 }
 
 template <typename i_t, typename f_t>
@@ -389,14 +414,15 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   if (s.cold)
     thrust::fill(p.handle_ptr->get_thrust_policy(), s.current.begin(), s.current.end(), 0.);
   if (p.n_variables)
-    initialize_projection<i_t, f_t>
-      <<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(p.view(),
-                                                              s.col_scale.data(),
-                                                              input.data(),
-                                                              s.target.data(),
-                                                              s.current.data(),
-                                                              f_t(settings.distance_weight),
-                                                              s.cold);
+    initialize_projection<i_t, f_t><<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(
+      p.view(),
+      s.col_scale.data(),
+      input.data(),
+      s.start.size() ? s.start.data() : nullptr,
+      s.target.data(),
+      s.current.data(),
+      f_t(settings.distance_weight),
+      s.cold);
   s.cold = false;
   raft::copy(s.anchor.data(), s.current.data(), s.current.size(), stream);
   raft::copy(s.point.data(), s.current.data(), s.current.size(), stream);
@@ -470,8 +496,9 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     }
   }
   if (last_check != result.iterations) update_result(result, s.metrics(settings), settings);
-  // Warm start the next target from the bounded PDHG point, never the reflection.
-  raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
+  if (!settings.anchor_halpern) {
+    raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
+  }
   output.resize(p.n_variables, stream);
   if (p.n_variables)
     unscale_output<<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(

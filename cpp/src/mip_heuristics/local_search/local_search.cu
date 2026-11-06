@@ -13,6 +13,7 @@
 #include <branch_and_bound/branch_and_bound.hpp>
 #include <math_optimization/tic_toc.hpp>
 #include <mip_heuristics/diversity/diversity_manager.cuh>
+#include <mip_heuristics/fp_experiment.hpp>
 #include <mip_heuristics/lns/cpufj.cuh>
 #include <mip_heuristics/lns/thread_budget.hpp>
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
@@ -1104,20 +1105,34 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   auto n_vars         = solution.problem_ptr->n_variables;
   auto n_binary_vars  = solution.problem_ptr->get_n_binary_variables();
   auto n_integer_vars = solution.problem_ptr->n_integer_vars;
-  bool is_feasible    = check_fj_on_lp_optimal(solution, perturb, timer);
-  CUOPT_LOG_INFO("FPPHASE fj_lp_opt t=%.3f feas=%d",
-                 context.diversity_manager_ptr->timer.elapsed_time(),
-                 (int)is_feasible);
-  if (is_feasible) {
-    CUOPT_LOG_DEBUG("Solution generated with FJ on LP optimal: is_feasible %d", is_feasible);
-    return true;
+  bool is_feasible    = false;
+  const bool skip_fj  = fp_experiment::skip_initial_fj();
+  if (skip_fj) {
+    if (lp_optimal_exists) {
+      raft::copy(solution.assignment.data(),
+                 lp_optimal_solution.data(),
+                 solution.assignment.size(),
+                 solution.handle_ptr->get_stream());
+    }
+    CUOPT_LOG_INFO("FPPHASE skip_initial_fj t=%.3f lp_optimal=%d",
+                   context.diversity_manager_ptr->timer.elapsed_time(),
+                   (int)lp_optimal_exists);
+  } else {
+    is_feasible = check_fj_on_lp_optimal(solution, perturb, timer);
+    CUOPT_LOG_INFO("FPPHASE fj_lp_opt t=%.3f feas=%d",
+                   context.diversity_manager_ptr->timer.elapsed_time(),
+                   (int)is_feasible);
+    if (is_feasible) {
+      CUOPT_LOG_DEBUG("Solution generated with FJ on LP optimal: is_feasible %d", is_feasible);
+      return true;
+    }
   }
   population_ptr->add_external_solutions_to_population();
   if (context.preempt_heuristic_solver_.load()) {
     CUOPT_LOG_DEBUG("Preempting heuristic solver!");
     return is_feasible;
   }
-  if (!perturb) {
+  if (!perturb && !skip_fj) {
     raft::copy(fj_sol_on_lp_opt.data(),
                solution.assignment.data(),
                solution.assignment.size(),

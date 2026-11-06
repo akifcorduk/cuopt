@@ -42,17 +42,23 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   pdlp_solver_settings_t<i_t, f_t> pdlp_settings{};
   pdlp_settings.detect_infeasibility = settings.check_infeasibility;
   pdlp_settings.set_optimality_tolerance(settings.tolerance);
-  f_t tolerance_divisor =
-    op_problem.tolerances.absolute_tolerance / op_problem.tolerances.relative_tolerance;
-  if (tolerance_divisor == 0) { tolerance_divisor = 1; }
-  pdlp_settings.tolerances.relative_primal_tolerance = settings.tolerance / tolerance_divisor;
-  pdlp_settings.tolerances.relative_dual_tolerance   = settings.tolerance / tolerance_divisor;
-  pdlp_settings.time_limit                           = settings.time_limit;
-  pdlp_settings.concurrent_halt                      = settings.concurrent_halt;
-  pdlp_settings.per_constraint_residual              = settings.per_constraint_residual;
-  pdlp_settings.first_primal_feasible                = settings.return_first_feasible;
-  pdlp_settings.pdlp_solver_mode                     = pdlp_solver_mode_t::Stable2;
-  pdlp_settings.presolver                            = presolver_t::None;
+  if (settings.relative_criteria) {
+    pdlp_settings.tolerances.absolute_primal_tolerance = 0.1 * settings.tolerance;
+    pdlp_settings.tolerances.relative_primal_tolerance = 0.1 * settings.tolerance;
+    pdlp_settings.per_constraint_residual              = false;
+  } else {
+    f_t tolerance_divisor =
+      op_problem.tolerances.absolute_tolerance / op_problem.tolerances.relative_tolerance;
+    if (tolerance_divisor == 0) { tolerance_divisor = 1; }
+    pdlp_settings.tolerances.relative_primal_tolerance = settings.tolerance / tolerance_divisor;
+    pdlp_settings.tolerances.relative_dual_tolerance   = settings.tolerance / tolerance_divisor;
+    pdlp_settings.per_constraint_residual              = settings.per_constraint_residual;
+  }
+  pdlp_settings.time_limit            = settings.time_limit;
+  pdlp_settings.concurrent_halt       = settings.concurrent_halt;
+  pdlp_settings.first_primal_feasible = settings.return_first_feasible;
+  pdlp_settings.pdlp_solver_mode      = pdlp_solver_mode_t::Stable2;
+  pdlp_settings.presolver             = presolver_t::None;
   set_pdlp_solver_mode(pdlp_settings);
   // TODO: set Stable3 here?
   pdlp::pdlp_solver_t<i_t, f_t> lp_solver(op_problem, pdlp_settings);

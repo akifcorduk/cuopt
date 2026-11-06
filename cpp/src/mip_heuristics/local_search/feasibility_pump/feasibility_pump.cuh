@@ -197,6 +197,10 @@ class feasibility_pump_t {
   i_t trace_iteration     = 0;
   f_t trace_last_distance = NAN;
   const char* trace_exit  = "";
+  // Paper tolerance schedule (fp_experiment::paper_tolerance): 1e-2, x0.98 per projection, floor
+  // 1e-4.
+  double projection_tolerance = 1e-2;
+  f_t last_alpha_used         = 0;
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
   rmm::device_uvector<var_t> orig_variable_types;

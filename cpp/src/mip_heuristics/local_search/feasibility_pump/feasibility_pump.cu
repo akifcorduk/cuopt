@@ -84,7 +84,9 @@ void feasibility_pump_t<i_t, f_t>::adjust_objective_with_original(solution_t<i_t
       "changing alpha from %f to %f", config.alpha, config.alpha * config.alpha_decrease_factor);
     config.alpha = config.alpha * config.alpha_decrease_factor;
   }
-  f_t distance_weight         = 1. - config.alpha;
+  const f_t alpha             = fp_experiment::pure_distance() ? f_t(0) : f_t(config.alpha);
+  last_alpha_used             = alpha;
+  f_t distance_weight         = 1. - alpha;
   std::vector<f_t> obj_vector = cuopt::host_copy(solution.problem_ptr->objective_coefficients,
                                                  solution.handle_ptr->get_stream());
   solution.handle_ptr->sync_stream();
@@ -94,7 +96,7 @@ void feasibility_pump_t<i_t, f_t>::adjust_objective_with_original(solution_t<i_t
                   l2_norm_of_original_obj,
                   l2_norm_of_distance_obj);
   // f_t orig_obj_weight = config.alpha * (l2_norm_of_distance_obj / l2_norm_of_original_obj);
-  f_t orig_obj_weight = config.alpha / l2_norm_of_original_obj;
+  f_t orig_obj_weight = alpha / l2_norm_of_original_obj;
   distance_weight     = distance_weight / l2_norm_of_distance_obj;
   if (!isfinite(orig_obj_weight)) {
     CUOPT_LOG_TRACE("orig_obj_weight is not finite, setting to zero");
@@ -146,25 +148,40 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   if (config.use_pdfp_projection) {
     auto& problem = *solution.problem_ptr;
     if (!longer_lp_run) { config.alpha *= config.alpha_decrease_factor; }
+    const f_t alpha = fp_experiment::pure_distance() ? f_t(0) : f_t(config.alpha);
+    last_alpha_used = alpha;
     auto objective =
       cuopt::host_copy(problem.objective_coefficients, solution.handle_ptr->get_stream());
-    const f_t objective_norm = vector_norm(objective.begin(), objective.end());
+    const f_t objective_norm   = vector_norm(objective.begin(), objective.end());
+    const bool paper_tolerance = fp_experiment::paper_tolerance();
     pdfp_projection_settings_t settings;
-    settings.distance_weight  = problem.n_integer_vars > 0
-                                  ? (1. - config.alpha) / std::sqrt(f_t(problem.n_integer_vars))
-                                  : 0.;
-    settings.objective_weight = objective_norm > 0. ? config.alpha / objective_norm : 0.;
-    settings.tolerance        = get_tolerance_from_ratio(ratio_of_set_integers,
-                                                  context.settings.tolerances.absolute_tolerance);
-    const f_t base            = context.settings.heuristic_params.relaxed_lp_time_limit;
+    settings.distance_weight =
+      problem.n_integer_vars > 0 ? (1. - alpha) / std::sqrt(f_t(problem.n_integer_vars)) : 0.;
+    settings.objective_weight = objective_norm > 0. ? alpha / objective_norm : 0.;
+    settings.tolerance =
+      paper_tolerance ? projection_tolerance
+                      : get_tolerance_from_ratio(ratio_of_set_integers,
+                                                 context.settings.tolerances.absolute_tolerance);
+    settings.relative_primal = paper_tolerance;
+    settings.original_units  = problem.n_integer_vars < problem.n_variables;
+    settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
+    const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
     settings.time_limit =
-      std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+      paper_tolerance
+        ? std::max(0.05, timer.remaining_time())
+        : std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
     const f_t old_remaining = timer.remaining_time();
     double setup_time       = 0.;
     if (!pdfp_projector) {
       const auto setup_start = std::chrono::steady_clock::now();
-      pdfp_projector         = std::make_unique<pdfp_projection_t<i_t, f_t>>(problem);
-      pdfp_problem           = solution.problem_ptr;
+      pdfp_projector =
+        std::make_unique<pdfp_projection_t<i_t, f_t>>(problem, fp_experiment::pdfp_spectral_step());
+      pdfp_problem = solution.problem_ptr;
+      if (fp_experiment::pdfp_paper_warm_start() && context.diversity_manager_ptr != nullptr &&
+          context.diversity_manager_ptr->ls.lp_optimal_exists &&
+          lp_optimal_solution.size() == size_t(problem.n_variables)) {
+        pdfp_projector->set_cold_start(lp_optimal_solution);
+      }
       setup_time =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count();
     }
@@ -172,6 +189,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
                  "The PDFP projector was built for another problem");
     last_pdfp_result = pdfp_projector->project(solution.assignment, solution.assignment, settings);
     last_lp_time     = old_remaining - timer.remaining_time();
+    if (paper_tolerance) { projection_tolerance = std::max(projection_tolerance * 0.98, 1e-4); }
     raft::copy(last_projection.data(),
                solution.assignment.data(),
                solution.assignment.size(),
@@ -275,13 +293,16 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   f_t old_remaining  = timer.remaining_time();
   cuopt_func_call(solution.test_variable_bounds(false));
   relaxed_lp_settings_t lp_settings;
-  lp_settings.time_limit          = time_limit;
-  lp_settings.tolerance           = lp_tolerance;
+  const bool paper_tolerance = fp_experiment::paper_tolerance();
+  lp_settings.time_limit = paper_tolerance ? std::max(0.05, timer.remaining_time()) : time_limit;
+  lp_settings.tolerance  = paper_tolerance ? projection_tolerance : lp_tolerance;
+  lp_settings.relative_criteria   = paper_tolerance;
   lp_settings.check_infeasibility = false;
   const auto lp_start             = std::chrono::steady_clock::now();
   auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
   const double lp_call_time =
     std::chrono::duration<double>(std::chrono::steady_clock::now() - lp_start).count();
+  if (paper_tolerance) { projection_tolerance = std::max(projection_tolerance * 0.98, 1e-4); }
   cuopt_func_call(solution.test_variable_bounds(false));
   last_lp_time = old_remaining - timer.remaining_time();
   lp_time += last_lp_time;
@@ -293,8 +314,8 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     trace.projector  = "epigraph";
     trace.status     = solver_response.get_termination_status_string();
     std::replace(trace.status.begin(), trace.status.end(), ' ', '_');
-    trace.tolerance       = lp_tolerance;
-    trace.time_limit      = time_limit;
+    trace.tolerance       = lp_settings.tolerance;
+    trace.time_limit      = lp_settings.time_limit;
     trace.solve_time      = lp_call_time;
     trace.setup_time      = 0.;
     trace.iterations      = info.number_of_steps_taken;
@@ -512,6 +533,7 @@ template <typename i_t, typename f_t>
 void feasibility_pump_t<i_t, f_t>::reset()
 {
   ++trace_run;
+  projection_tolerance = 1e-2;
   pdfp_projector.reset();
   best_excess               = std::numeric_limits<f_t>::infinity();
   total_fp_time_until_cycle = 0;
@@ -671,7 +693,7 @@ void feasibility_pump_t<i_t, f_t>::trace_projection(solution_t<i_t, f_t>& soluti
     trace_time(),
     general_integers_relaxed ? "binary" : "all",
     p.projector,
-    config.alpha,
+    (double)last_alpha_used,
     p.tolerance,
     p.time_limit,
     p.total_time,

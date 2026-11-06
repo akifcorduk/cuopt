@@ -17,13 +17,16 @@
 namespace cuopt::mathematical_optimization::mip {
 
 struct relaxed_lp_settings_t {
-  double tolerance                  = 1e-4;
-  double time_limit                 = 1.0;
-  bool check_infeasibility          = true;
-  bool return_first_feasible        = false;
-  bool save_state                   = true;
-  bool per_constraint_residual      = true;
-  bool has_initial_primal           = true;
+  double tolerance             = 1e-4;
+  double time_limit            = 1.0;
+  bool check_infeasibility     = true;
+  bool return_first_feasible   = false;
+  bool save_state              = true;
+  bool per_constraint_residual = true;
+  bool has_initial_primal      = true;
+  // PDLP's relative criteria instead of per-constraint residuals: ||primal residual||_2 <=
+  // 0.1 * tolerance * (1 + ||b||_2), dual residual and gap <= tolerance in the same relative form.
+  bool relative_criteria            = false;
   std::atomic<int>* concurrent_halt = nullptr;
 };
 
