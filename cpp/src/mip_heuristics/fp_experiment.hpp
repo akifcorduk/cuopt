@@ -13,11 +13,11 @@
 // benchmark runs use; the environment variables override them for local runs.
 namespace cuopt::mathematical_optimization::mip::fp_experiment {
 
-constexpr bool default_use_pdfp_projection   = false;
+constexpr bool default_use_pdfp_projection   = true;
 constexpr bool default_gpu_heuristics_only   = true;
 constexpr bool default_skip_initial_fj       = true;
-constexpr bool default_pdfp_spectral_step    = false;
-constexpr bool default_paper_tolerance       = false;
+constexpr bool default_pdfp_spectral_step    = true;
+constexpr bool default_paper_tolerance       = true;
 constexpr bool default_pdfp_paper_warm_start = false;
 constexpr bool default_pure_distance         = false;
 
