@@ -13,7 +13,7 @@
 // benchmark runs use; the environment variables override them for local runs.
 namespace cuopt::mathematical_optimization::mip::fp_experiment {
 
-constexpr bool default_use_pdfp_projection = false;
+constexpr bool default_use_pdfp_projection = true;
 constexpr bool default_gpu_heuristics_only = true;
 
 inline bool env_flag(const char* name, bool compiled_default)
