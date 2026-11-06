@@ -135,6 +135,34 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
 {
   raft::common::nvtx::range fun_scope("linear_project_onto_polytope");
   CUOPT_LOG_DEBUG("linear projection of fp");
+  if (config.use_pdfp_projection) {
+    auto& problem = *solution.problem_ptr;
+    if (!longer_lp_run) { config.alpha *= config.alpha_decrease_factor; }
+    auto objective =
+      cuopt::host_copy(problem.objective_coefficients, solution.handle_ptr->get_stream());
+    const f_t objective_norm = vector_norm(objective.begin(), objective.end());
+    pdfp_projection_settings_t settings;
+    settings.distance_weight  = problem.n_integer_vars > 0
+                                  ? (1. - config.alpha) / std::sqrt(f_t(problem.n_integer_vars))
+                                  : 0.;
+    settings.objective_weight = objective_norm > 0. ? config.alpha / objective_norm : 0.;
+    settings.tolerance        = get_tolerance_from_ratio(ratio_of_set_integers,
+                                                  context.settings.tolerances.absolute_tolerance);
+    const f_t base            = context.settings.heuristic_params.relaxed_lp_time_limit;
+    settings.time_limit =
+      std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+    const f_t old_remaining = timer.remaining_time();
+    if (!pdfp_projector) {
+      pdfp_projector = std::make_unique<pdfp_projection_t<i_t, f_t>>(problem);
+    }
+    last_pdfp_result = pdfp_projector->project(solution.assignment, solution.assignment, settings);
+    last_lp_time     = old_remaining - timer.remaining_time();
+    raft::copy(last_projection.data(),
+               solution.assignment.data(),
+               solution.assignment.size(),
+               solution.handle_ptr->get_stream());
+    return solution.compute_feasibility();
+  }
   auto h_assignment = solution.get_host_assignment();
   auto h_variable_bounds =
     cuopt::host_copy(solution.problem_ptr->variable_bounds, solution.handle_ptr->get_stream());
@@ -375,6 +403,7 @@ bool feasibility_pump_t<i_t, f_t>::restart_fp(solution_t<i_t, f_t>& solution)
 template <typename i_t, typename f_t>
 void feasibility_pump_t<i_t, f_t>::reset()
 {
+  pdfp_projector.reset();
   best_excess               = std::numeric_limits<f_t>::infinity();
   total_fp_time_until_cycle = 0;
   fp_fj_cycle_time_begin    = timer.remaining_time();
@@ -387,6 +416,7 @@ template <typename i_t, typename f_t>
 void feasibility_pump_t<i_t, f_t>::resize_vectors(problem_t<i_t, f_t>& problem,
                                                   const raft::handle_t* handle_ptr)
 {
+  pdfp_projector.reset();
   last_rounding.resize(problem.n_variables, handle_ptr->get_stream());
   last_projection.resize(problem.n_variables, handle_ptr->get_stream());
 }

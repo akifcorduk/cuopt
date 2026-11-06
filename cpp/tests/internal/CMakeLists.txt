@@ -19,6 +19,8 @@ ConfigureTest(NUMOPT_INTERNAL_TEST
     # mip
     ${CUOPT_TEST_DIR}/mip/miplib_test.cu
     ${CUOPT_TEST_DIR}/mip/problem_test.cu
+    ${CUOPT_TEST_DIR}/mip/pdfp_projection_test.cu
+    ${CUOPT_TEST_DIR}/mip/pdfp_integration_test.cu
     ${CUOPT_TEST_DIR}/mip/elim_var_remap_test.cu
     ${CUOPT_TEST_DIR}/mip/bounds_standardization_test.cu
     ${CUOPT_TEST_DIR}/mip/multi_probe_test.cu
