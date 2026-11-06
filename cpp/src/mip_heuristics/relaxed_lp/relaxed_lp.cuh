@@ -26,7 +26,10 @@ struct relaxed_lp_settings_t {
   bool has_initial_primal      = true;
   // PDLP's relative criteria instead of per-constraint residuals: ||primal residual||_2 <=
   // 0.1 * tolerance * (1 + ||b||_2), dual residual and gap <= tolerance in the same relative form.
-  bool relative_criteria            = false;
+  bool relative_criteria = false;
+  // With relative_criteria and a non-negative value: primal test ||residual||_2 <=
+  // 0.1 * tolerance * (1 + primal_rhs_norm) instead of PDLP's own right-hand-side norm.
+  double primal_rhs_norm            = -1.;
   std::atomic<int>* concurrent_halt = nullptr;
 };
 

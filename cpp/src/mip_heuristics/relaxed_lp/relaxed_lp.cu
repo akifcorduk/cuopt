@@ -43,8 +43,10 @@ optimization_problem_solution_t<i_t, f_t> get_relaxed_lp_solution(
   pdlp_settings.detect_infeasibility = settings.check_infeasibility;
   pdlp_settings.set_optimality_tolerance(settings.tolerance);
   if (settings.relative_criteria) {
-    pdlp_settings.tolerances.absolute_primal_tolerance = 0.1 * settings.tolerance;
-    pdlp_settings.tolerances.relative_primal_tolerance = 0.1 * settings.tolerance;
+    const bool own_norm = settings.primal_rhs_norm >= 0.;
+    pdlp_settings.tolerances.absolute_primal_tolerance =
+      0.1 * settings.tolerance * (own_norm ? 1. + settings.primal_rhs_norm : 1.);
+    pdlp_settings.tolerances.relative_primal_tolerance = own_norm ? 0. : 0.1 * settings.tolerance;
     pdlp_settings.per_constraint_residual              = false;
   } else {
     f_t tolerance_divisor =

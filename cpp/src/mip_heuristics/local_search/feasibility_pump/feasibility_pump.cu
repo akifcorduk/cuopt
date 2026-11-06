@@ -296,7 +296,23 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   const bool paper_tolerance = fp_experiment::paper_tolerance();
   lp_settings.time_limit = paper_tolerance ? std::max(0.05, timer.remaining_time()) : time_limit;
   lp_settings.tolerance  = paper_tolerance ? projection_tolerance : lp_tolerance;
-  lp_settings.relative_criteria   = paper_tolerance;
+  lp_settings.relative_criteria = paper_tolerance;
+  if (paper_tolerance) {
+    // Same right-hand-side norm as PDFP (original rows only, not the epigraph rows).
+    const f_t* lower            = solution.problem_ptr->constraint_lower_bounds.data();
+    const f_t* upper            = solution.problem_ptr->constraint_upper_bounds.data();
+    lp_settings.primal_rhs_norm = std::sqrt(thrust::transform_reduce(
+      solution.handle_ptr->get_thrust_policy(),
+      thrust::make_counting_iterator<i_t>(0),
+      thrust::make_counting_iterator<i_t>(solution.problem_ptr->n_constraints),
+      cuda::proclaim_return_type<f_t>([lower, upper] __device__(i_t i) -> f_t {
+        const f_t rhs = max(isfinite(lower[i]) ? abs(lower[i]) : f_t(0),
+                            isfinite(upper[i]) ? abs(upper[i]) : f_t(0));
+        return rhs * rhs;
+      }),
+      f_t(0),
+      thrust::plus<f_t>()));
+  }
   lp_settings.check_infeasibility = false;
   const auto lp_start             = std::chrono::steady_clock::now();
   auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
