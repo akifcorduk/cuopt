@@ -33,6 +33,7 @@
 
 #include <cuda/functional>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 
@@ -178,11 +179,10 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     auto& trace           = last_projection_trace;
     trace.projector       = "pdfp";
     trace.status          = last_pdfp_result.converged                             ? "Optimal"
-                            : last_pdfp_result.elapsed_time >= settings.time_limit ? "TimeLimit"
-                                                                                   : "IterationLimit";
+                            : last_pdfp_result.elapsed_time >= settings.time_limit ? "Time_Limit"
+                                                                                   : "Iteration_Limit";
     trace.tolerance       = settings.tolerance;
     trace.time_limit      = settings.time_limit;
-    trace.total_time      = last_lp_time;
     trace.solve_time      = last_pdfp_result.elapsed_time;
     trace.setup_time      = setup_time;
     trace.iterations      = last_pdfp_result.iterations;
@@ -278,21 +278,24 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   lp_settings.time_limit          = time_limit;
   lp_settings.tolerance           = lp_tolerance;
   lp_settings.check_infeasibility = false;
+  const auto lp_start             = std::chrono::steady_clock::now();
   auto solver_response            = get_relaxed_lp_solution(temp_p, solution, lp_settings);
+  const double lp_call_time =
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - lp_start).count();
   cuopt_func_call(solution.test_variable_bounds(false));
   last_lp_time = old_remaining - timer.remaining_time();
   lp_time += last_lp_time;
   n_calls++;
   CUOPT_LOG_DEBUG("lp_time %f average lp_time %f", last_lp_time, lp_time / n_calls);
   {
-    const auto& info      = solver_response.get_additional_termination_information();
-    auto& trace           = last_projection_trace;
-    trace.projector       = "epigraph";
-    trace.status          = solver_response.get_termination_status_string();
+    const auto& info = solver_response.get_additional_termination_information();
+    auto& trace      = last_projection_trace;
+    trace.projector  = "epigraph";
+    trace.status     = solver_response.get_termination_status_string();
+    std::replace(trace.status.begin(), trace.status.end(), ' ', '_');
     trace.tolerance       = lp_tolerance;
     trace.time_limit      = time_limit;
-    trace.total_time      = last_lp_time;
-    trace.solve_time      = info.solve_time;
+    trace.solve_time      = lp_call_time;
     trace.setup_time      = 0.;
     trace.iterations      = info.number_of_steps_taken;
     trace.primal_residual = info.l2_relative_primal_residual;
@@ -769,8 +772,11 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent_impl(solution_t<i_t, f_
     // pass n_assigned_integers from the previous iteration
     f_t ratio_of_assigned_integers =
       f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
+    const auto projection_start = std::chrono::steady_clock::now();
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
-    i_t n_integers   = solution.compute_number_of_integers();
+    last_projection_trace.total_time =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - projection_start).count();
+    i_t n_integers = solution.compute_number_of_integers();
     trace_projection(solution, n_integers);
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
                     n_integers,

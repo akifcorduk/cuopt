@@ -967,8 +967,12 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   population_ptr->add_external_solutions_to_population();
   if (population_ptr->current_size() > 1 &&
       i - last_improved_iteration > iterations_for_stagnation) {
-    fp.config.alpha = default_alpha;
+    fp.config.alpha              = default_alpha;
+    const double recombine_start = context.diversity_manager_ptr->timer.elapsed_time();
     population_ptr->diversity_step(max_iterations_without_improvement);
+    CUOPT_LOG_INFO("FPPHASE diversity_step t=%.3f dur=%.3f",
+                   context.diversity_manager_ptr->timer.elapsed_time(),
+                   context.diversity_manager_ptr->timer.elapsed_time() - recombine_start);
     population_ptr->print();
     population_ptr->update_weights();
     save_solution_and_add_cutting_plane(
@@ -1101,6 +1105,9 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   auto n_binary_vars  = solution.problem_ptr->get_n_binary_variables();
   auto n_integer_vars = solution.problem_ptr->n_integer_vars;
   bool is_feasible    = check_fj_on_lp_optimal(solution, perturb, timer);
+  CUOPT_LOG_INFO("FPPHASE fj_lp_opt t=%.3f feas=%d",
+                 context.diversity_manager_ptr->timer.elapsed_time(),
+                 (int)is_feasible);
   if (is_feasible) {
     CUOPT_LOG_DEBUG("Solution generated with FJ on LP optimal: is_feasible %d", is_feasible);
     return true;
@@ -1117,6 +1124,9 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
                solution.handle_ptr->get_stream());
     fj.reset_weights(solution.handle_ptr->get_stream());
     is_feasible = run_fj_on_zero(solution, timer);
+    CUOPT_LOG_INFO("FPPHASE fj_zero t=%.3f feas=%d",
+                   context.diversity_manager_ptr->timer.elapsed_time(),
+                   (int)is_feasible);
     if (is_feasible) {
       CUOPT_LOG_DEBUG("Solution generated with FJ on zero solution: is_feasible %d", is_feasible);
       return true;
@@ -1136,7 +1146,11 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   fp.cycle_queue.reset(solution);
   fp.reset();
   fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
+  CUOPT_LOG_INFO("FPPHASE staged_fp t=%.3f", context.diversity_manager_ptr->timer.elapsed_time());
   is_feasible = run_staged_fp(solution, timer, population_ptr);
+  CUOPT_LOG_INFO("FPPHASE staged_fp_end t=%.3f feas=%d",
+                 context.diversity_manager_ptr->timer.elapsed_time(),
+                 (int)is_feasible);
   // is_feasible = run_fp(solution, timer);
   CUOPT_LOG_DEBUG("Solution generated with FP: is_feasible %d", is_feasible);
   return is_feasible;

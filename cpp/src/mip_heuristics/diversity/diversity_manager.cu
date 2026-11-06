@@ -450,6 +450,7 @@ template <typename i_t, typename f_t>
 void diversity_manager_t<i_t, f_t>::run_fp_alone()
 {
   CUOPT_LOG_DEBUG("Running FP alone!");
+  CUOPT_LOG_INFO("FPPHASE fp_alone t=%.3f", timer.elapsed_time());
   solution_t<i_t, f_t> sol(population.best_feasible());
   ls.run_fp(sol, timer, &population);
   CUOPT_LOG_DEBUG("FP alone finished!");
@@ -583,6 +584,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
     set_pdlp_solver_mode(pdlp_settings);
     timer_t lp_timer(lp_time_limit);
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
+    CUOPT_LOG_INFO("FPPHASE root_lp t=%.3f status=%s iters=%d obj=%.10g",
+                   timer.elapsed_time(),
+                   lp_result.get_termination_status_string().c_str(),
+                   lp_result.get_additional_termination_information().number_of_steps_taken,
+                   (double)lp_result.get_objective_value());
 
     // The concurrent root LP can fail to produce a usable solution -- e.g. the barrier
     // hits a numerical error on an infeasible problem and PDLP returns NumericalError
