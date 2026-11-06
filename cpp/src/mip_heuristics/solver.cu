@@ -5,6 +5,7 @@
  */
 /* clang-format on */
 
+#include <mip_heuristics/fp_experiment.hpp>
 #include <mip_heuristics/lns/thread_budget.hpp>
 #include "diversity/diversity_manager.cuh"
 #include "local_search/local_search.cuh"
@@ -472,14 +473,22 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   branch_and_bound->set_user_bound_callback(
     [stats_ptr](f_t user_bound) { stats_ptr->set_solution_bound(user_bound); });
 
+  const bool gpu_heuristics_only = fp_experiment::gpu_heuristics_only();
+  CUOPT_LOG_INFO("FP experiment: projector %s, GPU heuristic thread only %d",
+                 fp_experiment::use_pdfp_projection() ? "pdfp" : "epigraph",
+                 (int)gpu_heuristics_only);
+
   // Set the primal heuristics -> branch and bound callback
   if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
     branch_and_bound->set_concurrent_lp_root_solve(true);
 
-    context.problem_ptr->branch_and_bound_callback =
-      [bb = branch_and_bound.get()](const std::vector<f_t>& solution, heuristics_origin_t origin) {
+    if (!gpu_heuristics_only) {
+      context.problem_ptr->branch_and_bound_callback = [bb = branch_and_bound.get()](
+                                                         const std::vector<f_t>& solution,
+                                                         heuristics_origin_t origin) {
         return bb->set_solution_from_heuristics(solution, origin);
       };
+    }
   } else if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
     branch_and_bound->set_concurrent_lp_root_solve(false);
     // TODO once deterministic GPU heuristics are integrated
@@ -501,7 +510,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
   std::unique_ptr<mip::root_structural_t<i_t, f_t>> root_structural;
   if (num_threads - lns_threads >= CUOPT_MIP_ROOT_STRUCTURAL_REQUIRED_THREAD_COUNT &&
-      context.settings.determinism_mode != CUOPT_MODE_DETERMINISTIC) {
+      context.settings.determinism_mode != CUOPT_MODE_DETERMINISTIC && !gpu_heuristics_only) {
     root_structural = std::make_unique<mip::root_structural_t<i_t, f_t>>(
       *context.problem_ptr,
       context.settings.get_tolerances(),
@@ -514,9 +523,11 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
 
 #pragma omp taskgroup
   {
+    if (!gpu_heuristics_only) {
 #pragma omp task default(shared) priority(CUOPT_CRITICAL_TASK_PRIORITY)
-    {
-      branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
+      {
+        branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
+      }
     }
 
     if (root_structural) {

@@ -9,6 +9,7 @@
 #include "diversity_manager.cuh"
 
 #include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
+#include <mip_heuristics/fp_experiment.hpp>
 #include <mip_heuristics/lns/thread_budget.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include <presolve/third_party_presolve.hpp>
@@ -475,6 +476,11 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
   // to automatically compute the solving time on scope exit
   auto timer_raii_guard =
     cuopt::scope_guard([&]() { stats.total_solve_time = timer.elapsed_time(); });
+  auto fp_trace_summary_guard    = cuopt::scope_guard([&]() {
+    ls.fp.log_trace_summary();
+    fp_recombiner.fp.log_trace_summary();
+  });
+  const bool gpu_heuristics_only = fp_experiment::gpu_heuristics_only();
 
   // Debug: Allow disabling GPU heuristics to test B&B tree determinism in isolation
   const char* disable_heuristics_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
@@ -539,10 +545,10 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
   if (check_b_b_preemption()) { return population.best_feasible(); }
   // Run CPUFJ early to find quick initial solutions
   ls_cpufj_raii_guard_t ls_cpufj_raii_guard(ls);  // RAII to stop cpufj threads on solve stop
-  ls.start_cpufj_scratch_threads(population);
+  if (!gpu_heuristics_only) { ls.start_cpufj_scratch_threads(population); }
   // Dedicated ruin-and-repair improvement worker on a spare thread; deepens the population's
   // feasible incumbent without taking any thread away from feasibility discovery above.
-  ls.start_cpufj_lns_improvement_thread(population);
+  if (!gpu_heuristics_only) { ls.start_cpufj_lns_improvement_thread(population); }
 
   if (check_b_b_preemption()) { return population.best_feasible(); }
   lp_state_t<i_t, f_t>& lp_state = problem_ptr->lp_state;
@@ -564,10 +570,10 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
     pdlp_settings.tolerances.absolute_primal_tolerance = absolute_tolerance;
     pdlp_settings.tolerances.relative_primal_tolerance =
       context.settings.tolerances.relative_tolerance;
-    pdlp_settings.time_limit              = lp_time_limit;
-    pdlp_settings.first_primal_feasible   = false;
-    pdlp_settings.concurrent_halt         = &global_concurrent_halt;
-    pdlp_settings.method                  = context.settings.method;
+    pdlp_settings.time_limit            = lp_time_limit;
+    pdlp_settings.first_primal_feasible = false;
+    pdlp_settings.concurrent_halt       = &global_concurrent_halt;
+    pdlp_settings.method = gpu_heuristics_only ? method_t::PDLP : context.settings.method;
     pdlp_settings.large_nnz_threshold     = context.settings.large_nnz_threshold;
     pdlp_settings.inside_mip              = true;
     pdlp_settings.pdlp_solver_mode        = pdlp_solver_mode_t::Stable2;
@@ -691,7 +697,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
     lp_rounded_sol.round_nearest(rng());
     lp_rounded_sol.compute_feasibility();
     population.add_solution(std::move(lp_rounded_sol));
-    ls.start_cpufj_lptopt_scratch_threads(population);
+    if (!gpu_heuristics_only) { ls.start_cpufj_lptopt_scratch_threads(population); }
   }
 
   if (check_b_b_preemption()) { return population.best_feasible(); }

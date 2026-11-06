@@ -33,6 +33,7 @@ class fp_recombiner_t : public recombiner_t<i_t, f_t> {
       vars_to_fix(n_vars, handle_ptr->get_stream()),
       fp(context, fj, constraint_prop, line_segment_search, lp_optimal_solution)
   {
+    fp.trace_source = "rec";
   }
 
   std::pair<solution_t<i_t, f_t>, bool> recombine(solution_t<i_t, f_t>& a,

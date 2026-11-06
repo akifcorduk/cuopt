@@ -10,6 +10,7 @@
 #include "pdfp_projection.cuh"
 
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
+#include <mip_heuristics/fp_experiment.hpp>
 #include <mip_heuristics/local_search/line_segment_search/line_segment_search.cuh>
 #include <mip_heuristics/local_search/rounding/constraint_prop.cuh>
 #include <mip_heuristics/solution/solution.cuh>
@@ -17,7 +18,9 @@
 
 #include <thrust/count.h>
 
+#include <cmath>
 #include <deque>
+#include <string>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -95,12 +98,45 @@ struct cycle_queue_t {
 };
 
 struct fp_config_t {
-  bool use_pdfp_projection               = false;
+  bool use_pdfp_projection               = fp_experiment::use_pdfp_projection();
   double alpha                           = default_alpha;
   double alpha_decrease_factor           = 0.9;
   bool check_distance_cycle              = true;
   int first_stage_kk                     = 70;
   double cycle_distance_reduction_ration = 0.1;
+};
+
+// What the last projection reported about itself; logged by trace_projection.
+struct fp_projection_trace_t {
+  const char* projector  = "";
+  std::string status     = "";
+  double tolerance       = NAN;
+  double time_limit      = NAN;
+  double total_time      = NAN;
+  double solve_time      = NAN;
+  double setup_time      = 0.;
+  int iterations         = 0;
+  double primal_residual = NAN;
+  double dual_residual   = NAN;
+  double relative_gap    = NAN;
+  int n_rows             = 0;
+  int n_cols             = 0;
+  int n_aux              = 0;
+};
+
+struct fp_trace_totals_t {
+  long n_descents          = 0;
+  long n_feasible_descents = 0;
+  long n_projections       = 0;
+  long n_converged         = 0;
+  long n_roundings         = 0;
+  long n_cycle_restarts    = 0;
+  double projection_time   = 0.;
+  double solve_time        = 0.;
+  double setup_time        = 0.;
+  double rounding_time     = 0.;
+  double fj_time           = 0.;
+  double cycle_time        = 0.;
 };
 
 template <typename i_t, typename f_t>
@@ -124,6 +160,10 @@ class feasibility_pump_t {
   void perturbate(solution_t<i_t, f_t>& solution);
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
   bool run_single_fp_descent(solution_t<i_t, f_t>& solution);
+  bool run_single_fp_descent_impl(solution_t<i_t, f_t>& solution);
+  double trace_time();
+  void trace_projection(solution_t<i_t, f_t>& solution, i_t n_integers);
+  void log_trace_summary();
   bool round(solution_t<i_t, f_t>& solution);
   bool handle_cycle(solution_t<i_t, f_t>& solution);
   bool restart_fp(solution_t<i_t, f_t>& solution);
@@ -147,7 +187,16 @@ class feasibility_pump_t {
   constraint_prop_t<i_t, f_t>& constraint_prop;
   fp_config_t config;
   std::unique_ptr<pdfp_projection_t<i_t, f_t>> pdfp_projector;
+  problem_t<i_t, f_t>* pdfp_problem = nullptr;
   pdfp_projection_result_t last_pdfp_result;
+  const char* trace_source = "ls";
+  fp_projection_trace_t last_projection_trace;
+  fp_trace_totals_t trace_totals;
+  i_t trace_run           = 0;
+  i_t trace_descent       = 0;
+  i_t trace_iteration     = 0;
+  f_t trace_last_distance = NAN;
+  const char* trace_exit  = "";
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
   rmm::device_uvector<var_t> orig_variable_types;

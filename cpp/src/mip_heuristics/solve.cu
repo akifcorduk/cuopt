@@ -12,6 +12,7 @@
 #include <linear_algebra/sort_csr.cuh>
 #include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
 #include <mip_heuristics/feasibility_jump/early_gpufj.cuh>
+#include <mip_heuristics/fp_experiment.hpp>
 #include <mip_heuristics/lns/thread_budget.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/mip_scaling_strategy.cuh>
@@ -283,7 +284,8 @@ mip_solution_t<i_t, f_t> run_mip_solver(
     std::unique_ptr<mip::early_structural_t<i_t, f_t>> early_structural;
     bool run_early_cpufj = problem.has_papilo_presolve_data() &&
                            settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
-                           problem.original_problem_ptr->get_n_integers() > 0;
+                           problem.original_problem_ptr->get_n_integers() > 0 &&
+                           !mip::fp_experiment::gpu_heuristics_only();
     if (run_early_cpufj) {
       auto* presolver_ptr                  = problem.presolve_data.papilo_presolve_ptr;
       auto mip_callbacks                   = settings.get_mip_callbacks();
@@ -539,7 +541,8 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
 
     bool run_early_fj = run_presolve && settings.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
                         op_problem.get_problem_category() != problem_category_t::LP &&
-                        op_problem.get_n_constraints() > 0;
+                        op_problem.get_n_constraints() > 0 &&
+                        !mip::fp_experiment::gpu_heuristics_only();
     const f_t objective_sense = op_problem.get_sense() ? f_t{-1} : f_t{1};
     f_t no_bound              = objective_sense > f_t{0} ? (f_t)-1e20 : (f_t)1e20;
 
@@ -1027,7 +1030,8 @@ mip_solution_t<i_t, f_t> solve_mip(optimization_problem_t<i_t, f_t>& op_problem,
   // probe would search a relaxation that admits 0 < x < L and report it as an incumbent.
   if (settings_const.determinism_mode != CUOPT_MODE_DETERMINISTIC &&
       op_problem.get_problem_category() != problem_category_t::LP &&
-      op_problem.get_n_constraints() > 0 && !op_problem.has_semi_continuous_variables()) {
+      op_problem.get_n_constraints() > 0 && !op_problem.has_semi_continuous_variables() &&
+      !mip::fp_experiment::gpu_heuristics_only()) {
     // The probe publishes before solve_mip_helper reaches its own setup() loop, and get_solution
     // consumers size their view from n_variables. setup() only stores it, so the later call is a
     // repeated store of the same count: no reformulation has run on either side of it.
