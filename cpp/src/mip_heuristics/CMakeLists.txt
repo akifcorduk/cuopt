@@ -29,6 +29,7 @@ set(MIP_NON_LP_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/rounding/constraint_prop.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/rounding/simple_rounding.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/feasibility_pump/feasibility_pump.cu
+  ${CMAKE_CURRENT_SOURCE_DIR}/local_search/feasibility_pump/pdfp_projection.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/local_search/line_segment_search/line_segment_search.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/feasibility_jump.cu
   ${CMAKE_CURRENT_SOURCE_DIR}/feasibility_jump/feasibility_jump_kernels.cu

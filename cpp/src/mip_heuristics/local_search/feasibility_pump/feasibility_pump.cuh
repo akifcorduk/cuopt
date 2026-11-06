@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include "pdfp_projection.cuh"
+
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
 #include <mip_heuristics/local_search/line_segment_search/line_segment_search.cuh>
 #include <mip_heuristics/local_search/rounding/constraint_prop.cuh>
@@ -93,6 +95,7 @@ struct cycle_queue_t {
 };
 
 struct fp_config_t {
+  bool use_pdfp_projection               = false;
   double alpha                           = default_alpha;
   double alpha_decrease_factor           = 0.9;
   bool check_distance_cycle              = true;
@@ -143,6 +146,8 @@ class feasibility_pump_t {
   cycle_queue_t<i_t, f_t> cycle_queue;
   constraint_prop_t<i_t, f_t>& constraint_prop;
   fp_config_t config;
+  std::unique_ptr<pdfp_projection_t<i_t, f_t>> pdfp_projector;
+  pdfp_projection_result_t last_pdfp_result;
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
   rmm::device_uvector<var_t> orig_variable_types;
