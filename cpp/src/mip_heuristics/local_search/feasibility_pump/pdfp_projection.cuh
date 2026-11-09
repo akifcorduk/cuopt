@@ -25,6 +25,9 @@ struct pdfp_projection_settings_t {
   bool original_units  = true;
   // Anchor the next projection at the last Halpern iterate instead of the bounded PDHG point.
   bool anchor_halpern = false;
+  // Between residual checks, fuse the Halpern update into the primal and dual steps and replay the
+  // iterations as captured CUDA graphs; false launches the unfused kernels per iteration.
+  bool fused_graph = true;
 };
 
 struct pdfp_projection_result_t {
@@ -45,8 +48,13 @@ template <typename i_t, typename f_t>
 class pdfp_projection_t {
  public:
   // spectral_step uses ||A||_2 <= 1, which the final Pock-Chambolle scaling pass certifies,
-  // instead of the looser bound sqrt(||A||_1 ||A||_inf).
-  explicit pdfp_projection_t(problem_t<i_t, f_t>& problem, bool spectral_step = false);
+  // instead of the looser bound sqrt(||A||_1 ||A||_inf). cusparse_spmv runs the products with
+  // cuSPARSE on scaled copies of A and A^T instead of the one-warp-per-row kernel; the copies
+  // borrow the model's CSR structure, so the model's matrix must not be reallocated while the
+  // projector lives.
+  explicit pdfp_projection_t(problem_t<i_t, f_t>& problem,
+                             bool spectral_step = false,
+                             bool cusparse_spmv = true);
   ~pdfp_projection_t();
   pdfp_projection_result_t project(const rmm::device_uvector<f_t>& target,
                                    rmm::device_uvector<f_t>& output,

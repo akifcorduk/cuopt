@@ -20,6 +20,8 @@ constexpr bool default_pdfp_spectral_step    = false;
 constexpr bool default_paper_tolerance       = false;
 constexpr bool default_pdfp_paper_warm_start = false;
 constexpr bool default_pure_distance         = false;
+constexpr bool default_pdfp_cusparse_spmv    = true;
+constexpr bool default_pdfp_cuda_graph       = true;
 
 inline bool env_flag(const char* name, bool compiled_default)
 {
@@ -67,5 +69,19 @@ inline bool pdfp_paper_warm_start()
 
 // Pure L1 distance projections (no objective term), as in the paper.
 inline bool pure_distance() { return env_flag("CUOPT_FP_EXP_PURE_DIST", default_pure_distance); }
+
+// PDFP SpMV through cuSPARSE (CSR ALG2 on scaled copies of A and A^T, as in PDLP) instead of the
+// one-warp-per-row kernel, which serializes long rows/columns and the dense objective cut row.
+inline bool pdfp_cusparse_spmv()
+{
+  return env_flag("CUOPT_FP_EXP_PDFP_CUSPARSE", default_pdfp_cusparse_spmv);
+}
+
+// PDFP iterations between residual checks with the Halpern update fused into the primal and dual
+// steps, replayed as captured CUDA graphs.
+inline bool pdfp_cuda_graph()
+{
+  return env_flag("CUOPT_FP_EXP_PDFP_GRAPH", default_pdfp_cuda_graph);
+}
 
 }  // namespace cuopt::mathematical_optimization::mip::fp_experiment

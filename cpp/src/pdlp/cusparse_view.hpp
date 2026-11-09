@@ -322,6 +322,21 @@ void mixed_precision_spmv_preprocess(cusparseHandle_t handle,
 #endif
 
 #if CUDA_VER_12_4_UP
+// Resolves cusparseSpMV_preprocess at runtime, so a newer build still loads with an older cuSPARSE.
+template <
+  typename T,
+  typename std::enable_if_t<std::is_same_v<T, float> || std::is_same_v<T, double>>* = nullptr>
+void my_cusparsespmv_preprocess(cusparseHandle_t handle,
+                                cusparseOperation_t opA,
+                                const T* alpha,
+                                cusparseConstSpMatDescr_t matA,
+                                cusparseConstDnVecDescr_t vecX,
+                                const T* beta,
+                                cusparseDnVecDescr_t vecY,
+                                cusparseSpMVAlg_t alg,
+                                void* externalBuffer,
+                                cudaStream_t stream);
+
 template <
   typename T,
   typename std::enable_if_t<std::is_same_v<T, float> || std::is_same_v<T, double>>* = nullptr>

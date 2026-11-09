@@ -165,6 +165,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     settings.relative_primal = paper_tolerance;
     settings.original_units  = problem.n_integer_vars < problem.n_variables;
     settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
+    settings.fused_graph     = fp_experiment::pdfp_cuda_graph();
     const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
     settings.time_limit =
       paper_tolerance
@@ -174,8 +175,8 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     double setup_time       = 0.;
     if (!pdfp_projector) {
       const auto setup_start = std::chrono::steady_clock::now();
-      pdfp_projector =
-        std::make_unique<pdfp_projection_t<i_t, f_t>>(problem, fp_experiment::pdfp_spectral_step());
+      pdfp_projector         = std::make_unique<pdfp_projection_t<i_t, f_t>>(
+        problem, fp_experiment::pdfp_spectral_step(), fp_experiment::pdfp_cusparse_spmv());
       pdfp_problem = solution.problem_ptr;
       if (fp_experiment::pdfp_paper_warm_start() && context.diversity_manager_ptr != nullptr &&
           context.diversity_manager_ptr->ls.lp_optimal_exists &&

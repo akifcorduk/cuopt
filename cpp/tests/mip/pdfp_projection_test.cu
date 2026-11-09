@@ -548,6 +548,46 @@ TEST(PdfpProjection, IntegerMaskChangesBetweenWarmProjections)
   EXPECT_NEAR(result.objective, 0., 2e-5);
 }
 
+// The fused, graph-replayed iterations between residual checks must reproduce the plain kernels,
+// across restarts, primal-weight updates and warm projections with changing weights.
+TEST(PdfpProjection, FusedGraphMatchesPlainIterations)
+{
+  constexpr int n    = 4000;
+  const auto model   = paired_model(n);
+  constexpr int runs = 3;
+  std::vector<std::vector<double>> outputs[2];
+  std::vector<int> iterations[2];
+  for (int fused = 0; fused < 2; ++fused) {
+    raft::handle_t handle;
+    auto op_problem = model.device_problem(handle);
+    mip::problem_t<int, double> problem(op_problem);
+    mip::pdfp_projection_t<int, double> projector(problem);
+    rmm::device_uvector<double> target(n, handle.get_stream());
+    auto settings            = accurate_settings();
+    settings.tolerance       = 1e-14;
+    settings.iteration_limit = 600;
+    settings.fused_graph     = fused == 1;
+    for (int run = 0; run < runs; ++run) {
+      std::vector<double> h_target(n);
+      for (int j = 0; j < n; ++j)
+        h_target[j] = (j + run) % 3 == 0 ? 2. : 3.5 - run;
+      raft::copy(target.data(), h_target.data(), n, handle.get_stream());
+      settings.distance_weight = 1. / (1 + run);
+      const auto result        = projector.project(target, target, settings);
+      iterations[fused].push_back(result.iterations);
+      outputs[fused].push_back(cuopt::host_copy(target, handle.get_stream()));
+    }
+  }
+  EXPECT_EQ(iterations[0], iterations[1]);
+  double max_difference = 0.;
+  for (int run = 0; run < runs; ++run)
+    for (int j = 0; j < n; ++j)
+      max_difference = std::max(
+        max_difference,
+        std::abs(outputs[0][run][j] - outputs[1][run][j]) / (1. + std::abs(outputs[0][run][j])));
+  EXPECT_LT(max_difference, 1e-9);
+}
+
 TEST(PdfpProjection, DISABLED_Benchmark100kGeneralIntegers)
 {
   constexpr int n = 100000;

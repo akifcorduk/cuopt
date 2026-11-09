@@ -474,9 +474,13 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     [stats_ptr](f_t user_bound) { stats_ptr->set_solution_bound(user_bound); });
 
   const bool gpu_heuristics_only = fp_experiment::gpu_heuristics_only();
-  CUOPT_LOG_INFO("FP experiment: projector %s, GPU heuristic thread only %d",
-                 fp_experiment::use_pdfp_projection() ? "pdfp" : "epigraph",
-                 (int)gpu_heuristics_only);
+  CUOPT_LOG_INFO(
+    "FP experiment: projector %s, GPU heuristic thread only %d, PDFP cuSPARSE SpMV %d, PDFP CUDA "
+    "graph %d",
+    fp_experiment::use_pdfp_projection() ? "pdfp" : "epigraph",
+    (int)gpu_heuristics_only,
+    (int)fp_experiment::pdfp_cusparse_spmv(),
+    (int)fp_experiment::pdfp_cuda_graph());
 
   // Set the primal heuristics -> branch and bound callback
   if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {
