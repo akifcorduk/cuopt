@@ -28,6 +28,8 @@
 #include <thrust/gather.h>
 #include <thrust/tabulate.h>
 
+#include <cstdlib>
+
 namespace cuopt::mathematical_optimization::mip {
 
 template <typename i_t, typename f_t>
@@ -231,6 +233,21 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
              solution.handle_ptr->get_stream());
   // Projection result might be feasible but not optimal, due to time limits
   bool is_feasible = solution.compute_feasibility();
+  CUOPT_LOG_INFO(
+    "FPTOL t=%.3f ratio=%.4f tol=%.3g tlim=%.3g lp_time=%.4f iters=%d status=%d feas=%d nint=%d "
+    "integral=%d alpha=%.4g",
+    context.diversity_manager_ptr != nullptr ? context.diversity_manager_ptr->timer.elapsed_time()
+                                             : -1.,
+    (double)ratio_of_set_integers,
+    lp_tolerance,
+    (double)time_limit,
+    (double)last_lp_time,
+    solver_response.get_additional_termination_information().number_of_steps_taken,
+    (int)solver_response.get_termination_status(),
+    (int)is_feasible,
+    solution.problem_ptr->n_integer_vars,
+    solution.n_assigned_integers,
+    (double)config.alpha);
   cuopt_func_call(solution.test_variable_bounds(false));
   if (!is_feasible) {
     CUOPT_LOG_DEBUG("LP is infeasible returning the current PDLP solution! Code %d",
@@ -492,7 +509,12 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
     }
     proj_begin = timer.remaining_time();
     // previous projection's integrality; solution.n_assigned_integers is the rounding's
-    f_t ratio_of_assigned_integers = f_t(n_integers) / solution.problem_ptr->n_integer_vars;
+    static const bool fp_ratio_old = [] {
+      const char* v = std::getenv("CUOPT_FP_RATIO_OLD");
+      return v != nullptr && v[0] == '1';
+    }();
+    f_t ratio_of_assigned_integers = f_t(fp_ratio_old ? solution.n_assigned_integers : n_integers) /
+                                     solution.problem_ptr->n_integer_vars;
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
     n_integers       = solution.compute_number_of_integers();
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
