@@ -166,11 +166,11 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     settings.original_units  = problem.n_integer_vars < problem.n_variables;
     settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
     settings.fused_graph     = fp_experiment::pdfp_cuda_graph();
-    const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
+    // Allow PDFP time to converge, while reserving time for subsequent pump iterations.
+    const double projection_time_cap = longer_lp_run ? 10. : 5.;
     settings.time_limit =
-      paper_tolerance
-        ? std::max(0.05, timer.remaining_time())
-        : std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+      paper_tolerance ? std::max(0.05, timer.remaining_time())
+                      : std::max(0.05, std::min(projection_time_cap, timer.remaining_time() / 4.));
     const f_t old_remaining = timer.remaining_time();
     double setup_time       = 0.;
     if (!pdfp_projector) {

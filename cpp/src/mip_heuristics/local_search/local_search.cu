@@ -925,7 +925,10 @@ void local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
   f_t& best_objective)
 {
   raft::common::nvtx::range fun_scope("reset_alpha_and_save_solution");
-  fp.config.alpha = default_alpha;
+  // Once feasibility is reached, spend the next descent pushing harder on the objective
+  // through the objective cut, while retaining a substantial distance-to-integrality term.
+  fp.config.alpha                 = 0.7;
+  fp.config.alpha_decrease_factor = 0.99;
   solution_t<i_t, f_t> solution_copy(solution);
   solution_copy.problem_ptr = old_problem_ptr;
   solution_copy.resize_to_problem();
@@ -968,8 +971,9 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   population_ptr->add_external_solutions_to_population();
   if (population_ptr->current_size() > 1 &&
       i - last_improved_iteration > iterations_for_stagnation) {
-    fp.config.alpha              = default_alpha;
-    const double recombine_start = context.diversity_manager_ptr->timer.elapsed_time();
+    fp.config.alpha                 = 0.7;
+    fp.config.alpha_decrease_factor = 0.99;
+    const double recombine_start    = context.diversity_manager_ptr->timer.elapsed_time();
     population_ptr->diversity_step(max_iterations_without_improvement);
     CUOPT_LOG_INFO("FPPHASE diversity_step t=%.3f dur=%.3f",
                    context.diversity_manager_ptr->timer.elapsed_time(),

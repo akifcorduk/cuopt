@@ -1,0 +1,423 @@
+{
+  "experiment": "cuopt-pdfp-pi-l4-r1-c8o4evq",
+  "candidate": "1dc12d14bf0842e6973209f625df2ea4",
+  "title": "Persist primal weight across PDFP projection warm starts",
+  "base_commit": "4e33112b24c80d13a756b5c085010edfb79efcac",
+  "selection": "User-selected four-repetition candidate with mean fitness -259.75.",
+  "evaluations": 4,
+  "recorded_fitness": [
+    -239.03891763561938,
+    -284.90335792660983,
+    -267.2221325159781,
+    -247.81571985758464
+  ],
+  "mean_fitness": -259.74503198394797,
+  "mean_primal_integral": 259.74503198394797,
+  "validation": "All four recorded Hive evaluations built the candidate and completed ten 600-second benchmark cases with the frozen original-model incumbent verifier.",
+  "limitations": "Four recorded evaluations; no new GPU runs, guard-set checks or full-suite validation during publication.",
+  "environment": {
+    "CUOPT_FP_EXP_PDFP": "1",
+    "CUOPT_FP_EXP_PDFP_STEP": "1",
+    "CUOPT_FP_EXP_GPU_ONLY": "1",
+    "CUOPT_FP_EXP_SKIP_FJ": "1"
+  },
+  "hardware": {
+    "gpu": "L4",
+    "cpu_threads": 10,
+    "per_instance_seconds": 600,
+    "seed": 42
+  },
+  "build": {
+    "type": "Release",
+    "DEFINE_ASSERT": "ON",
+    "CMAKE_CUDA_ARCHITECTURES": "89-real",
+    "target": "solve_MIP"
+  },
+  "run_command": "CUOPT_FP_EXP_PDFP=1 CUOPT_FP_EXP_PDFP_STEP=1 CUOPT_FP_EXP_GPU_ONLY=1 CUOPT_FP_EXP_SKIP_FJ=1 <build>/solve_MIP --path <instance.mps> --time-limit 600 --num-cpu-threads 10 --write-log-file t --log-to-console t --out-dir <results>",
+  "evaluation_results": [
+    {
+      "mean_pi": 239.03891763561938,
+      "sum_pi": 2390.3891763561937,
+      "instances": [
+        {
+          "instance": "neos-4532248-waihi",
+          "pi": 248.31356417970625,
+          "gap": 0.11747851002865345,
+          "incumbents": 23,
+          "first_incumbent_s": 134.914049916,
+          "projections": 92,
+          "process_seconds": 603.9957458429999
+        },
+        {
+          "instance": "sing44",
+          "pi": 100.016494808049,
+          "gap": 0.11624528484520347,
+          "incumbents": 1,
+          "first_incumbent_s": 34.250820258,
+          "projections": 92,
+          "process_seconds": 600.8551588589999
+        },
+        {
+          "instance": "sing326",
+          "pi": 192.1881398426098,
+          "gap": 0.24326091983662534,
+          "incumbents": 3,
+          "first_incumbent_s": 33.785173496,
+          "projections": 95,
+          "process_seconds": 600.8865550039991
+        },
+        {
+          "instance": "neos-4413714-turia",
+          "pi": 549.7761743574606,
+          "gap": 0.9014489248940972,
+          "incumbents": 31,
+          "first_incumbent_s": 69.877710066,
+          "projections": 94,
+          "process_seconds": 601.1671214290018
+        },
+        {
+          "instance": "neos-848589",
+          "pi": 378.91110885837827,
+          "gap": 0.4067879834514769,
+          "incumbents": 20,
+          "first_incumbent_s": 39.156483289,
+          "projections": 88,
+          "process_seconds": 602.0435336689989
+        },
+        {
+          "instance": "buildingenergy",
+          "pi": 119.88476393321949,
+          "gap": 0.014834897518324,
+          "incumbents": 2,
+          "first_incumbent_s": 112.244334177,
+          "projections": 84,
+          "process_seconds": 604.7435270360002
+        },
+        {
+          "instance": "neos-662469",
+          "pi": 41.445544302582334,
+          "gap": 0.003860190335207623,
+          "incumbents": 15,
+          "first_incumbent_s": 19.886054709,
+          "projections": 181,
+          "process_seconds": 600.7594043129993
+        },
+        {
+          "instance": "neos-4300652-rahue",
+          "pi": 356.23221999685387,
+          "gap": 0.038088393819619114,
+          "incumbents": 15,
+          "first_incumbent_s": 282.919723856,
+          "projections": 808,
+          "process_seconds": 601.6482969549998
+        },
+        {
+          "instance": "s250r10",
+          "pi": 147.54101487504676,
+          "gap": 0.0018438668834553596,
+          "incumbents": 12,
+          "first_incumbent_s": 119.709351717,
+          "projections": 84,
+          "process_seconds": 602.3702537510017
+        },
+        {
+          "instance": "s100",
+          "pi": 256.08015120228754,
+          "gap": 0.08727733375103458,
+          "incumbents": 3,
+          "first_incumbent_s": 208.208287501,
+          "projections": 79,
+          "process_seconds": 604.1195542450005
+        }
+      ]
+    },
+    {
+      "mean_pi": 284.90335792660983,
+      "sum_pi": 2849.033579266098,
+      "instances": [
+        {
+          "instance": "neos-4532248-waihi",
+          "pi": 222.01236190847766,
+          "gap": 0.09278350515463944,
+          "incumbents": 29,
+          "first_incumbent_s": 88.571365652,
+          "projections": 91,
+          "process_seconds": 603.8195450450003
+        },
+        {
+          "instance": "sing44",
+          "pi": 81.76789592849819,
+          "gap": 0.04402981259636584,
+          "incumbents": 18,
+          "first_incumbent_s": 34.322301292,
+          "projections": 54,
+          "process_seconds": 601.1837945949992
+        },
+        {
+          "instance": "sing326",
+          "pi": 191.25320464648723,
+          "gap": 0.1305568123195504,
+          "incumbents": 13,
+          "first_incumbent_s": 33.836007281,
+          "projections": 78,
+          "process_seconds": 601.1379097240006
+        },
+        {
+          "instance": "neos-4413714-turia",
+          "pi": 547.2412797023051,
+          "gap": 0.8952740087179615,
+          "incumbents": 30,
+          "first_incumbent_s": 62.170899278,
+          "projections": 97,
+          "process_seconds": 601.109228962001
+        },
+        {
+          "instance": "neos-848589",
+          "pi": 598.9283597568941,
+          "gap": 0.9967531177135672,
+          "incumbents": 81,
+          "first_incumbent_s": 43.144729727,
+          "projections": 210,
+          "process_seconds": 602.1067665589999
+        },
+        {
+          "instance": "buildingenergy",
+          "pi": 316.1662263014275,
+          "gap": 0.014573376478456222,
+          "incumbents": 2,
+          "first_incumbent_s": 100.327362939,
+          "projections": 78,
+          "process_seconds": 601.5924691180007
+        },
+        {
+          "instance": "neos-662469",
+          "pi": 70.1855542963616,
+          "gap": 0.05435970027541472,
+          "incumbents": 10,
+          "first_incumbent_s": 20.825132631,
+          "projections": 417,
+          "process_seconds": 601.1916107329998
+        },
+        {
+          "instance": "neos-4300652-rahue",
+          "pi": 383.0315018922761,
+          "gap": 0.010579810579810544,
+          "incumbents": 19,
+          "first_incumbent_s": 327.395306551,
+          "projections": 780,
+          "process_seconds": 601.3058587680007
+        },
+        {
+          "instance": "s250r10",
+          "pi": 229.86566922271794,
+          "gap": 0.10293253876331196,
+          "incumbents": 6,
+          "first_incumbent_s": 175.093829679,
+          "projections": 83,
+          "process_seconds": 602.5544062930003
+        },
+        {
+          "instance": "s100",
+          "pi": 208.5815256106532,
+          "gap": 0.10349837834366385,
+          "incumbents": 3,
+          "first_incumbent_s": 153.828280266,
+          "projections": 79,
+          "process_seconds": 604.4028381859989
+        }
+      ]
+    },
+    {
+      "mean_pi": 267.2221325159781,
+      "sum_pi": 2672.221325159781,
+      "instances": [
+        {
+          "instance": "neos-4532248-waihi",
+          "pi": 168.70384255132015,
+          "gap": 0.05954198473282462,
+          "incumbents": 30,
+          "first_incumbent_s": 54.752989146,
+          "projections": 92,
+          "process_seconds": 603.9697170510008
+        },
+        {
+          "instance": "sing44",
+          "pi": 100.16356444774685,
+          "gap": 0.11624528484520347,
+          "incumbents": 1,
+          "first_incumbent_s": 34.417234804,
+          "projections": 92,
+          "process_seconds": 600.8794220279997
+        },
+        {
+          "instance": "sing326",
+          "pi": 263.08255348400394,
+          "gap": 0.40500413358852716,
+          "incumbents": 1,
+          "first_incumbent_s": 33.748256861,
+          "projections": 92,
+          "process_seconds": 600.7511512250003
+        },
+        {
+          "instance": "neos-4413714-turia",
+          "pi": 549.8214158695038,
+          "gap": 0.9006393435250661,
+          "incumbents": 35,
+          "first_incumbent_s": 68.869887345,
+          "projections": 95,
+          "process_seconds": 601.0216239689998
+        },
+        {
+          "instance": "neos-848589",
+          "pi": 410.97602332175796,
+          "gap": 0.4435982614381085,
+          "incumbents": 50,
+          "first_incumbent_s": 37.606262745,
+          "projections": 129,
+          "process_seconds": 601.8433688929999
+        },
+        {
+          "instance": "buildingenergy",
+          "pi": 107.07431621029608,
+          "gap": 0.014861564840545318,
+          "incumbents": 2,
+          "first_incumbent_s": 99.159176829,
+          "projections": 85,
+          "process_seconds": 602.2396893740006
+        },
+        {
+          "instance": "neos-662469",
+          "pi": 94.93983603477974,
+          "gap": 0.10048663877742722,
+          "incumbents": 15,
+          "first_incumbent_s": 19.962711341,
+          "projections": 492,
+          "process_seconds": 600.7039106599987
+        },
+        {
+          "instance": "neos-4300652-rahue",
+          "pi": 600.0,
+          "gap": 1.0,
+          "incumbents": 0,
+          "first_incumbent_s": null,
+          "projections": 1717,
+          "process_seconds": 601.3978491079997
+        },
+        {
+          "instance": "s250r10",
+          "pi": 222.3711325104,
+          "gap": 0.10626172022665703,
+          "incumbents": 2,
+          "first_incumbent_s": 173.491817454,
+          "projections": 83,
+          "process_seconds": 602.3385471540005
+        },
+        {
+          "instance": "s100",
+          "pi": 155.0886407299725,
+          "gap": 0.06227210620287509,
+          "incumbents": 4,
+          "first_incumbent_s": 86.133627801,
+          "projections": 79,
+          "process_seconds": 605.1217852469999
+        }
+      ]
+    },
+    {
+      "mean_pi": 247.81571985758464,
+      "sum_pi": 2478.1571985758465,
+      "instances": [
+        {
+          "instance": "neos-4532248-waihi",
+          "pi": 281.00012806372644,
+          "gap": 0.09278350515463944,
+          "incumbents": 20,
+          "first_incumbent_s": 156.454271234,
+          "projections": 93,
+          "process_seconds": 604.0999103440008
+        },
+        {
+          "instance": "sing44",
+          "pi": 100.0368005926878,
+          "gap": 0.11624528484520347,
+          "incumbents": 1,
+          "first_incumbent_s": 34.273796978,
+          "projections": 92,
+          "process_seconds": 600.7841321629985
+        },
+        {
+          "instance": "sing326",
+          "pi": 261.90263505383894,
+          "gap": 0.39974696797775,
+          "incumbents": 1,
+          "first_incumbent_s": 36.741928971,
+          "projections": 101,
+          "process_seconds": 600.7059435749998
+        },
+        {
+          "instance": "neos-4413714-turia",
+          "pi": 534.0587019472292,
+          "gap": 0.8758241536205795,
+          "incumbents": 4,
+          "first_incumbent_s": 62.512367079,
+          "projections": 94,
+          "process_seconds": 601.1107215320008
+        },
+        {
+          "instance": "neos-848589",
+          "pi": 395.9163461134406,
+          "gap": 0.4050424420976753,
+          "incumbents": 54,
+          "first_incumbent_s": 37.399248752,
+          "projections": 110,
+          "process_seconds": 604.2091645990004
+        },
+        {
+          "instance": "buildingenergy",
+          "pi": 106.92359265033694,
+          "gap": 0.01718232416255253,
+          "incumbents": 3,
+          "first_incumbent_s": 98.279458253,
+          "projections": 65,
+          "process_seconds": 602.2353804869999
+        },
+        {
+          "instance": "neos-662469",
+          "pi": 77.40374965305465,
+          "gap": 0.004709787992065356,
+          "incumbents": 17,
+          "first_incumbent_s": 20.655936725,
+          "projections": 550,
+          "process_seconds": 600.7885464250012
+        },
+        {
+          "instance": "neos-4300652-rahue",
+          "pi": 359.02302139321586,
+          "gap": 0.038088393819619114,
+          "incumbents": 15,
+          "first_incumbent_s": 283.729006071,
+          "projections": 632,
+          "process_seconds": 601.4499017959988
+        },
+        {
+          "instance": "s250r10",
+          "pi": 139.06814024004436,
+          "gap": 0.032359543091187,
+          "incumbents": 9,
+          "first_incumbent_s": 93.817729499,
+          "projections": 88,
+          "process_seconds": 602.5351128319999
+        },
+        {
+          "instance": "s100",
+          "pi": 222.82408286827177,
+          "gap": 0.04585877582094685,
+          "incumbents": 6,
+          "first_incumbent_s": 153.618430692,
+          "projections": 79,
+          "process_seconds": 604.1743792670004
+        }
+      ]
+    }
+  ]
+}
