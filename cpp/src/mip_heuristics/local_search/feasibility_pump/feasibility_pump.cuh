@@ -24,7 +24,8 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
-constexpr double default_alpha                  = 0.99;
+// Favor distance to integrality while searching for the first feasible solution.
+constexpr double default_alpha                  = 0.25;
 constexpr double distance_to_check_for_feasible = 0.01;
 
 template <typename i_t, typename f_t>
@@ -100,10 +101,17 @@ struct cycle_queue_t {
 struct fp_config_t {
   bool use_pdfp_projection               = fp_experiment::use_pdfp_projection();
   double alpha                           = default_alpha;
-  double alpha_decrease_factor           = 0.9;
+  double alpha_decrease_factor           = 0.95;
   bool check_distance_cycle              = true;
   int first_stage_kk                     = 70;
   double cycle_distance_reduction_ration = 0.1;
+
+  void reset_for_objective_improvement()
+  {
+    // Keep the objective influential across descents without dropping the distance term.
+    alpha                 = 0.7;
+    alpha_decrease_factor = 0.99;
+  }
 };
 
 // What the last projection reported about itself; logged by trace_projection.
