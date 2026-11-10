@@ -200,7 +200,9 @@ class feasibility_pump_t {
   // Paper tolerance schedule (fp_experiment::paper_tolerance): 1e-2, x0.98 per projection, floor
   // 1e-4.
   double projection_tolerance = 1e-2;
-  f_t last_alpha_used         = 0;
+  // True once the current FP run has produced a feasible incumbent; enables converged projections.
+  bool incumbent_in_run = false;
+  f_t last_alpha_used   = 0;
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
   rmm::device_uvector<var_t> orig_variable_types;

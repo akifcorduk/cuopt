@@ -154,23 +154,32 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
       cuopt::host_copy(problem.objective_coefficients, solution.handle_ptr->get_stream());
     const f_t objective_norm   = vector_norm(objective.begin(), objective.end());
     const bool paper_tolerance = fp_experiment::paper_tolerance();
+    // Two-regime policy: before the first incumbent of this FP run use the fast truncated
+    // projection; afterwards use converged paper-style projections with a decaying tolerance.
+    const bool converged_mode                      = paper_tolerance || incumbent_in_run;
+    constexpr double converged_projection_time_cap = 8.0;
     pdfp_projection_settings_t settings;
     settings.distance_weight =
       problem.n_integer_vars > 0 ? (1. - alpha) / std::sqrt(f_t(problem.n_integer_vars)) : 0.;
     settings.objective_weight = objective_norm > 0. ? alpha / objective_norm : 0.;
     settings.tolerance =
-      paper_tolerance ? projection_tolerance
-                      : get_tolerance_from_ratio(ratio_of_set_integers,
-                                                 context.settings.tolerances.absolute_tolerance);
-    settings.relative_primal = paper_tolerance;
+      converged_mode ? projection_tolerance
+                     : get_tolerance_from_ratio(ratio_of_set_integers,
+                                                context.settings.tolerances.absolute_tolerance);
+    settings.relative_primal = converged_mode;
     settings.original_units  = problem.n_integer_vars < problem.n_variables;
     settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
     settings.fused_graph     = fp_experiment::pdfp_cuda_graph();
     const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
-    settings.time_limit =
-      paper_tolerance
-        ? std::max(0.05, timer.remaining_time())
-        : std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+    if (paper_tolerance) {
+      settings.time_limit = std::max(0.05, timer.remaining_time());
+    } else if (incumbent_in_run) {
+      settings.time_limit =
+        std::max(0.05, std::min(converged_projection_time_cap, timer.remaining_time() / 4.));
+    } else {
+      settings.time_limit =
+        std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+    }
     const f_t old_remaining = timer.remaining_time();
     double setup_time       = 0.;
     if (!pdfp_projector) {
@@ -190,7 +199,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
                  "The PDFP projector was built for another problem");
     last_pdfp_result = pdfp_projector->project(solution.assignment, solution.assignment, settings);
     last_lp_time     = old_remaining - timer.remaining_time();
-    if (paper_tolerance) { projection_tolerance = std::max(projection_tolerance * 0.98, 1e-4); }
+    if (converged_mode) { projection_tolerance = std::max(projection_tolerance * 0.98, 1e-4); }
     raft::copy(last_projection.data(),
                solution.assignment.data(),
                solution.assignment.size(),
@@ -551,6 +560,7 @@ void feasibility_pump_t<i_t, f_t>::reset()
 {
   ++trace_run;
   projection_tolerance = 1e-2;
+  incumbent_in_run     = false;
   pdfp_projector.reset();
   best_excess               = std::numeric_limits<f_t>::infinity();
   total_fp_time_until_cycle = 0;
@@ -769,7 +779,8 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
   trace_exit          = "";
   const double start  = trace_time();
   const bool feasible = run_single_fp_descent_impl(solution);
-  const double end    = trace_time();
+  if (feasible) { incumbent_in_run = true; }
+  const double end = trace_time();
   ++trace_totals.n_descents;
   if (feasible) { ++trace_totals.n_feasible_descents; }
   CUOPT_LOG_INFO(
