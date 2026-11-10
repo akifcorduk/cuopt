@@ -166,11 +166,11 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     settings.original_units  = problem.n_integer_vars < problem.n_variables;
     settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
     settings.fused_graph     = fp_experiment::pdfp_cuda_graph();
-    const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
+    // Allow PDFP time to converge, while reserving time for subsequent pump iterations.
+    const double projection_time_cap = longer_lp_run ? 10. : 5.;
     settings.time_limit =
-      paper_tolerance
-        ? std::max(0.05, timer.remaining_time())
-        : std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+      paper_tolerance ? std::max(0.05, timer.remaining_time())
+                      : std::max(0.05, std::min(projection_time_cap, timer.remaining_time() / 4.));
     const f_t old_remaining = timer.remaining_time();
     double setup_time       = 0.;
     if (!pdfp_projector) {
@@ -631,6 +631,10 @@ void feasibility_pump_t<i_t, f_t>::relax_general_integers(solution_t<i_t, f_t>& 
   solution.problem_ptr->compute_n_integer_vars();
   solution.problem_ptr->compute_binary_var_table();
   general_integers_relaxed = true;
+  // The projector's persisted primal/dual step-size calibration was learned against a
+  // problem with a different effective n_integer_vars; invalidate it so the next project()
+  // call recalibrates and cold-starts against the relaxed (binary-only) problem.
+  if (pdfp_projector) { pdfp_projector->reset(); }
   CUOPT_LOG_DEBUG("Integers are relaxed n_int vars %d n_binary vars %d n_vars %d",
                   solution.problem_ptr->n_integer_vars,
                   solution.problem_ptr->n_binary_vars,
@@ -647,6 +651,9 @@ void feasibility_pump_t<i_t, f_t>::revert_relaxation(solution_t<i_t, f_t>& solut
   solution.problem_ptr->compute_n_integer_vars();
   solution.problem_ptr->compute_binary_var_table();
   general_integers_relaxed = false;
+  // Same as above: the problem's effective n_integer_vars just changed back to the full
+  // integer count, so the persisted step-size calibration is stale and must be reset.
+  if (pdfp_projector) { pdfp_projector->reset(); }
   solution.compute_feasibility();
 }
 

@@ -213,6 +213,19 @@ __global__ void unscale_output(i_t n, const f_t* point, const f_t* scale, f_t* o
   if (j < n) output[j] = point[j] * scale[j];
 }
 
+// A divergent inner trajectory must never publish a non-finite assignment. Falls back to the
+// bound-clipped pre-projection point, in original (unscaled) units, for any non-finite entry.
+template <typename i_t, typename f_t>
+__global__ void repair_output(typename problem_t<i_t, f_t>::view_t pb,
+                              const f_t* input,
+                              f_t* output)
+{
+  i_t j = blockIdx.x * blockDim.x + threadIdx.x;
+  if (j >= pb.n_variables) return;
+  f_t v     = isfinite(input[j]) ? input[j] : f_t(0);
+  output[j] = clip(v, get_lower(pb.variable_bounds[j]), get_upper(pb.variable_bounds[j]));
+}
+
 struct metrics_t {
   double primal = 0., dual = 0., gap = 0., objective = 0., target = 0., cost = 0.;
   double dx = 0., dy = 0., cross = 0., anchor_x = 0., anchor_dual = 0.;
@@ -345,6 +358,7 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
   bool cusparse_spmv;
   f_t eta;
   bool cold                        = true;
+  f_t primal_weight                = -1.;
   static constexpr int graph_chunk = 16;
 
   impl_t(problem_t<i_t, f_t>& p, bool spectral_step, bool use_cusparse)
@@ -401,6 +415,32 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
         if (rm[row] > 0.) rs[row] /= std::sqrt(rm[row]);
       for (i_t j = 0; j < p.n_variables; ++j)
         if (cm[j] > 0.) cs[j] /= std::sqrt(cm[j]);
+    }
+    // Bound-aware damping: rows whose RHS magnitude (after row equilibration) is
+    // wildly disproportionate to the matrix-coefficient scale -- e.g. an
+    // objective-value cutting-plane row, whose RHS can be in the millions while
+    // its coefficients are ordinary objective coefficients -- destabilize the
+    // shared PDHG step size derived from rs/cs below. Shrink such rows' scale
+    // further so their scaled bound lands near the same O(1e2)-O(1e3) range that
+    // well-conditioned rows already settle into. This is a pure positive
+    // multiplicative rescaling of row_scale: both the row's matrix coefficients
+    // (scale_csr_values) and its bounds (primal_step/dual_step) are driven off
+    // the same row_scale consistently, so it changes only preconditioning/step
+    // size, never the feasible region or the projection optimum.
+    {
+      auto lower = cuopt::host_copy(p.constraint_lower_bounds, p.handle_ptr->get_stream());
+      auto upper = cuopt::host_copy(p.constraint_upper_bounds, p.handle_ptr->get_stream());
+      p.handle_ptr->sync_stream();
+      constexpr f_t target_scale = 1e3;
+      for (i_t row = 0; row < p.n_constraints; ++row) {
+        f_t lo = lower[row], hi = upper[row];
+        bool lo_finite = std::isfinite(lo), hi_finite = std::isfinite(hi);
+        if (!lo_finite && !hi_finite) continue;
+        f_t b = 0.;
+        if (lo_finite) b = std::max(b, std::abs(lo * rs[row]));
+        if (hi_finite) b = std::max(b, std::abs(hi * rs[row]));
+        if (b > target_scale) rs[row] *= target_scale / b;
+      }
     }
     // A certified spectral upper bound keeps the reflected operator nonexpansive
     // even when power iteration would underestimate a clustered leading singular value.
@@ -692,7 +732,8 @@ pdfp_projection_t<i_t, f_t>::~pdfp_projection_t() = default;
 template <typename i_t, typename f_t>
 void pdfp_projection_t<i_t, f_t>::reset()
 {
-  impl_->cold = true;
+  impl_->cold          = true;
+  impl_->primal_weight = -1.;
 }
 
 template <typename i_t, typename f_t>
@@ -751,7 +792,20 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   raft::copy(s.point.data(), s.current.data(), s.current.size(), stream);
   thrust::fill(p.handle_ptr->get_thrust_policy(), s.slack.begin(), s.slack.end(), 0.);
   thrust::fill(p.handle_ptr->get_thrust_policy(), s.atz.begin(), s.atz.end(), 0.);
-  f_t weight              = std::sqrt(1. + double(p.n_integer_vars) / std::max(1, p.n_constraints));
+  // A matrix-scale-informed default; also the safety anchor that bounds how far a persisted,
+  // warm-started calibration may have drifted before it is reused as this call's starting weight.
+  const double default_weight =
+    std::sqrt(1. + double(p.n_integer_vars) / std::max(1, p.n_constraints));
+  if (s.primal_weight <= 0. || !std::isfinite(s.primal_weight)) {
+    s.primal_weight = default_weight;
+  } else {
+    // Clamping keeps a warm start close to the structurally-sound scale even when the
+    // controller previously pushed it toward an extreme that was fine for that call's
+    // target/anchor but is unsafe as the very first step of a call against a new target.
+    s.primal_weight =
+      std::clamp(s.primal_weight, f_t(default_weight * 1e-3), f_t(default_weight * 1e3));
+  }
+  f_t weight              = s.primal_weight;
   double initial_residual = -1., last_residual = INFINITY, integral = 0.;
   int inner      = 0;
   int last_check = -1;
@@ -809,6 +863,10 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     }
   }
   if (last_check != result.iterations) update_result(result, s.metrics(settings), settings);
+  // Only persist a value the next warm call can safely build on; a non-finite weight (which
+  // should not arise from the clamped update above, but may follow a diverged iterate) must
+  // not poison subsequent calls, so it is dropped in favor of whatever was already stored.
+  if (std::isfinite(weight) && weight > 0.) { s.primal_weight = weight; }
   if (!settings.anchor_halpern) {
     raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
   }
@@ -818,6 +876,30 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
       p.n_variables, s.point.data(), s.col_scale.data(), output.data());
   RAFT_CUDA_TRY(cudaGetLastError());
   p.handle_ptr->sync_stream();
+  // The caller (and the independent verifier downstream of it) must never see a non-finite
+  // assignment escape a projection; the bound-clipping inside every PDHG step should already
+  // prevent this, but a persisted step-size calibration this call's clamp could not fully tame
+  // is the one path that could still let a diverged iterate through. Detect and repair it here,
+  // and force the next call to fully recalibrate from a cold start.
+  bool output_finite = true;
+  if (p.n_variables) {
+    output_finite = thrust::transform_reduce(p.handle_ptr->get_thrust_policy(),
+                                             output.begin(),
+                                             output.end(),
+                                             finite_value{},
+                                             true,
+                                             thrust::logical_and<bool>{});
+  }
+  if (!output_finite) {
+    if (p.n_variables)
+      repair_output<i_t, f_t><<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(
+        p.view(), input.data(), output.data());
+    RAFT_CUDA_TRY(cudaGetLastError());
+    p.handle_ptr->sync_stream();
+    s.cold           = true;
+    s.primal_weight  = -1.;
+    result.converged = false;
+  }
   result.elapsed_time = timer.elapsed_time();
   return result;
 }
