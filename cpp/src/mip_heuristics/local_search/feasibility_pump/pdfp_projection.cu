@@ -345,6 +345,7 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
   bool cusparse_spmv;
   f_t eta;
   bool cold                        = true;
+  f_t primal_weight                = -1.;  // No calibration until the first projection.
   static constexpr int graph_chunk = 16;
 
   impl_t(problem_t<i_t, f_t>& p, bool spectral_step, bool use_cusparse)
@@ -692,7 +693,8 @@ pdfp_projection_t<i_t, f_t>::~pdfp_projection_t() = default;
 template <typename i_t, typename f_t>
 void pdfp_projection_t<i_t, f_t>::reset()
 {
-  impl_->cold = true;
+  impl_->cold          = true;
+  impl_->primal_weight = -1.;
 }
 
 template <typename i_t, typename f_t>
@@ -751,7 +753,18 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   raft::copy(s.point.data(), s.current.data(), s.current.size(), stream);
   thrust::fill(p.handle_ptr->get_thrust_policy(), s.slack.begin(), s.slack.end(), 0.);
   thrust::fill(p.handle_ptr->get_thrust_policy(), s.atz.begin(), s.atz.end(), 0.);
-  f_t weight              = std::sqrt(1. + double(p.n_integer_vars) / std::max(1, p.n_constraints));
+  // Reuse the residual controller's calibration across targets. Model dimensions provide
+  // the initial scale and a reference band for warm starts.
+  const double default_weight =
+    std::sqrt(1. + double(p.n_integer_vars) / std::max(1, p.n_constraints));
+  if (s.primal_weight <= 0. || !std::isfinite(s.primal_weight)) {
+    s.primal_weight = default_weight;
+  } else {
+    // A weight adapted to one target may be too extreme for the next target.
+    s.primal_weight =
+      std::clamp(s.primal_weight, f_t(default_weight * 1e-3), f_t(default_weight * 1e3));
+  }
+  f_t weight              = s.primal_weight;
   double initial_residual = -1., last_residual = INFINITY, integral = 0.;
   int inner      = 0;
   int last_check = -1;
@@ -809,6 +822,8 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     }
   }
   if (last_check != result.iterations) update_result(result, s.metrics(settings), settings);
+  // Preserve the valid starting calibration if this call produced an invalid weight.
+  if (std::isfinite(weight) && weight > 0.) { s.primal_weight = weight; }
   if (!settings.anchor_halpern) {
     raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
   }

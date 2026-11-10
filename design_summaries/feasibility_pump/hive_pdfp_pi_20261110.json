@@ -1,0 +1,124 @@
+{
+  "experiment": "cuopt-pdfp-pi-l4-r1-c8o4evq",
+  "candidate": "e8d44dd9bc6e42d487f378b86bbb6dff",
+  "base_commit": "4e33112b24c80d13a756b5c085010edfb79efcac",
+  "selection": "Highest arithmetic mean recorded fitness across available evaluations per candidate; 59 scored candidates.",
+  "candidate_evaluations": 1,
+  "mean_primal_integral": 249.84970026718344,
+  "baseline_mean_primal_integral": 426.5434228770273,
+  "observed_pi_reduction_percent": 41.42455682895027,
+  "validation": "Successful Hive evaluation compiled the candidate and completed all ten 600-second cases with the frozen original-model incumbent verifier. Publication changes relative to the evaluated code are whitespace-only formatting.",
+  "limitations": "Candidate and starting baseline each have one recorded evaluation; no repeat, guard-set, or full-suite validation claimed.",
+  "hardware": {
+    "gpu": "L4",
+    "solver_cpu_threads": 10,
+    "time_limit_seconds": 600,
+    "seed": 42
+  },
+  "environment": {
+    "CUOPT_FP_EXP_PDFP": "1",
+    "CUOPT_FP_EXP_PDFP_STEP": "1",
+    "CUOPT_FP_EXP_GPU_ONLY": "1",
+    "CUOPT_FP_EXP_SKIP_FJ": "1"
+  },
+  "build": {
+    "type": "Release",
+    "DEFINE_ASSERT": "ON",
+    "CMAKE_CUDA_ARCHITECTURES": "89-real",
+    "target": "solve_MIP"
+  },
+  "run_command": "CUOPT_FP_EXP_PDFP=1 CUOPT_FP_EXP_PDFP_STEP=1 CUOPT_FP_EXP_GPU_ONLY=1 CUOPT_FP_EXP_SKIP_FJ=1 <build>/solve_MIP --path <instance.mps> --time-limit 600 --num-cpu-threads 10 --write-log-file t --log-to-console t --out-dir <results>",
+  "instances": [
+    {
+      "instance": "neos-4532248-waihi",
+      "pi": 116.80628748065125,
+      "gap": 0.05954198473282462,
+      "incumbents": 29,
+      "first_incumbent_s": 59.416698251,
+      "projections": 423,
+      "process_seconds": 603.9593191530003
+    },
+    {
+      "instance": "sing44",
+      "pi": 79.3286094607273,
+      "gap": 0.05534087418882032,
+      "incumbents": 19,
+      "first_incumbent_s": 34.334351659,
+      "projections": 145,
+      "process_seconds": 600.9040221529976
+    },
+    {
+      "instance": "sing326",
+      "pi": 176.53659118249863,
+      "gap": 0.13673168332208846,
+      "incumbents": 31,
+      "first_incumbent_s": 32.293648954,
+      "projections": 138,
+      "process_seconds": 601.1406542299992
+    },
+    {
+      "instance": "neos-4413714-turia",
+      "pi": 539.6954967733272,
+      "gap": 0.8834069069204706,
+      "incumbents": 30,
+      "first_incumbent_s": 57.112444338,
+      "projections": 69,
+      "process_seconds": 601.2635433620017
+    },
+    {
+      "instance": "neos-848589",
+      "pi": 584.6114250945661,
+      "gap": 0.9219397646137116,
+      "incumbents": 12,
+      "first_incumbent_s": 44.160111731,
+      "projections": 163,
+      "process_seconds": 604.1817997570033
+    },
+    {
+      "instance": "buildingenergy",
+      "pi": 115.02261853180391,
+      "gap": 0.017261443739092736,
+      "incumbents": 3,
+      "first_incumbent_s": 106.504106274,
+      "projections": 236,
+      "process_seconds": 602.4906352709986
+    },
+    {
+      "instance": "neos-662469",
+      "pi": 38.76404669462089,
+      "gap": 0.0032705355175735745,
+      "incumbents": 20,
+      "first_incumbent_s": 18.204931036,
+      "projections": 446,
+      "process_seconds": 601.0367906540014
+    },
+    {
+      "instance": "neos-4300652-rahue",
+      "pi": 510.39789087192185,
+      "gap": 0.033137697516929986,
+      "incumbents": 12,
+      "first_incumbent_s": 397.675304381,
+      "projections": 1015,
+      "process_seconds": 601.2213295699985
+    },
+    {
+      "instance": "s250r10",
+      "pi": 143.97038726808944,
+      "gap": 0.05491059432436115,
+      "incumbents": 15,
+      "first_incumbent_s": 72.015017399,
+      "projections": 281,
+      "process_seconds": 603.5691194760002
+    },
+    {
+      "instance": "s100",
+      "pi": 193.3636493136274,
+      "gap": 0.13530336022222078,
+      "incumbents": 5,
+      "first_incumbent_s": 85.814129697,
+      "projections": 144,
+      "process_seconds": 604.4656557590024
+    }
+  ],
+  "reference": "https://arxiv.org/pdf/2611.03629"
+}
