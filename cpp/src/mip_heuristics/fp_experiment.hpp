@@ -32,7 +32,7 @@ constexpr bool default_pdfp_target_start     = true;
 constexpr bool default_pdfp_shadow           = false;
 constexpr bool default_ratio_tolerance       = false;
 constexpr int default_pdfp_check_interval    = 200;
-constexpr int default_fj_check_floor_ms      = 0;
+constexpr int default_fj_check_floor_ms      = 50;
 
 inline bool env_flag(const char* name, bool compiled_default)
 {
