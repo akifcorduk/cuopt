@@ -199,6 +199,38 @@ Feasible found: 231 per run counting all incumbents, 230 valid only (rocI-4-11).
 are not comparable with the MIPFeas table (cuopt 0.0088 on a DGX Spark GB10, one instance at a time):
 these runs share an H100 node 8 ways with 10 CPU threads each.
 
+Check against GAMS' own data (2026-11-11). GAMS' archive `2026-10-30_mipfeas_results_and_scripts.zip`
+(cloud.gams.com/s/oQBzPAXDdzcKDNr, 20.9 MB: `create_primalintegral.py`, `optimal_objective.csv`,
+`primalintegral.csv`, 1,631 `.trc` traces) reproduces exactly: a port of their `calculate_primal_integral`
+(`mipfeas/gams_pi_port.py`) gives every published geomean on their traces (cbc 0.0980, cuopt 0.0088,
+cuopt-b200 0.0076, highs 0.0447, rexi 0.0103, scip 0.0609, scipconc 0.0168; per instance within 1e-19 of
+their csv), and the scorer above gives the same numbers on their traces (no instance off by more than
+1e-4). Their reference values equal the repo BKS on all 233 instances. What differs for our runs:
+
+- GAMS runs every solver with `optcr=0` (mipfeas.gms). These runs use cuOpt's default
+  `relative_mip_gap` 1e-4, so B&B stops early on a near-optimal objective on 4-6 instances per run
+  ("Optimal solution found within relative MIP gap tolerance", e.g. neos-957323, radiationm40-10-02,
+  neos-827175). GAMS' scorer counts an early stop whose objective is not z as a failure (P = 2); the
+  scorer above charged only the residual gap.
+- GAMS also scores an incumbent better than z as P = 2 (whitelisted for cuOpt only on
+  neos-3754480-nidda). solve_MIP's `valid` flag already drops those (supportcase26,
+  neos-4722843-widden, binkar10_1), which is why the valid-only rows are close.
+
+With GAMS' rules applied to these runs (`mipfeas/gams_step_c.py`; I rows = running best, E row at
+`run_solver`, GAMS' cuOpt whitelists for both arms):
+
+| incumbents | base rep 0 / 1 | fix rep 0 / 1 | fix vs base | P = 2 failures per run |
+|---|---|---|---|---|
+| all reported | 0.01680 / 0.01559 | 0.01527 / 0.01429 | -8.7% | 8 / 6 vs 8 / 6 |
+| valid only | 0.01587 / 0.01524 | 0.01545 / 0.01392 | -5.6% | 5 / 4 vs 7 / 4 |
+
+The fix still wins, with more rep noise (4-8%) because the failure rules turn sub-1e-4 endings into
+P = 2. None of this is comparable with the published cuOpt numbers: on one scorer these upstream-main
+EOS runs score 0.0135 vs GAMS' cuopt 26.10 0.0088 (GB10) / 0.0076 (B200), worse on 106 instances and
+better on 6 (`mipfeas/ours_vs_gams.py`), with later first incumbents (shifted geomean 0.95 s vs
+0.67-0.71 s; app1-2, rd-rplusc-21, milo-v12-6-r2-40-1 are the largest). Gap setting, hardware (H100
+nodes shared 8 ways), and version (26.12 dev vs 26.10) are not separated yet.
+
 Reading: the gain is in anytime quality, about -9% sgm PI where the fix changes FP and nothing where
 it does not, which is the pattern expected from cheaper projections and more FP iterations. It does
 not move the final 600 s gap or feasibility beyond rep noise.
