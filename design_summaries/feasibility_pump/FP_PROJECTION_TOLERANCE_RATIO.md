@@ -231,6 +231,23 @@ better on 6 (`mipfeas/ours_vs_gams.py`), with later first incumbents (shifted ge
 0.67-0.71 s; app1-2, rd-rplusc-21, milo-v12-6-r2-40-1 are the largest). Gap setting, hardware (H100
 nodes shared 8 ways), and version (26.12 dev vs 26.10) are not separated yet.
 
+Resource setting (2026-11-11, user request): baseline `32ba4c968` rerun as rep 2 with 24 CPU threads and 4
+instances per H100 node (12 batches of 20; EOS script copies `run_script_g4t24.sh` /
+`benchmark_script_g4t24.sh`, jobs 6511464-6511475), results `benchmark_32ba4c968_2`:
+
+| run | threads, instances per node | MIPFeas sgm, GAMS integration without failure rules | GAMS rules, all / valid | first incumbent, sgm(t+1)-1 | optimal (solver) |
+|---|---|---|---|---|---|
+| base rep 0 / 1 | 10, 8 | 0.01350 / 0.01334 | 0.0168 / 0.0159, 0.0156 / 0.0152 | 0.95 s | 76 / 75 |
+| base rep 2 | 24, 4 | 0.00891 | 0.0115 / 0.0108 | 0.80 s | 89 |
+| GAMS cuopt 26.10 GB10 / B200 | 10 / 24, 1 | 0.00879 / 0.00755 | same | 0.67 / 0.71 s | - |
+
+Per instance (factor 1.5 on P + 0.001): rep 2 is better than rep 0 on 76 and worse on 7 (rep 1 vs rep 0:
+23 / 16); vs GAMS' B200 the count goes from worse 106 / better 6 to worse 48 / better 16. The largest
+gains are the instances furthest behind GAMS (rd-rplusc-21, milo-v12-6-r2-40-1, app1-2, supportcase10,
+rmatr200-p5, uccase12). So most of the distance to the published cuOpt numbers is the benchmark's 10
+threads with 8 instances per node, not the code; threads and node sharing are not separated (both
+changed). The fix A/B above was measured at 10 threads / 8 per node.
+
 Reading: the gain is in anytime quality, about -9% sgm PI where the fix changes FP and nothing where
 it does not, which is the pattern expected from cheaper projections and more FP iterations. It does
 not move the final 600 s gap or feasibility beyond rep noise.
