@@ -13,22 +13,22 @@
 // benchmark runs use; the environment variables override them for local runs.
 namespace cuopt::mathematical_optimization::mip::fp_experiment {
 
-constexpr bool default_use_pdfp_projection   = false;
+constexpr bool default_use_pdfp_projection   = true;
 constexpr bool default_gpu_heuristics_only   = true;
 constexpr bool default_skip_initial_fj       = true;
-constexpr bool default_pdfp_spectral_step    = false;
+constexpr bool default_pdfp_spectral_step    = true;
 constexpr bool default_paper_tolerance       = false;
 constexpr bool default_pdfp_paper_warm_start = false;
 constexpr bool default_pure_distance         = false;
 constexpr bool default_pdfp_cusparse_spmv    = true;
 constexpr bool default_pdfp_cuda_graph       = true;
-constexpr bool default_pdfp_prox_distance    = false;
-constexpr bool default_pdfp_primal_tolerance = false;
-constexpr bool default_pdfp_gap_test         = false;
-constexpr bool default_pdfp_balanced_weight  = false;
+constexpr bool default_pdfp_prox_distance    = true;
+constexpr bool default_pdfp_primal_tolerance = true;
+constexpr bool default_pdfp_gap_test         = true;
+constexpr bool default_pdfp_balanced_weight  = true;
 constexpr bool default_pdfp_damped_weight    = false;
-constexpr bool default_pdfp_wide_weight      = false;
-constexpr bool default_pdfp_target_start     = false;
+constexpr bool default_pdfp_wide_weight      = true;
+constexpr bool default_pdfp_target_start     = true;
 constexpr bool default_pdfp_shadow           = false;
 constexpr bool default_ratio_tolerance       = false;
 constexpr int default_pdfp_check_interval    = 200;
