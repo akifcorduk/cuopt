@@ -484,6 +484,7 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
              solution.assignment.data(),
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
+  i_t n_integers = solution.problem_ptr->n_integer_vars;
   while (true) {
     if (context.diversity_manager_ptr->check_b_b_preemption() || timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");
@@ -491,11 +492,10 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
       return false;
     }
     proj_begin = timer.remaining_time();
-    // pass n_assigned_integers from the previous iteration
-    f_t ratio_of_assigned_integers =
-      f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
+    // previous projection's integrality; solution.n_assigned_integers is the rounding's
+    f_t ratio_of_assigned_integers = f_t(n_integers) / solution.problem_ptr->n_integer_vars;
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
-    i_t n_integers   = solution.compute_number_of_integers();
+    n_integers       = solution.compute_number_of_integers();
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
                     n_integers,
                     solution.problem_ptr->n_integer_vars);
