@@ -1,7 +1,9 @@
 # Feasibility pump — projection tolerance from the integer ratio
 
 Fix branch: `fix/fp-assigned-integers-ratio` (`66bf34c1b` on upstream main `0c90faa1a`).
-Bench: `bench/fp-ratio-fix` (`4465befc7`, same tree, parent `0c90faa1a`).
+Bench (EOS, section 6): `bench/fp-ratio-fix-pin` (`37fbdbc4a`) vs `bench/fp-ratio-base-pin` (`32ba4c968`),
+upstream main `0c90faa1a` with `RAPIDS_BRANCH=release/26.12`; `bench/fp-ratio-fix` (`4465befc7`) is the
+unpinned original that could not run.
 Dev-node experiment: `exp/fp-ratio-trace` (fix + instrumentation on `4b0767834`, see section 2).
 
 ## 1. Question
@@ -120,23 +122,62 @@ cod105 0.064 vs 0.026, mas74 0.164 vs 0.087, bab2 101.9 vs 101.7, air05 1.26 vs 
 
 ## 5. Decision
 
-Keep the fix (it restores the documented intent and removes a silent no-op) pending the EOS
-comparison below; decide on merging from its primal gap / primal integral. If EOS shows a loss, the
-next question is the schedule itself (thresholds, or tightening when a descent stalls), not the
-counter.
+Keep the fix. It restores the documented intent, removes a silent no-op that dates from late 2024,
+and the EOS comparison (section 7) shows a consistent primal-integral gain on the instances whose
+FP behavior it changes, with final gap and feasibility unchanged. Open next: the feedback loop (loose
+projections stay loose); the schedule itself (thresholds, tightening when a descent stalls) is the
+lever if more is wanted, not the counter.
 
 Related: on the PDFP experiment branch (`exp/fp-pdfp-trace`, e.g. `9126569d6`) both projectors take
 their tolerance from this ratio (`get_tolerance_from_ratio` for PDFP and for the epigraph LP), so the
 epigraph-vs-PDFP runs so far compared both projectors with the schedule switched off (1e-6, unless a
 variant set its own tolerance).
 
-## 6. EOS benchmark proposal (not launched; needs the user's approval)
+## 6. EOS run (approved 2026-11-11)
 
-- Hashes: `4465befc7` (`bench/fp-ratio-fix`) vs its parent `0c90faa1a` (upstream main), both on origin.
-- Default parameters, full solver, 240 MIPLIB2017 instances, 600 s, `n_batches` 6, `runtime` 01:40:00.
-- `config_eos.json` change: put the two hashes first in `commit_hashes`, `n_hashes_to_run: 2`,
-  `n_iters: 2` (currently 1), `suffix_start_idx: 0`; everything else unchanged. 2 x 2 x 6 = 24 jobs.
-  `n_iters` is re-read when each job starts, so restore it only after no job is PENDING.
-- Compare: feasible count, BKS primal gap (geomean, BKS reached), primal integral, time to first
-  solution; reps of the same hash first for noise. The bench commit has no FPTOL line, so FP-level
-  numbers come from the dev-node runs above.
+- First submission `4465befc7` vs `0c90faa1a` (jobs 6510298-6510321) produced nothing: both arms built,
+  then `solve_MIP` died at load with `libcuopt_mathopt.so: undefined symbol
+  _ZTIN3rmm9_RMM_27_29bad_allocE`. RAPIDS main moved to 27.02 that day; cuOpt is at 26.12 with
+  `RAPIDS_BRANCH=main`, so CPM fetched rmm 27.02 while `mamba env update` installed librmm 26.12. Not
+  related to the fix; it hits every commit with `RAPIDS_BRANCH=main`.
+- Rerun with `RAPIDS_BRANCH=release/26.12` in both arms (build-only, as upstream #1870 did for 26.10):
+  base `32ba4c968` (`bench/fp-ratio-base-pin` = `0c90faa1a` + pin), fix `37fbdbc4a`
+  (`bench/fp-ratio-fix-pin` = base + the 4-line fix). Canary 6510443, then 23 jobs up to 6510531; 2 reps,
+  240 instances, 600 s, default parameters, 8 instances per H100 node at a time. All 24 jobs clean
+  (6/6 result files, 240/240 logs per run). Results in `~/Documents/benchmarks/benchmark_{32ba4c968,37fbdbc4a}_{0,1}`.
+
+## 7. EOS results
+
+Primal gap vs the repo BKS (233 instances with a BKS):
+
+| run | feasible | at BKS | geomean(gap+1)-1 | primal integral sum | sgm10 PI | median PI |
+|---|---|---|---|---|---|---|
+| base rep 0 | 231 | 128 | 0.0376 | 10,684 | 15.90 | 5.67 |
+| base rep 1 | 231 | 128 | 0.0403 | 10,814 | 15.55 | 5.77 |
+| fix rep 0 | 231 | 131 | 0.0395 | 11,367 | 15.59 | 4.98 |
+| fix rep 1 | 231 | 131 | 0.0419 | 11,394 | 15.06 | 4.72 |
+
+The fix's worse sum and geomean come from three all-or-nothing instances: academictimetablesmall and
+rd-rplusc-21 (a solution in 1 of 2 base reps, 0 of 2 fix reps, 600 gap-seconds each) and cbs-cta (BKS 0,
+so any nonzero objective counts as gap 1; one fix rep missed 0). ns1952667 flips the other way (1 of 2
+base reps vs 2 of 2 fix reps). Solver-gap view (compare.py): 231 feasible and 75-76 optimal in every
+run; fix vs base differences match base vs base.
+
+On the 222 stable instances (a solution in all four runs, BKS != 0), rep-averaged primal integral,
+better/worse by more than max(1 s, 5%):
+
+| subset | n | sgm10 PI base (rep 0 / 1) | sgm10 PI fix (rep 0 / 1) | fix better / worse | sign test |
+|---|---|---|---|---|---|
+| all stable | 222 | 14.39 / 13.86 | 13.42 / 13.21 | 58 / 32 | p = 0.008 |
+| fix changes >= 50% of FP projection time | 107 | 10.91 / 10.24 | 9.43 / 9.70 | 27 / 11 | p = 0.014 |
+| fix changes < 5% of FP projection time | 69 | 20.12 / 19.99 | 20.33 / 19.91 | 16 / 16 | p = 1.0 |
+
+The subsets come from the what-if on the epigraph GPU-only traces (section 1). Single-rep noise for
+the same comparison (base rep 1 vs rep 0) is 52 / 49 on the stable set. Final gap on the stable set is
+neutral (geomean 0.0278 / 0.0305 fix vs 0.0295 / 0.0291 base; at BKS 125 / 126 vs 124 / 120) and the
+time to the first solution is unchanged (shifted geomean 0.74-0.76 s in every run; first incumbents
+come from FJ and the early heuristics, before FP).
+
+Reading: the gain is in anytime quality, about -9% sgm PI where the fix changes FP and nothing where
+it does not, which is the pattern expected from cheaper projections and more FP iterations. It does
+not move the final 600 s gap or feasibility beyond rep noise.
