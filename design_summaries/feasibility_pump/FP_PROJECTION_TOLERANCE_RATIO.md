@@ -269,6 +269,18 @@ weak positive signal where it changes FP. The 10-thread / 8-per-node A/B (two re
 clear anytime gain; with 24 threads the CPU side (B&B, CPU FJ) finds and improves solutions sooner,
 which plausibly leaves FP less to contribute. More reps are needed to size the effect in this setting.
 
+Final-solution side at 24 threads (`mipfeas/opt_check.py`): the fix lost 6 proven optima and gained none
+(10 threads: 3 / 3 per rep; identical runs 3 / 4). Four of the six also flip between identical 10-thread
+runs (graphdraw-domain, neos-1171737, ns1952667, unitcal_7); mzzv11 and tbfp-network were never proven at
+10 threads (base `_2` took 385 s and 485 s). On the 83 instances both runs prove, the fix is not slower
+(sgm 43.3 s -> 40.1 s, 25 faster / 17 slower by > 10%). Gap to BKS leans to the base in all three
+pairings (0.0376 / 0.0403 vs 0.0395 / 0.0419 at 10 threads, 0.0265 vs 0.0290 at 24), each within the 6-7%
+identical runs differ by. Aggregate MIPFeas differs by 0.6-1.2% between identical 10-thread runs, so the
+6% anytime gain would likely have shown in one 24-thread run; a 1-2% effect cannot be resolved. The
+largest 24-thread swings are mostly bimodal instances (academictimetablesmall, ns1952667, supportcase10,
+ns1644855 swing as much between identical runs); rail02 is the only large gain that holds in all three
+pairings.
+
 Run layout and configuration (checked 2026-11-11 from the logs, the EOS scripts and sacct). Each commit
 has three runs and the suffix is a run index, not a count: `_0` and `_1` are two reps at 10 threads / 8
 instances per node (6 jobs each; all 24 jobs of both arms started 01:57-02:05 PST, interleaved); `_2` is
