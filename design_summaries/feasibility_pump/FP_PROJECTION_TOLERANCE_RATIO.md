@@ -178,6 +178,27 @@ neutral (geomean 0.0278 / 0.0305 fix vs 0.0295 / 0.0291 base; at BKS 125 / 126 v
 time to the first solution is unchanged (shifted geomean 0.74-0.76 s in every run; first incumbents
 come from FJ and the early heuristics, before FP).
 
+MIPFeas score (plato.asu.edu/ftp/mipfeas.html, GAMS blog of Oct 2026): P = (1/600) * integral over
+[0, 600 s] of p(t), with p = 2 before the first incumbent, 1 on a sign mismatch, else the relative gap to
+the optimal / best-known value; shifted geometric mean with shift 0.001 over the 233 feasible
+instances (repo BKS as the reference). The page writes the gap denominator as max(|z|, |z*|, 1), the
+blog as max(|z|, |z*|) with 0 when both are below 1e-6; both are shown. MIPFeas scores the incumbents
+the solver reports; the solve_MIP trace also re-checks each incumbent (`valid`), and 18-22 instances
+per run have some incumbents flagged invalid in both arms (rocI-4-11 all of them; cbs-cta in fix rep 0
+loses its optimal incumbents that way), so both counts are shown:
+
+| incumbents | gap denominator | base rep 0 / 1 | fix rep 0 / 1 | fix vs base (mean of reps) |
+|---|---|---|---|---|
+| all reported (MIPFeas) | max(\|z\|,\|z*\|,1) | 0.01350 / 0.01334 | 0.01259 / 0.01252 | -6.4% |
+| all reported (MIPFeas) | max(\|z\|,\|z*\|) | 0.01429 / 0.01412 | 0.01337 / 0.01325 | -6.3% |
+| valid only | max(\|z\|,\|z*\|,1) | 0.01378 / 0.01364 | 0.01328 / 0.01277 | -5.0% |
+| valid only | max(\|z\|,\|z*\|) | 0.01459 / 0.01443 | 0.01410 / 0.01350 | -4.9% |
+
+Feasible found: 231 per run counting all incumbents, 230 valid only (rocI-4-11). Rep-to-rep spread is
+1.0-1.2% (base) and 0.6-4% (fix); both fix reps beat both base reps in every variant. The absolute values
+are not comparable with the MIPFeas table (cuopt 0.0088 on a DGX Spark GB10, one instance at a time):
+these runs share an H100 node 8 ways with 10 CPU threads each.
+
 Reading: the gain is in anytime quality, about -9% sgm PI where the fix changes FP and nothing where
 it does not, which is the pattern expected from cheaper projections and more FP iterations. It does
 not move the final 600 s gap or feasibility beyond rep noise.
