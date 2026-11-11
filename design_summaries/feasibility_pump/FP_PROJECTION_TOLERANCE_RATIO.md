@@ -248,6 +248,27 @@ rmatr200-p5, uccase12). So most of the distance to the published cuOpt numbers i
 threads with 8 instances per node, not the code; threads and node sharing are not separated (both
 changed). The fix A/B above was measured at 10 threads / 8 per node.
 
+Fix vs base at 24 threads / 4 instances per node (rep 2 of each, one run per arm; fix jobs 6511998-6512009,
+`benchmark_37fbdbc4a_2`; `mipfeas/ab_pair.py`):
+
+| | base rep 2 | fix rep 2 |
+|---|---|---|
+| MIPFeas sgm, all / valid incumbents | 0.00891 / 0.00912 | 0.00895 / 0.00945 |
+| GAMS rules, all / valid | 0.01146 / 0.01075 | 0.01123 / 0.01096 |
+| feasible / at BKS / BKS gap geomean | 232 / 143 / 0.0265 | 231 / 142 / 0.0290 |
+| proven optimal (solver) | 89 | 83 |
+
+Per instance (MIPFeas P, better/worse by more than max(0.0005, 5%)): all 233 instances 59 / 56 (sign test
+p = 0.85); where the fix changes >= 50% of FP projection time 30 / 19 (p = 0.15, sgm 0.00550 -> 0.00536);
+where it changes < 5%, 20 / 22. Two identical runs (base rep 0 vs 1, other setting) differ by 58 / 64.
+Largest fix gains academictimetablesmall, rail01, rail02, bab6; largest losses ns1952667 (no solution in
+the fix run), supportcase10, ns1644855, rocII-5-11.
+
+Reading: in the GAMS-like resource setting the fix is neutral within single-run noise, with at most a
+weak positive signal where it changes FP. The 10-thread / 8-per-node A/B (two reps per arm) showed a
+clear anytime gain; with 24 threads the CPU side (B&B, CPU FJ) finds and improves solutions sooner,
+which plausibly leaves FP less to contribute. More reps are needed to size the effect in this setting.
+
 Reading: the gain is in anytime quality, about -9% sgm PI where the fix changes FP and nothing where
 it does not, which is the pattern expected from cheaper projections and more FP iterations. It does
 not move the final 600 s gap or feasibility beyond rep noise.
