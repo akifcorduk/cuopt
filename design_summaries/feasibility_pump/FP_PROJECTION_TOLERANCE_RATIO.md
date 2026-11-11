@@ -248,10 +248,10 @@ rmatr200-p5, uccase12). So most of the distance to the published cuOpt numbers i
 threads with 8 instances per node, not the code; threads and node sharing are not separated (both
 changed). The fix A/B above was measured at 10 threads / 8 per node.
 
-Fix vs base at 24 threads / 4 instances per node (rep 2 of each, one run per arm; fix jobs 6511998-6512009,
+Fix vs base at 24 threads / 4 instances per node (one run per arm, suffix `_2`; fix jobs 6511998-6512009,
 `benchmark_37fbdbc4a_2`; `mipfeas/ab_pair.py`):
 
-| | base rep 2 | fix rep 2 |
+| | base `_2` (1 run) | fix `_2` (1 run) |
 |---|---|---|
 | MIPFeas sgm, all / valid incumbents | 0.00891 / 0.00912 | 0.00895 / 0.00945 |
 | GAMS rules, all / valid | 0.01146 / 0.01075 | 0.01123 / 0.01096 |
@@ -268,6 +268,18 @@ Reading: in the GAMS-like resource setting the fix is neutral within single-run 
 weak positive signal where it changes FP. The 10-thread / 8-per-node A/B (two reps per arm) showed a
 clear anytime gain; with 24 threads the CPU side (B&B, CPU FJ) finds and improves solutions sooner,
 which plausibly leaves FP less to contribute. More reps are needed to size the effect in this setting.
+
+Run layout and configuration (checked 2026-11-11 from the logs, the EOS scripts and sacct). Each commit
+has three runs and the suffix is a run index, not a count: `_0` and `_1` are two reps at 10 threads / 8
+instances per node (6 jobs each; all 24 jobs of both arms started 01:57-02:05 PST, interleaved); `_2` is
+one run at 24 threads / 4 per node (12 jobs; base 04:11-05:01, fix 05:22-06:11 PST, so sequential and on
+24 different nodes). Within each setting the arms differ only by the fix (`37fbdbc4a` = `32ba4c968` + the
+4-line change, both pinned to release/26.12): every log shows the same 240 instances, the 600 s limit,
+default gaps (relative 1e-4), no deterministic mode, the setting's thread count and GPU ids, and an
+8480C + H100 80GB node; nodes are exclusive (OverSubscribe=EXCLUSIVE, 224 CPUs per job); all 36 jobs
+resolved the same conda transaction (cuDSS 1.0.0.35) and CPM dependencies (CCCL 3.6.0, GTest 1.16.0,
+KaMinPar 3.7.3). The `_g4t24` scripts differ from the standard ones only in `--num-cpu-threads 24` and
+`GPU_COUNT=4`.
 
 Reading: the gain is in anytime quality, about -9% sgm PI where the fix changes FP and nothing where
 it does not, which is the pattern expected from cheaper projections and more FP iterations. It does
