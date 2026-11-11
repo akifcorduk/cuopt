@@ -476,11 +476,25 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   const bool gpu_heuristics_only = fp_experiment::gpu_heuristics_only();
   CUOPT_LOG_INFO(
     "FP experiment: projector %s, GPU heuristic thread only %d, PDFP cuSPARSE SpMV %d, PDFP CUDA "
-    "graph %d",
+    "graph %d, PDFP safe step %d, PDFP prox distance %d, PDFP primal tolerance %d, ratio "
+    "tolerance %d, PDFP check interval %d, PDFP gap test %d, PDFP weight init/damped/wide "
+    "%d/%d/%d, PDFP target start %d, PDFP shadow %d, FJ check floor %d ms",
     fp_experiment::use_pdfp_projection() ? "pdfp" : "epigraph",
     (int)gpu_heuristics_only,
     (int)fp_experiment::pdfp_cusparse_spmv(),
-    (int)fp_experiment::pdfp_cuda_graph());
+    (int)fp_experiment::pdfp_cuda_graph(),
+    (int)fp_experiment::pdfp_spectral_step(),
+    (int)fp_experiment::pdfp_prox_distance(),
+    (int)fp_experiment::pdfp_primal_tolerance(),
+    (int)fp_experiment::ratio_tolerance(),
+    fp_experiment::pdfp_check_interval(),
+    (int)fp_experiment::pdfp_gap_test(),
+    (int)fp_experiment::pdfp_balanced_weight(),
+    (int)fp_experiment::pdfp_damped_weight(),
+    (int)fp_experiment::pdfp_wide_weight(),
+    (int)fp_experiment::pdfp_target_start(),
+    (int)fp_experiment::pdfp_shadow(),
+    fp_experiment::fj_check_floor_ms());
 
   // Set the primal heuristics -> branch and bound callback
   if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {

@@ -156,6 +156,15 @@ class feasibility_pump_t {
   bool linear_project_onto_polytope(solution_t<i_t, f_t>& solution,
                                     f_t proximity_to_polytope,
                                     bool longer_lp_run = false);
+  pdfp_projection_settings_t pdfp_settings(problem_t<i_t, f_t>& problem,
+                                           f_t alpha,
+                                           f_t ratio_of_set_integers,
+                                           bool longer_lp_run);
+  // Creates the PDFP projector for the solution's problem if needed; returns the setup time.
+  double ensure_pdfp_projector(solution_t<i_t, f_t>& solution);
+  void shadow_pdfp_projection(solution_t<i_t, f_t>& solution,
+                              f_t ratio_of_set_integers,
+                              bool longer_lp_run);
 
   void perturbate(solution_t<i_t, f_t>& solution);
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
@@ -203,6 +212,7 @@ class feasibility_pump_t {
   f_t last_alpha_used         = 0;
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
+  rmm::device_uvector<f_t> shadow_projection;
   rmm::device_uvector<var_t> orig_variable_types;
   bool general_integers_relaxed = false;
   f_t best_excess;

@@ -90,12 +90,14 @@ __global__ void initialize_projection(typename problem_t<i_t, f_t>::view_t pb,
                                       f_t* target,
                                       f_t* current,
                                       f_t distance_weight,
-                                      bool cold)
+                                      bool cold,
+                                      bool start_at_target)
 {
   i_t j = blockIdx.x * blockDim.x + threadIdx.x;
   if (j >= pb.n_variables) return;
   target[j] = input[j] / scale[j];
   if (cold) current[j] = start != nullptr ? start[j] / scale[j] : target[j];
+  if (start_at_target) current[j] = target[j];
   current[j] = clip(current[j],
                     get_lower(pb.variable_bounds[j]) / scale[j],
                     get_upper(pb.variable_bounds[j]) / scale[j]);
@@ -136,11 +138,13 @@ __global__ void primal_step(typename problem_t<i_t, f_t>::view_t pb,
                             f_t* current,
                             const f_t* anchor,
                             const f_t* atz,
+                            const f_t* target,
                             f_t* point,
                             f_t* reflected_x,
                             f_t* slack,
                             const f_t* params,
-                            i_t* counters)
+                            i_t* counters,
+                            bool prox)
 {
   i_t j = blockIdx.x * blockDim.x + threadIdx.x;
   if (halpern && j == 0) counters[1] = counters[0] + 1;
@@ -148,8 +152,15 @@ __global__ void primal_step(typename problem_t<i_t, f_t>::view_t pb,
   f_t tau = params[tau_slot];
   f_t v   = current[j] - tau * (params[objective_slot] * pb.objective_coefficients[j] * scale[j] +
                               atz[j] - current[pb.n_variables + j]);
-  f_t x   = clip(
-    v, get_lower(pb.variable_bounds[j]) / scale[j], get_upper(pb.variable_bounds[j]) / scale[j]);
+  f_t x   = v;
+  if (prox && pb.variable_types.size() && pb.is_integer_var(j)) {
+    // Proximal step of tau * w * |x - target|; clipping to the box afterwards is exact in 1-D.
+    f_t shrink = tau * params[distance_slot] * scale[j];
+    f_t d      = v - target[j];
+    x          = target[j] + (d > shrink ? d - shrink : d < -shrink ? d + shrink : f_t(0));
+  }
+  x = clip(
+    x, get_lower(pb.variable_bounds[j]) / scale[j], get_upper(pb.variable_bounds[j]) / scale[j]);
   point[j]       = x;
   reflected_x[j] = 2 * x - current[j];
   slack[j]       = (x - v) / tau;
@@ -170,13 +181,14 @@ __global__ void dual_step(typename problem_t<i_t, f_t>::view_t pb,
                           const f_t* ax,
                           f_t* point,
                           const f_t* params,
-                          i_t* counters)
+                          i_t* counters,
+                          bool prox)
 {
   i_t j      = blockIdx.x * blockDim.x + threadIdx.x;
   f_t sigma  = params[sigma_slot];
   f_t lambda = halpern ? f_t(1) / (counters[1] + 1) : f_t(0);
   if (halpern && j == 0) counters[0] = counters[1];
-  if (j < pb.n_variables) {
+  if (j < pb.n_variables && !prox) {
     f_t w = pb.variable_types.size() && pb.is_integer_var(j) ? params[distance_slot] * col_scale[j]
                                                              : f_t(0);
     f_t y = clip(current[pb.n_variables + j] + sigma * (target[j] - reflected_x[j]), -w, w);
@@ -217,6 +229,7 @@ struct metrics_t {
   double primal = 0., dual = 0., gap = 0., objective = 0., target = 0., cost = 0.;
   double dx = 0., dy = 0., cross = 0., anchor_x = 0., anchor_dual = 0.;
   double primal_sq = 0., primal_sq_scaled = 0., rhs_sq = 0., rhs_sq_scaled = 0.;
+  double dual_objective = 0., dual_illegal = 0.;
 };
 
 struct add_metrics {
@@ -237,6 +250,8 @@ struct add_metrics {
     a.primal_sq_scaled += b.primal_sq_scaled;
     a.rhs_sq += b.rhs_sq;
     a.rhs_sq_scaled += b.rhs_sq_scaled;
+    a.dual_objective += b.dual_objective;
+    a.dual_illegal += b.dual_illegal;
     return a;
   }
 };
@@ -246,7 +261,8 @@ struct collect_metrics {
   typename problem_t<i_t, f_t>::view_t pb;
   const f_t *col_scale, *row_scale, *target, *current, *point, *anchor;
   const f_t *ax, *atz, *atz_point, *slack;
-  f_t distance_weight, objective_weight;
+  f_t distance_weight, objective_weight, bound_ratio;
+  bool prox;
 
   __device__ metrics_t operator()(i_t j) const
   {
@@ -260,9 +276,10 @@ struct collect_metrics {
       f_t residual = c + atz_point[j] - y - slack[j];
       r.dual       = residual * residual;
       r.cost       = c * c + w * w;
-      r.gap        = y * (target[j] - x) - dist;
-      r.objective  = c * x + dist;
-      r.target     = w * abs(target[j]);
+      // With prox the step's own subgradient of the distance term is exact at x.
+      r.gap       = prox ? f_t(0) : y * (target[j] - x) - dist;
+      r.objective = c * x + dist;
+      r.target    = w * abs(target[j]);
       f_t dx = current[j] - x, dy = current[pb.n_variables + j] - y;
       r.dx    = dx * dx;
       r.dy    = dy * dy;
@@ -270,24 +287,83 @@ struct collect_metrics {
       f_t da = anchor[j] - x, db = anchor[pb.n_variables + j] - y;
       r.anchor_x    = da * da;
       r.anchor_dual = db * db;
+      // Dual bound of the row duals alone: min over the box of g * x + w * |x - target|, attained
+      // at a bound or at the target. A slope that an infinite bound leaves unbounded is the
+      // illegal part of the reduced cost, as in PDLP.
+      f_t lower = get_lower(pb.variable_bounds[j]) / col_scale[j];
+      f_t upper = get_upper(pb.variable_bounds[j]) / col_scale[j];
+      f_t g     = c + atz_point[j];
+      if (!isfinite(upper) && g < -w) {
+        r.dual_illegal += (g + w) * (g + w);
+        g = -w;
+      }
+      if (!isfinite(lower) && g > w) {
+        r.dual_illegal += (g - w) * (g - w);
+        g = w;
+      }
+      f_t best = g * target[j];
+      if (isfinite(upper)) best = min(best, g * upper + w * (upper - target[j]));
+      if (isfinite(lower)) best = min(best, g * lower + w * (target[j] - lower));
+      r.dual_objective = best;
     }
     if (j < pb.n_constraints) {
       f_t activity = ax[j] / row_scale[j];
       f_t l = pb.constraint_lower_bounds[j], u = pb.constraint_upper_bounds[j];
-      r.primal           = isfinite(activity) ? abs(activity - clip(activity, l, u)) : INFINITY;
       f_t rhs            = max(isfinite(l) ? abs(l) : f_t(0), isfinite(u) ? abs(u) : f_t(0));
+      r.primal           = isfinite(activity) ? abs(activity - clip(activity, l, u)) : INFINITY;
       r.primal_sq        = r.primal * r.primal;
       r.primal_sq_scaled = r.primal_sq * row_scale[j] * row_scale[j];
       r.rhs_sq           = rhs * rhs;
       r.rhs_sq_scaled    = r.rhs_sq * row_scale[j] * row_scale[j];
-      f_t z              = point[2 * pb.n_variables + j];
+      // Violation in units of the row's own feasibility tolerance, abs + rel * |bound|.
+      r.primal /= 1 + bound_ratio * rhs;
+      f_t z = point[2 * pb.n_variables + j];
       // The zero case avoids multiplying an infinite row bound by zero.
       f_t support = z > 0 ? z * u * row_scale[j] : z < 0 ? z * l * row_scale[j] : 0.;
       r.gap += z * ax[j] - support;
+      r.dual_objective -= support;
       f_t dz = current[2 * pb.n_variables + j] - z;
       f_t da = anchor[2 * pb.n_variables + j] - z;
       r.dy += dz * dz;
       r.anchor_dual += da * da;
+    }
+    return r;
+  }
+};
+
+// Squared norms of the scaled cost (objective and distance slopes) and of the scaled row bounds.
+struct norms_t {
+  double cost = 0., bounds = 0.;
+};
+
+struct add_norms {
+  __host__ __device__ norms_t operator()(norms_t a, norms_t b) const
+  {
+    a.cost += b.cost;
+    a.bounds += b.bounds;
+    return a;
+  }
+};
+
+template <typename i_t, typename f_t>
+struct collect_norms {
+  typename problem_t<i_t, f_t>::view_t pb;
+  const f_t *col_scale, *row_scale;
+  f_t distance_weight, objective_weight;
+
+  __device__ norms_t operator()(i_t j) const
+  {
+    norms_t r;
+    if (j < pb.n_variables) {
+      f_t w =
+        pb.variable_types.size() && pb.is_integer_var(j) ? distance_weight * col_scale[j] : 0.;
+      f_t c  = objective_weight * pb.objective_coefficients[j] * col_scale[j];
+      r.cost = c * c + w * w;
+    }
+    if (j < pb.n_constraints) {
+      f_t l = pb.constraint_lower_bounds[j], u = pb.constraint_upper_bounds[j];
+      f_t bound = max(isfinite(l) ? abs(l) : f_t(0), isfinite(u) ? abs(u) : f_t(0)) * row_scale[j];
+      r.bounds  = bound * bound;
     }
     return r;
   }
@@ -308,7 +384,12 @@ void update_result(pdfp_projection_result_t& result,
       : std::sqrt(metrics.primal_sq_scaled) / (1. + std::sqrt(metrics.rhs_sq_scaled));
   result.dual_residual = std::sqrt(metrics.dual) / (1. + std::sqrt(metrics.cost));
   result.relative_gap  = std::abs(metrics.gap) / (1. + metrics.target);
-  result.objective     = metrics.objective;
+  if (settings.duality_gap_test) {
+    result.dual_residual = std::sqrt(metrics.dual_illegal) / (1. + std::sqrt(metrics.cost));
+    result.relative_gap  = std::abs(metrics.objective - metrics.dual_objective) /
+                          (1. + std::abs(metrics.objective) + std::abs(metrics.dual_objective));
+  }
+  result.objective = metrics.objective;
   result.converged =
     result.iterations > 0 && std::isfinite(result.objective) && std::isfinite(metrics.cost) &&
     std::isfinite(metrics.target) && std::isfinite(result.primal_residual) &&
@@ -342,12 +423,12 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
   std::array<const i_t*, 4> csr;
   cuopt::manual_cuda_graph_t chunk_graph, single_graph;
   std::array<const void*, 5> graph_view{};
-  bool cusparse_spmv;
+  bool cusparse_spmv, prox;
   f_t eta;
   bool cold                        = true;
   static constexpr int graph_chunk = 16;
 
-  impl_t(problem_t<i_t, f_t>& p, bool spectral_step, bool use_cusparse)
+  impl_t(problem_t<i_t, f_t>& p, bool spectral_step, bool use_cusparse, bool prox_distance)
     : problem(p),
       col_scale(p.n_variables, p.handle_ptr->get_stream()),
       row_scale(p.n_constraints, p.handle_ptr->get_stream()),
@@ -373,7 +454,8 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
           p.variables.data(),
           p.reverse_offsets.data(),
           p.reverse_constraints.data()},
-      cusparse_spmv(use_cusparse)
+      cusparse_spmv(use_cusparse),
+      prox(prox_distance)
   {
     auto offsets = cuopt::host_copy(p.offsets, p.handle_ptr->get_stream());
     auto indices = cuopt::host_copy(p.variables, p.handle_ptr->get_stream());
@@ -417,7 +499,10 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
     }
     for (auto a : cm)
       col_norm = std::max(col_norm, a);
-    eta = .998 / std::sqrt(1. + (spectral_step ? 1. : row_norm * col_norm));
+    // The bounded distance dual adds an identity block to the operator; prox has A alone, and
+    // an empty A leaves the step free.
+    const f_t operator_bound = (prox ? 0. : 1.) + (spectral_step ? 1. : row_norm * col_norm);
+    eta                      = .998 / std::sqrt(operator_bound > 0. ? operator_bound : 1.);
     raft::copy(row_scale.data(), rs.data(), rs.size(), p.handle_ptr->get_stream());
     raft::copy(col_scale.data(), cs.data(), cs.size(), p.handle_ptr->get_stream());
     if (cusparse_spmv && !values.empty()) { build_cusparse_matrices(); }
@@ -587,11 +672,13 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
                                                             current.data(),
                                                             anchor.data(),
                                                             atz.data(),
+                                                            target.data(),
                                                             point.data(),
                                                             reflected_x.data(),
                                                             slack.data(),
                                                             params.data(),
-                                                            counters.data());
+                                                            counters.data(),
+                                                            prox);
     multiply(a_reflected);
     if (n_dual)
       dual_step<halpern, i_t, f_t><<<(n_dual + 255) / 256, 256, 0, st.get()>>>(p.view(),
@@ -604,7 +691,8 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
                                                                                ax.data(),
                                                                                point.data(),
                                                                                params.data(),
-                                                                               counters.data());
+                                                                               counters.data(),
+                                                                               prox);
   }
 
   void halpern_update(int inner)
@@ -663,7 +751,9 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
                                 atz_point.data(),
                                 slack.data(),
                                 f_t(settings.distance_weight),
-                                f_t(settings.objective_weight)},
+                                f_t(settings.objective_weight),
+                                f_t(settings.primal_bound_ratio),
+                                prox},
       metrics_t{},
       add_metrics{});
   }
@@ -672,8 +762,9 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
 template <typename i_t, typename f_t>
 pdfp_projection_t<i_t, f_t>::pdfp_projection_t(problem_t<i_t, f_t>& problem,
                                                bool spectral_step,
-                                               bool cusparse_spmv)
-  : impl_(std::make_unique<impl_t>(problem, spectral_step, cusparse_spmv))
+                                               bool cusparse_spmv,
+                                               bool prox_distance)
+  : impl_(std::make_unique<impl_t>(problem, spectral_step, cusparse_spmv, prox_distance))
 {
 }
 
@@ -718,7 +809,10 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   cuopt_expects(std::isfinite(settings.tolerance) && settings.tolerance > 0. &&
                   settings.time_limit >= 0. && settings.iteration_limit >= 0 &&
                   settings.check_interval > 0 && std::isfinite(settings.distance_weight) &&
-                  settings.distance_weight >= 0. && std::isfinite(settings.objective_weight),
+                  settings.distance_weight >= 0. && std::isfinite(settings.objective_weight) &&
+                  std::isfinite(settings.primal_bound_ratio) && settings.primal_bound_ratio >= 0. &&
+                  std::isfinite(settings.weight_gain) && settings.weight_gain > 0. &&
+                  std::isfinite(settings.weight_limit) && settings.weight_limit >= 1.,
                 error_type_t::ValidationError,
                 "Invalid PDFP projection settings");
   bool finite = thrust::transform_reduce(p.handle_ptr->get_thrust_policy(),
@@ -744,14 +838,29 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
       s.start.size() ? s.start.data() : nullptr,
       s.target.data(),
       s.current.data(),
-      f_t(settings.distance_weight),
-      s.cold);
+      s.prox ? f_t(0) : f_t(settings.distance_weight),
+      s.cold,
+      settings.start_at_target);
   s.cold = false;
   raft::copy(s.anchor.data(), s.current.data(), s.current.size(), stream);
   raft::copy(s.point.data(), s.current.data(), s.current.size(), stream);
   thrust::fill(p.handle_ptr->get_thrust_policy(), s.slack.begin(), s.slack.end(), 0.);
   thrust::fill(p.handle_ptr->get_thrust_policy(), s.atz.begin(), s.atz.end(), 0.);
-  f_t weight              = std::sqrt(1. + double(p.n_integer_vars) / std::max(1, p.n_constraints));
+  f_t weight = std::sqrt(1. + double(p.n_integer_vars) / std::max(1, p.n_constraints));
+  if (settings.balanced_weight) {
+    const auto norms = thrust::transform_reduce(
+      p.handle_ptr->get_thrust_policy(),
+      thrust::make_counting_iterator<i_t>(0),
+      thrust::make_counting_iterator<i_t>(std::max(p.n_variables, p.n_constraints)),
+      collect_norms<i_t, f_t>{p.view(),
+                              s.col_scale.data(),
+                              s.row_scale.data(),
+                              f_t(settings.distance_weight),
+                              f_t(settings.objective_weight)},
+      norms_t{},
+      add_norms{});
+    weight = (std::sqrt(norms.cost) + 1.) / (std::sqrt(norms.bounds) + 1.);
+  }
   double initial_residual = -1., last_residual = INFINITY, integral = 0.;
   int inner      = 0;
   int last_check = -1;
@@ -797,13 +906,16 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
         metrics.anchor_x < 1e24 && metrics.anchor_dual < 1e24) {
       double error = std::log(std::sqrt(metrics.anchor_dual / metrics.anchor_x) / weight);
       integral     = .3 * integral + error;
-      weight       = std::clamp(weight * std::exp(.99 * error + .01 * integral), 1e-6, 1e6);
+      weight       = std::clamp(weight * std::exp(settings.weight_gain * error + .01 * integral),
+                          1. / settings.weight_limit,
+                          settings.weight_limit);
     }
     last_residual = residual;
     if (restart) {
       raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
       raft::copy(s.anchor.data(), s.point.data(), s.point.size(), stream);
       inner = 0;
+      ++result.restarts;
     } else {
       s.halpern_update(inner);
     }
@@ -818,7 +930,8 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
       p.n_variables, s.point.data(), s.col_scale.data(), output.data());
   RAFT_CUDA_TRY(cudaGetLastError());
   p.handle_ptr->sync_stream();
-  result.elapsed_time = timer.elapsed_time();
+  result.elapsed_time  = timer.elapsed_time();
+  result.primal_weight = weight;
   return result;
 }
 

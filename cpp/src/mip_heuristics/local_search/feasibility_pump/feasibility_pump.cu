@@ -56,6 +56,7 @@ feasibility_pump_t<i_t, f_t>::feasibility_pump_t(
     last_rounding(context.problem_ptr->n_variables, context.problem_ptr->handle_ptr->get_stream()),
     last_projection(context.problem_ptr->n_variables,
                     context.problem_ptr->handle_ptr->get_stream()),
+    shadow_projection(0, context.problem_ptr->handle_ptr->get_stream()),
     orig_variable_types(context.problem_ptr->n_variables,
                         context.problem_ptr->handle_ptr->get_stream()),
     lp_optimal_solution(lp_optimal_solution_),
@@ -126,6 +127,122 @@ double get_tolerance_from_ratio(double ratio_integer, double absolute_tol)
   }
 }
 
+template <typename i_t, typename f_t>
+pdfp_projection_settings_t feasibility_pump_t<i_t, f_t>::pdfp_settings(problem_t<i_t, f_t>& problem,
+                                                                       f_t alpha,
+                                                                       f_t ratio_of_set_integers,
+                                                                       bool longer_lp_run)
+{
+  auto objective =
+    cuopt::host_copy(problem.objective_coefficients, problem.handle_ptr->get_stream());
+  const f_t objective_norm   = vector_norm(objective.begin(), objective.end());
+  const bool paper_tolerance = fp_experiment::paper_tolerance();
+  pdfp_projection_settings_t settings;
+  settings.distance_weight =
+    problem.n_integer_vars > 0 ? (1. - alpha) / std::sqrt(f_t(problem.n_integer_vars)) : 0.;
+  settings.objective_weight = objective_norm > 0. ? alpha / objective_norm : 0.;
+  settings.tolerance        = paper_tolerance
+                                ? projection_tolerance
+                                : get_tolerance_from_ratio(ratio_of_set_integers,
+                                                    context.settings.tolerances.absolute_tolerance);
+  settings.relative_primal  = paper_tolerance;
+  if (fp_experiment::pdfp_primal_tolerance()) {
+    settings.primal_ratio       = 1.;
+    settings.primal_bound_ratio = context.settings.tolerances.relative_tolerance /
+                                  context.settings.tolerances.absolute_tolerance;
+  }
+  settings.duality_gap_test = fp_experiment::pdfp_gap_test();
+  settings.balanced_weight  = fp_experiment::pdfp_balanced_weight();
+  if (fp_experiment::pdfp_damped_weight()) { settings.weight_gain = .5; }
+  if (fp_experiment::pdfp_wide_weight()) { settings.weight_limit = 1e12; }
+  settings.start_at_target = fp_experiment::pdfp_target_start();
+  settings.check_interval  = fp_experiment::pdfp_check_interval();
+  settings.original_units  = problem.n_integer_vars < problem.n_variables;
+  settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
+  settings.fused_graph     = fp_experiment::pdfp_cuda_graph();
+  const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
+  settings.time_limit =
+    paper_tolerance
+      ? std::max(0.05, timer.remaining_time())
+      : std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+  return settings;
+}
+
+template <typename i_t, typename f_t>
+double feasibility_pump_t<i_t, f_t>::ensure_pdfp_projector(solution_t<i_t, f_t>& solution)
+{
+  auto& problem     = *solution.problem_ptr;
+  double setup_time = 0.;
+  if (!pdfp_projector) {
+    const auto setup_start = std::chrono::steady_clock::now();
+    pdfp_projector =
+      std::make_unique<pdfp_projection_t<i_t, f_t>>(problem,
+                                                    fp_experiment::pdfp_spectral_step(),
+                                                    fp_experiment::pdfp_cusparse_spmv(),
+                                                    fp_experiment::pdfp_prox_distance());
+    pdfp_problem = solution.problem_ptr;
+    if (fp_experiment::pdfp_paper_warm_start() && context.diversity_manager_ptr != nullptr &&
+        context.diversity_manager_ptr->ls.lp_optimal_exists &&
+        lp_optimal_solution.size() == size_t(problem.n_variables)) {
+      pdfp_projector->set_cold_start(lp_optimal_solution);
+    }
+    setup_time =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count();
+  }
+  cuopt_assert(pdfp_problem == solution.problem_ptr,
+               "The PDFP projector was built for another problem");
+  return setup_time;
+}
+
+template <typename i_t, typename f_t>
+void feasibility_pump_t<i_t, f_t>::shadow_pdfp_projection(solution_t<i_t, f_t>& solution,
+                                                          f_t ratio_of_set_integers,
+                                                          bool longer_lp_run)
+{
+  auto& problem = *solution.problem_ptr;
+  // The alpha the epigraph LP is about to use.
+  const f_t next_alpha =
+    longer_lp_run ? f_t(config.alpha) : f_t(config.alpha * config.alpha_decrease_factor);
+  const f_t alpha     = fp_experiment::pure_distance() ? f_t(0) : next_alpha;
+  const auto settings = pdfp_settings(problem, alpha, ratio_of_set_integers, longer_lp_run);
+  ensure_pdfp_projector(solution);
+  const auto result  = pdfp_projector->project(solution.assignment, shadow_projection, settings);
+  const f_t distance = compute_l1_distance<i_t, f_t>(
+    problem.integer_indices, solution.assignment, shadow_projection, solution.handle_ptr);
+  const f_t* x = shadow_projection.data();
+  const i_t n_integral =
+    thrust::count_if(solution.handle_ptr->get_thrust_policy(),
+                     problem.integer_indices.begin(),
+                     problem.integer_indices.end(),
+                     [pb = problem.view(), x] __device__(i_t j) { return pb.is_integer(x[j]); });
+  const f_t objective = problem.get_user_obj_from_solver_obj(compute_objective_from_vec<i_t, f_t>(
+    shadow_projection, problem.objective_coefficients, solution.handle_ptr));
+  CUOPT_LOG_INFO(
+    "FPS src=%s run=%d desc=%d it=%d alpha=%.4g tol=%.3g tlim=%.3g stime=%.4f iters=%d status=%s "
+    "nint=%d integral=%d dist=%.6g pres=%.3e dres=%.3e gap=%.3e obj=%.10g weight=%.3g restarts=%d",
+    trace_source,
+    trace_run,
+    trace_descent,
+    trace_iteration,
+    (double)alpha,
+    settings.tolerance,
+    settings.time_limit,
+    result.elapsed_time,
+    result.iterations,
+    result.converged                             ? "Optimal"
+    : result.elapsed_time >= settings.time_limit ? "Time_Limit"
+                                                 : "Iteration_Limit",
+    problem.n_integer_vars,
+    n_integral,
+    (double)distance,
+    result.primal_residual,
+    result.dual_residual,
+    result.relative_gap,
+    (double)objective,
+    result.primal_weight,
+    result.restarts);
+}
+
 // projects the current integer solution to the polytope.
 // the epsilon can be larger here maybe 10-1,10-2.
 // finding the projection requires running LP that minimizes the distance of the current solution to
@@ -148,46 +265,12 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
   if (config.use_pdfp_projection) {
     auto& problem = *solution.problem_ptr;
     if (!longer_lp_run) { config.alpha *= config.alpha_decrease_factor; }
-    const f_t alpha = fp_experiment::pure_distance() ? f_t(0) : f_t(config.alpha);
-    last_alpha_used = alpha;
-    auto objective =
-      cuopt::host_copy(problem.objective_coefficients, solution.handle_ptr->get_stream());
-    const f_t objective_norm   = vector_norm(objective.begin(), objective.end());
+    const f_t alpha            = fp_experiment::pure_distance() ? f_t(0) : f_t(config.alpha);
+    last_alpha_used            = alpha;
     const bool paper_tolerance = fp_experiment::paper_tolerance();
-    pdfp_projection_settings_t settings;
-    settings.distance_weight =
-      problem.n_integer_vars > 0 ? (1. - alpha) / std::sqrt(f_t(problem.n_integer_vars)) : 0.;
-    settings.objective_weight = objective_norm > 0. ? alpha / objective_norm : 0.;
-    settings.tolerance =
-      paper_tolerance ? projection_tolerance
-                      : get_tolerance_from_ratio(ratio_of_set_integers,
-                                                 context.settings.tolerances.absolute_tolerance);
-    settings.relative_primal = paper_tolerance;
-    settings.original_units  = problem.n_integer_vars < problem.n_variables;
-    settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
-    settings.fused_graph     = fp_experiment::pdfp_cuda_graph();
-    const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
-    settings.time_limit =
-      paper_tolerance
-        ? std::max(0.05, timer.remaining_time())
-        : std::max(0.05, std::min(longer_lp_run ? 5. * base : base, timer.remaining_time() / 10.));
+    const auto settings     = pdfp_settings(problem, alpha, ratio_of_set_integers, longer_lp_run);
     const f_t old_remaining = timer.remaining_time();
-    double setup_time       = 0.;
-    if (!pdfp_projector) {
-      const auto setup_start = std::chrono::steady_clock::now();
-      pdfp_projector         = std::make_unique<pdfp_projection_t<i_t, f_t>>(
-        problem, fp_experiment::pdfp_spectral_step(), fp_experiment::pdfp_cusparse_spmv());
-      pdfp_problem = solution.problem_ptr;
-      if (fp_experiment::pdfp_paper_warm_start() && context.diversity_manager_ptr != nullptr &&
-          context.diversity_manager_ptr->ls.lp_optimal_exists &&
-          lp_optimal_solution.size() == size_t(problem.n_variables)) {
-        pdfp_projector->set_cold_start(lp_optimal_solution);
-      }
-      setup_time =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count();
-    }
-    cuopt_assert(pdfp_problem == solution.problem_ptr,
-                 "The PDFP projector was built for another problem");
+    const double setup_time = ensure_pdfp_projector(solution);
     last_pdfp_result = pdfp_projector->project(solution.assignment, solution.assignment, settings);
     last_lp_time     = old_remaining - timer.remaining_time();
     if (paper_tolerance) { projection_tolerance = std::max(projection_tolerance * 0.98, 1e-4); }
@@ -212,6 +295,9 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     trace.n_cols          = problem.n_variables;
     trace.n_aux           = 0;
     return solution.compute_feasibility();
+  }
+  if (fp_experiment::pdfp_shadow()) {
+    shadow_pdfp_projection(solution, ratio_of_set_integers, longer_lp_run);
   }
   auto h_assignment = solution.get_host_assignment();
   auto h_variable_bounds =
@@ -799,6 +885,8 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent_impl(solution_t<i_t, f_
              solution.assignment.data(),
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
+  // The nearest rounding a descent starts from is fully integral.
+  i_t n_integers = solution.problem_ptr->n_integer_vars;
   while (true) {
     if (context.diversity_manager_ptr->check_b_b_preemption() || timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");
@@ -808,14 +896,15 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent_impl(solution_t<i_t, f_
     }
     ++trace_iteration;
     proj_begin = timer.remaining_time();
-    // pass n_assigned_integers from the previous iteration
+    // The previous projection's integrality; solution.n_assigned_integers is the rounding's.
     f_t ratio_of_assigned_integers =
-      f_t(solution.n_assigned_integers) / solution.problem_ptr->n_integer_vars;
+      f_t(fp_experiment::ratio_tolerance() ? n_integers : solution.n_assigned_integers) /
+      solution.problem_ptr->n_integer_vars;
     const auto projection_start = std::chrono::steady_clock::now();
     bool is_feasible = linear_project_onto_polytope(solution, ratio_of_assigned_integers);
     last_projection_trace.total_time =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - projection_start).count();
-    i_t n_integers = solution.compute_number_of_integers();
+    n_integers = solution.compute_number_of_integers();
     trace_projection(solution, n_integers);
     CUOPT_LOG_DEBUG("after fp projection n_integers %d total n_integes %d",
                     n_integers,
@@ -879,7 +968,8 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent_impl(solution_t<i_t, f_
     const bool round_feasible = is_feasible;
     if (!is_feasible) {
       const f_t time_ratio = 0.2;
-      is_feasible          = test_fj_feasible(solution, time_ratio * proj_and_round_time);
+      const f_t floor      = 1e-3 * fp_experiment::fj_check_floor_ms();
+      is_feasible = test_fj_feasible(solution, std::max(floor, time_ratio * proj_and_round_time));
     }
     if (timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");

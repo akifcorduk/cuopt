@@ -18,8 +18,10 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace cuopt::mathematical_optimization::test {
@@ -112,12 +114,16 @@ struct oracle_result_t {
   pdlp_termination_status_t status;
   double setup_time, solve_time;
   int rows, columns, nnz;
+  int iterations = -1;
 };
 
+// warm_dual, when given, warm-starts PDLP as FP does: primal at the target, dual from the previous
+// projection when the row count matches; it receives this projection's dual.
 oracle_result_t epigraph_projection(const raft::handle_t& handle,
                                     const projection_model_t& original,
                                     const std::vector<double>& target,
-                                    const mip::pdfp_projection_settings_t& settings)
+                                    const mip::pdfp_projection_settings_t& settings,
+                                    std::vector<double>* warm_dual = nullptr)
 {
   const auto begin = clock_type::now();
   auto model       = original;
@@ -154,10 +160,25 @@ oracle_result_t epigraph_projection(const raft::handle_t& handle,
   lp_settings.time_limit       = settings.time_limit;
   lp_settings.set_optimality_tolerance(settings.tolerance);
   lp_settings.log_to_console = false;
-  auto result                = solve_lp(problem, lp_settings);
+  std::vector<double> warm_primal;
+  if (warm_dual != nullptr) {
+    // FP's relaxed LP keeps the relative primal and dual tolerances at tolerance * rel / abs.
+    lp_settings.tolerances.relative_primal_tolerance = settings.tolerance * 1e-6;
+    lp_settings.tolerances.relative_dual_tolerance   = settings.tolerance * 1e-6;
+    warm_primal                                      = target;
+    warm_primal.resize(model.lower.size(), 0.);
+    lp_settings.set_initial_primal_solution(warm_primal.data(), warm_primal.size());
+    if (warm_dual->size() == model.row_lower.size()) {
+      lp_settings.set_initial_dual_solution(warm_dual->data(), warm_dual->size());
+    }
+  }
+  auto result = solve_lp(problem, lp_settings);
   handle.sync_stream();
   const auto solve_end = clock_type::now();
   auto x               = cuopt::host_copy(result.get_primal_solution(), handle.get_stream());
+  if (warm_dual != nullptr) {
+    *warm_dual = cuopt::host_copy(result.get_dual_solution(), handle.get_stream());
+  }
   if (x.size() < static_cast<size_t>(n)) {
     ADD_FAILURE() << "Epigraph solver returned no complete primal solution";
     throw std::runtime_error("Missing epigraph primal solution");
@@ -169,7 +190,8 @@ oracle_result_t epigraph_projection(const raft::handle_t& handle,
           std::chrono::duration<double>(solve_end - setup_end).count(),
           static_cast<int>(model.row_lower.size()),
           static_cast<int>(model.lower.size()),
-          static_cast<int>(model.values.size())};
+          static_cast<int>(model.values.size()),
+          result.get_additional_termination_information().number_of_steps_taken};
 }
 
 mip::pdfp_projection_settings_t accurate_settings()
@@ -204,6 +226,35 @@ std::vector<double> check_projection(const projection_model_t& model,
   auto oracle = epigraph_projection(handle, model, target, settings);
   EXPECT_EQ(oracle.status, pdlp_termination_status_t::Optimal);
   EXPECT_NEAR(measure(model, target, oracle.x, settings).objective, metrics.objective, 5e-5);
+  // The prox form of the distance term solves the same projection.
+  mip::pdfp_projection_t<int, double> prox_projector(problem, false, true, true);
+  rmm::device_uvector<double> d_prox(target.size(), handle.get_stream());
+  const auto prox_result = prox_projector.project(d_target, d_prox, settings);
+  const auto prox_output = cuopt::host_copy(d_prox, handle.get_stream());
+  EXPECT_TRUE(prox_result.converged);
+  const auto prox_metrics = measure(model, target, prox_output, settings);
+  EXPECT_LT(prox_metrics.row_violation, 2e-5);
+  EXPECT_LT(prox_metrics.bound_violation, 1e-10);
+  EXPECT_NEAR(prox_metrics.objective, expected_objective, 2e-5);
+  EXPECT_NEAR(prox_result.objective, prox_metrics.objective, 2e-5);
+  // PDLP's stopping rule (duality gap, row tolerance abs + rel * |bound|) reaches the same optimum
+  // with either form of the distance term.
+  auto gap_settings               = settings;
+  gap_settings.duality_gap_test   = true;
+  gap_settings.primal_ratio       = 1.;
+  gap_settings.primal_bound_ratio = 1e-6;
+  for (int prox = 0; prox < 2; ++prox) {
+    mip::pdfp_projection_t<int, double> gap_projector(problem, false, true, prox == 1);
+    rmm::device_uvector<double> d_gap(target.size(), handle.get_stream());
+    const auto gap_result = gap_projector.project(d_target, d_gap, gap_settings);
+    const auto gap_output = cuopt::host_copy(d_gap, handle.get_stream());
+    EXPECT_TRUE(gap_result.converged);
+    const auto gap_metrics = measure(model, target, gap_output, gap_settings);
+    EXPECT_LT(gap_metrics.row_violation, 2e-5);
+    EXPECT_LT(gap_metrics.bound_violation, 1e-10);
+    EXPECT_NEAR(
+      gap_metrics.objective, expected_objective, 2e-5 * (1. + std::abs(expected_objective)));
+  }
   return output;
 }
 
@@ -555,37 +606,77 @@ TEST(PdfpProjection, FusedGraphMatchesPlainIterations)
   constexpr int n    = 4000;
   const auto model   = paired_model(n);
   constexpr int runs = 3;
-  std::vector<std::vector<double>> outputs[2];
-  std::vector<int> iterations[2];
-  for (int fused = 0; fused < 2; ++fused) {
+  for (int prox = 0; prox < 2; ++prox) {
+    std::vector<std::vector<double>> outputs[2];
+    std::vector<int> iterations[2];
+    for (int fused = 0; fused < 2; ++fused) {
+      raft::handle_t handle;
+      auto op_problem = model.device_problem(handle);
+      mip::problem_t<int, double> problem(op_problem);
+      mip::pdfp_projection_t<int, double> projector(problem, false, true, prox == 1);
+      rmm::device_uvector<double> target(n, handle.get_stream());
+      auto settings            = accurate_settings();
+      settings.tolerance       = 1e-14;
+      settings.iteration_limit = 600;
+      settings.fused_graph     = fused == 1;
+      for (int run = 0; run < runs; ++run) {
+        std::vector<double> h_target(n);
+        for (int j = 0; j < n; ++j)
+          h_target[j] = (j + run) % 3 == 0 ? 2. : 3.5 - run;
+        raft::copy(target.data(), h_target.data(), n, handle.get_stream());
+        settings.distance_weight = 1. / (1 + run);
+        const auto result        = projector.project(target, target, settings);
+        iterations[fused].push_back(result.iterations);
+        outputs[fused].push_back(cuopt::host_copy(target, handle.get_stream()));
+      }
+    }
+    EXPECT_EQ(iterations[0], iterations[1]);
+    double max_difference = 0.;
+    for (int run = 0; run < runs; ++run)
+      for (int j = 0; j < n; ++j)
+        max_difference = std::max(
+          max_difference,
+          std::abs(outputs[0][run][j] - outputs[1][run][j]) / (1. + std::abs(outputs[0][run][j])));
+    EXPECT_LT(max_difference, 1e-9);
+  }
+}
+
+// Warm projections with targets at variable bounds, inside them and changing between calls:
+// the prox form must reach the objective of the bounded-dual form.
+TEST(PdfpProjection, ProxDistanceMatchesBoundedDualOnWarmProjections)
+{
+  constexpr int n    = 400;
+  const auto model   = paired_model(n);
+  constexpr int runs = 4;
+  std::vector<double> objectives[2];
+  for (int prox = 0; prox < 2; ++prox) {
     raft::handle_t handle;
     auto op_problem = model.device_problem(handle);
     mip::problem_t<int, double> problem(op_problem);
-    mip::pdfp_projection_t<int, double> projector(problem);
+    mip::pdfp_projection_t<int, double> projector(problem, false, true, prox == 1);
     rmm::device_uvector<double> target(n, handle.get_stream());
-    auto settings            = accurate_settings();
-    settings.tolerance       = 1e-14;
-    settings.iteration_limit = 600;
-    settings.fused_graph     = fused == 1;
+    rmm::device_uvector<double> output(n, handle.get_stream());
+    auto settings = accurate_settings();
     for (int run = 0; run < runs; ++run) {
       std::vector<double> h_target(n);
-      for (int j = 0; j < n; ++j)
-        h_target[j] = (j + run) % 3 == 0 ? 2. : 3.5 - run;
+      for (int j = 0; j < n; ++j) {
+        const int kind = (j + run) % 4;
+        h_target[j]    = kind == 0 ? -10. : kind == 1 ? 10. : kind == 2 ? 3. : -1. - run;
+      }
       raft::copy(target.data(), h_target.data(), n, handle.get_stream());
-      settings.distance_weight = 1. / (1 + run);
-      const auto result        = projector.project(target, target, settings);
-      iterations[fused].push_back(result.iterations);
-      outputs[fused].push_back(cuopt::host_copy(target, handle.get_stream()));
+      settings.distance_weight  = 1. / (1 + run);
+      settings.objective_weight = run % 2 == 0 ? 0. : 0.05;
+      const auto result         = projector.project(target, output, settings);
+      EXPECT_TRUE(result.converged);
+      const auto x       = cuopt::host_copy(output, handle.get_stream());
+      const auto metrics = measure(model, h_target, x, settings);
+      EXPECT_LT(metrics.row_violation, 2e-5);
+      EXPECT_LT(metrics.bound_violation, 1e-10);
+      objectives[prox].push_back(metrics.objective);
     }
   }
-  EXPECT_EQ(iterations[0], iterations[1]);
-  double max_difference = 0.;
   for (int run = 0; run < runs; ++run)
-    for (int j = 0; j < n; ++j)
-      max_difference = std::max(
-        max_difference,
-        std::abs(outputs[0][run][j] - outputs[1][run][j]) / (1. + std::abs(outputs[0][run][j])));
-  EXPECT_LT(max_difference, 1e-9);
+    EXPECT_NEAR(objectives[0][run], objectives[1][run], 1e-4 * (1. + std::abs(objectives[0][run])));
 }
 
 TEST(PdfpProjection, DISABLED_Benchmark100kGeneralIntegers)
@@ -630,6 +721,167 @@ TEST(PdfpProjection, DISABLED_BenchmarkMps)
   }
   std::cout << "PDFP_BENCHMARK instance=" << path << '\n';
   benchmark_model(model, std::move(target));
+}
+
+// FP-like sequence on an MPS. Every method projects the same targets with FP's objective mixing:
+// the nearest rounding of the epigraph oracle's previous projection, alpha 0.99 * 0.9^k. Each
+// method is warm-started from its own previous projection.
+TEST(PdfpProjection, DISABLED_BenchmarkFpSequence)
+{
+  const char* path = std::getenv("PDFP_BENCHMARK_MPS");
+  ASSERT_NE(path, nullptr) << "Set PDFP_BENCHMARK_MPS to an MPS file.";
+  auto env_double = [](const char* name, double fallback) {
+    const char* value = std::getenv(name);
+    return value == nullptr ? fallback : std::stod(value);
+  };
+  const double tolerance  = env_double("PDFP_BENCHMARK_TOL", 1e-6);
+  const double time_limit = env_double("PDFP_BENCHMARK_TIME_LIMIT", 5.);
+  const int steps         = int(env_double("PDFP_BENCHMARK_STEPS", 6));
+  const int interval      = int(env_double("PDFP_BENCHMARK_CHECK", 200));
+  raft::handle_t handle;
+  auto mps        = io::read_mps<int, double>(path, false);
+  auto op_problem = mps_data_model_to_optimization_problem(&handle, mps);
+  mip::problem_t<int, double> problem(op_problem);
+  auto model  = copy_model(problem);
+  const int n = model.lower.size();
+  pdlp_solver_settings_t<int, double> root_settings;
+  root_settings.method     = method_t::PDLP;
+  root_settings.time_limit = 30.;
+  root_settings.set_optimality_tolerance(1e-4);
+  root_settings.log_to_console = false;
+  auto root                    = solve_lp(op_problem, root_settings);
+  auto x                       = cuopt::host_copy(root.get_primal_solution(), handle.get_stream());
+  ASSERT_EQ(x.size(), size_t(n));
+  int n_integer         = 0;
+  double objective_norm = 0.;
+  for (int j = 0; j < n; ++j) {
+    n_integer += model.types[j] == var_t::INTEGER;
+    objective_norm += model.objective[j] * model.objective[j];
+  }
+  objective_norm = std::sqrt(objective_norm);
+  auto rounding  = [&](const std::vector<double>& point) {
+    std::vector<double> target(point);
+    for (int j = 0; j < n; ++j) {
+      if (model.types[j] == var_t::INTEGER) target[j] = std::round(target[j]);
+      target[j] = std::clamp(target[j], model.lower[j], model.upper[j]);
+    }
+    return target;
+  };
+  struct variant_t {
+    const char* name;
+    bool prox, row_tolerance, gap_test, balanced_weight;
+    double weight_gain;
+  };
+  // PDFP_BENCHMARK_VARIANTS keeps the variants whose name is in the comma-separated list.
+  const char* wanted = std::getenv("PDFP_BENCHMARK_VARIANTS");
+  std::vector<variant_t> variants;
+  for (const auto& variant :
+       std::vector<variant_t>{{"dual", false, false, false, false, .99},
+                              {"dual+ptol", false, true, false, false, .99},
+                              {"dual+ptol+gap", false, true, true, false, .99},
+                              {"prox", true, false, false, false, .99},
+                              {"prox+ptol", true, true, false, false, .99},
+                              {"prox+ptol+gap", true, true, true, false, .99},
+                              {"pg+w0", true, true, true, true, .99},
+                              {"pg+kp", true, true, true, false, .5},
+                              {"pg+w0+kp", true, true, true, true, .5},
+                              {"dg+w0+kp", false, true, true, true, .5}}) {
+    const std::string list = wanted == nullptr ? "" : std::string(",") + wanted + ",";
+    if (wanted == nullptr || wanted[0] == '\0' ||
+        list.find(std::string(",") + variant.name + ",") != std::string::npos) {
+      variants.push_back(variant);
+    }
+  }
+  std::vector<std::unique_ptr<mip::pdfp_projection_t<int, double>>> projectors;
+  for (const auto& variant : variants) {
+    projectors.push_back(
+      std::make_unique<mip::pdfp_projection_t<int, double>>(problem, true, true, variant.prox));
+  }
+  rmm::device_uvector<double> d_target(n, handle.get_stream());
+  rmm::device_uvector<double> d_output(n, handle.get_stream());
+  std::vector<double> oracle_dual;
+  auto target  = rounding(x);
+  double alpha = .99;
+  std::cout << "FPSEQ instance=" << path << " rows=" << problem.n_constraints << " cols=" << n
+            << " integers=" << n_integer << " nnz=" << problem.nnz << " tol=" << tolerance << '\n';
+  auto report = [&](int step,
+                    const char* method,
+                    const std::vector<double>& point,
+                    const mip::pdfp_projection_settings_t& settings,
+                    int iterations,
+                    double seconds,
+                    bool converged,
+                    double weight,
+                    int restarts) {
+    const auto metrics = measure(model, target, point, settings);
+    int integral       = 0;
+    for (int j = 0; j < n; ++j) {
+      integral +=
+        model.types[j] == var_t::INTEGER && std::abs(point[j] - std::round(point[j])) <= 1e-5;
+    }
+    std::cout << std::setprecision(9) << "FPSEQ step=" << step << " method=" << method
+              << " iters=" << iterations << " sec=" << seconds << " conv=" << converged
+              << " obj=" << metrics.objective << std::setprecision(3)
+              << " viol=" << metrics.row_violation << " relviol=" << metrics.relative_row_violation
+              << " integral=" << integral << " weight=" << weight << " restarts=" << restarts
+              << '\n';
+  };
+  for (int step = 1; step <= steps; ++step) {
+    alpha *= .9;
+    mip::pdfp_projection_settings_t settings;
+    settings.tolerance        = tolerance;
+    settings.time_limit       = time_limit;
+    settings.check_interval   = interval;
+    settings.distance_weight  = n_integer > 0 ? (1. - alpha) / std::sqrt(double(n_integer)) : 0.;
+    settings.objective_weight = objective_norm > 0. ? alpha / objective_norm : 0.;
+    raft::copy(d_target.data(), target.data(), n, handle.get_stream());
+    for (size_t v = 0; v < variants.size(); ++v) {
+      auto variant_settings = settings;
+      if (variants[v].row_tolerance) {
+        variant_settings.primal_ratio       = 1.;
+        variant_settings.primal_bound_ratio = 1e-6;
+      }
+      variant_settings.duality_gap_test = variants[v].gap_test;
+      variant_settings.balanced_weight  = variants[v].balanced_weight;
+      variant_settings.weight_gain      = variants[v].weight_gain;
+      handle.sync_stream();
+      const auto begin  = clock_type::now();
+      const auto result = projectors[v]->project(d_target, d_output, variant_settings);
+      handle.sync_stream();
+      const double seconds = std::chrono::duration<double>(clock_type::now() - begin).count();
+      report(step,
+             variants[v].name,
+             cuopt::host_copy(d_output, handle.get_stream()),
+             settings,
+             result.iterations,
+             seconds,
+             result.converged,
+             result.primal_weight,
+             result.restarts);
+    }
+    auto oracle = epigraph_projection(handle, model, target, settings, &oracle_dual);
+    report(step,
+           "epigraph_pdlp",
+           oracle.x,
+           settings,
+           oracle.iterations,
+           oracle.solve_time,
+           oracle.status == pdlp_termination_status_t::Optimal,
+           0.,
+           0);
+    auto next = rounding(oracle.x);
+    if (next == target) {
+      // The pump would cycle here; move on by flipping about 1% of the integers.
+      unsigned state = 12345u + step;
+      for (int j = 0; j < n; ++j) {
+        state = state * 1664525u + 1013904223u;
+        if (model.types[j] != var_t::INTEGER || (state >> 8) % 100 != 0) continue;
+        next[j] = next[j] < model.upper[j] ? next[j] + 1. : next[j] - 1.;
+        next[j] = std::clamp(next[j], model.lower[j], model.upper[j]);
+      }
+    }
+    target = std::move(next);
+  }
 }
 
 }  // namespace cuopt::mathematical_optimization::test
