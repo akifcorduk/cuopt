@@ -37,7 +37,7 @@ constexpr bool default_pdfp_adaptive_step    = false;
 constexpr double default_pdfp_step_growth    = 64.;
 constexpr double default_pdfp_held_weight    = .03;
 constexpr int default_fj_check_interval      = 1;
-constexpr int default_fj_check_min_ms        = 100;
+constexpr int default_fj_check_min_ms        = 300;
 
 inline bool env_flag(const char* name, bool compiled_default)
 {
