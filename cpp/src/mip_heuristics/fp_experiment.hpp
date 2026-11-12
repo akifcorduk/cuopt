@@ -33,6 +33,9 @@ constexpr bool default_pdfp_shadow           = false;
 constexpr bool default_ratio_tolerance       = false;
 constexpr int default_pdfp_check_interval    = 200;
 constexpr int default_fj_check_floor_ms      = 0;
+constexpr bool default_pdfp_adaptive_step    = false;
+constexpr double default_pdfp_step_growth    = 64.;
+constexpr double default_pdfp_held_weight    = 1.;
 
 inline bool env_flag(const char* name, bool compiled_default)
 {
@@ -47,6 +50,13 @@ inline int env_int(const char* name, int compiled_default)
   const char* value = std::getenv(name);
   if (value == nullptr || value[0] == '\0') { return compiled_default; }
   return std::atoi(value);
+}
+
+inline double env_double(const char* name, double compiled_default)
+{
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') { return compiled_default; }
+  return std::atof(value);
 }
 
 inline bool use_pdfp_projection()
@@ -166,6 +176,27 @@ inline int pdfp_check_interval()
 inline int fj_check_floor_ms()
 {
   return env_int("CUOPT_FP_EXP_FJ_FLOOR_MS", default_fj_check_floor_ms);
+}
+
+// PDFP adapts its step to the iterates as PDLP's adaptive rule does, instead of keeping the step
+// certified for the whole matrix: near a projection most integers sit at a bound and only a small
+// part of A acts on the iterates.
+inline bool pdfp_adaptive_step()
+{
+  return env_flag("CUOPT_FP_EXP_PDFP_ADAPT", default_pdfp_adaptive_step);
+}
+
+// Largest adaptive step, as a multiple of the certified one.
+inline double pdfp_step_growth()
+{
+  return env_double("CUOPT_FP_EXP_PDFP_ADAPT_MAX", default_pdfp_step_growth);
+}
+
+// PDFP step weight of variables held at a bound or at the target and of slack rows; below 1 the
+// steps follow the working set at each restart (per-variable and per-row, still certified).
+inline double pdfp_held_weight()
+{
+  return env_double("CUOPT_FP_EXP_PDFP_HELD", default_pdfp_held_weight);
 }
 
 }  // namespace cuopt::mathematical_optimization::mip::fp_experiment

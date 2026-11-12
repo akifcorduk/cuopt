@@ -155,12 +155,15 @@ pdfp_projection_settings_t feasibility_pump_t<i_t, f_t>::pdfp_settings(problem_t
   settings.balanced_weight  = fp_experiment::pdfp_balanced_weight();
   if (fp_experiment::pdfp_damped_weight()) { settings.weight_gain = .5; }
   if (fp_experiment::pdfp_wide_weight()) { settings.weight_limit = 1e12; }
-  settings.start_at_target = fp_experiment::pdfp_target_start();
-  settings.check_interval  = fp_experiment::pdfp_check_interval();
-  settings.original_units  = problem.n_integer_vars < problem.n_variables;
-  settings.anchor_halpern  = fp_experiment::pdfp_paper_warm_start();
-  settings.fused_graph     = fp_experiment::pdfp_cuda_graph();
-  const f_t base           = context.settings.heuristic_params.relaxed_lp_time_limit;
+  settings.start_at_target   = fp_experiment::pdfp_target_start();
+  settings.check_interval    = fp_experiment::pdfp_check_interval();
+  settings.original_units    = problem.n_integer_vars < problem.n_variables;
+  settings.anchor_halpern    = fp_experiment::pdfp_paper_warm_start();
+  settings.fused_graph       = fp_experiment::pdfp_cuda_graph();
+  settings.adaptive_step     = fp_experiment::pdfp_adaptive_step();
+  settings.step_growth_limit = fp_experiment::pdfp_step_growth();
+  settings.held_weight       = fp_experiment::pdfp_held_weight();
+  const f_t base             = context.settings.heuristic_params.relaxed_lp_time_limit;
   settings.time_limit =
     paper_tolerance
       ? std::max(0.05, timer.remaining_time())
@@ -219,7 +222,8 @@ void feasibility_pump_t<i_t, f_t>::shadow_pdfp_projection(solution_t<i_t, f_t>& 
     shadow_projection, problem.objective_coefficients, solution.handle_ptr));
   CUOPT_LOG_INFO(
     "FPS src=%s run=%d desc=%d it=%d alpha=%.4g tol=%.3g tlim=%.3g stime=%.4f iters=%d status=%s "
-    "nint=%d integral=%d dist=%.6g pres=%.3e dres=%.3e gap=%.3e obj=%.10g weight=%.3g restarts=%d",
+    "nint=%d integral=%d dist=%.6g pres=%.3e dres=%.3e gap=%.3e obj=%.10g weight=%.3g restarts=%d "
+    "step=%.4g cuts=%d moving=%d acting=%d",
     trace_source,
     trace_run,
     trace_descent,
@@ -240,7 +244,11 @@ void feasibility_pump_t<i_t, f_t>::shadow_pdfp_projection(solution_t<i_t, f_t>& 
     result.relative_gap,
     (double)objective,
     result.primal_weight,
-    result.restarts);
+    result.restarts,
+    result.step,
+    result.step_cuts,
+    result.moving_variables,
+    result.acting_rows);
 }
 
 // projects the current integer solution to the polytope.
@@ -278,22 +286,28 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
                solution.assignment.data(),
                solution.assignment.size(),
                solution.handle_ptr->get_stream());
-    auto& trace           = last_projection_trace;
-    trace.projector       = "pdfp";
-    trace.status          = last_pdfp_result.converged                             ? "Optimal"
-                            : last_pdfp_result.elapsed_time >= settings.time_limit ? "Time_Limit"
-                                                                                   : "Iteration_Limit";
-    trace.tolerance       = settings.tolerance;
-    trace.time_limit      = settings.time_limit;
-    trace.solve_time      = last_pdfp_result.elapsed_time;
-    trace.setup_time      = setup_time;
-    trace.iterations      = last_pdfp_result.iterations;
-    trace.primal_residual = last_pdfp_result.primal_residual;
-    trace.dual_residual   = last_pdfp_result.dual_residual;
-    trace.relative_gap    = last_pdfp_result.relative_gap;
-    trace.n_rows          = problem.n_constraints;
-    trace.n_cols          = problem.n_variables;
-    trace.n_aux           = 0;
+    auto& trace            = last_projection_trace;
+    trace.projector        = "pdfp";
+    trace.status           = last_pdfp_result.converged                             ? "Optimal"
+                             : last_pdfp_result.elapsed_time >= settings.time_limit ? "Time_Limit"
+                                                                                    : "Iteration_Limit";
+    trace.tolerance        = settings.tolerance;
+    trace.time_limit       = settings.time_limit;
+    trace.solve_time       = last_pdfp_result.elapsed_time;
+    trace.setup_time       = setup_time;
+    trace.iterations       = last_pdfp_result.iterations;
+    trace.primal_residual  = last_pdfp_result.primal_residual;
+    trace.dual_residual    = last_pdfp_result.dual_residual;
+    trace.relative_gap     = last_pdfp_result.relative_gap;
+    trace.step             = last_pdfp_result.step;
+    trace.weight           = last_pdfp_result.primal_weight;
+    trace.restarts         = last_pdfp_result.restarts;
+    trace.step_cuts        = last_pdfp_result.step_cuts;
+    trace.moving_variables = last_pdfp_result.moving_variables;
+    trace.acting_rows      = last_pdfp_result.acting_rows;
+    trace.n_rows           = problem.n_constraints;
+    trace.n_cols           = problem.n_variables;
+    trace.n_aux            = 0;
     return solution.compute_feasibility();
   }
   if (fp_experiment::pdfp_shadow()) {
@@ -428,6 +442,11 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     trace.n_rows          = temp_p.n_constraints;
     trace.n_cols          = temp_p.n_variables;
     trace.n_aux           = h_variables.size();
+    const auto& warm      = solver_response.get_pdlp_warm_start_data();
+    trace.step            = warm.initial_step_size_;
+    trace.weight          = warm.initial_primal_weight_;
+    trace.restarts        = -1;
+    trace.step_cuts       = 0;
   }
   solution.assignment.resize(solution.problem_ptr->n_variables, solution.handle_ptr->get_stream());
   raft::copy(last_projection.data(),
@@ -788,7 +807,9 @@ void feasibility_pump_t<i_t, f_t>::trace_projection(solution_t<i_t, f_t>& soluti
     "FPT src=%s run=%d desc=%d it=%d t=%.3f stage=%s proj=%s alpha=%.4g tol=%.3g tlim=%.3g "
     "ptime=%.4f stime=%.4f setup=%.4f iters=%d status=%s nint=%d integral=%d match=%d "
     "dist=%.6g dred=%.4g pinf_max=%.3e pinf_l2=%.3e pinf_sum=%.3e nviol=%d pres=%.3e dres=%.3e "
-    "gap=%.3e obj=%.10g rows=%d cols=%d naux=%d",
+    "gap=%.3e obj=%.10g rows=%d cols=%d naux=%d step=%.4g weight=%.4g restarts=%d cuts=%d "
+    "moving=%d "
+    "acting=%d",
     trace_source,
     trace_run,
     trace_descent,
@@ -819,7 +840,13 @@ void feasibility_pump_t<i_t, f_t>::trace_projection(solution_t<i_t, f_t>& soluti
     (double)solution.get_user_objective(),
     p.n_rows,
     p.n_cols,
-    p.n_aux);
+    p.n_aux,
+    p.step,
+    p.weight,
+    p.restarts,
+    p.step_cuts,
+    p.moving_variables,
+    p.acting_rows);
 }
 
 template <typename i_t, typename f_t>

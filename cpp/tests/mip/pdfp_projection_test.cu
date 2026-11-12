@@ -255,6 +255,35 @@ std::vector<double> check_projection(const projection_model_t& model,
     EXPECT_NEAR(
       gap_metrics.objective, expected_objective, 2e-5 * (1. + std::abs(expected_objective)));
   }
+  // The adaptive step reaches the same optimum, also from the step a previous projection left.
+  auto adaptive_settings          = gap_settings;
+  adaptive_settings.adaptive_step = true;
+  mip::pdfp_projection_t<int, double> adaptive_projector(problem, true, true, true);
+  rmm::device_uvector<double> d_adaptive(target.size(), handle.get_stream());
+  for (int pass = 0; pass < 2; ++pass) {
+    const auto adaptive_result =
+      adaptive_projector.project(d_target, d_adaptive, adaptive_settings);
+    const auto adaptive_output = cuopt::host_copy(d_adaptive, handle.get_stream());
+    EXPECT_TRUE(adaptive_result.converged);
+    const auto adaptive_metrics = measure(model, target, adaptive_output, adaptive_settings);
+    EXPECT_LT(adaptive_metrics.row_violation, 2e-5);
+    EXPECT_LT(adaptive_metrics.bound_violation, 1e-10);
+    EXPECT_NEAR(
+      adaptive_metrics.objective, expected_objective, 2e-5 * (1. + std::abs(expected_objective)));
+  }
+  // Working-set steps solve the same projection.
+  auto held_settings        = gap_settings;
+  held_settings.held_weight = .01;
+  mip::pdfp_projection_t<int, double> held_projector(problem, true, true, true);
+  rmm::device_uvector<double> d_held(target.size(), handle.get_stream());
+  const auto held_result = held_projector.project(d_target, d_held, held_settings);
+  const auto held_output = cuopt::host_copy(d_held, handle.get_stream());
+  EXPECT_TRUE(held_result.converged);
+  const auto held_metrics = measure(model, target, held_output, held_settings);
+  EXPECT_LT(held_metrics.row_violation, 2e-5);
+  EXPECT_LT(held_metrics.bound_violation, 1e-10);
+  EXPECT_NEAR(
+    held_metrics.objective, expected_objective, 2e-5 * (1. + std::abs(expected_objective)));
   return output;
 }
 

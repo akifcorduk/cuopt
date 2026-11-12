@@ -45,6 +45,18 @@ struct pdfp_projection_settings_t {
   // Between residual checks, fuse the Halpern update into the primal and dual steps and replay the
   // iterations as captured CUDA graphs; false launches the unfused kernels per iteration.
   bool fused_graph = true;
+  // Adapt the step to the iterates as PDLP's adaptive rule does. Every residual check bounds the
+  // step by (w |dx|^2 + |dy|^2 / w) / (2 |dx' A' dy|) of its own iteration. The step grows at
+  // restarts while the checks of the period allow it, up to step_growth_limit times the certified
+  // step; a check that finds it above its bound cuts it and restarts. The step carries over to the
+  // next projection.
+  bool adaptive_step       = false;
+  double step_growth_limit = 64.;
+  // Below 1: per-variable and per-row steps from the working set at each restart. Variables held
+  // at a bound or at the target and slack rows get this weight in the Pock-Chambolle sums, which
+  // enlarges the steps of the variables that move and of the rows that act on them. The steps
+  // stay certified for the whole matrix. Needs the prox distance and the unit-norm step.
+  double held_weight = 1.;
 };
 
 struct pdfp_projection_result_t {
@@ -58,6 +70,13 @@ struct pdfp_projection_result_t {
   // Primal weight at exit and the number of restarts taken.
   double primal_weight = 0.;
   int restarts         = 0;
+  // Step eta: tau = eta / weight, sigma = eta * weight.
+  double step = 0.;
+  // Checks that found the adaptive step above its bound.
+  int step_cuts = 0;
+  // With working-set steps: variables and rows with full weight at exit.
+  int moving_variables = -1;
+  int acting_rows      = -1;
 };
 
 // Solves min distance_weight * sum_{j in I}|x_j-target_j| + objective_weight*c'x

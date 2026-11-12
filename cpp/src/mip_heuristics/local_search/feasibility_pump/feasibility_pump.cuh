@@ -122,6 +122,12 @@ struct fp_projection_trace_t {
   int n_rows             = 0;
   int n_cols             = 0;
   int n_aux              = 0;
+  double step            = NAN;
+  double weight          = NAN;
+  int restarts           = -1;
+  int step_cuts          = 0;
+  int moving_variables   = -1;
+  int acting_rows        = -1;
 };
 
 struct fp_trace_totals_t {
