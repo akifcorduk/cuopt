@@ -996,7 +996,14 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent_impl(solution_t<i_t, f_
     if (!is_feasible) {
       const f_t time_ratio = 0.2;
       const f_t floor      = 1e-3 * fp_experiment::fj_check_floor_ms();
-      is_feasible = test_fj_feasible(solution, std::max(floor, time_ratio * proj_and_round_time));
+      fj_check_budget += time_ratio * proj_and_round_time;
+      ++fj_check_wait;
+      if (fj_check_wait >= fp_experiment::fj_check_interval() &&
+          fj_check_budget >= 1e-3 * fp_experiment::fj_check_min_ms()) {
+        is_feasible     = test_fj_feasible(solution, std::max(floor, fj_check_budget));
+        fj_check_budget = 0;
+        fj_check_wait   = 0;
+      }
     }
     if (timer.check_time_limit()) {
       CUOPT_LOG_DEBUG("FP time limit reached!");

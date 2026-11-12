@@ -230,6 +230,9 @@ class feasibility_pump_t {
   f_t fp_fj_cycle_time_begin;
   f_t proj_and_round_time;
   f_t proj_begin;
+  // FJ check time owed since the last check, and FP iterations since then; kept across descents.
+  f_t fj_check_budget = 0;
+  i_t fj_check_wait   = 0;
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;
