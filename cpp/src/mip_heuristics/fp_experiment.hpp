@@ -38,6 +38,7 @@ constexpr double default_pdfp_step_growth    = 64.;
 constexpr double default_pdfp_held_weight    = 1.;
 constexpr int default_fj_check_interval      = 1;
 constexpr int default_fj_check_min_ms        = 0;
+constexpr int default_pdfp_time_cap_ms       = 0;
 
 inline bool env_flag(const char* name, bool compiled_default)
 {
@@ -189,6 +190,13 @@ inline int fj_check_interval()
 
 // The FJ check waits until the time it is owed reaches this many milliseconds.
 inline int fj_check_min_ms() { return env_int("CUOPT_FP_EXP_FJ_MIN_MS", default_fj_check_min_ms); }
+
+// Time cap of a PDFP projection in milliseconds (five times that on a longer run); 0 keeps the
+// relaxed LP time limit of the heuristic settings.
+inline int pdfp_time_cap_ms()
+{
+  return env_int("CUOPT_FP_EXP_PDFP_CAP_MS", default_pdfp_time_cap_ms);
+}
 
 // PDFP adapts its step to the iterates as PDLP's adaptive rule does, instead of keeping the step
 // certified for the whole matrix: near a projection most integers sit at a bound and only a small

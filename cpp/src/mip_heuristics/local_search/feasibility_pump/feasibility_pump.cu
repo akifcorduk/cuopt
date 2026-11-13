@@ -163,7 +163,9 @@ pdfp_projection_settings_t feasibility_pump_t<i_t, f_t>::pdfp_settings(problem_t
   settings.adaptive_step     = fp_experiment::pdfp_adaptive_step();
   settings.step_growth_limit = fp_experiment::pdfp_step_growth();
   settings.held_weight       = fp_experiment::pdfp_held_weight();
-  const f_t base             = context.settings.heuristic_params.relaxed_lp_time_limit;
+  const i_t cap_ms           = fp_experiment::pdfp_time_cap_ms();
+  const f_t base =
+    cap_ms > 0 ? 1e-3 * cap_ms : context.settings.heuristic_params.relaxed_lp_time_limit;
   settings.time_limit =
     paper_tolerance
       ? std::max(0.05, timer.remaining_time())
