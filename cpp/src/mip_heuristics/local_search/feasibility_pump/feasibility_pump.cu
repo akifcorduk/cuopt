@@ -163,7 +163,13 @@ pdfp_projection_settings_t feasibility_pump_t<i_t, f_t>::pdfp_settings(problem_t
   settings.adaptive_step     = fp_experiment::pdfp_adaptive_step();
   settings.step_growth_limit = fp_experiment::pdfp_step_growth();
   settings.held_weight       = fp_experiment::pdfp_held_weight();
-  const i_t cap_ms           = fp_experiment::pdfp_time_cap_ms();
+  const f_t pull_cap         = fp_experiment::pdfp_objective_pull();
+  if (pull_cap > 0. && objective_norm > 0. && std::isfinite(objective_bound)) {
+    settings.objective_bound = objective_bound;
+    settings.pull_limit      = pull_cap / objective_norm;
+    settings.pull_floor      = std::min(f_t(0.02), pull_cap) / objective_norm;
+  }
+  const i_t cap_ms = fp_experiment::pdfp_time_cap_ms();
   const f_t base =
     cap_ms > 0 ? 1e-3 * cap_ms : context.settings.heuristic_params.relaxed_lp_time_limit;
   settings.time_limit =
@@ -307,6 +313,11 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     trace.step_cuts        = last_pdfp_result.step_cuts;
     trace.moving_variables = last_pdfp_result.moving_variables;
     trace.acting_rows      = last_pdfp_result.acting_rows;
+    trace.pull =
+      settings.pull_limit > 0. ? last_pdfp_result.objective_pull / settings.pull_limit : 0.;
+    trace.pull_updates     = last_pdfp_result.pull_updates;
+    trace.linear_objective = last_pdfp_result.linear_objective;
+    trace.objective_bound  = settings.objective_bound;
     trace.n_rows           = problem.n_constraints;
     trace.n_cols           = problem.n_variables;
     trace.n_aux            = 0;
@@ -811,7 +822,7 @@ void feasibility_pump_t<i_t, f_t>::trace_projection(solution_t<i_t, f_t>& soluti
     "dist=%.6g dred=%.4g pinf_max=%.3e pinf_l2=%.3e pinf_sum=%.3e nviol=%d pres=%.3e dres=%.3e "
     "gap=%.3e obj=%.10g rows=%d cols=%d naux=%d step=%.4g weight=%.4g restarts=%d cuts=%d "
     "moving=%d "
-    "acting=%d",
+    "acting=%d pull=%.4g pullup=%d cx=%.10g bound=%.10g",
     trace_source,
     trace_run,
     trace_descent,
@@ -848,7 +859,11 @@ void feasibility_pump_t<i_t, f_t>::trace_projection(solution_t<i_t, f_t>& soluti
     p.restarts,
     p.step_cuts,
     p.moving_variables,
-    p.acting_rows);
+    p.acting_rows,
+    p.pull,
+    p.pull_updates,
+    p.linear_objective,
+    p.objective_bound);
 }
 
 template <typename i_t, typename f_t>

@@ -877,6 +877,23 @@ void local_search_t<i_t, f_t>::resize_vectors(problem_t<i_t, f_t>& problem,
   fp.resize_vectors(problem, handle_ptr);
 }
 
+// Objective level at a relative slack from the best objective; below it by at least the epsilon
+// when the slack is negative.
+template <typename f_t>
+static f_t objective_level(f_t best_objective, f_t slack)
+{
+  if (slack < 0) {
+    return best_objective - std::max(std::abs(slack * best_objective), f_t(OBJECTIVE_EPSILON));
+  }
+  return best_objective + slack * std::abs(best_objective);
+}
+
+// The cut is a row of the FP problem unless the slack is infinite.
+static bool fp_cut_row() { return std::isfinite(fp_experiment::fp_cut_slack()); }
+
+// The level FP aims below: 0.1% under the best objective.
+constexpr double fp_target_slack = -0.001;
+
 template <typename i_t, typename f_t>
 void local_search_t<i_t, f_t>::save_solution_and_add_cutting_plane(
   solution_t<i_t, f_t>& solution, rmm::device_uvector<f_t>& best_solution, f_t& best_objective)
@@ -887,10 +904,12 @@ void local_search_t<i_t, f_t>::save_solution_and_add_cutting_plane(
                solution.assignment.data(),
                solution.assignment.size(),
                solution.handle_ptr->get_stream());
-    best_objective = solution.get_objective();
-    f_t objective_cut =
-      best_objective - std::max(std::abs(0.001 * best_objective), OBJECTIVE_EPSILON);
-    problem_with_objective_cut.add_cutting_plane_at_objective(objective_cut);
+    best_objective     = solution.get_objective();
+    fp.objective_bound = objective_level(best_objective, f_t(fp_target_slack));
+    if (fp_cut_row()) {
+      problem_with_objective_cut.add_cutting_plane_at_objective(
+        objective_level(best_objective, f_t(fp_experiment::fp_cut_slack())));
+    }
   }
 }
 
@@ -931,7 +950,7 @@ void local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
   solution_copy.resize_to_problem();
   population_ptr->add_solution(std::move(solution_copy));
   population_ptr->add_external_solutions_to_population();
-  if (!cutting_plane_added_for_active_run) {
+  if (fp_cut_row() && !cutting_plane_added_for_active_run) {
     solution.problem_ptr = &problem_with_objective_cut;
     solution.resize_to_problem();
     resize_to_new_problem();
@@ -985,6 +1004,38 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   }
 }
 
+// A feasible FP point that improves the best solution restarts the stagnation count. Under a
+// relaxed cut a point that does not improve it leaves the count running, so the recombiners start.
+template <typename i_t, typename f_t>
+void local_search_t<i_t, f_t>::save_fp_solution(solution_t<i_t, f_t>& solution,
+                                                problem_t<i_t, f_t>* old_problem_ptr,
+                                                population_t<i_t, f_t>* population_ptr,
+                                                i_t i,
+                                                i_t& last_improved_iteration,
+                                                rmm::device_uvector<f_t>& best_solution,
+                                                f_t& best_objective)
+{
+  const f_t objective_before = best_objective;
+  reset_alpha_and_save_solution(solution,
+                                old_problem_ptr,
+                                population_ptr,
+                                i,
+                                last_improved_iteration,
+                                best_solution,
+                                best_objective);
+  if (fp_experiment::fp_cut_slack() < 0 || best_objective < objective_before) {
+    last_improved_iteration = i;
+    return;
+  }
+  reset_alpha_and_run_recombiners(solution,
+                                  old_problem_ptr,
+                                  population_ptr,
+                                  i,
+                                  last_improved_iteration,
+                                  best_solution,
+                                  best_objective);
+}
+
 template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
                                       timer_t timer,
@@ -1002,13 +1053,16 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
   fp.timer                             = timer_t(timer.remaining_time());
   fp.improvement_callback              = make_fj_improvement_callback(old_problem_ptr);
   // if it has not been initialized yet, create a new problem and move it to the cut problem
-  if (!problem_with_objective_cut.cutting_plane_added) {
+  if (fp_cut_row() && !problem_with_objective_cut.cutting_plane_added) {
     problem_with_objective_cut = std::move(problem_t<i_t, f_t>(*old_problem_ptr));
   }
   if (is_feasible) {
+    fp.objective_bound = objective_level(f_t(best_objective), f_t(fp_target_slack));
+  }
+  if (is_feasible && fp_cut_row()) {
     CUOPT_LOG_DEBUG("FP initial solution is feasible, adding cutting plane at obj");
-    f_t objective_cut =
-      best_objective - std::max(std::abs(0.001 * best_objective), OBJECTIVE_EPSILON);
+    const f_t objective_cut =
+      objective_level(f_t(best_objective), f_t(fp_experiment::fp_cut_slack()));
     problem_with_objective_cut.add_cutting_plane_at_objective(objective_cut);
     // Do the copy here for proper handling of the added constraints weight
     fj.copy_weights(
@@ -1039,14 +1093,13 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     if (is_feasible) {
       CUOPT_LOG_DEBUG("Found feasible in FP with obj %f. Continue with FJ!",
                       solution.get_objective());
-      reset_alpha_and_save_solution(solution,
-                                    old_problem_ptr,
-                                    population_ptr,
-                                    i,
-                                    last_improved_iteration,
-                                    best_solution,
-                                    best_objective);
-      last_improved_iteration = i;
+      save_fp_solution(solution,
+                       old_problem_ptr,
+                       population_ptr,
+                       i,
+                       last_improved_iteration,
+                       best_solution,
+                       best_objective);
     }
     // if not feasible, it means it is a cycle
     else {
@@ -1063,14 +1116,13 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       if (is_feasible) {
         CUOPT_LOG_DEBUG("Found feasible during restart with obj %f. Continue with FJ!",
                         solution.get_objective());
-        reset_alpha_and_save_solution(solution,
-                                      old_problem_ptr,
-                                      population_ptr,
-                                      i,
-                                      last_improved_iteration,
-                                      best_solution,
-                                      best_objective);
-        last_improved_iteration = i;
+        save_fp_solution(solution,
+                         old_problem_ptr,
+                         population_ptr,
+                         i,
+                         last_improved_iteration,
+                         best_solution,
+                         best_objective);
       } else {
         reset_alpha_and_run_recombiners(solution,
                                         old_problem_ptr,
@@ -1086,6 +1138,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
              best_solution.data(),
              solution.assignment.size(),
              solution.handle_ptr->get_stream());
+  fp.objective_bound   = std::numeric_limits<f_t>::infinity();
   solution.problem_ptr = old_problem_ptr;
   solution.resize_to_problem();
   resize_to_old_problem(old_problem_ptr);

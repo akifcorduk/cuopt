@@ -128,6 +128,11 @@ struct fp_projection_trace_t {
   int step_cuts          = 0;
   int moving_variables   = -1;
   int acting_rows        = -1;
+  // Objective pull: share of its limit in use, times it grew, c'x of the projection and the bound.
+  double pull             = 0.;
+  int pull_updates        = 0;
+  double linear_objective = NAN;
+  double objective_bound  = INFINITY;
 };
 
 struct fp_trace_totals_t {
@@ -233,6 +238,8 @@ class feasibility_pump_t {
   // FJ check time owed since the last check, and FP iterations since then; kept across descents.
   f_t fj_check_budget = 0;
   i_t fj_check_wait   = 0;
+  // Objective level the PDFP pull aims below; infinite while no feasible solution is known.
+  f_t objective_bound = std::numeric_limits<f_t>::infinity();
   i_t n_fj_single_descents;
   i_t max_n_of_integers = 0;
   cuopt::timer_t timer;

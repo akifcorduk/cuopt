@@ -57,6 +57,16 @@ struct pdfp_projection_settings_t {
   // enlarges the steps of the variables that move and of the rows that act on them. The steps
   // stay certified for the whole matrix. Needs the prox distance and the unit-norm step.
   double held_weight = 1.;
+  // An objective bound as a pull instead of a row. At a restart whose point has c'x above
+  // objective_bound, the objective weight in use grows by half, from at least pull_floor, when it
+  // has settled there (the projection converged, or the period cut its fixed-point error to a
+  // fifth) or when, ten check intervals after its last growth, the period's rate leaves the bound
+  // further away than the iterations spent so far. The weight added to objective_weight stops at
+  // pull_limit; two thirds of it carry over to the next projection. pull_limit = 0 turns it off.
+  // Needs the prox distance.
+  double objective_bound = INFINITY;
+  double pull_limit      = 0.;
+  double pull_floor      = 0.;
 };
 
 struct pdfp_projection_result_t {
@@ -77,6 +87,10 @@ struct pdfp_projection_result_t {
   // With working-set steps: variables and rows with full weight at exit.
   int moving_variables = -1;
   int acting_rows      = -1;
+  // c'x at exit, the weight the pull added to objective_weight, and the times it grew.
+  double linear_objective = NAN;
+  double objective_pull   = 0.;
+  int pull_updates        = 0;
 };
 
 // Solves min distance_weight * sum_{j in I}|x_j-target_j| + objective_weight*c'x

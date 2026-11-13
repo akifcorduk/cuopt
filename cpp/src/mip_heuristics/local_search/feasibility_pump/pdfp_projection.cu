@@ -286,7 +286,7 @@ __global__ void unscale_output(i_t n, const f_t* point, const f_t* scale, f_t* o
 }
 
 struct metrics_t {
-  double primal = 0., dual = 0., gap = 0., objective = 0., target = 0., cost = 0.;
+  double primal = 0., dual = 0., gap = 0., objective = 0., target = 0., cost = 0., linear = 0.;
   double dx = 0., dy = 0., cross = 0., anchor_x = 0., anchor_dual = 0.;
   double primal_sq = 0., primal_sq_scaled = 0., rhs_sq = 0., rhs_sq_scaled = 0.;
   double dual_objective = 0., dual_illegal = 0.;
@@ -301,6 +301,7 @@ struct add_metrics {
     a.objective += b.objective;
     a.target += b.target;
     a.cost += b.cost;
+    a.linear += b.linear;
     a.dx += b.dx;
     a.dy += b.dy;
     a.cross += b.cross;
@@ -340,6 +341,7 @@ struct collect_metrics {
       // With prox the step's own subgradient of the distance term is exact at x.
       r.gap       = prox ? f_t(0) : y * (target[j] - x) - dist;
       r.objective = c * x + dist;
+      r.linear    = pb.objective_coefficients[j] * col_scale[j] * x;
       r.target    = w * abs(target[j]);
       f_t dx = current[j] - x, dy = current[pb.n_variables + j] - y;
       r.dx    = dx * dx / col_step[j];
@@ -492,6 +494,7 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
   f_t eta;
   bool cold                        = true;
   f_t carried_step                 = 0.;
+  f_t carried_pull                 = 0.;
   static constexpr int graph_chunk = 16;
 
   impl_t(problem_t<i_t, f_t>& p, bool spectral_step, bool use_cusparse, bool prox_distance)
@@ -928,6 +931,7 @@ void pdfp_projection_t<i_t, f_t>::reset()
 {
   impl_->cold         = true;
   impl_->carried_step = 0.;
+  impl_->carried_pull = 0.;
 }
 
 template <typename i_t, typename f_t>
@@ -958,7 +962,10 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
                   std::isfinite(settings.weight_gain) && settings.weight_gain > 0. &&
                   std::isfinite(settings.weight_limit) && settings.weight_limit >= 1. &&
                   std::isfinite(settings.step_growth_limit) && settings.step_growth_limit >= 1. &&
-                  settings.held_weight > 0. && settings.held_weight <= 1.,
+                  settings.held_weight > 0. && settings.held_weight <= 1. &&
+                  !std::isnan(settings.objective_bound) && std::isfinite(settings.pull_limit) &&
+                  settings.pull_limit >= 0. && std::isfinite(settings.pull_floor) &&
+                  (settings.pull_limit == 0. || settings.pull_floor > 0.),
                 error_type_t::ValidationError,
                 "Invalid PDFP projection settings");
   bool finite = thrust::transform_reduce(p.handle_ptr->get_thrust_policy(),
@@ -974,6 +981,12 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   }
   cuopt::timer_t timer(settings.time_limit);
   pdfp_projection_result_t result;
+  // `active` is the problem being iterated: the settings with the pull in the objective weight.
+  const bool pulled        = settings.pull_limit > 0. && std::isfinite(settings.objective_bound);
+  const double bound_slack = 1e-6 * std::max(1., std::abs(settings.objective_bound));
+  f_t pull    = pulled ? std::min(f_t(settings.pull_limit), f_t(s.carried_pull / 1.5)) : f_t(0);
+  auto active = settings;
+  active.objective_weight = settings.objective_weight + pull;
   if (s.cold)
     thrust::fill(p.handle_ptr->get_thrust_policy(), s.current.begin(), s.current.end(), 0.);
   if (p.n_variables)
@@ -1001,12 +1014,16 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
       collect_norms<i_t, f_t>{p.view(),
                               s.col_scale.data(),
                               s.row_scale.data(),
-                              f_t(settings.distance_weight),
-                              f_t(settings.objective_weight)},
+                              f_t(active.distance_weight),
+                              f_t(active.objective_weight)},
       norms_t{},
       add_norms{});
     weight = (std::sqrt(norms.cost) + 1.) / (std::sqrt(norms.bounds) + 1.);
   }
+  // With the bounded distance dual the primal weight keeps following the dual while the pull has
+  // not yet moved the point, and the steps it leaves are too small for the pull to act.
+  cuopt_expects(
+    !pulled || s.prox, error_type_t::ValidationError, "The objective pull needs the prox distance");
   const bool weighted_steps = settings.held_weight < 1.;
   cuopt_expects(!weighted_steps || (s.prox && s.unit_norm),
                 error_type_t::ValidationError,
@@ -1014,7 +1031,7 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   if (weighted_steps) {
     s.multiply(s.a_point);
     s.multiply(s.at_point);
-    s.update_steps(settings);
+    s.update_steps(active);
   } else if (!s.uniform_steps) {
     thrust::fill(p.handle_ptr->get_thrust_policy(), s.col_step.begin(), s.col_step.end(), f_t(1));
     thrust::fill(p.handle_ptr->get_thrust_policy(), s.row_step.begin(), s.row_step.end(), f_t(1));
@@ -1027,6 +1044,10 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   double initial_residual = -1., last_residual = INFINITY, integral = 0.;
   int inner      = 0;
   int last_check = -1;
+  double linear  = NAN;
+  // c'x minus the bound at the last restart, and the iteration of the pull's last growth.
+  double period_excess = INFINITY;
+  int last_growth      = 0;
   if (s.graph_view != s.view_pointers()) {
     s.chunk_graph.reset();
     s.single_graph.reset();
@@ -1034,7 +1055,7 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   }
   int iter = 0;
   while (iter < settings.iteration_limit && !timer.check_time_limit()) {
-    s.set_state(step, weight, settings, inner);
+    s.set_state(step, weight, active, inner);
     // Iterations between residual checks run fused; checks come right after a restart, every
     // check_interval iterations and at the iteration limit.
     if (inner > 0) {
@@ -1052,10 +1073,14 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     s.template iteration<false>();
     result.iterations = iter;
     bool restart      = false;
-    auto metrics      = s.metrics(settings);
+    auto metrics      = s.metrics(active);
     update_result(result, metrics, settings);
     last_check = iter;
-    if (result.converged) break;
+    linear     = metrics.linear;
+    // The bound is still to be reached and the pull has room to grow.
+    const bool above =
+      pulled && pull < settings.pull_limit && linear > settings.objective_bound + bound_slack;
+    if (result.converged && !above) break;
     const double movement = weight * metrics.dx + metrics.dy / weight;
     if (settings.adaptive_step) {
       const double bound =
@@ -1080,13 +1105,18 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
       }
     }
     double residual = std::sqrt(std::max(0., movement - 2 * step * metrics.cross));
+    // The weight in use has settled: the projection converged with it, or the fixed-point error of
+    // the period fell to a fifth. A point still travelling keeps its error and does not count.
+    bool settled = result.converged;
     if (inner == 1)
       initial_residual = residual;
     else {
       restart = iter == settings.check_interval || residual <= .2 * initial_residual ||
                 (residual <= .5 * initial_residual && residual > last_residual) ||
                 inner >= .36 * iter;
+      settled = settled || residual <= .2 * initial_residual;
     }
+    if (result.converged) restart = true;
     if (restart && metrics.anchor_x > 1e-16 && metrics.anchor_dual > 1e-16 &&
         metrics.anchor_x < 1e24 && metrics.anchor_dual < 1e24) {
       double error = std::log(std::sqrt(metrics.anchor_dual / metrics.anchor_x) / weight);
@@ -1106,14 +1136,41 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     if (restart) {
       raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
       raft::copy(s.anchor.data(), s.point.data(), s.point.size(), stream);
-      inner = 0;
+      // Iterations the bound is away at the rate of the period that ends here.
+      const double excess = linear - settings.objective_bound;
+      const double closed = period_excess - excess;
+      const double away   = closed > 0. ? excess * inner / closed : INFINITY;
+      period_excess       = excess;
+      inner               = 0;
       ++result.restarts;
-      if (weighted_steps) { s.update_steps(settings); }
+      // The pull grows when the weight in use has settled above the bound, or travels towards it
+      // too slowly: further away than the iterations already spent. A weight gets ten check
+      // intervals before its travel is judged, so the primal weight can follow it.
+      const int spacing = 10 * settings.check_interval;
+      const bool slow   = iter - last_growth >= spacing && away > std::max(spacing, iter);
+      if (above && (settled || slow)) {
+        const f_t grown = std::max(f_t(1.5 * active.objective_weight), f_t(settings.pull_floor));
+        pull = std::min(f_t(settings.pull_limit), f_t(grown - settings.objective_weight));
+        active.objective_weight = settings.objective_weight + pull;
+        last_growth             = iter;
+        ++result.pull_updates;
+      }
+      if (weighted_steps) { s.update_steps(active); }
     } else {
       s.halpern_update(inner);
     }
   }
-  if (last_check != result.iterations) update_result(result, s.metrics(settings), settings);
+  if (last_check != result.iterations) {
+    const auto metrics = s.metrics(active);
+    update_result(result, metrics, settings);
+    linear = metrics.linear;
+  }
+  if (pulled && pull < settings.pull_limit && linear > settings.objective_bound + bound_slack) {
+    result.converged = false;
+  }
+  result.linear_objective = linear;
+  result.objective_pull   = pull;
+  s.carried_pull          = pull;
   if (!settings.anchor_halpern) {
     raft::copy(s.current.data(), s.point.data(), s.point.size(), stream);
   }

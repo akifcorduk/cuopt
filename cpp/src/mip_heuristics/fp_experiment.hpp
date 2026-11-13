@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <limits>
 
 // Switches of the FP projection experiment (epigraph PDLP vs PDFP). The compiled defaults are what
 // benchmark runs use; the environment variables override them for local runs.
@@ -39,6 +40,8 @@ constexpr double default_pdfp_held_weight    = 1.;
 constexpr int default_fj_check_interval      = 1;
 constexpr int default_fj_check_min_ms        = 0;
 constexpr int default_pdfp_time_cap_ms       = 0;
+constexpr double default_fp_cut_slack        = -0.001;
+constexpr double default_pdfp_objective_pull = 0.;
 
 inline bool env_flag(const char* name, bool compiled_default)
 {
@@ -196,6 +199,21 @@ inline int fj_check_min_ms() { return env_int("CUOPT_FP_EXP_FJ_MIN_MS", default_
 inline int pdfp_time_cap_ms()
 {
   return env_int("CUOPT_FP_EXP_PDFP_CAP_MS", default_pdfp_time_cap_ms);
+}
+
+// Once a feasible solution exists FP works under the objective cut best + slack * |best|. At
+// -0.001 only a point 0.1% better than the best solution is feasible for FP. With a slack of zero
+// or more FP may return points up to that much worse than the best: they join the population, and
+// a descent that does not improve the best counts towards the stagnation that starts the
+// recombiners. An infinite slack ("inf") leaves the cut row out of the FP problem.
+inline double fp_cut_slack() { return env_double("CUOPT_FP_EXP_CUT_SLACK", default_fp_cut_slack); }
+
+// PDFP pulls its projections towards the objective level 0.1% below the best solution by raising
+// the objective weight, instead of (or next to) the cut row. The value is the most the pull may
+// add, in units of alpha; 0 turns it off.
+inline double pdfp_objective_pull()
+{
+  return env_double("CUOPT_FP_EXP_PDFP_PULL", default_pdfp_objective_pull);
 }
 
 // PDFP adapts its step to the iterates as PDLP's adaptive rule does, instead of keeping the step

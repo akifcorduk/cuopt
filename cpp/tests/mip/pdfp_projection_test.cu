@@ -535,6 +535,63 @@ TEST(PdfpProjection, IterationLimitDoesNotClaimConvergence)
     EXPECT_TRUE(std::isfinite(value));
 }
 
+// min |x - 7| over x >= 1, 0 <= x <= 10 with c = 2: the projection is x = 7 (c'x = 14). A bound of
+// c'x <= 8 needs an objective weight above 0.5, where the point jumps to x = 1.
+TEST(PdfpProjection, ObjectivePullReachesBoundOrStopsAtItsLimit)
+{
+  projection_model_t model{{0, 1}, {0}, {1.}, {1.}, {inf}, {0.}, {10.}, {2.}, {var_t::INTEGER}};
+  for (bool working_set : {false, true}) {
+    raft::handle_t handle;
+    auto op_problem = model.device_problem(handle);
+    mip::problem_t<int, double> problem(op_problem);
+    mip::pdfp_projection_t<int, double> projector(problem, working_set, true, true);
+    auto settings = accurate_settings();
+    if (working_set) {
+      settings.held_weight    = .03;
+      settings.check_interval = 50;
+    }
+    std::vector<double> target{7.};
+    rmm::device_uvector<double> d_target(1, handle.get_stream()), output(1, handle.get_stream());
+    raft::copy(d_target.data(), target.data(), target.size(), handle.get_stream());
+
+    settings.objective_bound = 20.;
+    settings.pull_limit      = 10.;
+    settings.pull_floor      = .1;
+    auto result              = projector.project(d_target, output, settings);
+    EXPECT_TRUE(result.converged);
+    EXPECT_NEAR(cuopt::host_copy(output, handle.get_stream())[0], 7., 2e-5);
+    EXPECT_EQ(result.pull_updates, 0);
+    EXPECT_EQ(result.objective_pull, 0.);
+    EXPECT_NEAR(result.linear_objective, 14., 1e-4);
+
+    settings.objective_bound = 8.;
+    result                   = projector.project(d_target, output, settings);
+    EXPECT_TRUE(result.converged);
+    EXPECT_NEAR(cuopt::host_copy(output, handle.get_stream())[0], 1., 2e-5);
+    EXPECT_GT(result.objective_pull, .5);
+    EXPECT_LE(result.objective_pull, 1.2);
+    EXPECT_GT(result.pull_updates, 0);
+    EXPECT_NEAR(result.linear_objective, 2., 1e-4);
+
+    // Two thirds of the pull carry over, so the next projection starts near the weight it needs.
+    const double carried = result.objective_pull;
+    result               = projector.project(d_target, output, settings);
+    EXPECT_TRUE(result.converged);
+    EXPECT_NEAR(cuopt::host_copy(output, handle.get_stream())[0], 1., 2e-5);
+    EXPECT_LE(result.pull_updates, 4);
+    EXPECT_GE(result.objective_pull, carried / 1.5);
+    EXPECT_LE(result.objective_pull, 1.2);
+
+    projector.reset();
+    settings.pull_limit = .3;
+    result              = projector.project(d_target, output, settings);
+    EXPECT_TRUE(result.converged);
+    EXPECT_NEAR(cuopt::host_copy(output, handle.get_stream())[0], 7., 2e-5);
+    EXPECT_NEAR(result.objective_pull, .3, 1e-12);
+    EXPECT_NEAR(result.linear_objective, 14., 1e-4);
+  }
+}
+
 TEST(PdfpProjection, EmptyMatrixUsesVariableBounds)
 {
   projection_model_t model{
