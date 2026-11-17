@@ -684,6 +684,25 @@ struct solve {
       target_vehicle_ids_.resize(target_vehicles_);
       std::iota(target_vehicle_ids_.begin(), target_vehicle_ids_.end(), 0);
     }
+    bool route_minimization_only = false;
+    detail::set_if_env_set(route_minimization_only, "CUOPT_ROUTE_MINIMIZATION_ONLY");
+    if (route_minimization_only) {
+      cuopt_expects(!from_dir && !injection_info.has_info(),
+                    error_type_t::ValidationError,
+                    "Route minimization only does not support initial solutions");
+      // Give construction and route minimization the entire remaining solve budget.
+      // Return before any local cost improvement or population search is run.
+      const auto generation_time = timer.remaining_time();
+      if (p->solver_settings_ptr->enable_verbose_mode_) {
+        std::cout << "Route minimization only: remaining time " << generation_time
+                  << " seconds; cost improvement disabled." << std::endl;
+      }
+      g.generate_solution(
+        temp_pair.first, target_vehicle_ids_, generation_time, final_weights, timer);
+      reserve_population.add_solution(timer.elapsed_time(), temp_pair.first);
+      print_population_best(reserve_population);
+      return;
+    }
     run_ls_and_exit();
     if (!from_dir) {
       generate_from_scratch();
