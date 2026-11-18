@@ -6,6 +6,7 @@
 #include <branch_and_bound/post_root_snapshot.hpp>
 #include <dual_simplex/solve.hpp>
 #include <math_optimization/tic_toc.hpp>
+#include <mip_heuristics/gpu_submip_experiment.hpp>
 #include <mip_heuristics/gpu_submip_fp.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/utils.hpp>
@@ -616,7 +617,10 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
   if (current_user_cutoff) {
     cutoff = std::min(cutoff, simplex::compute_presolved_objective(job.lp, current_user_cutoff()));
   }
-  if (cutoff == std::numeric_limits<f_t>::infinity()) {
+  // Only a RENS neighbourhood of the experiment is searched without a cutoff.
+  const bool rens_alone =
+    job.strategy == search_strategy_t::RENS && gpu_submip_experiment::rens_without_incumbent();
+  if (cutoff == std::numeric_limits<f_t>::infinity() && !rens_alone) {
     if (run_info) { run_info->exit_reason = "no_incumbent"; }
     return false;
   }
@@ -690,9 +694,11 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     }
   }
   std::unique_ptr<gpu_submip_fp_t<i_t, f_t>> local_session;
-  auto& session = session_cache ? *session_cache : local_session;
-  const bool reused =
-    session && session->can_reuse(job.lp, job.var_types) && session->config() == options.fp_config;
+  auto& session          = session_cache ? *session_cache : local_session;
+  const bool with_cutoff = std::isfinite(target);
+  const bool reused      = session && session->has_cutoff_row() == with_cutoff &&
+                      session->can_reuse(job.lp, job.var_types) &&
+                      session->config() == options.fp_config;
   if (!reused) {
     session = std::make_unique<gpu_submip_fp_t<i_t, f_t>>(handle,
                                                           job.lp,
@@ -700,7 +706,8 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
                                                           settings,
                                                           options.compact_fixed,
                                                           options.fused_pdlp,
-                                                          options.fp_config);
+                                                          options.fp_config,
+                                                          with_cutoff);
   }
   const double setup_seconds = toc(started);
   std::vector<f_t> seed      = primal_seed_override ? *primal_seed_override : job.primal;

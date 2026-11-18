@@ -348,6 +348,8 @@ class branch_and_bound_t {
       std::atomic<uint64_t> valid{0};
       // Neighbourhoods not offered because every integer is fixed.
       std::atomic<uint64_t> no_free_integer{0};
+      // Eligible neighbourhoods offered before the first incumbent.
+      std::atomic<uint64_t> without_cutoff{0};
     };
     std::array<source_stats_t, gpu_submip_source_count> source_stats;
   };

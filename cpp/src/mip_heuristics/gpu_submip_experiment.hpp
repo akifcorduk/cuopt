@@ -27,6 +27,9 @@ inline constexpr double default_screen_seconds = 0.;
 inline constexpr double default_target_share = 0.;
 // CUOPT_GPU_SUBMIP_LP_START: start the descent from the screen's LP point. Needs the screen.
 inline constexpr bool default_lp_start = false;
+// CUOPT_GPU_SUBMIP_RENS_NO_INCUMBENT: before the first incumbent, give the worker the RENS
+// neighbourhoods of the tree nodes, searched without a cutoff.
+inline constexpr bool default_rens_without_incumbent = false;
 
 inline bool flag(const char* name, bool fallback)
 {
@@ -59,5 +62,9 @@ inline double target_share()
   return number("CUOPT_GPU_SUBMIP_TARGET_SHARE", default_target_share);
 }
 inline bool lp_start() { return flag("CUOPT_GPU_SUBMIP_LP_START", default_lp_start); }
+inline bool rens_without_incumbent()
+{
+  return flag("CUOPT_GPU_SUBMIP_RENS_NO_INCUMBENT", default_rens_without_incumbent);
+}
 
 }  // namespace cuopt::mathematical_optimization::mip::gpu_submip_experiment

@@ -38,7 +38,8 @@ template <typename i_t, typename f_t>
 optimization_problem_t<i_t, f_t> make_gpu_submip_problem(
   const raft::handle_t* handle,
   const simplex::lp_problem_t<i_t, f_t>& lp,
-  const std::vector<simplex::variable_type_t>& variable_types)
+  const std::vector<simplex::variable_type_t>& variable_types,
+  bool cutoff_row)
 {
   cuopt_expects(variable_types.size() <= static_cast<size_t>(lp.num_cols),
                 error_type_t::ValidationError,
@@ -47,19 +48,22 @@ optimization_problem_t<i_t, f_t> make_gpu_submip_problem(
   lp.A.to_compressed_row(matrix);
   matrix.x.resize(lp.A.nnz());
   matrix.j.resize(lp.A.nnz());
-  // Keep a stable final row for the improving objective cutoff. This avoids
-  // changing row identities when a new incumbent tightens the cutoff.
-  for (i_t j = 0; j < lp.num_cols; ++j) {
-    if (lp.objective[j] != f_t(0)) {
-      matrix.x.push_back(lp.objective[j]);
-      matrix.j.push_back(j);
-    }
-  }
-  matrix.row_start.push_back(static_cast<i_t>(matrix.x.size()));
   std::vector<f_t> row_lower = lp.rhs;
   std::vector<f_t> row_upper = lp.rhs;
-  row_lower.push_back(-std::numeric_limits<f_t>::infinity());
-  row_upper.push_back(std::numeric_limits<f_t>::infinity());
+  // Keep a stable final row for the improving objective cutoff. This avoids
+  // changing row identities when a new incumbent tightens the cutoff. A search without an
+  // incumbent has no such row: FJ needs a bound on every row.
+  if (cutoff_row) {
+    for (i_t j = 0; j < lp.num_cols; ++j) {
+      if (lp.objective[j] != f_t(0)) {
+        matrix.x.push_back(lp.objective[j]);
+        matrix.j.push_back(j);
+      }
+    }
+    matrix.row_start.push_back(static_cast<i_t>(matrix.x.size()));
+    row_lower.push_back(-std::numeric_limits<f_t>::infinity());
+    row_upper.push_back(std::numeric_limits<f_t>::infinity());
+  }
   std::vector<var_t> types(lp.num_cols, var_t::CONTINUOUS);
   for (size_t j = 0; j < variable_types.size(); ++j) {
     if (variable_types[j] != simplex::variable_type_t::CONTINUOUS) { types[j] = var_t::INTEGER; }
@@ -104,13 +108,15 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
          const mip_solver_settings_t<i_t, f_t>& settings,
          bool compact_fixed,
          bool fused_adaptive_step,
-         const gpu_submip_fp_config_t& config_)
+         const gpu_submip_fp_config_t& config_,
+         bool cutoff_row_)
     : handle(handle_),
       config(config_),
       source_lp(lp),
       source_types(variable_types),
       columns(lp, variable_types, compact_fixed),
-      model(make_gpu_submip_problem(handle, columns.reduced_lp, columns.reduced_types)),
+      model(
+        make_gpu_submip_problem(handle, columns.reduced_lp, columns.reduced_types, cutoff_row_)),
       problem(model, settings.tolerances),
       context(handle, &problem, gpu_submip_settings(settings, config)),
       lp_solution(problem.n_variables, handle->get_stream()),
@@ -127,6 +133,7 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
                     config.propagation_seconds >= config.rounding_seconds,
                   error_type_t::ValidationError,
                   "Invalid GPU FP configuration");
+    cutoff_row                           = cutoff_row_;
     fp.config.initial_alpha              = config.initial_alpha;
     fp.config.projection_time_limit      = config.pdlp_seconds;
     fp.config.rounding_time_limit        = config.rounding_seconds;
@@ -183,7 +190,7 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
     CUOPT_LOG_INFO(
       "GpuSubmipFpModel compact_fixed=%d full_cols=%d gpu_cols=%d "
       "full_lp_nnz=%zu gpu_lp_nnz=%zu fixed_cols=%zu free_integer=%d "
-      "objective_shift=%.17g",
+      "objective_shift=%.17g cutoff_row=%d",
       int(compact_fixed),
       int(lp.num_cols),
       int(columns.reduced_lp.num_cols),
@@ -191,7 +198,8 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
       static_cast<size_t>(columns.reduced_lp.A.nnz()),
       columns.fixed_columns.size(),
       int(free_integers),
-      double(columns.objective_shift));
+      double(columns.objective_shift),
+      int(cutoff_row));
   }
 
   ~impl_t() noexcept
@@ -237,8 +245,9 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
   {
     run_info = {};
     candidate.clear();
+    // An infinite cutoff is a search without an incumbent: the cutoff row stays free.
     if (remaining_time <= 0 || (halt && halt->load(std::memory_order_acquire)) ||
-        !std::isfinite(cutoff)) {
+        !(cutoff > -std::numeric_limits<f_t>::infinity())) {
       return false;
     }
     cuopt_expects(can_reuse(node_lp),
@@ -266,8 +275,12 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
     }
     fp.set_projection_host_bounds(bounds);
     raft::copy(problem.variable_bounds.data(), bounds.data(), bounds.size(), handle->get_stream());
-    problem.constraint_upper_bounds.set_element_async(
-      problem.n_constraints - 1, local_cutoff, handle->get_stream());
+    cuopt_assert(cutoff_row == std::isfinite(local_cutoff),
+                 "A session has a cutoff row exactly when its job has a cutoff");
+    if (cutoff_row) {
+      problem.constraint_upper_bounds.set_element_async(
+        problem.n_constraints - 1, local_cutoff, handle->get_stream());
+    }
     pdlp::combine_constraint_bounds(problem, problem.combined_bounds);
     problem.compute_binary_var_table();
     fj.reset_weights(handle->get_stream());
@@ -297,8 +310,10 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
                handle->get_stream());
     // The cutoff has the same row identity but a new RHS; start its dual at zero.
     const f_t zero = 0;
-    solution.lp_state.prev_dual.set_element_async(
-      problem.n_constraints - 1, zero, handle->get_stream());
+    if (cutoff_row) {
+      solution.lp_state.prev_dual.set_element_async(
+        problem.n_constraints - 1, zero, handle->get_stream());
+    }
     fp.cycle_queue.reset(solution);
     fp.reset();
     fp.diagnostics.cutoff = local_cutoff;
@@ -312,7 +327,7 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
     }
     // The objective level the descent has to reach; the job's cutoff unless the screen sets more.
     f_t fp_cutoff = local_cutoff;
-    if (fp.config.use_pdfp_projection && screen_seconds > 0) {
+    if (fp.config.use_pdfp_projection && screen_seconds > 0 && std::isfinite(local_cutoff)) {
       // The restricted LP without its cutoff row: can c'x get below the cutoff at all?
       const auto stream    = handle->get_stream();
       const auto row       = problem.n_constraints - 1;
@@ -562,6 +577,7 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
   std::vector<i_t> integer_columns;
   bool has_projection{false};
   // Seconds for the objective-only screen before a PDFP descent; zero skips it.
+  bool cutoff_row{true};
   double screen_seconds{0.};
   bool lp_start{false};
   double target_share{0.};
@@ -576,10 +592,17 @@ gpu_submip_fp_t<i_t, f_t>::gpu_submip_fp_t(
   const mip_solver_settings_t<i_t, f_t>& settings,
   bool compact_fixed,
   bool fused_adaptive_step,
-  const gpu_submip_fp_config_t& config)
+  const gpu_submip_fp_config_t& config,
+  bool cutoff_row)
   : impl_(std::make_unique<impl_t>(
-      handle, lp, variable_types, settings, compact_fixed, fused_adaptive_step, config))
+      handle, lp, variable_types, settings, compact_fixed, fused_adaptive_step, config, cutoff_row))
 {
+}
+
+template <typename i_t, typename f_t>
+bool gpu_submip_fp_t<i_t, f_t>::has_cutoff_row() const
+{
+  return impl_->cutoff_row;
 }
 
 template <typename i_t, typename f_t>

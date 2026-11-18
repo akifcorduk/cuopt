@@ -2506,8 +2506,13 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   typename gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>>::reservation_t reservation;
   if (shared->options.independent) {
     stats.callbacks.fetch_add(1, std::memory_order_relaxed);
-    // Leave the regular GPU worker running until an improving cutoff is available.
-    if (!std::isfinite(upper_bound_.load(std::memory_order::relaxed))) { return {}; }
+    // Leave the regular GPU worker running until an improving cutoff is available, unless the
+    // experiment sends it the RENS neighbourhoods that need none.
+    const bool has_cutoff = std::isfinite(upper_bound_.load(std::memory_order::relaxed));
+    const bool rens_alone =
+      strategy == search_strategy_t::RENS && gpu_submip_experiment::rens_without_incumbent();
+    if (!has_cutoff && !rens_alone) { return {}; }
+    if (!has_cutoff) { stats.without_cutoff.fetch_add(1, std::memory_order_relaxed); }
     stats.eligible.fetch_add(1, std::memory_order_relaxed);
     if (shared->options.pending_max_age > 0) {
       const double now       = tic();
@@ -2788,6 +2793,8 @@ f_t branch_and_bound_t<i_t, f_t>::publish_gpu_submip_solution(
       auto callback_assignment = user_assignment;
       settings_.solution_callback(callback_assignment, parent_objective);
     }
+    // A first incumbent counts as a full improvement.
+    if (!std::isfinite(previous_upper)) { return 1.; }
     const f_t previous_user = compute_user_objective(original_lp_, previous_upper);
     const f_t new_user      = compute_user_objective(original_lp_, parent_objective);
     return std::abs(previous_user - new_user) / std::max(f_t(1), std::abs(previous_user));
@@ -5743,7 +5750,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       CUOPT_LOG_INFO(
         "GpuSubmipQueueSummary source=%s callbacks=%llu eligible=%llu selected=%llu "
         "enqueued=%llu enqueue_failed=%llu dequeued=%llu valid=%llu unexecuted=%llu "
-        "replaced_pending=%llu no_free_integer=%llu",
+        "replaced_pending=%llu no_free_integer=%llu without_cutoff=%llu",
         gpu_submip_source_name(static_cast<gpu_submip_source_t>(source)),
         (unsigned long long)stats.callbacks.load(),
         (unsigned long long)stats.eligible.load(),
@@ -5754,7 +5761,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         (unsigned long long)stats.valid.load(),
         (unsigned long long)(enqueued - dequeued),
         (unsigned long long)stats.replaced_pending.load(),
-        (unsigned long long)stats.no_free_integer.load());
+        (unsigned long long)stats.no_free_integer.load(),
+        (unsigned long long)stats.without_cutoff.load());
     }
   }
   if (gpu_submip_exception_) { std::rethrow_exception(gpu_submip_exception_); }

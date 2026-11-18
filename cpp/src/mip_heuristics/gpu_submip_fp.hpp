@@ -69,7 +69,8 @@ class gpu_submip_fp_t {
                   const mip_solver_settings_t<i_t, f_t>& settings,
                   bool compact_fixed                   = true,
                   bool fused_adaptive_step             = false,
-                  const gpu_submip_fp_config_t& config = {});
+                  const gpu_submip_fp_config_t& config = {},
+                  bool cutoff_row                      = true);
   ~gpu_submip_fp_t();
 
   gpu_submip_fp_t(const gpu_submip_fp_t&)            = delete;
@@ -79,6 +80,9 @@ class gpu_submip_fp_t {
   // Equality includes matrix, RHS, objective and types, not just dimensions.
   bool can_reuse(const simplex::lp_problem_t<i_t, f_t>& node_lp,
                  const std::vector<simplex::variable_type_t>& variable_types) const;
+  // False for a session built to search without an incumbent: its model has no cutoff row and
+  // it runs only with an infinite cutoff.
+  bool has_cutoff_row() const;
 
   // Export the last finite projection (or ending assignment) in full coordinates.
   // The caller can perturb it for a new descent without rebuilding the GPU model.
