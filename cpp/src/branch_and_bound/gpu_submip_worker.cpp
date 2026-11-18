@@ -46,7 +46,7 @@ constexpr std::array<fp_effort_config_t, 4> fp_effort_configs{{
 
 int experiment_integer(const char* name, int fallback, int lower)
 {
-  const char* text = std::getenv(name);
+  const char* text = gpu_submip_experiment::environment(name);
   if (text == nullptr) { return fallback; }
   const std::string_view input{text};
   int value               = 0;
@@ -59,7 +59,7 @@ int experiment_integer(const char* name, int fallback, int lower)
 
 double experiment_option(const char* name, double fallback, double lower, double upper)
 {
-  const char* text = std::getenv(name);
+  const char* text = gpu_submip_experiment::environment(name);
   if (text == nullptr) { return fallback; }
   char* end          = nullptr;
   const double value = std::strtod(text, &end);
@@ -72,7 +72,8 @@ double experiment_option(const char* name, double fallback, double lower, double
 gpu_submip_options_t benchmark_defaults_from_environment()
 {
   gpu_submip_options_t options;
-  const char* requested_family  = std::getenv("CUOPT_GPU_SUBMIP_CONFIG_FAMILY");
+  const char* requested_family =
+    gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_CONFIG_FAMILY");
   const std::string_view family = requested_family ? requested_family : "checkpoint";
   if (family != "checkpoint" && family != "effort" && family != "fp") {
     throw std::invalid_argument("GPU sub-MIP config family must be checkpoint, effort, or fp");
@@ -89,7 +90,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
     options.min_improve                = 0.;
     options.regular_gpu_seconds        = 10.;
   }
-  if (std::getenv("CUOPT_CONFIG_ID") != nullptr) {
+  if (gpu_submip_experiment::environment("CUOPT_CONFIG_ID") != nullptr) {
     const size_t preset_count = family == "checkpoint" ? 1 : fp_config_names.size();
     const int config_id       = experiment_integer("CUOPT_CONFIG_ID", 0, 0);
     const int max_config      = experiment_integer("CUOPT_MAX_CONFIG", 4, 1);
@@ -122,7 +123,7 @@ gpu_submip_options_t benchmark_defaults_from_environment()
       options.fp_config.name.c_str(),
       family.data(),
       profile);
-  } else if (const char* name = std::getenv("CUOPT_GPU_SUBMIP_FP_CONFIG")) {
+  } else if (const char* name = gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_FP_CONFIG")) {
     // Numeric benchmark IDs take precedence over the legacy named FP configuration.
     options.fp_config = gpu_submip_fp_config_from_name(name);
   }
@@ -217,7 +218,7 @@ gpu_submip_fp_config_t gpu_submip_fp_config_from_environment()
 gpu_submip_options_t gpu_submip_options_from_environment()
 {
   auto options     = benchmark_defaults_from_environment();
-  const char* mode = std::getenv("CUOPT_GPU_SUBMIP_MODE");
+  const char* mode = gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_MODE");
   if (mode != nullptr) {
     if (std::string(mode) == "cpufj") {
       options.mode = gpu_submip_mode_t::CPUFJ_FULL_GPU;
@@ -227,7 +228,7 @@ gpu_submip_options_t gpu_submip_options_from_environment()
       throw std::invalid_argument("GPU sub-MIP mode must be node or cpufj");
     }
   }
-  if (const char* lifetime = std::getenv("CUOPT_GPU_SUBMIP_LIFETIME")) {
+  if (const char* lifetime = gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_LIFETIME")) {
     const std::string value(lifetime);
     if (value != "independent" && value != "paired") {
       throw std::invalid_argument("GPU sub-MIP lifetime must be independent or paired");
@@ -639,18 +640,20 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
     }
   }
   cuopt_assert(free_integer_columns > 0, "A GPU sub-MIP job needs a free integer column");
-  const char* collection_directory = std::getenv("CUOPT_GPU_SUBMIP_JOB_COLLECTION_DIR");
-  const bool collection            = collection_directory && *collection_directory;
+  const char* collection_directory =
+    gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_JOB_COLLECTION_DIR");
+  const bool collection = collection_directory && *collection_directory;
   const auto snapshot_path =
     collection ? gpu_submip_job_collection_path(job.source,
                                                 collection_directory,
                                                 started - job.solve_start,
                                                 job.deadline - job.solve_start,
                                                 free_integer_columns)
-               : gpu_submip_job_snapshot_path(job.source,
-                                              std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT"),
-                                              std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_SOURCE"),
-                                              std::getenv("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_DIR"));
+               : gpu_submip_job_snapshot_path(
+                   job.source,
+                   gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT"),
+                   gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_SOURCE"),
+                   gpu_submip_experiment::environment("CUOPT_GPU_SUBMIP_JOB_SNAPSHOT_DIR"));
   if (!snapshot_path.empty()) {
     static std::mutex snapshot_mutex;
     static std::set<std::string> captured_paths;

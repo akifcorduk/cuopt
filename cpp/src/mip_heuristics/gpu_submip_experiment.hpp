@@ -31,15 +31,26 @@ inline constexpr bool default_lp_start = false;
 // neighbourhoods of the tree nodes, searched without a cutoff.
 inline constexpr bool default_rens_without_incumbent = false;
 
+// Benchmark commits set this to false, so that their defaults hold whatever the environment
+// says: the cluster's benchmark script exports CUOPT_GPU_SUBMIP, CUOPT_SUBMIP_POOL_DIAGNOSTICS,
+// CUOPT_GPU_SUBMIP_CONFIG_FAMILY, CUOPT_CONFIG_ID and CUOPT_MAX_CONFIG.
+inline constexpr bool default_read_environment = true;
+
+// The value of a variable of the experiment, or null when the environment is not read.
+inline const char* environment(const char* name)
+{
+  return default_read_environment ? std::getenv(name) : nullptr;
+}
+
 inline bool flag(const char* name, bool fallback)
 {
-  const char* value = std::getenv(name);
+  const char* value = environment(name);
   return value == nullptr || value[0] == '\0' ? fallback : std::atoi(value) != 0;
 }
 
 inline double number(const char* name, double fallback)
 {
-  const char* value = std::getenv(name);
+  const char* value = environment(name);
   return value == nullptr || value[0] == '\0' ? fallback : std::atof(value);
 }
 

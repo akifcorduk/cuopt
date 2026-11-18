@@ -341,7 +341,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   CUOPT_LOG_INFO(
     "GpuSubmipExperiment requested=%d enabled=%d threads=%d pool_diagnostics=%d pdfp=%d "
     "projection_seconds=%.9g screen_seconds=%.9g target_share=%.9g lp_start=%d "
-    "rens_without_incumbent=%d",
+    "rens_without_incumbent=%d read_environment=%d",
     int(gpu_submip_requested),
     int(gpu_submip_enabled),
     omp_get_num_threads(),
@@ -351,7 +351,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     gpu_submip_experiment::screen_seconds(),
     gpu_submip_experiment::target_share(),
     int(gpu_submip_experiment::lp_start()),
-    int(gpu_submip_experiment::rens_without_incumbent()));
+    int(gpu_submip_experiment::rens_without_incumbent()),
+    int(gpu_submip_experiment::default_read_environment));
   const bool full_gpu_handoff = gpu_submip_enabled && gpu_submip_options_from_environment().mode ==
                                                         gpu_submip_mode_t::CPUFJ_FULL_GPU;
   if (full_gpu_handoff) {
