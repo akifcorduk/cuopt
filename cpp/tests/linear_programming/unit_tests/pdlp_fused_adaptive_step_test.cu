@@ -57,8 +57,13 @@ class adaptive_step_state_t {
     settings_.pdlp_solver_mode = pdlp_solver_mode_t::Stable2;
     set_pdlp_solver_mode(settings_);
     problem_.compute_transpose_of_problem();
-    pdhg_ = std::make_unique<pdlp::pdhg_solver_t<int, double>>(
-      &handle_, problem_, false, climbers_, settings_.hyper_params, settings_.new_bounds);
+    pdhg_     = std::make_unique<pdlp::pdhg_solver_t<int, double>>(&handle_,
+                                                               problem_,
+                                                               false,
+                                                               climbers_,
+                                                               settings_.hyper_params,
+                                                               settings_.new_bounds,
+                                                               settings_.large_nnz_threshold);
     strategy_ = std::make_unique<pdlp::adaptive_step_size_strategy_t<int, double>>(
       &handle_, &primal_weight_, &step_size_, false, 1, 1, climbers_, settings_.hyper_params);
     write(primal_weight_, 1);
