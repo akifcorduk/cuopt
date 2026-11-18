@@ -594,7 +594,10 @@ __global__ void find_vrp_moves_kernel(typename solution_t<i_t, f_t, REQUEST>::vi
   auto route_1 = solution.routes[r_id_1];
   auto route_2 = solution.routes[r_id_2];
   // if the end index of a fragment is above(or below when reversed) the route boundaries
-  if (search_data.start_idx_1 + search_data.frag_size_1 >= route_1.get_num_nodes() ||
+  i_t max_end_idx_1 = search_data.move_type > (i_t)vrp_move_t::RELOCATE
+                        ? route_1.get_num_nodes()
+                        : route_1.get_num_nodes() - 1;
+  if (search_data.start_idx_1 + search_data.frag_size_1 > max_end_idx_1 ||
       search_data.start_idx_2 + search_data.frag_size_2 >= route_2.get_num_nodes() ||
       search_data.start_idx_2 < 0 || route_1.get_num_nodes() <= 1 || route_2.get_num_nodes() <= 1) {
     return;
