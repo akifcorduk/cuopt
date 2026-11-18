@@ -278,9 +278,7 @@ struct adapted_sol_t {
     }
 
     for (auto& a : second.routes) {
-      if (second.pred[a.start.node()].is_depot() || second.succ[a.start.node()].is_depot()) {
-        common_edges++;
-      }
+      if (pred[a.start.node()].is_depot() || succ[a.start.node()].is_depot()) { common_edges++; }
     }
 
     double max_symmetrical_diference =
