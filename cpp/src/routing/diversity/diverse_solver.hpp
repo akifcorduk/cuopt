@@ -947,7 +947,7 @@ struct solve {
       if (adjust_coeff_weights < 1.1) {
         adjust_coeff_weights = 1.06;
       } else {
-        adjust_coeff_weights *= 0.8 + uni_dis(rng);
+        adjust_coeff_weights = std::max(1.06, adjust_coeff_weights * (0.8 + uni_dis(rng)));
       }
     }
 
