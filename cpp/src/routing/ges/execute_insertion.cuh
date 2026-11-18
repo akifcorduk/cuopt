@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -52,7 +52,8 @@ DI void execute_insert(typename solution_t<i_t, f_t, REQUEST>::view_t& view,
   route_t<i_t, f_t, REQUEST>::view_t::compute_forward(route_to_modify);
   route_t<i_t, f_t, REQUEST>::view_t::compute_backward(route_to_modify);
   route_to_modify.compute_cost();
-  view.routes_to_copy[route_to_modify.get_id()] = 1;
+  view.routes_to_copy[route_to_modify.get_id()]   = 1;
+  view.routes_to_search[route_to_modify.get_id()] = 1;
 }
 
 // Function used for pickup/delivery insertion after no ejection
