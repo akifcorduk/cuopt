@@ -479,6 +479,10 @@ DI bool get_work_config(typename solution_t<i_t, f_t, REQUEST>::view_t& solution
     if (solution.problem.is_cvrp() && search_data.offset != 0) { return true; }
     search_data.frag_size_1 = (fragment_size_type / max_cross_size) + 1;
     search_data.frag_size_2 = (fragment_size_type % max_cross_size) + 1;
+    if ((search_data.frag_size_1 == 1 && reverse_type % 2 == 1) ||
+        (search_data.frag_size_2 == 1 && reverse_type >= 2)) {
+      return true;
+    }
     if (reverse_type == 0) {
       search_data.reversed_frag_1 = false;
       search_data.reversed_frag_2 = false;
@@ -526,6 +530,7 @@ DI bool get_work_config(typename solution_t<i_t, f_t, REQUEST>::view_t& solution
     search_data.offset      = 0;
     search_data.frag_size_1 = 0;
     search_data.frag_size_2 = fragment_size_type + 1;
+    if (search_data.frag_size_2 == 1 && reverse_type == 1) { return true; }
     if (reverse_type == 0) {
       search_data.reversed_frag_1 = false;
       search_data.reversed_frag_2 = false;
@@ -543,6 +548,10 @@ DI bool get_work_config(typename solution_t<i_t, f_t, REQUEST>::view_t& solution
   } else if (move_category <= (i_t)vrp_move_t::TWO_OPT_STAR) {
     // Don't run two opt star if there are non uniform breaks
     if (solution.problem.has_non_uniform_breaks()) { return true; }
+    if (move_category == (i_t)vrp_move_t::TWO_OPT_STAR &&
+        solution.problem.fleet_info.is_homogenous_fleet()) {
+      return true;
+    }
     constexpr bool outgoing_relocate = false;
     bool valid_work_load             = get_nodes_to_consider<i_t, f_t, REQUEST>(
       solution, move_candidates, search_data, outgoing_relocate, recycle);

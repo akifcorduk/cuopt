@@ -31,12 +31,7 @@ enum class dim_t {
   SIZE
 };
 
-constexpr double get_nominal_diff(double c_1, double c_2)
-{
-  double diff = c_1 - c_2;
-  if (EPSILON < diff && diff < 0.) { return 0.; }
-  return diff;
-}
+constexpr double get_nominal_diff(double c_1, double c_2) { return c_1 - c_2; }
 
 // This is currently a different cost structure than the legacy solver
 // As we merge two solvers, reconsolidate these two cost structures

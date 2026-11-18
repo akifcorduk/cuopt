@@ -87,7 +87,9 @@ __global__ void extract_offsets_kernel(typename solution_t<i_t, f_t, REQUEST>::v
   i_t th_id = threadIdx.x + blockIdx.x * blockDim.x;
   // n_random_moves + 1 to mark the last segment where we end all segments
   if (n_random_moves < th_id || th_id == 0) { return; }
-  i_t curr_route_pair_idx = move_candidates.random_move_candidates.moves_per_route_pair[th_id].y;
+  i_t curr_route_pair_idx =
+    th_id == n_random_moves ? std::numeric_limits<int>::max()
+                            : move_candidates.random_move_candidates.moves_per_route_pair[th_id].y;
   i_t prev_route_pair_idx =
     move_candidates.random_move_candidates.moves_per_route_pair[th_id - 1].y;
 
@@ -99,9 +101,6 @@ __global__ void extract_offsets_kernel(typename solution_t<i_t, f_t, REQUEST>::v
     // don't write the end index as there is no segment after this
     if (th_id != n_random_moves) {
       move_candidates.random_move_candidates.move_begin_offset[curr_route_pair_idx] = th_id;
-    } else {
-      cuopt_assert(curr_route_pair_idx == std::numeric_limits<int>::max(),
-                   "Route pair index issue!");
     }
   }
 }

@@ -195,7 +195,6 @@ struct ExactCycleFinder {
       copy_cost(0, handle_ptr_->get_stream()),
       d_cub_storage_bytes(0, handle_ptr_->get_stream()),
       max_threads(handle_ptr_->get_device_properties().maxThreadsPerBlock),
-      max_blocks(handle_ptr_->get_device_properties().maxGridSize[0]),
       depot_included(depot_included_),
       cycle_candidates(0, max_level_, handle_ptr_->get_stream()),
       handle_ptr(handle_ptr_)
@@ -233,7 +232,6 @@ struct ExactCycleFinder {
   i_t n_occupied_heads;
   size_t max_paths{};
   size_t max_threads{};
-  size_t max_blocks{};
   bool depot_included{};
   cycle_candidates_t<i_t, f_t, max_routes> cycle_candidates;
 };

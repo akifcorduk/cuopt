@@ -61,8 +61,6 @@ struct graph_t {
   void reset(solution_handle_t<int, float> const* sol_handle)
   {
     async_fill(row_sizes, 0, sol_handle->get_stream());
-    async_fill(indices, -1, sol_handle->get_stream());
-    async_fill(weights, std::numeric_limits<double>::max(), sol_handle->get_stream());
     async_fill(route_ids, -1, sol_handle->get_stream());
   }
 

@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -95,19 +95,19 @@ __global__ void extend_cycle(
   int curr_cycle_size)
 {
   ret.curr_cycle_size = curr_cycle_size;
-  for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < d_valid_paths.max_available;
-       i += blockDim.x * gridDim.x) {
-    if (d_valid_paths.keys[i] == d_best.key_ptr[0]) {
-      // acquire
-      auto route_id = graph.route_ids[d_best.key_ptr[0].head];
-      // Set las bit to false "cutting the head"
-      d_best.key_ptr[0].label.set(route_id, false);
-      // Set new head
-      auto pred              = d_valid_paths.predecessors[i];
-      d_best.key_ptr[0].head = pred;
-      ret.push_back(d_best.key_ptr[0].head);
-    }
+  size_t i            = hash(d_best.key_ptr[0]) % d_valid_paths.max_available;
+  while (!(d_valid_paths.keys[i] == d_best.key_ptr[0])) {
+    cuopt_assert(!d_valid_paths.keys[i].empty(), "Path key should be in the map of its level");
+    i = (i + 1) % d_valid_paths.max_available;
   }
+  // acquire
+  auto route_id = graph.route_ids[d_best.key_ptr[0].head];
+  // Set las bit to false "cutting the head"
+  d_best.key_ptr[0].label.set(route_id, false);
+  // Set new head
+  auto pred              = d_valid_paths.predecessors[i];
+  d_best.key_ptr[0].head = pred;
+  ret.push_back(d_best.key_ptr[0].head);
 }
 
 template <typename i_t, typename f_t, size_t max_routes>

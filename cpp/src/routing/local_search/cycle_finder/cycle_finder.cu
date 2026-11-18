@@ -184,8 +184,6 @@ void ExactCycleFinder<i_t, f_t, max_routes>::get_cycle(graph_t<i_t, f_t>& graph,
                                                        ret_cycles_t<i_t, f_t>& d_ret)
 {
   raft::common::nvtx::range fun_scope("get_cycle");
-  auto n_threads = 256;
-  auto n_blocks  = std::min((d_valid_paths.max_available + n_threads - 1) / n_threads, max_blocks);
 
   const i_t n_cycles = best_cycles.n_cycles.value(handle_ptr->get_stream());
   auto level_vec     = host_copy(best_cycles.level_ptr.data(), n_cycles, handle_ptr->get_stream());
@@ -198,12 +196,12 @@ void ExactCycleFinder<i_t, f_t, max_routes>::get_cycle(graph_t<i_t, f_t>& graph,
 
     for (int i = level; i > 0; --i) {
       extend_cycle<i_t, f_t, max_routes>
-        <<<n_blocks, n_threads, 0, handle_ptr->get_stream().get()>>>(graph.view(),
-                                                                     d_valid_paths.subspan(i),
-                                                                     best_cycles.subspan(cycle_id),
-                                                                     d_ret.view(),
-                                                                     i,
-                                                                     (level + 1) - i);
+        <<<1, 1, 0, handle_ptr->get_stream().get()>>>(graph.view(),
+                                                      d_valid_paths.subspan(i),
+                                                      best_cycles.subspan(cycle_id),
+                                                      d_ret.view(),
+                                                      i,
+                                                      (level + 1) - i);
       RAFT_CHECK_CUDA(handle_ptr->get_stream().get());
     }
     close_cycle<i_t, f_t, max_routes><<<1, 1, 0, handle_ptr->get_stream().get()>>>(

@@ -33,9 +33,6 @@ class random_move_candidates_t {
 
   void reset(solution_handle_t<i_t, f_t> const* sol_handle)
   {
-    async_fill(moves_per_route_pair,
-               int2{std::numeric_limits<int>::max(), std::numeric_limits<int>::max()},
-               sol_handle->get_stream());
     async_fill(move_begin_offset, 0, sol_handle->get_stream());
     async_fill(move_end_offset, 0, sol_handle->get_stream());
     n_moves.set_value_to_zero_async(sol_handle->get_stream());

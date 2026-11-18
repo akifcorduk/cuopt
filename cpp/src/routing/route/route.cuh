@@ -742,10 +742,11 @@ class route_t {
       cuopt_assert(end > 0, "End has to be strictly positive.");
       cuopt_assert(end >= start, "End should be bigger than start.");
       cuopt_assert(start <= curr_route.get_num_nodes(), "Start should be smaller than n_nodes+1.");
-      auto curr_node = curr_route.get_node(start);
+      auto curr_node          = curr_route.get_node(start);
+      const auto vehicle_info = curr_route.vehicle_info();
       while (start < end) {
         auto next_node = curr_route.get_node(start + 1);
-        curr_node.calculate_forward_all(next_node, curr_route.vehicle_info());
+        curr_node.calculate_forward_all(next_node, vehicle_info);
         curr_route.set_forward_data(start + 1, next_node);
         curr_node = next_node;
         ++start;
@@ -763,10 +764,11 @@ class route_t {
       cuopt_assert(end > 0, "End has to be strictly positive.");
       cuopt_assert(end >= start, "End should be bigger than start.");
       cuopt_assert(end <= curr_route.get_num_nodes(), "End should be smaller than n_nodes+1.");
-      auto curr_node = curr_route.get_node(end);
+      auto curr_node          = curr_route.get_node(end);
+      const auto vehicle_info = curr_route.vehicle_info();
       while (end > start) {
         auto prev_node = curr_route.get_node(end - 1);
-        curr_node.calculate_backward_all(prev_node, curr_route.vehicle_info());
+        curr_node.calculate_backward_all(prev_node, vehicle_info);
         curr_route.set_backward_data(end - 1, prev_node);
         curr_node = prev_node;
         --end;
