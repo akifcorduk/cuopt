@@ -385,6 +385,9 @@ bool local_search_t<i_t, f_t, REQUEST>::perform_two_opt(
                sol.sol_handle->get_stream());
   } else {
     two_opt_cand_data_.resize(sol.get_n_routes(), sol.sol_handle->get_stream());
+    async_fill(two_opt_cand_data_,
+               is_two_opt_uinitialized_t<i_t>::init_data(),
+               sol.sol_handle->get_stream());
     async_fill(locks_, 0, sol.sol_handle->get_stream());
   }
 
@@ -401,9 +404,10 @@ bool local_search_t<i_t, f_t, REQUEST>::perform_two_opt(
       cuopt::make_span(locks_));
   RAFT_CHECK_CUDA(sol.sol_handle->get_stream().get());
 
-  n_moves_found = thrust::count_if(sol.sol_handle->get_thrust_policy(),
-                                   sampled_nodes_data_.begin(),
-                                   sampled_nodes_data_.end(),
+  auto& found_data = sol.problem_ptr->is_cvrp_intra() ? sampled_nodes_data_ : two_opt_cand_data_;
+  n_moves_found    = thrust::count_if(sol.sol_handle->get_thrust_policy(),
+                                   found_data.begin(),
+                                   found_data.end(),
                                    is_two_opt_initialized_t<i_t>());
   if (!n_moves_found) { return false; }
 
