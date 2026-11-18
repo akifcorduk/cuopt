@@ -18,6 +18,7 @@
 #include <branch_and_bound/symmetry.hpp>
 #include <dual_simplex/simplex_solver_settings.hpp>
 #include <dual_simplex/solve.hpp>
+#include <mip_heuristics/gpu_submip_experiment.hpp>
 #include <pdlp/translate.hpp>
 #include <utilities/mip_gpu_handoff.hpp>
 #include <utilities/mip_green_context.cuh>
@@ -328,10 +329,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   diversity_manager_t<i_t, f_t> dm(context);
   auto partition_restoration = cuopt::scope_guard(
     [&]() { restore_gpu_partition_at_scope_exit(context, dm, gpu_partition, sol); });
-  const char* gpu_submip_env  = std::getenv("CUOPT_GPU_SUBMIP");
-  const char* disable_gpu_env = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
-  const bool gpu_submip_requested =
-    gpu_submip_env != nullptr && std::strcmp(gpu_submip_env, "1") == 0;
+  const char* disable_gpu_env     = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
+  const bool gpu_submip_requested = gpu_submip_experiment::enabled();
   const bool gpu_submip_enabled =
     gpu_submip_requested && omp_get_num_threads() >= 4 &&
     (disable_gpu_env == nullptr || std::strcmp(disable_gpu_env, "1") != 0) &&
@@ -339,6 +338,18 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   if (gpu_submip_requested && omp_get_num_threads() < 4) {
     CUOPT_LOG_WARN("GPU subMIP disabled: at least four OpenMP threads are required");
   }
+  CUOPT_LOG_INFO(
+    "GpuSubmipExperiment requested=%d enabled=%d threads=%d pool_diagnostics=%d pdfp=%d "
+    "projection_seconds=%.9g screen_seconds=%.9g target_share=%.9g lp_start=%d",
+    int(gpu_submip_requested),
+    int(gpu_submip_enabled),
+    omp_get_num_threads(),
+    int(gpu_submip_experiment::pool_diagnostics()),
+    int(gpu_submip_experiment::pdfp()),
+    gpu_submip_experiment::projection_seconds(),
+    gpu_submip_experiment::screen_seconds(),
+    gpu_submip_experiment::target_share(),
+    int(gpu_submip_experiment::lp_start()));
   const bool full_gpu_handoff = gpu_submip_enabled && gpu_submip_options_from_environment().mode ==
                                                         gpu_submip_mode_t::CPUFJ_FULL_GPU;
   if (full_gpu_handoff) {

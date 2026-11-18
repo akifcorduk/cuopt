@@ -19,6 +19,7 @@
 
 #include <cuts/cuts.hpp>
 #include <mip_heuristics/feasibility_jump/fj_cpu_worker.cuh>
+#include <mip_heuristics/gpu_submip_experiment.hpp>
 #include <mip_heuristics/gpu_submip_fp.hpp>
 #include <mip_heuristics/gpu_submip_full_device.hpp>
 #include <mip_heuristics/mip_constants.hpp>
@@ -2442,7 +2443,7 @@ void branch_and_bound_t<i_t, f_t>::enqueue_gpu_submip_job(const lp_problem_t<i_t
                         types,
                         relaxation,
                         incumbent,
-                        upper_bound_.load(),
+                        upper_bound_.load(std::memory_order::relaxed),
                         shared->options,
                         *gpu_submip_settings_,
                         shared->next_job.fetch_add(1),
@@ -2497,13 +2498,16 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
   for (size_t j = 0; j < types.size() && !has_free_integer; ++j) {
     has_free_integer = types[j] != variable_type_t::CONTINUOUS && lp.lower[j] != lp.upper[j];
   }
-  if (!has_free_integer) { return {}; }
   auto& stats = shared->source_stats[static_cast<size_t>(gpu_submip_source_t::CPU_SUBMIP)];
+  if (!has_free_integer) {
+    stats.no_free_integer.fetch_add(1, std::memory_order_relaxed);
+    return {};
+  }
   typename gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>>::reservation_t reservation;
   if (shared->options.independent) {
     stats.callbacks.fetch_add(1, std::memory_order_relaxed);
     // Leave the regular GPU worker running until an improving cutoff is available.
-    if (!std::isfinite(upper_bound_.load())) { return {}; }
+    if (!std::isfinite(upper_bound_.load(std::memory_order::relaxed))) { return {}; }
     stats.eligible.fetch_add(1, std::memory_order_relaxed);
     if (shared->options.pending_max_age > 0) {
       const double now       = tic();
@@ -2546,16 +2550,16 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
       })) {
     warm_incumbent = incumbent_seed;
   }
-  auto owned_job =
-    std::make_unique<gpu_submip_job_t<i_t, f_t>>(make_gpu_submip_job(lp,
-                                                                     types,
-                                                                     seed,
-                                                                     warm_incumbent,
-                                                                     upper_bound_.load(),
-                                                                     shared->options,
-                                                                     *mip_settings,
-                                                                     job_id,
-                                                                     false));
+  auto owned_job = std::make_unique<gpu_submip_job_t<i_t, f_t>>(
+    make_gpu_submip_job(lp,
+                        types,
+                        seed,
+                        warm_incumbent,
+                        upper_bound_.load(std::memory_order::relaxed),
+                        shared->options,
+                        *mip_settings,
+                        job_id,
+                        false));
   auto* job      = owned_job.get();
   job->source    = gpu_submip_source_t::CPU_SUBMIP;
   job->source_id = gpu_submip_source_id_;
@@ -2756,16 +2760,25 @@ f_t branch_and_bound_t<i_t, f_t>::publish_gpu_submip_solution(
     std::lock_guard lock(mutex_original_lp_);
     crush_primal_solution(
       original_problem_, original_lp_, user_assignment, new_slacks_, assignment);
-    f_t primal_error, bound_error;
+    f_t primal_error, bound_error, integral_error;
     i_t fractional;
-    if (!check_guess(
-          original_lp_, settings_, var_types_, assignment, primal_error, bound_error, fractional)) {
+    if (!check_guess(original_lp_,
+                     settings_,
+                     var_types_,
+                     assignment,
+                     primal_error,
+                     bound_error,
+                     fractional,
+                     integral_error)) {
       settings_.log.printf("GPU job candidate rejected by parent feasibility check\n");
       return 0.;
     }
     parent_objective = compute_objective(original_lp_, assignment);
   }
-  if (node_concurrent_halt_.load() || parent_objective >= upper_bound_.load()) { return 0.; }
+  if (node_concurrent_halt_.load() ||
+      parent_objective >= upper_bound_.load(std::memory_order::relaxed)) {
+    return 0.;
+  }
   f_t previous_upper;
   if (set_solution_from_heuristics(user_assignment, heuristics_origin_t::SUBMIP, &previous_upper)) {
     CUOPT_LOG_INFO("GpuSubmipIncumbent objective=%.17g elapsed=%.6f",
@@ -2805,7 +2818,7 @@ bool branch_and_bound_t<i_t, f_t>::capture_gpu_submip_snapshot(const char* stage
   {
     std::lock_guard lock(mutex_upper_);
     if (incumbent_.has_incumbent) { snapshot_incumbent = incumbent_.x; }
-    snapshot_upper = upper_bound_.load();
+    snapshot_upper = upper_bound_.load(std::memory_order::relaxed);
   }
   auto snapshot = capture_post_root_snapshot(original_lp_,
                                              var_types_,
@@ -2948,7 +2961,9 @@ void branch_and_bound_t<i_t, f_t>::run_gpu_submip_worker_impl()
       handle,
       &node_concurrent_halt_,
       shared->options,
-      [this]() { return compute_user_objective(original_lp_, upper_bound_.load()); },
+      [this]() {
+        return compute_user_objective(original_lp_, upper_bound_.load(std::memory_order::relaxed));
+      },
       [this](const std::vector<f_t>& candidate, f_t) { publish_gpu_submip_solution(candidate); },
       &session,
       nullptr,
@@ -5599,7 +5614,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
     }
     gpu_submip_shared_->device_pool         = std::make_shared<gpu_submip_device_pool_t>();
     gpu_submip_shared_->current_user_cutoff = [this]() {
-      return compute_user_objective(original_lp_, upper_bound_.load());
+      return compute_user_objective(original_lp_, upper_bound_.load(std::memory_order::relaxed));
     };
     gpu_submip_shared_->publish = [this](const std::vector<f_t>& candidate, f_t) {
       publish_gpu_submip_solution(candidate);
@@ -5663,8 +5678,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                new_slacks_,
                                seed_generator_);
 
-      const char* pool_diagnostics = std::getenv("CUOPT_SUBMIP_POOL_DIAGNOSTICS");
-      if ((pool_diagnostics && std::atoi(pool_diagnostics) != 0) ||
+      if (gpu_submip_experiment::pool_diagnostics() ||
           (gpu_submip_shared_ &&
            gpu_submip_shared_->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU)) {
         static std::atomic<uint64_t> next_pool_id{0};
@@ -5729,7 +5743,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       CUOPT_LOG_INFO(
         "GpuSubmipQueueSummary source=%s callbacks=%llu eligible=%llu selected=%llu "
         "enqueued=%llu enqueue_failed=%llu dequeued=%llu valid=%llu unexecuted=%llu "
-        "replaced_pending=%llu",
+        "replaced_pending=%llu no_free_integer=%llu",
         gpu_submip_source_name(static_cast<gpu_submip_source_t>(source)),
         (unsigned long long)stats.callbacks.load(),
         (unsigned long long)stats.eligible.load(),
@@ -5739,7 +5753,8 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
         (unsigned long long)dequeued,
         (unsigned long long)stats.valid.load(),
         (unsigned long long)(enqueued - dequeued),
-        (unsigned long long)stats.replaced_pending.load());
+        (unsigned long long)stats.replaced_pending.load(),
+        (unsigned long long)stats.no_free_integer.load());
     }
   }
   if (gpu_submip_exception_) { std::rethrow_exception(gpu_submip_exception_); }

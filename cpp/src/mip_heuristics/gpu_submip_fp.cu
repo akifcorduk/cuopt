@@ -8,6 +8,7 @@
 #include <cuopt/error.hpp>
 #include <cuopt/mathematical_optimization/optimization_problem.hpp>
 #include <dual_simplex/presolve.hpp>
+#include <mip_heuristics/gpu_submip_experiment.hpp>
 #include <mip_heuristics/gpu_submip_fixed_columns.hpp>
 #include <mip_heuristics/local_search/feasibility_pump/feasibility_pump.cuh>
 #include <mip_heuristics/solver_context.cuh>
@@ -88,8 +89,8 @@ template <typename i_t, typename f_t>
 mip_solver_settings_t<i_t, f_t> gpu_submip_settings(const mip_solver_settings_t<i_t, f_t>& settings,
                                                     const gpu_submip_fp_config_t& config)
 {
-  auto local_settings                                   = settings;
-  local_settings.heuristic_params.relaxed_lp_time_limit = config.pdlp_seconds;
+  auto local_settings                                             = settings;
+  local_settings.mip_hyper_params.heuristic_relaxed_lp_time_limit = config.pdlp_seconds;
   return local_settings;
 }
 
@@ -150,18 +151,13 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
     fp.config.use_projection_warm_start = true;
     fp.config.log_descent_diagnostics   = true;
     fp.config.fused_adaptive_step       = fused_adaptive_step;
-    const char* pdfp                    = std::getenv("CUOPT_GPU_SUBMIP_PDFP");
-    fp.config.use_pdfp_projection       = pdfp != nullptr && pdfp[0] == '1';
-    const char* projection_seconds      = std::getenv("CUOPT_GPU_SUBMIP_PROJECTION_SECONDS");
-    if (projection_seconds != nullptr && projection_seconds[0] != '\0') {
-      fp.config.projection_time_limit = std::atof(projection_seconds);
+    fp.config.use_pdfp_projection       = gpu_submip_experiment::pdfp();
+    if (gpu_submip_experiment::projection_seconds() > 0) {
+      fp.config.projection_time_limit = gpu_submip_experiment::projection_seconds();
     }
-    const char* screen = std::getenv("CUOPT_GPU_SUBMIP_SCREEN_SECONDS");
-    if (screen != nullptr && screen[0] != '\0') { screen_seconds = std::atof(screen); }
-    const char* start = std::getenv("CUOPT_GPU_SUBMIP_LP_START");
-    lp_start          = start != nullptr && start[0] == '1';
-    const char* share = std::getenv("CUOPT_GPU_SUBMIP_TARGET_SHARE");
-    if (share != nullptr && share[0] != '\0') { target_share = std::atof(share); }
+    screen_seconds = gpu_submip_experiment::screen_seconds();
+    lp_start       = gpu_submip_experiment::lp_start();
+    target_share   = gpu_submip_experiment::target_share();
     cuopt_expects(target_share >= 0 && target_share < 1,
                   error_type_t::ValidationError,
                   "The target share of the LP improvement lies in [0, 1)");
@@ -365,7 +361,7 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
       CUOPT_LOG_INFO(
         "GpuSubmipFpScreen job=%llu verdict=%d dual_bound=%.9g cutoff=%.9g linear=%.9g "
         "iterations=%d seconds=%.6f converged=%d unbounded=%d left_unbounded=%d target=%.9g "
-        "lp_start=%d",
+        "lp_start=%d primal_residual=%.9g dual_residual=%.9g relative_gap=%.9g restarts=%d",
         (unsigned long long)job_id,
         screen.reach_verdict,
         screen.dual_bound,
@@ -377,7 +373,11 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
         int(std::count_if(bounds.begin(), bounds.end(), unbounded)),
         int(std::count_if(box.begin(), box.end(), unbounded)),
         double(fp_cutoff),
-        int(reached && lp_start));
+        int(reached && lp_start),
+        screen.primal_residual,
+        screen.dual_residual,
+        screen.relative_gap,
+        screen.restarts);
       if (screen.reach_verdict > 0) {
         run_info.exit_reason = "screened";
         return false;

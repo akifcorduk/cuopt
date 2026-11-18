@@ -346,6 +346,8 @@ class branch_and_bound_t {
       std::atomic<uint64_t> replaced_pending{0};
       std::atomic<uint64_t> dequeued{0};
       std::atomic<uint64_t> valid{0};
+      // Neighbourhoods not offered because every integer is fixed.
+      std::atomic<uint64_t> no_free_integer{0};
     };
     std::array<source_stats_t, gpu_submip_source_count> source_stats;
   };

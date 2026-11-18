@@ -218,7 +218,7 @@ bool feasibility_pump_t<i_t, f_t>::pdfp_project_onto_polytope(solution_t<i_t, f_
   settings.check_interval   = 50;
   settings.original_units   = problem.n_integer_vars < problem.n_variables;
   settings.held_weight      = .03;
-  const f_t rlp_base        = context.settings.heuristic_params.relaxed_lp_time_limit;
+  const f_t rlp_base        = context.settings.mip_hyper_params.heuristic_relaxed_lp_time_limit;
   f_t time_limit            = longer_lp_run ? 5. * rlp_base : rlp_base;
   time_limit                = std::max(0.05, std::min(time_limit, timer.remaining_time() / 10.));
   if (config.projection_time_limit > 0) {
@@ -256,6 +256,32 @@ bool feasibility_pump_t<i_t, f_t>::pdfp_project_onto_polytope(solution_t<i_t, f_
                                                : pdlp_termination_status_t::IterationLimit);
     diagnostics.pdlp_steps           = result.iterations;
     diagnostics.pdlp_primal_residual = result.primal_residual;
+    // The same projections as GpuSubmipFpProjection reports.
+    if (diagnostics.projections == 1 || diagnostics.projections % 10 == 0) {
+      CUOPT_LOG_INFO(
+        "GpuSubmipFpPdfp job=%llu iter=%d converged=%d iterations=%d seconds=%.6f "
+        "limit_seconds=%.6f tolerance=%.9g primal_residual=%.9g dual_residual=%.9g "
+        "relative_gap=%.9g objective=%.9g linear=%.9g primal_weight=%.9g step=%.9g "
+        "step_cuts=%d restarts=%d moving_variables=%d acting_rows=%d",
+        (unsigned long long)diagnostics.job_id,
+        diagnostics.projections,
+        int(result.converged),
+        result.iterations,
+        result.elapsed_time,
+        double(time_limit),
+        settings.tolerance,
+        result.primal_residual,
+        result.dual_residual,
+        result.relative_gap,
+        result.objective,
+        result.linear_objective,
+        result.primal_weight,
+        result.step,
+        result.step_cuts,
+        result.restarts,
+        result.moving_variables,
+        result.acting_rows);
+    }
   }
   return is_feasible;
 }
@@ -874,9 +900,10 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
         relaxed_lp_settings_t lp_settings;
         lp_settings.time_limit =
           context.diversity_manager_ptr == nullptr
-            ? std::max(0.,
-                       std::min(double(context.settings.heuristic_params.relaxed_lp_time_limit),
-                                timer.remaining_time()))
+            ? std::max(
+                0.,
+                std::min(double(context.settings.mip_hyper_params.heuristic_relaxed_lp_time_limit),
+                         timer.remaining_time()))
             : lp_verify_time_limit;
         lp_settings.concurrent_halt       = concurrent_halt;
         lp_settings.fused_adaptive_step   = config.fused_adaptive_step;
