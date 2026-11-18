@@ -1118,7 +1118,9 @@ struct solve {
       }
       // True for VRP
       if (consider_expensive_recombiners) {
-        recombine_options.insert(recombiner_t::EAX);
+        if (!a.problem->dimensions_info.has_dimension(detail::dim_t::TIME)) {
+          recombine_options.insert(recombiner_t::EAX);
+        }
         recombine_options.insert(recombiner_t::AEAX);
         if (!a.problem->is_tsp) { recombine_options.insert(recombiner_t::IX); }
       }
