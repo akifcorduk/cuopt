@@ -389,7 +389,8 @@ DI bool get_nodes_to_consider(typename solution_t<i_t, f_t, REQUEST>::view_t& so
   if (search_data.block_node_id >= solution.get_num_orders()) {
     search_data.start_idx_1       = 0;
     i_t depot_after_special_index = search_data.block_node_id - solution.get_num_orders();
-    i_t route_id                  = depot_after_special_index / after_depot_insertion_multiplier;
+    i_t route_id                  = recycle ? depot_after_special_index
+                                            : depot_after_special_index / after_depot_insertion_multiplier;
     i_t neighbor_batch            = depot_after_special_index % after_depot_insertion_multiplier;
     // reduce it to a unique id again, for move recording and consistency
     search_data.block_node_id = solution.get_num_orders() + route_id;
