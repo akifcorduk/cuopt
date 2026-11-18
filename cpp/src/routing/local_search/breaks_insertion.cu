@@ -190,7 +190,7 @@ __global__ void execute_break_moves(typename solution_t<i_t, f_t, REQUEST>::view
   i_t route_id         = blockIdx.x;
   auto curr_route_cand = best_cand_per_route[route_id];
 
-  if (curr_route_cand.cost > 0.) { return; }
+  if (curr_route_cand.cost >= -EPSILON) { return; }
 
   extern __shared__ i_t shmem[];
 

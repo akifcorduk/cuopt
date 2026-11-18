@@ -371,7 +371,7 @@ std::vector<f_t> waypoint_matrix_t<i_t, f_t>::_compute_shortest_path_costs(
   for (std::size_t i = 0; i < n_target_locations * n_target_locations; ++i) {
     const auto src = i / n_target_locations;
     const auto dst = i % n_target_locations;
-    if (src == dst)
+    if (target_locations[src] == target_locations[dst])
       shortest_path_matrix[i] = 0.0f;
     else
       dispatch(
@@ -379,6 +379,28 @@ std::vector<f_t> waypoint_matrix_t<i_t, f_t>::_compute_shortest_path_costs(
   }
 
   return shortest_path_matrix;
+}
+
+template <typename pm_t, typename i_t>
+static void check_target_paths(pm_t const& predecessor_matrix,
+                               i_t const* target_locations,
+                               i_t n_target_locations)
+{
+  cuopt_expects(predecessor_matrix.size() >= n_target_locations,
+                error_type_t::ValidationError,
+                "compute_shortest_path_costs must be called after compute_cost_matrix, with at "
+                "most as many target locations.");
+  for (i_t src = 0; src < n_target_locations; ++src) {
+    for (i_t dst = 0; dst < n_target_locations; ++dst) {
+      if (target_locations[src] == target_locations[dst]) { continue; }
+      cuopt_expects(predecessor_matrix[src][target_locations[dst]] !=
+                      (typename pm_t::value_type::value_type)(-1),
+                    error_type_t::ValidationError,
+                    "Target location %d is not reachable from target location %d.",
+                    target_locations[dst],
+                    target_locations[src]);
+    }
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -400,6 +422,7 @@ void waypoint_matrix_t<i_t, f_t>::compute_shortest_path_costs(f_t* d_custom_matr
 
   // Target locations validity checks
   check_target_locations(target_locations, n_target_locations, n_vertices_);
+  dispatch(check_target_paths, target_locations, n_target_locations);
 
   std::vector<f_t> shortest_path_matrix =
     _compute_shortest_path_costs(target_locations, n_target_locations, weights);

@@ -32,7 +32,7 @@ constexpr bool is_constraint(size_t index)
 }
 
 /*! Initializing xoshiro */
-static thread_local uint64_t s_xoshiro[4]{
+inline thread_local uint64_t s_xoshiro[4]{
   0x9E3779B97F4A7C15LL, 0xBF58476D1CE4E5B9LL, 0x94D049BB133111EBLL, 0x16B6F9BB132A53FFLL};
 
 /*! \brief { Generate rotations} */

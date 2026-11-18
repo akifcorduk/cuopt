@@ -1034,7 +1034,7 @@ bool local_search_t<i_t, f_t, REQUEST>::perform_sliding_window(
 
   // FIXME:: we should be using is_cvrp_intra(), but other dimensions are not handled correctly in
   // this case, need to replicate what we do in the two opt here
-  auto is_cvrp = solution.problem_ptr->is_cvrp();
+  auto is_cvrp = solution.problem_ptr->is_cvrp_fast_eval_;
 
   sliding_cuda_graph.start_capture(solution.sol_handle->get_stream());
   async_fill(found_sliding_solution_data_,

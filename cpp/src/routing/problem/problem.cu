@@ -45,6 +45,19 @@ problem_t<i_t, f_t>::problem_t(const data_model_view_t<i_t, f_t>& data_model_vie
   populate_host_arrays();
   populate_vehicle_buckets();
 
+  for (i_t v = 0; v < get_fleet_size(); ++v) {
+    i_t earliest = fleet_info_h.earliest_time[v];
+    i_t latest   = fleet_info_h.latest_time[v];
+    if (order_info_h.depot_included) {
+      earliest = std::max(earliest, order_info_h.earliest_time[DEPOT]);
+      latest   = std::min(latest, order_info_h.latest_time[DEPOT]);
+    }
+    cuopt_expects(earliest <= latest,
+                  error_type_t::ValidationError,
+                  "Vehicle %d has an empty time window or does not overlap the depot time window!",
+                  v);
+  }
+
   initialize_depot_info();
 
   // FIXME: Implement to_host for containers
@@ -289,8 +302,15 @@ void problem_t<i_t, f_t>::populate_dimensions_info()
 
   bool time_matrix_exists = data_view_ptr->get_transit_time_matrices().size() > 0;
 
+  bool time_break_exists = !data_view_ptr->get_uniform_breaks().empty();
+  for (const auto& vehicle_breaks : data_view_ptr->get_non_uniform_breaks()) {
+    for (const auto& vehicle_break : vehicle_breaks.second) {
+      time_break_exists = time_break_exists || !vehicle_break.is_distance_based_;
+    }
+  }
+
   bool enable_time_dim = vehicle_max_times_exists || vehicle_tw_exists || travel_time_obj_exists ||
-                         order_tw_exists || time_matrix_exists;
+                         order_tw_exists || time_matrix_exists || time_break_exists;
 
   if (enable_time_dim) {
     dimensions_info.enable_dimension(dim_t::TIME);
@@ -383,6 +403,14 @@ void problem_t<i_t, f_t>::populate_dimensions_info()
   }
   dimensions_info.is_tsp = is_tsp;
 
+  bool non_negative_demands = std::all_of(order_info_h.demand.begin(),
+                                          order_info_h.demand.end(),
+                                          [](auto demand) { return demand >= 0; });
+
+  is_cvrp_intra_ = !is_pdp() && !dimensions_info.has_dimension(dim_t::TIME) &&
+                   !dimensions_info.has_dimension(dim_t::BREAK) && cost_obj_weight == 1.0 &&
+                   non_negative_demands;
+
   if (!is_tsp) {
     is_cvrp_ = !is_pdp() && (data_view_ptr->get_cost_matrices().size() == 1);
     if (is_cvrp_) {
@@ -390,7 +418,9 @@ void problem_t<i_t, f_t>::populate_dimensions_info()
         if (I != (int)dim_t::COST && I != (int)dim_t::CAP) { is_cvrp_ = false; }
       });
     }
-    is_cvrp_ = is_cvrp_ && n_capacity_dims == 1;
+    is_cvrp_           = is_cvrp_ && n_capacity_dims == 1;
+    is_cvrp_fast_eval_ = is_cvrp_ && !cost_dim_info.has_max_constraint && cost_obj_weight == 1.0 &&
+                         non_negative_demands;
   }
 }
 
@@ -815,8 +845,7 @@ bool problem_t<i_t, f_t>::is_pdp() const
 template <typename i_t, typename f_t>
 bool problem_t<i_t, f_t>::is_cvrp_intra() const
 {
-  return !is_pdp() && !dimensions_info.has_dimension(dim_t::TIME) &&
-         !dimensions_info.has_dimension(dim_t::BREAK);
+  return is_cvrp_intra_;
 }
 
 template <typename i_t, typename f_t>

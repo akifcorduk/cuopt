@@ -248,10 +248,13 @@ void solution_t<i_t, f_t, REQUEST>::clear_routes(std::vector<i_t> vehicle_ids)
   cuopt_assert(routes.size() >= given_n_routes, "routes size error!");
   cuopt_assert(routes_view.size() >= given_n_routes, "routes size error!");
 
+  std::vector<i_t> h_route_ids(n_routes);
+  std::iota(h_route_ids.begin(), h_route_ids.end(), 0);
   for (i_t i = 0; i < n_routes; ++i) {
     get_route(i).vehicle_id.set_value_async(vehicle_ids[i], sol_handle->get_stream());
-    get_route(i).route_id.set_value_async(i, sol_handle->get_stream());
+    get_route(i).route_id.set_value_async(h_route_ids[i], sol_handle->get_stream());
   }
+  sol_handle->sync_stream();
 
   set_routes_to_copy();
   thrust::fill(sol_handle->get_thrust_policy(),
@@ -581,10 +584,8 @@ void solution_t<i_t, f_t, REQUEST>::compute_cost()
   const i_t TPB       = 256;
   const auto n_blocks = (n_routes + TPB - 1) / TPB;
 
-  infeasible_cost_t zero_inf;
-  objective_cost_t zero_obj;
-  infeasibility_cost.set_value_async(zero_inf, sol_handle->get_stream());
-  objective_cost.set_value_async(zero_obj, sol_handle->get_stream());
+  infeasibility_cost.set_value_to_zero_async(sol_handle->get_stream());
+  objective_cost.set_value_to_zero_async(sol_handle->get_stream());
   n_infeasible_routes.set_value_to_zero_async(sol_handle->get_stream());
   if (get_n_routes() < 1) return;
   compute_cost_kernel<i_t, f_t, REQUEST>

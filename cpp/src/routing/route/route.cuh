@@ -36,10 +36,9 @@ class route_t {
       fleet_info_ptr(fleet_info_ptr_)
   {
     raft::common::nvtx::range fun_scope("zero route_t copy_ctr");
-    infeasible_cost_t zero_inf;
-    objective_cost_t zero_obj;
-    infeasibility_cost.set_value_async(zero_inf, sol_handle->get_stream());
-    objective_cost.set_value_async(zero_obj, sol_handle->get_stream());
+    infeasibility_cost.set_value_to_zero_async(sol_handle->get_stream());
+    objective_cost.set_value_to_zero_async(sol_handle->get_stream());
+    sol_handle->sync_stream();
   }
 
   void print() const

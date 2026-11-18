@@ -218,12 +218,9 @@ class problem_t {
     DI bool has_special_nodes() const { return !special_nodes.empty(); }
     constexpr i_t get_num_buckets() const { return fleet_info.vehicle_availability.size(); }
     DI bool has_non_uniform_breaks() const { return non_uniform_breaks; }
-    DI bool is_cvrp_intra() const
-    {
-      return !order_info.is_pdp() && !dimensions_info.has_dimension(dim_t::TIME) &&
-             !dimensions_info.has_dimension(dim_t::BREAK);
-    }
+    DI bool is_cvrp_intra() const { return is_cvrp_intra_; }
     DI bool is_cvrp() const { return is_cvrp_; }
+    DI bool is_cvrp_fast_eval() const { return is_cvrp_fast_eval_; }
 
     typename fleet_info_t<i_t, f_t>::view_t fleet_info;
     typename order_info_t<i_t, f_t>::view_t order_info;
@@ -237,6 +234,8 @@ class problem_t {
     typename special_nodes_t<i_t>::view_t special_nodes;
     bool non_uniform_breaks{false};
     bool is_cvrp_{false};
+    bool is_cvrp_fast_eval_{false};
+    bool is_cvrp_intra_{false};
   };
 
   view_t view() const
@@ -261,6 +260,8 @@ class problem_t {
     v.special_nodes           = special_nodes.view();
     v.non_uniform_breaks      = has_non_uniform_breaks();
     v.is_cvrp_                = is_cvrp();
+    v.is_cvrp_fast_eval_      = is_cvrp_fast_eval_;
+    v.is_cvrp_intra_          = is_cvrp_intra_;
     return v;
   }
 
@@ -333,6 +334,8 @@ class problem_t {
   special_nodes_t<i_t> special_nodes;
   bool is_tsp{false};
   bool is_cvrp_{false};
+  bool is_cvrp_fast_eval_{false};
+  bool is_cvrp_intra_{false};
   bool non_uniform_breaks_{false};
 };
 

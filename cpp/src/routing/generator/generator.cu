@@ -458,8 +458,7 @@ rmm ::device_uvector<i_t> create_service_time(raft::handle_t& handle,
   rmm::device_uvector<i_t> v_service_time(params.n_locations, handle.get_stream());
   // Create service time based on the average travel time between locations without self
   // locations.
-  auto depot_service = 0;
-  v_service_time.set_element_async(0, depot_service, handle.get_stream());
+  v_service_time.set_element_to_zero_async(0, handle.get_stream());
 
   raft::random::RngState r(params.seed, raft::random::GenPhilox);
   raft::random::uniformInt(r,

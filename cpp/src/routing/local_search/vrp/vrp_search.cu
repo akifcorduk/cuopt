@@ -613,7 +613,7 @@ __global__ void find_vrp_moves_kernel(typename solution_t<i_t, f_t, REQUEST>::vi
         solution, move_candidates, route_1, route_2, search_data, excess_limit);
     }
   } else {
-    if (solution.problem.is_cvrp()) {
+    if (solution.problem.is_cvrp_fast_eval()) {
       thrust::tie(cost_delta, selection_delta) = evaluate_move<i_t, f_t, REQUEST>(
         solution, move_candidates, route_1, route_2, search_data, excess_limit);
     } else {
@@ -650,7 +650,7 @@ bool find_vrp_moves(solution_t<i_t, f_t, REQUEST>& sol,
   raft::common::nvtx::range fun_scope("find_vrp_moves");
   if (sol.n_routes < 2) { return false; }
 
-  if (sol.problem_ptr->is_cvrp()) {
+  if (sol.problem_ptr->is_cvrp_fast_eval_) {
     compute_reverse_costs<i_t, f_t, REQUEST>
       <<<sol.get_n_routes(), 32, 0, sol.sol_handle->get_stream().get()>>>(sol.view());
   }

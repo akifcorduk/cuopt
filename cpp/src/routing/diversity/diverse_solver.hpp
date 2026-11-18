@@ -364,7 +364,8 @@ struct solve {
     if (initial_islands.size() > 1) {
       int threshold_index = p->is_cvrp() ? std::max(3, find_initial_diversity(from_islands, true))
                                          : find_initial_diversity(from_islands, true);
-      reserve_population.threshold = std::max<double>(0.8, diversity_levels[threshold_index]);
+      reserve_population.threshold = std::max<double>(
+        0.8, diversity_levels[std::min(threshold_index, (int)diversity_levels.size() - 1)]);
       benchmark_print("Resetting the reserve diversity level %d reserve treshold %f: \n",
                       threshold_index,
                       reserve_population.threshold);
@@ -607,7 +608,8 @@ struct solve {
       populate_working_vector();
       constexpr bool use_average = false;
       int threshold_index = p->is_cvrp() ? 1 : find_initial_diversity(working_vector, use_average);
-      working_population.threshold = diversity_levels[threshold_index];
+      working_population.threshold =
+        diversity_levels[std::min(threshold_index, (int)diversity_levels.size() - 1)];
       if (!p->is_cvrp()) { threshold_index = std::min(4, std::max(2, threshold_index)); }
       populate_working_population();
 

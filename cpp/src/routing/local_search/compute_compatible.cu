@@ -674,8 +674,8 @@ void initialize_incompatible(problem_t<i_t, f_t>& problem, solution_t<i_t, f_t, 
         is_problem_run);
     handle_ptr->get_stream().sync();
   }
-  problem.sort_viable_matrix(viables.viable_to_pickups, viables.viable_from_pickups);
-  problem.sort_viable_matrix(viables.viable_to_deliveries, viables.viable_from_deliveries);
+  problem.sort_viable_matrix(viables.viable_from_pickups, viables.viable_to_pickups);
+  problem.sort_viable_matrix(viables.viable_from_deliveries, viables.viable_to_deliveries);
   i_t max_viable_to_pickup     = thrust::reduce(handle_ptr->get_thrust_policy(),
                                             viables.n_viable_to_pickups.begin(),
                                             viables.n_viable_to_pickups.end(),

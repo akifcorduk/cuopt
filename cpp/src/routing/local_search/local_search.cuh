@@ -134,14 +134,14 @@ class local_search_t {
 
   void set_active_weights(const infeasible_cost_t weights, bool include_objective = true);
 
-  static inline void start_timer(f_t time_limit_)
+  void start_timer(f_t time_limit_)
   {
     time_limit         = time_limit_;
     start              = std::chrono::steady_clock::now();
     time_limit_reached = false;
   }
 
-  static inline bool get_time_limit_reached()
+  bool get_time_limit_reached()
   {
     bool v;
 #pragma omp atomic read
@@ -149,13 +149,13 @@ class local_search_t {
     return v;
   }
 
-  static inline void set_time_limit_reached()
+  void set_time_limit_reached()
   {
 #pragma omp atomic write
     time_limit_reached = true;
   }
 
-  static inline bool check_time_limit()
+  bool check_time_limit()
   {
     if (get_time_limit_reached()) return true;
     bool this_thread_finished =
@@ -190,9 +190,9 @@ class local_search_t {
   void fill_pdp_considered_nodes(solution_t<i_t, f_t, REQUEST>& solution,
                                  move_candidates_t<i_t, f_t>& move_candidates);
 
-  static inline f_t time_limit;
-  static inline std::chrono::time_point<std::chrono::steady_clock> start;
-  static inline bool time_limit_reached;
+  f_t time_limit = 0;
+  std::chrono::time_point<std::chrono::steady_clock> start;
+  bool time_limit_reached = false;
   ExactCycleFinder<i_t, f_t, 128> cycle_finder_small;
   ExactCycleFinder<i_t, f_t, 1024> cycle_finder_big;
   rmm::device_uvector<found_sliding_solution_t<i_t>> found_sliding_solution_data_;

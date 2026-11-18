@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2024-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2024-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -141,8 +141,6 @@ __global__ void compute_route_cost_differences_kernel(
   // We only need to store the best vehicle type of the route that has highest vehicle_assignment
   vehicle_assignment.top_bucket[global_offset + route_id] = top_indices[0];
   vehicle_assignment.top_cost[global_offset + route_id]   = __ddiv_rn(top_costs[0], scaling_factor);
-
-  if (threadIdx.x == 0) { atomicExch(&vehicle_assignment.run_sort[k_idx], 0); }
 }
 
 template <typename i_t, typename f_t, request_t REQUEST>
@@ -261,7 +259,7 @@ __global__ void update_assignment_kernel(
     vehicle_assignment.assignment_costs[k_idx] +=
       vehicle_assignment.top_cost[global_offset + sh_route_id];
     // One of the vehicle types is no longer available. Top k is needed again.
-    if (vehicle_availability[sh_best_bucket] == 0) { vehicle_assignment.run_sort[k_idx] = 1; }
+    vehicle_assignment.run_sort[k_idx] = vehicle_availability[sh_best_bucket] == 0;
   }
 }
 

@@ -427,34 +427,38 @@ bool execute_vrp_moves(solution_t<i_t, f_t, REQUEST>& sol,
     raft::alignTo(sol.check_routes_can_insert_and_get_sh_size(max_added_size), sizeof(double));
   size_t size_of_frag = dimensions_route_t<i_t, f_t, REQUEST>::get_shared_size(
     max_fragment_size, sol.problem_ptr->dimensions_info);
-  size_t sh_size     = shared_route_size * 2 + size_of_frag;
-  i_t TPB            = 64;
-  i_t n_blocks       = n_moves_found * 2;
-  i_t numBlocksPerSm = 0;
-  cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-    &numBlocksPerSm, execute_vrp_moves_kernel<i_t, f_t, REQUEST>, TPB, 0);
-  // if the number of blocks are larger than the gpu can hold, only execute the max fitting moves
-  n_blocks            = std::min(n_blocks,
-                      sol.sol_handle->get_device_properties().multiProcessorCount * numBlocksPerSm);
+  size_t sh_size      = shared_route_size * 2 + size_of_frag;
+  i_t TPB             = 64;
   auto sol_view       = sol.view();
   auto move_cand_view = move_candidates.view();
-  // launch
-  void* kernelArgs[] = {&sol_view, &move_cand_view};
   dim3 dimBlock(TPB, 1, 1);
-  dim3 dimGrid(n_blocks, 1, 1);
   bool is_set = set_shmem_of_kernel(execute_vrp_moves_kernel<i_t, f_t, REQUEST>, sh_size);
   if (!is_set) { return false; }
 
   cuopt_assert(is_set, "Not enough shared memory on device for execute_vrp_moves_kernel!");
   cuopt_expects(is_set, error_type_t::OutOfMemoryError, "Not enough shared memory on device");
+  i_t numBlocksPerSm = 0;
+  RAFT_CUDA_TRY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+    &numBlocksPerSm, execute_vrp_moves_kernel<i_t, f_t, REQUEST>, TPB, sh_size));
+  i_t max_moves_per_launch =
+    sol.sol_handle->get_device_properties().multiProcessorCount * numBlocksPerSm / 2;
+  cuopt_expects(
+    max_moves_per_launch > 0, error_type_t::OutOfMemoryError, "Not enough shared memory on device");
+  auto selected_move_indices = move_cand_view.vrp_move_candidates.selected_move_indices;
   // FIXME:: Cuda graph is turned off for now because of the assertions triggering in CUDA 12 builds
   // running on V100 move_candidates.vrp_execute_graph.start_capture(sol.sol_handle->get_stream());
-  cudaLaunchCooperativeKernel((void*)execute_vrp_moves_kernel<i_t, f_t, REQUEST>,
-                              dimGrid,
-                              dimBlock,
-                              kernelArgs,
-                              sh_size,
-                              sol.sol_handle->get_stream().get());
+  for (i_t first_move = 0; first_move < n_moves_found; first_move += max_moves_per_launch) {
+    move_cand_view.vrp_move_candidates.selected_move_indices =
+      selected_move_indices.subspan(first_move);
+    void* kernelArgs[] = {&sol_view, &move_cand_view};
+    dim3 dimGrid(2 * std::min(n_moves_found - first_move, max_moves_per_launch), 1, 1);
+    RAFT_CUDA_TRY(cudaLaunchCooperativeKernel((void*)execute_vrp_moves_kernel<i_t, f_t, REQUEST>,
+                                              dimGrid,
+                                              dimBlock,
+                                              kernelArgs,
+                                              sh_size,
+                                              sol.sol_handle->get_stream().get()));
+  }
   sol.compute_route_id_per_node();
   sol.compute_cost();
   // move_candidates.vrp_execute_graph.end_capture(sol.sol_handle->get_stream());

@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -236,6 +236,7 @@ __global__ void insert_node_to_best_kernel(typename solution_t<i_t, f_t, REQUEST
   const auto route_infeasibility_cost = route.get_infeasibility_cost();
   cuopt_assert(start < end, "Start should be smaller than the end!");
   for (i_t i = start + threadIdx.x; i < end; i += blockDim.x) {
+    route.get_node(i).calculate_forward_all(node_to_insert, route.vehicle_info());
     auto next_node    = route.get_node(i + 1);
     double cost_delta = node_to_insert.calculate_forward_all_and_delta(next_node,
                                                                        route.vehicle_info(),

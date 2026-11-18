@@ -259,15 +259,15 @@ __global__ void populate_cross_list_kernel(
   __syncthreads();
 
   auto& route_node_map = sol.route_node_map;
-  i_t first_node       = blockIdx.x + 1;
+  i_t first_node       = blockIdx.x + sol.is_depot_included();
   i_t first_route      = route_node_map.get_route_id(first_node);
   // we use incomplete LS in try_squeeze
   if (first_route == -1) return;
   const i_t special_node_id = sol.n_routes + sol.get_num_orders();
   // we can have all combinations at cross, delivery ejection and delivery insertion too
-  const i_t row_size = (sol.get_num_orders() - 1) + sol.n_routes;
+  const i_t row_size = sol.get_num_depot_excluded_orders() + sol.n_routes;
   for (i_t i = threadIdx.x; i < row_size; i += blockDim.x) {
-    i_t second_node = i + 1;
+    i_t second_node = i + sol.is_depot_included();
     i_t second_route;
     const auto first_cand = move_candidates.cand_matrix.get_candidate(first_node, second_node);
     cand_t second_cand;
@@ -316,7 +316,8 @@ __global__ void populate_cross_list_kernel(
 template <typename i_t, typename f_t, request_t REQUEST>
 __global__ void populate_cross_moves_kernel(
   typename solution_t<i_t, f_t, REQUEST>::view_t sol,
-  typename move_candidates_t<i_t, f_t>::view_t move_candidates)
+  typename move_candidates_t<i_t, f_t>::view_t move_candidates,
+  int64_t seed)
 {
   auto scross_cands         = move_candidates.scross_move_candidates;
   const i_t matrix_size     = sol.n_routes * sol.n_routes;
@@ -328,7 +329,7 @@ __global__ void populate_cross_moves_kernel(
   __syncthreads();
   if (threadIdx.x == 0) {
     raft::random::PCGenerator thread_rng(
-      clock64(), uint64_t((threadIdx.x + blockIdx.x * blockDim.x)), 0);
+      seed, uint64_t((threadIdx.x + blockIdx.x * blockDim.x)), 0);
     random_shuffle(route_pair_indices, sol.n_routes * sol.n_routes, thread_rng);
     i_t n_changed_routes = 0;
     for (i_t i = 0; i < matrix_size; ++i) {
@@ -419,8 +420,10 @@ bool local_search_t<i_t, f_t, REQUEST>::populate_cross_moves(
     return false;
   }
   populate_cross_list_kernel<i_t, f_t, REQUEST>
-    <<<solution.get_num_orders() - 1, TPB, sh_size, solution.sol_handle->get_stream().get()>>>(
-      solution.view(), move_candidates.view());
+    <<<solution.get_num_depot_excluded_orders(),
+       TPB,
+       sh_size,
+       solution.sol_handle->get_stream().get()>>>(solution.view(), move_candidates.view());
 
   sh_size = sizeof(i_t) * (solution.n_routes + 1) * solution.n_routes;
 
@@ -428,8 +431,8 @@ bool local_search_t<i_t, f_t, REQUEST>::populate_cross_moves(
     return false;
   }
   populate_cross_moves_kernel<i_t, f_t, REQUEST>
-    <<<1, TPB, sh_size, solution.sol_handle->get_stream().get()>>>(solution.view(),
-                                                                   move_candidates.view());
+    <<<1, TPB, sh_size, solution.sol_handle->get_stream().get()>>>(
+      solution.view(), move_candidates.view(), solution.problem_ptr->seed_gen.get_seed());
   solution.sol_handle->sync_stream();
   return true;
 }

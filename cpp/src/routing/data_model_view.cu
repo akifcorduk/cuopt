@@ -66,14 +66,17 @@ data_model_view_t<i_t, f_t>::data_model_view_t(raft::handle_t* handle_ptr,
 {
   cuopt_expects(
     num_locations > 0, error_type_t::ValidationError, "The data model needs at least one location");
+  cuopt_expects(num_locations <= (1 << 15),
+                error_type_t::ValidationError,
+                "Number of locations should be at most 32768");
   cuopt_expects(fleet_size > 0, error_type_t::ValidationError, "The fleet size must be positive");
 
   // If the number of orders is not specified, we can assume that there is one order per
   // location and one for the depot as well
   if (num_orders_ < 0) { num_orders_ = num_locations_; }
-  cuopt_expects(num_orders_ < std::numeric_limits<uint16_t>::max(),
+  cuopt_expects(num_orders_ < (1 << 15),
                 error_type_t::ValidationError,
-                "Number of nodes should be lower than 65535");
+                "Number of orders should be lower than 32768");
 }
 
 template <typename i_t, typename f_t>
