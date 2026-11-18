@@ -1,6 +1,6 @@
 /* clang-format off */
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 /* clang-format on */
@@ -34,7 +34,8 @@ struct adapted_modifier_t {
 
   void add_selected_unserviced_requests(adapted_sol_t<i_t, f_t, REQUEST>& adapted_solution,
                                         const std::vector<i_t>& unserviced_nodes,
-                                        costs final_weight);
+                                        costs final_weight,
+                                        bool include_objective);
 
   void equalize_routes_and_nodes(adapted_sol_t<i_t, f_t, REQUEST>& sol_a,
                                  adapted_sol_t<i_t, f_t, REQUEST>& sol_b,

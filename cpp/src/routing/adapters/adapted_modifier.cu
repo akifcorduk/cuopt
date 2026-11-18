@@ -78,7 +78,8 @@ void adapted_modifier_t<i_t, f_t, REQUEST>::add_unserviced_request(
   resource.ls.set_active_weights(gpu_weight, std::numeric_limits<f_t>::max());
   adapted_solution.sol.populate_ep_with_unserved(resource.ges.EP);
   resource.ges.EP.random_shuffle(adapted_solution.sol.problem_ptr->seed_gen.get_seed());
-  resource.ges.squeeze_all_ep();
+  const bool include_objective = true;
+  resource.ges.squeeze_all_ep(include_objective);
   adapted_solution.populate_host_data();
   adapted_solution.check_device_host_coherence();
   cuopt_func_call(adapted_solution.sol.check_cost_coherence(gpu_weight));
@@ -91,7 +92,8 @@ template <typename i_t, typename f_t, request_t REQUEST>
 void adapted_modifier_t<i_t, f_t, REQUEST>::add_selected_unserviced_requests(
   adapted_sol_t<i_t, f_t, REQUEST>& adapted_solution,
   const std::vector<i_t>& unserviced_nodes,
-  costs final_weight)
+  costs final_weight,
+  bool include_objective)
 {
   if (unserviced_nodes.empty()) { return; }
   raft::common::nvtx::range fun_scope("add_selected_unserviced_request");
@@ -102,7 +104,7 @@ void adapted_modifier_t<i_t, f_t, REQUEST>::add_selected_unserviced_requests(
   resource.ls.set_active_weights(gpu_weight, std::numeric_limits<f_t>::max());
   adapted_solution.sol.populate_ep_with_selected_unserved(resource.ges.EP, unserviced_nodes);
   resource.ges.EP.random_shuffle(adapted_solution.sol.problem_ptr->seed_gen.get_seed());
-  resource.ges.squeeze_all_ep();
+  resource.ges.squeeze_all_ep(include_objective);
   adapted_solution.populate_host_data();
   adapted_solution.check_device_host_coherence();
   cuopt_func_call(adapted_solution.sol.check_cost_coherence(gpu_weight));
@@ -155,10 +157,11 @@ void adapted_modifier_t<i_t, f_t, REQUEST>::equalize_routes_and_nodes(
   // If there are no mutually exclusive requests, take an early exit
   if (missing_in_a.empty() && missing_in_b.empty()) { return; }
 
+  const bool include_objective = false;
   if (!skip_adding_nodes_to_a) {
-    add_selected_unserviced_requests(sol_a, missing_in_a, final_weight);
+    add_selected_unserviced_requests(sol_a, missing_in_a, final_weight, include_objective);
   }
-  add_selected_unserviced_requests(sol_b, missing_in_b, final_weight);
+  add_selected_unserviced_requests(sol_b, missing_in_b, final_weight, include_objective);
 }
 
 /*! \brief { Greedily remove Cluster/Order infeasiblity. It may introduce time/cap infesibility and

@@ -87,7 +87,7 @@ class guided_ejection_search_t {
   void init_ejection_pool();
   bool try_squeeze_feasible(const request_info_t<i_t, REQUEST>* request, bool random_route = true);
   void squeeze(const request_info_t<i_t, REQUEST>* request, bool random_route = true);
-  void squeeze_all_ep();
+  void squeeze_all_ep(bool include_objective = false);
   bool repair_empty_routes();
   template <bool squeeze_mode>
   i_t try_multiple_insert(i_t n_insertions,

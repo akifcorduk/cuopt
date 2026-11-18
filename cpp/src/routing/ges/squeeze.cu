@@ -184,13 +184,12 @@ i_t guided_ejection_search_t<i_t, f_t, REQUEST>::try_multiple_feasible_insertion
 }
 
 template <typename i_t, typename f_t, request_t REQUEST>
-void guided_ejection_search_t<i_t, f_t, REQUEST>::squeeze_all_ep()
+void guided_ejection_search_t<i_t, f_t, REQUEST>::squeeze_all_ep(bool include_objective)
 {
   raft::common::nvtx::range fun_scope("squeeze_all_ep");
 
-  constexpr auto const squeeze_size      = 100;
-  constexpr auto const include_objective = false;
-  auto run_batches                       = true;
+  constexpr auto const squeeze_size = 100;
+  auto run_batches                  = true;
 
   async_fill(inserted_requests, 0, solution_ptr->sol_handle->get_stream());
 
@@ -418,8 +417,8 @@ template bool guided_ejection_search_t<int, float, request_t::VRP>::repair_empty
 
 template bool guided_ejection_search_t<int, float, request_t::PDP>::squeeze_all_and_save();
 template bool guided_ejection_search_t<int, float, request_t::VRP>::squeeze_all_and_save();
-template void guided_ejection_search_t<int, float, request_t::PDP>::squeeze_all_ep();
-template void guided_ejection_search_t<int, float, request_t::VRP>::squeeze_all_ep();
+template void guided_ejection_search_t<int, float, request_t::PDP>::squeeze_all_ep(bool);
+template void guided_ejection_search_t<int, float, request_t::VRP>::squeeze_all_ep(bool);
 
 template bool guided_ejection_search_t<int, float, request_t::PDP>::try_squeeze_feasible(
   const request_info_t<int, request_t::PDP>* request, bool random_route);

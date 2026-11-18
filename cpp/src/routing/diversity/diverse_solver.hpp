@@ -1143,7 +1143,9 @@ struct solve {
         success         = d.recombine(offspring);
         if (success) {
           recombine_stats.add_success();
-          lm.add_selected_unserviced_requests(offspring, d.removed_nodes, weights);
+          const bool include_objective = true;
+          lm.add_selected_unserviced_requests(
+            offspring, d.removed_nodes, weights, include_objective);
         }
         break;
       }
