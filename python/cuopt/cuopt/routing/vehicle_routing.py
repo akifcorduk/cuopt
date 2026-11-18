@@ -482,8 +482,9 @@ class DataModel(_DeferredDataModel):
     def set_objective_function(self, objectives, objective_weights):
         """
         The objective function can be defined as a linear combination of
-        the different objectives. Solver optimizes for vehicle
-        count first and then the total objective. ``COST`` defaults to weight
+        the different objectives. By default the solver works in two stages:
+        the vehicle count is minimized first, then the total objective is
+        optimized for that vehicle count. ``COST`` defaults to weight
         ``1.0``. ``PRIZE``, ``VEHICLE_FIXED_COST``, and
         ``DISTANCE_BREAK_COST`` also default to ``1.0`` when their associated
         model data is configured; explicitly pass ``0.0`` to disable them.

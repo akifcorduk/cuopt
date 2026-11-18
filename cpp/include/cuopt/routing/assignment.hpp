@@ -94,8 +94,9 @@ class assignment_t {
   /**
    * @brief Returns the objective value of the solution as a `double`. The
    * objective value is calculated based on the user provided objective function
-   * and the routes found by the solver. By default the solver optimizes for
-   * vehicle count first and cost second with associated weights INT_MAX and 1.
+   * and the routes found by the solver. By default the solver works in two
+   * stages: the vehicle count is minimized first, then the objective is
+   * optimized for that vehicle count.
    * @return Best objective value
    */
   double get_total_objective() const;

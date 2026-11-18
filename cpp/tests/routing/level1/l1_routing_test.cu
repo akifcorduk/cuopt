@@ -11,12 +11,6 @@ namespace cuopt {
 namespace routing {
 namespace test {
 
-// static std::vector<file_params> test_vec{{"cvrptw/R2_2_8.TXT", 17442.29, 19}};
-// static std::vector<file_params> test_vec{{"solomon/In/c101_25.txt", 17442.29, 19}};
-static std::vector<file_params> test_vec{{"cvrptw/R1_10_1.TXT", 29613.27, 100}};
-TEST_P(float_regression_test_t, DUMMY) { test_cvrptw(); }
-INSTANTIATE_TEST_SUITE_P(simple_test, float_regression_test_t, ::testing::ValuesIn(test_vec));
-
 TEST_P(regression_routing_test_tsp_t, TSP) { test_tsp(); }
 TEST_P(regression_routing_test_acvrp_t, ACVRP) { test_acvrp(); }
 TEST_P(regression_routing_test_25_t, CVRPTW_25) { test_cvrptw(); }

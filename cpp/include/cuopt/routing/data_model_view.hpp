@@ -196,10 +196,8 @@ class data_model_view_t {
                                   bool validate_input = true);
 
   /**
-   * @brief During improvement phase the solver only optimizes for the cost.
-   * This function is used to select the best solution accross all climbers
-   * based on other criterias (see objective_t enum). The value for the VEHICLE
-   * criteria should be set to a high value (2^32).
+   * @brief Set the objective function as a linear combination of the
+   * objectives in the objective_t enum.
    * @param[in] objectives device memory pointer of objective_t
    * @param[in] objective_weights device memory pointer to the weights
    * associated with the objectives.

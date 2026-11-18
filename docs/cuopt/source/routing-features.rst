@@ -89,7 +89,7 @@ If the primary goal is to serve as many customers as possible, it is advisable t
 Objectives
 ------------------------------
 
-The default objective of the solver is to optimize the cost computed using cost matrices.  However, a few other objectives can be set. The final objective is the linear combination of all the objectives specified. The specified objective weights are used as coefficients.  By default, the cuOpt solver optimizes for vehicle count first and final objective next.
+The default objective of the solver is to optimize the cost computed using cost matrices.  However, a few other objectives can be set. The final objective is the linear combination of all the objectives specified. The specified objective weights are used as coefficients.  By default, the cuOpt solver works in two stages: the number of vehicles is minimized first, then the final objective is optimized for that number of vehicles.
 
 Drop First / Last Trips
 ------------------------------
