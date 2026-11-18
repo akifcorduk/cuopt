@@ -108,7 +108,8 @@ class fj_t {
   void reset_cuda_graph();
   void recreate_streams();
   void update_launch_dimensions();
-  i_t solve(solution_t<i_t, f_t>& solution);
+  i_t solve(solution_t<i_t, f_t>& solution,
+            const fj_improvement_callback_t<f_t>& improvement_callback = {});
   std::unique_ptr<fj_cpu_climber_t<i_t, f_t>> create_cpu_climber(
     solution_t<i_t, f_t>& solution,
     const std::vector<f_t>& left_weights,
@@ -116,9 +117,10 @@ class fj_t {
     f_t objective_weight,
     std::atomic<bool>& preemption_flag,
     const probing_cache_t<i_t, f_t>* probing_cache,
-    fj_settings_t settings = fj_settings_t{},
-    bool randomize_params  = false,
-    bool preserve_rng      = false);
+    fj_settings_t settings      = fj_settings_t{},
+    bool randomize_params       = false,
+    bool preserve_rng           = false,
+    bool copy_related_variables = true);
   i_t alloc_max_climbers(i_t desired_climbers);
   void resize_vectors(const raft::handle_t* handle_ptr);
   void device_init(cuda::stream_ref stream);
@@ -130,14 +132,18 @@ class fj_t {
   void copy_weights(const weight_t<i_t, f_t>& weights,
                     const raft::handle_t* handle_ptr,
                     std::optional<i_t> new_size = std::nullopt);
-  i_t host_loop(solution_t<i_t, f_t>& solution, i_t climber_idx = 0);
+  i_t host_loop(solution_t<i_t, f_t>& solution,
+                const fj_improvement_callback_t<f_t>& improvement_callback,
+                i_t climber_idx = 0);
   void run_step_device(i_t climber_idx = 0, bool use_graph = true);
   void run_step_device(cuda::stream_ref stream, i_t climber_idx = 0, bool use_graph = true);
   void refresh_lhs_and_violation(cuda::stream_ref stream, i_t climber_idx = 0);
   // load balancing
   void load_balancing_score_update(cuda::stream_ref stream, i_t climber_idx = 0);
   // executed after a roudning FJ run if any fractionals remain to eliminate them
-  void round_remaining_fractionals(solution_t<i_t, f_t>& solution, i_t climber_idx = 0);
+  void round_remaining_fractionals(solution_t<i_t, f_t>& solution,
+                                   const fj_improvement_callback_t<f_t>& improvement_callback,
+                                   i_t climber_idx = 0);
 
   uint64_t next_seed() { return rng.next_u64(); }
 
@@ -544,7 +550,6 @@ class fj_t {
   // `view_t::settings`.
   rmm::device_scalar<fj_settings_t> device_settings;
 
-  fj_improvement_callback_t<f_t> improvement_callback;
   f_t last_reported_objective_{std::numeric_limits<f_t>::infinity()};
 };
 

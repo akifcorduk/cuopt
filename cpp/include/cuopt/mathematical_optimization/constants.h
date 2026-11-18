@@ -36,7 +36,7 @@
 #define CUOPT_NODE_LIMIT                            "node_limit"
 #define CUOPT_PDLP_SOLVER_MODE                      "pdlp_solver_mode"
 #define CUOPT_METHOD                                "method"
-#define CUOPT_CONCURRENT_NNZ_CUTOFF                 "concurrent_nnz_cutoff"
+#define CUOPT_LARGE_NNZ_THRESHOLD                   "large_nnz_threshold"
 #define CUOPT_PER_CONSTRAINT_RESIDUAL               "per_constraint_residual"
 #define CUOPT_SAVE_BEST_PRIMAL_SO_FAR               "save_best_primal_so_far"
 #define CUOPT_FIRST_PRIMAL_FEASIBLE                 "first_primal_feasible"
@@ -51,12 +51,15 @@
 #define CUOPT_POSTSOLVE_INFO                        "postsolve_info"
 #define CUOPT_BARRIER_PRESOLVE_BOUND_FREE_VARIABLES "barrier_presolve_bound_free_variables"
 #define CUOPT_BARRIER_ITERATIVE_REFINEMENT          "barrier_iterative_refinement"
+#define CUOPT_BARRIER_ADAPTIVE_ITERATIVE_REFINEMENT "barrier_adaptive_iterative_refinement"
 #define CUOPT_BARRIER_ADAPTIVE_REGULARIZATION       "barrier_adaptive_regularization"
 #define CUOPT_BARRIER_PRIMAL_REGULARIZATION         "barrier_primal_regularization"
 #define CUOPT_BARRIER_DUAL_REGULARIZATION           "barrier_dual_regularization"
 #define CUOPT_BARRIER_STEP_SCALE                    "barrier_step_scale"
 #define CUOPT_ELIMINATE_DENSE_COLUMNS               "eliminate_dense_columns"
 #define CUOPT_CUDSS_DETERMINISTIC                   "cudss_deterministic"
+#define CUOPT_CUDSS_ND_NLEVELS                      "cudss_nd_nlevels"
+#define CUOPT_CUDSS_HYBRID_EXECUTE_MODE             "cudss_hybrid_execute_mode"
 #define CUOPT_PRESOLVE                              "presolve"
 #define CUOPT_DUAL_SIMPLEX_INITIAL_PERTURBATION     "dual_simplex_initial_perturbation"
 #define CUOPT_DUAL_SIMPLEX_REMOVE_PERTURBATION      "dual_simplex_remove_perturbation"
@@ -70,7 +73,6 @@
 #define CUOPT_MIP_INTEGRALITY_TOLERANCE             "mip_integrality_tolerance"
 #define CUOPT_MIP_ABSOLUTE_GAP                      "mip_absolute_gap"
 #define CUOPT_MIP_RELATIVE_GAP                      "mip_relative_gap"
-#define CUOPT_MIP_HEURISTICS_ONLY                   "mip_heuristics_only"
 #define CUOPT_MIP_SCALING                           "mip_scaling"
 #define CUOPT_MIP_PRESOLVE                          "mip_presolve"
 #define CUOPT_MIP_SYMMETRY                          "mip_symmetry"
@@ -114,12 +116,9 @@
 #define CUOPT_MIP_HYPER_HEURISTIC_PRESOLVE_MAX_ROUNDS "mip_hyper_heuristic_presolve_max_rounds"
 #define CUOPT_MIP_HYPER_HEURISTIC_PAPILO_PROBING_MAX_BADGESIZE \
   "mip_hyper_heuristic_papilo_probing_max_badgesize"
-#define CUOPT_MIP_HYPER_HEURISTIC_ROOT_LP_TIME_RATIO  "mip_hyper_heuristic_root_lp_time_ratio"
-#define CUOPT_MIP_HYPER_HEURISTIC_ROOT_LP_MAX_TIME    "mip_hyper_heuristic_root_lp_max_time"
-#define CUOPT_MIP_HYPER_HEURISTIC_RINS_TIME_LIMIT     "mip_hyper_heuristic_rins_time_limit"
-#define CUOPT_MIP_HYPER_HEURISTIC_RINS_MAX_TIME_LIMIT "mip_hyper_heuristic_rins_max_time_limit"
-#define CUOPT_MIP_HYPER_HEURISTIC_RINS_FIX_RATE       "mip_hyper_heuristic_rins_fix_rate"
-#define CUOPT_MIP_HYPER_HEURISTIC_STAGNATION_TRIGGER  "mip_hyper_heuristic_stagnation_trigger"
+#define CUOPT_MIP_HYPER_HEURISTIC_ROOT_LP_TIME_RATIO "mip_hyper_heuristic_root_lp_time_ratio"
+#define CUOPT_MIP_HYPER_HEURISTIC_ROOT_LP_MAX_TIME   "mip_hyper_heuristic_root_lp_max_time"
+#define CUOPT_MIP_HYPER_HEURISTIC_STAGNATION_TRIGGER "mip_hyper_heuristic_stagnation_trigger"
 #define CUOPT_MIP_HYPER_HEURISTIC_MAX_ITERS_WITHOUT_IMPROVEMENT \
   "mip_hyper_heuristic_max_iterations_without_improvement"
 #define CUOPT_MIP_HYPER_HEURISTIC_INITIAL_INFEASIBILITY_WEIGHT \
@@ -159,6 +158,15 @@
 #define CUOPT_MIP_HYPER_SUBMIP_ROUND_CLOSE_RATIO      "mip_hyper_submip_round_close_ratio"
 #define CUOPT_MIP_HYPER_SUBMIP_ENABLE_CPUFJ           "mip_hyper_submip_enable_cpufj"
 
+/* @brief Branch-and-bound hyper-parameters */
+#define CUOPT_MIP_HYPER_BNB_BFS_WORKERS_RATIO    "mip_hyper_bnb_bfs_workers_ratio"
+#define CUOPT_MIP_HYPER_BNB_DIVING_WORKERS_RATIO "mip_hyper_bnb_diving_workers_ratio"
+#define CUOPT_MIP_HYPER_BNB_SUBMIP_WORKERS_RATIO "mip_hyper_bnb_submip_workers_ratio"
+#define CUOPT_MIP_HYPER_BNB_STEAL_CHANCE         "mip_hyper_bnb_steal_chance"
+#define CUOPT_MIP_HYPER_BNB_NODES_PER_STEAL      "mip_hyper_bnb_nodes_per_steal"
+#define CUOPT_MIP_HYPER_BNB_MAX_STEAL_ATTEMPTS   "mip_hyper_bnb_max_steal_attempts"
+#define CUOPT_MIP_HYPER_BNB_ROOT_HEURISTICS      "mip_hyper_bnb_root_heuristics"
+
 /* @brief Block bounded-variable-elimination step of cuOpt's internal MIP presolve */
 #define CUOPT_MIP_HYPER_BLOCK_BVE "mip_hyper_block_bve"
 
@@ -175,8 +183,20 @@
 /* @brief PDLP scaling hyper-parameter: Curtis-Reid prescaling toggle */
 #define CUOPT_PDLP_HYPER_ENABLE_CURTIS_REID_SCALING "pdlp_hyper_enable_curtis_reid_scaling"
 
+/* @brief PDLP reduced-matrix mode */
+#define CUOPT_PDLP_HYPER_REDUCED_MATRIX "pdlp_hyper_reduced_matrix"
+
+/* @brief PDLP hyper-parameter: -1 solver-mode preset, 0 off, 1 on */
+#define CUOPT_PDLP_HYPER_PROJECT_INITIAL_PRIMAL "pdlp_hyper_project_initial_primal"
+
 /* @brief Barrier initial point safeguard */
 #define CUOPT_BARRIER_INITIAL_POINT_SAFEGUARD "barrier_initial_point_safeguard"
+
+/* @brief Deprecated: accepted and ignored */
+#define CUOPT_MIP_HEURISTICS_ONLY                     "mip_heuristics_only"
+#define CUOPT_MIP_HYPER_HEURISTIC_RINS_TIME_LIMIT     "mip_hyper_heuristic_rins_time_limit"
+#define CUOPT_MIP_HYPER_HEURISTIC_RINS_MAX_TIME_LIMIT "mip_hyper_heuristic_rins_max_time_limit"
+#define CUOPT_MIP_HYPER_HEURISTIC_RINS_FIX_RATE       "mip_hyper_heuristic_rins_fix_rate"
 
 /* @brief MIP determinism mode constants */
 #define CUOPT_MODE_OPPORTUNISTIC 0
@@ -243,8 +263,14 @@
 #define CUOPT_PDLP_DOUBLE_PRECISION  1
 #define CUOPT_PDLP_MIXED_PRECISION   2
 
+/* @brief PDLP reduced-matrix mode constants */
+#define CUOPT_PDLP_REDUCED_MATRIX_DEFAULT          -1
+#define CUOPT_PDLP_REDUCED_MATRIX_OFF              0
+#define CUOPT_PDLP_REDUCED_MATRIX_COLUMN_REDUCTION 1
+
 /* @brief File format constants for problem I/O */
 #define CUOPT_FILE_FORMAT_MPS 0
+#define CUOPT_FILE_FORMAT_LP  1
 
 /* @brief Status codes constants -- shared with cuopt::client, defined in status_codes.h */
 #include "cuopt/status_codes.h"

@@ -1,6 +1,6 @@
 ---
 name: cuopt-developer
-version: "26.10.00"
+version: "26.12.00"
 description: Modify, build, test, debug, and contribute to NVIDIA cuOpt (C++/CUDA, Python, server, CI). Use for solver internals, PRs, DCO, and code conventions.
 license: Apache-2.0
 metadata:
@@ -238,6 +238,10 @@ its ABI-dependent representation includes slow x87 extended precision on x86-64,
 AArch64, and binary64 on other ARM64 targets.
 
 For C++ naming (`snake_case`, `d_`/`h_` prefixes, `_t` suffix), file extensions (`.hpp`/`.cpp`/`.cu`/`.cuh` and which compiler each uses), include order, Python style, error handling (`CUOPT_EXPECTS`, `RAFT_CUDA_TRY`), memory management (RMM patterns, no raw `new`/`delete`), CCCL bit/math helpers in device code, test-impact rules, volatile-comment rules (hardware names and self-referential issue/PR numbers in comments or skip messages go stale; issue links to a separate tracking issue are fine), **no large local lambdas** (extract named helpers instead), and **coarse work-estimate / time-limit gating** (phase/outer-loop only; no fine inner-loop or double checks), see [references/conventions.md](references/conventions.md).
+
+## Pre-PR self-review
+
+Before every `git push`, review `git diff origin/<target-branch>...<branch-you-push>` (the target is usually `main`) against [references/review_rules.md](references/review_rules.md), starting with its Whole-PR review section. The rules (comment content, terminology, types and ownership, reuse, public API surface, test quality, docs wording, PR hygiene) are the ones reviewers repeat most; CodeRabbit applies the same file, so a miss here comes back as a review comment.
 
 ## OpenMP task/runtime compatibility
 

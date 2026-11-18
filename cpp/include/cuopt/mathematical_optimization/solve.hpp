@@ -57,12 +57,14 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
  * @note Both primal and dual solutions are zero-initialized. For custom initialization, see
  * op_problem.initial_primal/dual_solution
  *
- * @tparam i_t Data type of indexes
+ * @tparam i_t Data type of the solver's indexes
+ * @tparam index_t Data type of the model's indexes; may be wider than i_t, in which case only
+ * multi-GPU PDLP is supported
  * @tparam f_t Data type of the variables and their weights in the equations
  *
  * @param[in] handle_ptr  A raft::handle_t object with its corresponding CUDA stream.
- * @param[in] mps_data_model  An optimization_problem_t<i_t, f_t> object with a
- * representation of a linear program
+ * @param[in] mps_data_model  An mps_data_model_t<index_t, f_t> with a representation of a
+ * linear program
  * @param[in] settings  A pdlp_solver_settings_t<i_t, f_t> object with the settings for the PDLP
  * solver.
  * @param[in] problem_checking  If true, the problem is checked for consistency.
@@ -70,10 +72,10 @@ optimization_problem_solution_t<i_t, f_t> solve_lp(
  * pdlp_solver_mode are used (instead of the ones comming from a potential hyper-params file).
  * @return optimization_problem_solution_t<i_t, f_t> owning container for the solver solution
  */
-template <typename i_t, typename f_t>
+template <typename i_t, typename index_t, typename f_t>
 optimization_problem_solution_t<i_t, f_t> solve_lp(
   raft::handle_t const* handle_ptr,
-  const cuopt::mathematical_optimization::io::mps_data_model_t<i_t, f_t>& mps_data_model,
+  const cuopt::mathematical_optimization::io::mps_data_model_t<index_t, f_t>& mps_data_model,
   pdlp_solver_settings_t<i_t, f_t> const& settings = pdlp_solver_settings_t<i_t, f_t>{},
   bool problem_checking                            = true,
   bool use_pdlp_solver_mode                        = true);
@@ -158,6 +160,10 @@ optimization_problem_t<i_t, f_t> mps_data_model_to_optimization_problem(
 template <typename i_t, typename f_t>
 cuopt::mathematical_optimization::io::mps_data_model_t<i_t, f_t> op_problem_to_mps_data_model(
   const optimization_problem_t<i_t, f_t>& op_problem);
+
+// True when method=PDLP and num_gpus is -1 or greater than 1, i.e. multi-GPU PDLP is requested.
+template <typename i_t, typename f_t>
+bool is_multigpu_pdlp_requested(pdlp_solver_settings_t<i_t, f_t> const& settings);
 
 // ============================================================================
 // CPU problem overloads (convert to GPU, solve, convert solution back)

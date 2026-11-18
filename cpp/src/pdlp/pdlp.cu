@@ -41,6 +41,8 @@
 #include <cub/device/device_reduce.cuh>
 #include <cub/device/device_transform.cuh>
 
+#include <cstdint>
+
 #include <thrust/count.h>
 #include <thrust/extrema.h>
 #include <thrust/iterator/counting_iterator.h>
@@ -49,6 +51,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <optional>
 #include <tuple>
@@ -199,7 +202,9 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
                  climber_strategies_,
                  settings_.hyper_params,
                  settings_.new_bounds,
-                 settings_.pdlp_precision == pdlp_precision_t::MixedPrecision},
+                 settings_.large_nnz_threshold,
+                 settings_.pdlp_precision == pdlp_precision_t::MixedPrecision,
+                 is_distributed_sub_pdlp},
     initial_scaling_strategy_{handle_ptr_,
                               op_problem_scaled_,
                               settings_.hyper_params.default_l_inf_ruiz_iterations,
@@ -388,6 +393,17 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
   }
 }
 
+template <typename i_t, typename f_t>
+static pdlp_solver_settings_t<i_t, f_t> without_distributed_reduction(
+  pdlp_solver_settings_t<i_t, f_t> settings)
+{
+  // Resolve this before constructing the shape-zero master; shards must inherit OFF as well.
+  reduced_matrix_enabled(
+    settings.hyper_params, 0, settings.large_nnz_threshold, false, false, false, false, true);
+  settings.hyper_params.reduced_matrix = reduced_matrix_mode_t::OFF;
+  return settings;
+}
+
 // ============================================================================
 // Multi-GPU ctor.
 // needs placeholder_problem to be a shape-0 problem
@@ -395,12 +411,15 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(mip::problem_t<i_t, f_t>& op_problem,
 // builds internal attributes from the placeholder_problem
 // builds the engine from the mps_data_model
 template <typename i_t, typename f_t>
+template <typename index_t>
 pdlp_solver_t<i_t, f_t>::pdlp_solver_t(
   mip::problem_t<i_t, f_t>& placeholder_problem,
-  cuopt::mathematical_optimization::io::mps_data_model_t<i_t, f_t> const& mps,
+  cuopt::mathematical_optimization::io::mps_data_model_t<index_t, f_t> const& mps,
   pdlp_solver_settings_t<i_t, f_t> const& settings)
   // Makes all inner feilds of master 0 size
-  : pdlp_solver_t(placeholder_problem, settings, /*is_legacy_batch_mode=*/false)
+  : pdlp_solver_t(placeholder_problem,
+                  without_distributed_reduction(settings),
+                  /*is_legacy_batch_mode=*/false)
 {
   cuopt_expects(placeholder_problem.n_variables == 0 && placeholder_problem.n_constraints == 0 &&
                   placeholder_problem.nnz == 0,
@@ -419,9 +438,9 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(
     return;
   }
   // ----- 1. Read problem shape and bulk data directly from mps (host) -----
-  const i_t n_vars = static_cast<i_t>(mps.get_objective_coefficients().size());
-  const i_t n_cstr = static_cast<i_t>(mps.get_constraint_lower_bounds().size());
-  const i_t nnz    = static_cast<i_t>(mps.get_constraint_matrix_values().size());
+  const i_t n_vars  = static_cast<i_t>(mps.get_objective_coefficients().size());
+  const i_t n_cstr  = static_cast<i_t>(mps.get_constraint_lower_bounds().size());
+  const index_t nnz = static_cast<index_t>(mps.get_constraint_matrix_values().size());
   cuopt_expects(n_vars > 0,
                 error_type_t::ValidationError,
                 "Multi-GPU PDLP from mps requires a non-empty objective");
@@ -432,7 +451,7 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(
                 error_type_t::ValidationError,
                 "mps constraint_matrix_offsets size must equal n_constraints + 1");
   cuopt_expects(
-    static_cast<i_t>(mps.get_constraint_matrix_indices().size()) == nnz,
+    static_cast<index_t>(mps.get_constraint_matrix_indices().size()) == nnz,
     error_type_t::ValidationError,
     "mps constraint_matrix_indices size must equal nnz (constraint_matrix_values size)");
   cuopt_expects(static_cast<i_t>(mps.get_constraint_upper_bounds().size()) == n_cstr,
@@ -446,28 +465,28 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(
                 "mps variable_upper_bounds size must equal n_variables");
 
   // A (CSR) — mutable copies for the engine + partitioner consumers below.
-  std::vector<i_t> h_A_row_offsets = mps.get_constraint_matrix_offsets();
-  std::vector<i_t> h_A_col_indices = mps.get_constraint_matrix_indices();
-  std::vector<f_t> h_A_values      = mps.get_constraint_matrix_values();
+  std::vector<index_t> h_A_row_offsets = mps.get_constraint_matrix_offsets();
+  std::vector<index_t> h_A_col_indices = mps.get_constraint_matrix_indices();
+  std::vector<f_t> h_A_values          = mps.get_constraint_matrix_values();
 
   // ----- 2. Transpose A -> A^T on the host (one-shot CSR transpose) -----
   // CSC(A) and CSR(A^T) share the same memory layout, so the CSC produced
   // by csr_matrix_t::to_compressed_col IS the CSR of A^T.
   // O(nnz + n_vars) counting sort, same as problem_t::compute_transpose.
   namespace ds = cuopt::mathematical_optimization;
-  ds::csr_matrix_t<i_t, f_t> A_csr(n_cstr, n_vars, nnz);
+  ds::csr_matrix_t<index_t, f_t> A_csr(n_cstr, n_vars, nnz);
   A_csr.row_start = h_A_row_offsets;
   A_csr.j         = h_A_col_indices;
   A_csr.x         = h_A_values;
-  ds::csc_matrix_t<i_t, f_t> AT_as_csc(n_vars, n_cstr, nnz);
+  ds::csc_matrix_t<index_t, f_t> AT_as_csc(n_vars, n_cstr, nnz);
   A_csr.to_compressed_col(AT_as_csc);
-  std::vector<i_t> h_A_t_row_offsets = std::move(AT_as_csc.col_start);
-  std::vector<i_t> h_A_t_col_indices = std::move(AT_as_csc.i);
-  std::vector<f_t> h_A_t_values      = std::move(AT_as_csc.x);
+  std::vector<index_t> h_A_t_row_offsets = std::move(AT_as_csc.col_start);
+  std::vector<index_t> h_A_t_col_indices = std::move(AT_as_csc.i);
+  std::vector<f_t> h_A_t_values          = std::move(AT_as_csc.x);
 
   // ----- 3. Partition -----
-  std::vector<i_t> parts;
-  partitioner_input_t<i_t, f_t> partition_input;
+  std::vector<int> parts;
+  partitioner_input_t<index_t, f_t> partition_input;
   partition_input.nb_cstr  = n_cstr;
   partition_input.nb_vars  = n_vars;
   partition_input.nb_parts = distributed_pdlp_num_gpus;
@@ -511,26 +530,34 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(
     (kind == partitioner_kind_t::RoundRobin) ? "round_robin"
     : (kind == partitioner_kind_t::KaMinPar) ? "kaminpar"
                                              : "unknown");
-  auto partitioner = make_partitioner<i_t, f_t>(kind);
-  parts            = partitioner->partition(partition_input);
+  auto partitioner = make_partitioner<index_t, f_t>(kind);
+  CUOPT_LOG_INFO("Partitioning dependency graph of the Linear Problem");
+  const auto partition_start = std::chrono::steady_clock::now();
+  parts                      = partitioner->partition(partition_input);
+  CUOPT_LOG_INFO(
+    "Partitioned in %.3fs",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - partition_start).count());
 
   // ----- 4. Build per-rank data -----
+  CUOPT_LOG_INFO("Loading sub-problems on %d GPUs", distributed_pdlp_num_gpus);
+  const auto shards_start = std::chrono::steady_clock::now();
   std::vector<rank_data_t<i_t, f_t>> sub_pdlp_rank_data =
-    create_rank_data_from_parts<i_t, f_t>(parts,
-                                          h_A_row_offsets,
-                                          h_A_col_indices,
-                                          h_A_values,
-                                          h_A_t_row_offsets,
-                                          h_A_t_col_indices,
-                                          h_A_t_values,
-                                          settings.num_gpus,
-                                          n_cstr,
-                                          n_vars,
-                                          nnz);
+    create_rank_data_from_parts<i_t, index_t, f_t>(parts,
+                                                   h_A_row_offsets,
+                                                   h_A_col_indices,
+                                                   h_A_values,
+                                                   h_A_t_row_offsets,
+                                                   h_A_t_col_indices,
+                                                   h_A_t_values,
+                                                   settings.num_gpus,
+                                                   n_cstr,
+                                                   n_vars,
+                                                   nnz);
 
   // ----- 5. Per-shard settings -----
   pdlp_solver_settings_t<i_t, f_t> sub_pdlp_settings = settings;
   sub_pdlp_settings.num_gpus                         = 1;
+  sub_pdlp_settings.hyper_params.reduced_matrix      = reduced_matrix_mode_t::OFF;
   // Disable automatic matrix scaling in the initial_scaling ctor: the
   // multi-GPU pipeline computes Curtis-Reid, Ruiz, and Pock-Chambolle via
   // distributed_scaling using the global problem.
@@ -540,6 +567,9 @@ pdlp_solver_t<i_t, f_t>::pdlp_solver_t(
 
   // ----- 6. Construct the engine: NCCL comms + per-shard pdlp_solver_t -----
   multi_gpu_engine.emplace(std::move(sub_pdlp_rank_data), mps, sub_pdlp_settings);
+  CUOPT_LOG_INFO(
+    "Sub-problems loaded in %.3fs",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - shards_start).count());
 
   // Non-owning back-pointer so engine helpers (e.g. allreduce_sum_inplace_to_master)
   // can apply a single pdlp_solver_t-shaped accessor lambda to master too.
@@ -1200,6 +1230,37 @@ std::optional<optimization_problem_solution_t<i_t, f_t>> pdlp_solver_t<i_t, f_t>
   // enough) We still need to check iteration and time limit prior without breaking the logic below
   // of first checking termination before the limit
   if (internal_solver_iterations_ <= 1) {
+    // Accept a feasible supplied primal start before steps can worsen it, but do not claim
+    // optimality yet. The primal residual does not check variable bounds, and not every start
+    // (e.g. PDLP warm start data) is clamped to them, so check the bounds explicitly. new_bounds
+    // overrides are not reflected in problem_ptr->variable_bounds, so skip when they are present.
+    const auto status = current_termination_strategy_.get_termination_status(0);
+    if (!batch_mode_ && settings_.new_bounds.empty() && settings_.first_primal_feasible &&
+        !initial_primal_.is_empty() &&
+        (status == pdlp_termination_status_t::PrimalFeasible ||
+         status == pdlp_termination_status_t::Optimal)) {
+      using f_t2   = typename type_2<f_t>::type;
+      auto& primal = (settings_.hyper_params.use_adaptive_step_size_strategy)
+                       ? pdhg_solver_.get_primal_solution()
+                       : pdhg_solver_.get_potential_next_primal_solution();
+      auto primal_and_bounds =
+        thrust::make_zip_iterator(primal.data(), problem_ptr->variable_bounds.data());
+      if (thrust::all_of(
+            handle_ptr_->get_thrust_policy(),
+            primal_and_bounds,
+            primal_and_bounds + primal_size_h_,
+            within_bounds<f_t, f_t2>(settings_.tolerances.absolute_primal_tolerance))) {
+        return current_termination_strategy_.fill_return_problem_solution(
+          internal_solver_iterations_,
+          pdhg_solver_,
+          primal,
+          (settings_.hyper_params.use_adaptive_step_size_strategy)
+            ? pdhg_solver_.get_dual_solution()
+            : pdhg_solver_.get_potential_next_dual_solution(),
+          get_filled_warmed_start_data(),
+          {pdlp_termination_status_t::PrimalFeasible});
+      }
+    }
     print_termination_criteria(timer);
     return check_limits(timer);
   }
@@ -2265,9 +2326,8 @@ void pdlp_solver_t<i_t, f_t>::compute_fixed_error(std::vector<int>& has_restarte
   // Computing the deltas (delta = reflected - potential_next)
   // TODO batch mdoe: this only works if everyone restarts
   if (is_distributed_master()) {
-    multi_gpu_engine->for_each_shard([](auto& shard) {
-      compute_primal_dual_deltas(shard.sub_pdlp->pdhg_solver_, shard.stream.view());
-    });
+    multi_gpu_engine->for_each_shard(
+      [](auto& shard) { compute_primal_dual_deltas(shard.sub_pdlp->pdhg_solver_, shard.stream); });
   } else {
     compute_primal_dual_deltas(pdhg_solver_, stream_view_);
   }
@@ -2641,6 +2701,7 @@ optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::run_solver(co
   if (!is_distributed_master()) {
     // Update FP32 matrix copies for mixed precision SpMV after scaling
     pdhg_solver_.get_cusparse_view().update_mixed_precision_matrices();
+    pdhg_solver_.redirect_reduced_csr_structure(*problem_ptr);
 
     // Redirect cuSPARSE descriptors to use the original problem's structural data (offsets,
     // indices), then free the duplicated structural vectors from the scaled copy to save device
@@ -3011,6 +3072,11 @@ optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::run_solver(co
 
       if (solution.has_value()) { return std::move(solution.value()); }
 
+      const auto& convergence      = current_termination_strategy_.get_convergence_information();
+      const f_t reduced_matrix_kkt = std::max({convergence.get_relative_l2_primal_residual_value(),
+                                               convergence.get_relative_l2_dual_residual_value(),
+                                               convergence.get_relative_gap_value()});
+
       if (settings_.hyper_params.rescale_for_restart) {
         if (!settings_.hyper_params.never_restart_to_average) {
           initial_scaling_strategy_.scale_solutions(unscaled_primal_avg_solution_,
@@ -3073,6 +3139,13 @@ optimization_problem_solution_t<i_t, f_t> pdlp_solver_t<i_t, f_t>::run_solver(co
             pdhg_solver_.get_dual_slack());
         }
       }
+
+      const bool checkpoint_restarted = std::any_of(
+        has_restarted.begin(), has_restarted.end(), [](int restarted) { return restarted == 1; });
+      pdhg_solver_.update_reduced_matrix(
+        reduced_matrix_kkt,
+        checkpoint_restarted,
+        restart_strategy_.last_restart_duality_gap_.primal_solution_);
 
       // In batch mode, after having checked for termination and restart
       // We transpose back to row for the PDHG iterations
@@ -3595,6 +3668,12 @@ bool pdlp_solver_t<i_t, f_t>::is_distributed_master() const
 #if MIP_INSTANTIATE_FLOAT || PDLP_INSTANTIATE_FLOAT
 template class pdlp_solver_t<int, float>;
 
+// The distributed ctor is a member template, so the class instantiation above does not cover it.
+template pdlp_solver_t<int, float>::pdlp_solver_t(
+  mip::problem_t<int, float>&,
+  cuopt::mathematical_optimization::io::mps_data_model_t<int, float> const&,
+  pdlp_solver_settings_t<int, float> const&);
+
 template __global__ void compute_weights_initial_primal_weight_from_squared_norms<float>(
   const float* b_vec_norm,
   const float* c_vec_norm,
@@ -3606,6 +3685,17 @@ template __global__ void compute_weights_initial_primal_weight_from_squared_norm
 
 #if MIP_INSTANTIATE_DOUBLE
 template class pdlp_solver_t<int, double>;
+
+// The distributed ctor is a member template, so the class instantiation above does not cover it.
+// One per mps index type; int64 is double-only.
+template pdlp_solver_t<int, double>::pdlp_solver_t(
+  mip::problem_t<int, double>&,
+  cuopt::mathematical_optimization::io::mps_data_model_t<int, double> const&,
+  pdlp_solver_settings_t<int, double> const&);
+template pdlp_solver_t<int, double>::pdlp_solver_t(
+  mip::problem_t<int, double>&,
+  cuopt::mathematical_optimization::io::mps_data_model_t<int64_t, double> const&,
+  pdlp_solver_settings_t<int, double> const&);
 
 template __global__ void compute_weights_initial_primal_weight_from_squared_norms<double>(
   const double* b_vec_norm,

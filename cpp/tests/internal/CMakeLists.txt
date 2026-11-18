@@ -18,6 +18,7 @@ ConfigureTest(NUMOPT_INTERNAL_TEST
     ${CUOPT_TEST_DIR}/linear_programming/unit_tests/pdlp_memory_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/unit_tests/pdlp_fused_adaptive_step_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/unit_tests/optimization_problem_test.cu
+    ${CUOPT_TEST_DIR}/linear_programming/unit_tests/reduced_matrix_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/unit_tests/presolve_test.cu
     ${CUOPT_TEST_DIR}/linear_programming/parser_test.cpp
     # mip

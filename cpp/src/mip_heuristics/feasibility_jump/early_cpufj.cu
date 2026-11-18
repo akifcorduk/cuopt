@@ -7,6 +7,8 @@
 
 #include "early_cpufj.cuh"
 
+#include "cpu/search/api.hpp"
+
 #include <mip_heuristics/mip_constants.hpp>
 #include <utilities/splitmix64.hpp>
 
@@ -37,7 +39,9 @@ early_cpufj_t<i_t, f_t>::~early_cpufj_t()
 }
 
 template <typename i_t, typename f_t>
-void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
+void early_cpufj_t<i_t, f_t>::start(int n_lanes,
+                                    bool low_latency,
+                                    const std::vector<std::vector<f_t>>& seeds)
 {
   const bool threaded = !omp_in_parallel();
   // 1: presolve, 1: early GPU FJ, 1: early CPU FJ
@@ -50,12 +54,20 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
   this->start_time_ = std::chrono::steady_clock::now();
 
   // Tasks are not preempted, so a lane posted beyond the team size would sit in the queue for the
-  // whole of presolve without running an iteration.
+  // whole of presolve without running an iteration. The lane count is also capped independently of
+  // the team size (see CUOPT_MIP_EARLY_CPUFJ_MAX_LANES).
   n_lanes =
     threaded
       ? 1
       : std::clamp(
-          n_lanes, 1, std::max(1, omp_get_num_threads() - CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS));
+          n_lanes,
+          1,
+          std::min(CUOPT_MIP_EARLY_CPUFJ_MAX_LANES,
+                   std::max(1, omp_get_num_threads() - CUOPT_MIP_EARLY_CPUFJ_RESERVED_THREADS)));
+  for (const auto& seed : seeds) {
+    cuopt_assert(seed.size() == (size_t)this->problem_ptr_->get_n_variables(),
+                 "seed size mismatch");
+  }
   cuopt::splitmix64_t seed_rng(seed_);
   const int64_t base_seed = seed_rng.next_i64();
   climbers_.resize(n_lanes);
@@ -77,8 +89,14 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
     } else {
       climbers_[k] = init_fj_cpu_clone(*climbers_[0], preemption_flag_, settings);
     }
-    climbers_[k]->low_latency = low_latency;
-    apply_lane_diversification<i_t, f_t>(*climbers_[k], k, base_seed);
+    climbers_[k]->low_latency   = low_latency;
+    const bool incumbent_seeded = !seeds.empty() && (n_lanes == 1 || k % 2 == 1);
+    if (incumbent_seeded) {
+      climbers_[k]->h_assignment = seeds[(k / 2) % seeds.size()];
+      recompute_lhs(*climbers_[k]);
+      climbers_[k]->h_best_assignment = climbers_[k]->h_assignment;
+    }
+    apply_lane_diversification<i_t, f_t>(*climbers_[k], k, base_seed, !incumbent_seeded);
     climbers_[k]->log_prefix           = "[Early CPUFJ " + std::to_string(k) + "] ";
     climbers_[k]->improvement_callback = report_incumbent;
   }
@@ -106,17 +124,22 @@ void early_cpufj_t<i_t, f_t>::start(int n_lanes, bool low_latency)
 }
 
 template <typename i_t, typename f_t>
+void early_cpufj_t<i_t, f_t>::request_stop()
+{
+  preemption_flag_.store(true);
+  for (auto& climber : climbers_) {
+    climber->halted = true;
+  }
+}
+
+template <typename i_t, typename f_t>
 void early_cpufj_t<i_t, f_t>::stop()
 {
   if (climbers_.empty()) { return; }
 
-  preemption_flag_.store(true);
-
   // Every lane is told to stop before any wait, otherwise the first wait blocks on a lane that has
   // not been asked to exit yet.
-  for (auto& climber : climbers_) {
-    climber->halted = true;
-  }
+  request_stop();
   if (worker_.joinable()) {
     worker_.join();
   } else {
