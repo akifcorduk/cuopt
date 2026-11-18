@@ -139,17 +139,17 @@ __device__ void try_permutations(
   // Abtritrally choose to propagate forward data (could have been on backward starting from the
   // end)
 
-  if (!forward_fragment_update<i_t, f_t, REQUEST>(s_route.get_node(window_start_idx - 1),
-                                                  s_route,
-                                                  nodes.data(),
-                                                  window_size,
-                                                  move_candidates.weights,
-                                                  excess_limit)) {
-    return;
-  }
+  const bool forward_valid =
+    forward_fragment_update<i_t, f_t, REQUEST>(s_route.get_node(window_start_idx - 1),
+                                               s_route,
+                                               nodes.data(),
+                                               window_size,
+                                               move_candidates.weights,
+                                               excess_limit);
+  bool in_place_valid = forward_valid;
 
   // Just for time filtration
-  if (dimensions_info.has_dimension(dim_t::TIME)) {
+  if (in_place_valid && dimensions_info.has_dimension(dim_t::TIME)) {
     auto next_node = s_route.get_node(window_start_idx + window_size);
 
     loop_over_constrained_dimensions(dimensions_info, [&] __device__(auto I) {
@@ -160,42 +160,42 @@ __device__ void try_permutations(
             nodes[window_size - 1].request.info, next_node.request.info, s_route.vehicle_info()));
     });
 
-    bool valid = true;
     loop_over_constrained_dimensions(dimensions_info, [&] __device__(auto I) {
-      valid &= get_dimension_of<I>(next_node).forward_feasible(
+      in_place_valid &= get_dimension_of<I>(next_node).forward_feasible(
         s_route.vehicle_info(), move_candidates.weights[I], excess_limit);
     });
-    if (!valid) { return; }
   }
 
-  auto next_node = s_route.get_node(window_start_idx + window_size);
+  if (in_place_valid) {
+    auto next_node = s_route.get_node(window_start_idx + window_size);
 
-  // Do a cost combine on right part
-  // Its backward info is valid and forward has just been updated
-  // Store the candidate if the different is better
+    // Do a cost combine on right part
+    // Its backward info is valid and forward has just been updated
+    // Store the candidate if the different is better
 
-  const double delta = node_t<i_t, f_t, REQUEST>::cost_combine(nodes[window_size - 1],
-                                                               next_node,
-                                                               s_route.vehicle_info(),
-                                                               move_candidates.include_objective,
-                                                               move_candidates.weights,
-                                                               s_route.get_objective_cost(),
-                                                               s_route.get_infeasibility_cost());
-  if (delta < -EPSILON) {
-    const double selection_delta =
-      node_t<i_t, f_t, REQUEST>::cost_combine(nodes[window_size - 1],
-                                              next_node,
-                                              s_route.vehicle_info(),
-                                              move_candidates.include_objective,
-                                              move_candidates.selection_weights,
-                                              s_route.get_objective_cost(),
-                                              s_route.get_infeasibility_cost());
-    if (delta < found_sliding_solution.delta) {
-      found_sliding_solution.delta                 = selection_delta;
-      found_sliding_solution.window_size           = window_size;
-      found_sliding_solution.intra_insertion_index = window_start_idx - 1;
-      found_sliding_solution.permutation_index     = permutation_index;
-      found_sliding_solution.window_start          = window_start_idx;
+    const double delta = node_t<i_t, f_t, REQUEST>::cost_combine(nodes[window_size - 1],
+                                                                 next_node,
+                                                                 s_route.vehicle_info(),
+                                                                 move_candidates.include_objective,
+                                                                 move_candidates.weights,
+                                                                 s_route.get_objective_cost(),
+                                                                 s_route.get_infeasibility_cost());
+    if (delta < -EPSILON) {
+      const double selection_delta =
+        node_t<i_t, f_t, REQUEST>::cost_combine(nodes[window_size - 1],
+                                                next_node,
+                                                s_route.vehicle_info(),
+                                                move_candidates.include_objective,
+                                                move_candidates.selection_weights,
+                                                s_route.get_objective_cost(),
+                                                s_route.get_infeasibility_cost());
+      if (delta < found_sliding_solution.delta) {
+        found_sliding_solution.delta                 = selection_delta;
+        found_sliding_solution.window_size           = window_size;
+        found_sliding_solution.intra_insertion_index = window_start_idx - 1;
+        found_sliding_solution.permutation_index     = permutation_index;
+        found_sliding_solution.window_start          = window_start_idx;
+      }
     }
   }
 
@@ -224,6 +224,7 @@ __device__ void try_permutations(
     }
 
     // Just for time filtration
+    bool valid = true;
     if (dimensions_info.has_dimension(dim_t::TIME)) {
       auto previous_node = s_route.get_node(i - 1);
 
@@ -231,40 +232,41 @@ __device__ void try_permutations(
         previous_node.time_dim,
         get_transit_time(
           previous_node.request.info, nodes[0].request.info, s_route.vehicle_info(), true));
-      if (!previous_node.time_dim.backward_feasible(
-            s_route.vehicle_info(), move_candidates.weights[dim_t::TIME], excess_limit)) {
-        break;
-      }
+      valid = previous_node.time_dim.backward_feasible(
+        s_route.vehicle_info(), move_candidates.weights[dim_t::TIME], excess_limit);
     }
 
     auto previous_node = s_route.get_node(i - 1);
 
-    // Do a cost combine on left part, its forward info is valid
+    if (valid) {
+      // Do a cost combine on left part, its forward info is valid
 
-    const double delta = node_t<i_t, f_t, REQUEST>::cost_combine(previous_node,
-                                                                 nodes[0],
-                                                                 s_route.vehicle_info(),
-                                                                 move_candidates.include_objective,
-                                                                 move_candidates.weights,
-                                                                 s_route.get_objective_cost(),
-                                                                 s_route.get_infeasibility_cost());
-    // i - 1 because we insert before current node
-    // (intra_insertion_index store the index after which we insert)
-    if (delta < -EPSILON) {
-      const double selection_delta =
+      const double delta =
         node_t<i_t, f_t, REQUEST>::cost_combine(previous_node,
                                                 nodes[0],
                                                 s_route.vehicle_info(),
                                                 move_candidates.include_objective,
-                                                move_candidates.selection_weights,
+                                                move_candidates.weights,
                                                 s_route.get_objective_cost(),
                                                 s_route.get_infeasibility_cost());
-      if (delta < found_sliding_solution.delta) {
-        found_sliding_solution.delta                 = selection_delta;
-        found_sliding_solution.window_size           = window_size;
-        found_sliding_solution.intra_insertion_index = i - 1;
-        found_sliding_solution.permutation_index     = permutation_index;
-        found_sliding_solution.window_start          = window_start_idx;
+      // i - 1 because we insert before current node
+      // (intra_insertion_index store the index after which we insert)
+      if (delta < -EPSILON) {
+        const double selection_delta =
+          node_t<i_t, f_t, REQUEST>::cost_combine(previous_node,
+                                                  nodes[0],
+                                                  s_route.vehicle_info(),
+                                                  move_candidates.include_objective,
+                                                  move_candidates.selection_weights,
+                                                  s_route.get_objective_cost(),
+                                                  s_route.get_infeasibility_cost());
+        if (delta < found_sliding_solution.delta) {
+          found_sliding_solution.delta                 = selection_delta;
+          found_sliding_solution.window_size           = window_size;
+          found_sliding_solution.intra_insertion_index = i - 1;
+          found_sliding_solution.permutation_index     = permutation_index;
+          found_sliding_solution.window_start          = window_start_idx;
+        }
       }
     }
 
@@ -287,6 +289,8 @@ __device__ void try_permutations(
 
   // -- Right part / shifting --
 
+  if (!forward_valid) { return; }
+
   curr_node = s_route.get_node(window_start_idx + window_size);
 
   // curr_node has incorrect forward data since before, window was between this node and the
@@ -307,6 +311,7 @@ __device__ void try_permutations(
     }
 
     // Just for time filtration
+    bool valid = true;
     if (dimensions_info.has_dimension(dim_t::TIME)) {
       auto next_node = s_route.get_node(i + 1);
 
@@ -318,42 +323,43 @@ __device__ void try_permutations(
               nodes[window_size - 1].request.info, next_node.request.info, s_route.vehicle_info()));
       });
 
-      bool valid = true;
       loop_over_constrained_dimensions(dimensions_info, [&] __device__(auto I) {
         valid &= get_dimension_of<I>(next_node).forward_feasible(
           s_route.vehicle_info(), move_candidates.weights[I], excess_limit);
       });
-      if (!valid) { return; }
     }
 
     auto next_node = s_route.get_node(i + 1);
 
-    // Do a cost combine on right part, its backward info is valid and update if the different is
-    // better
+    if (valid) {
+      // Do a cost combine on right part, its backward info is valid and update if the different
+      // is better
 
-    const double delta = node_t<i_t, f_t, REQUEST>::cost_combine(nodes[window_size - 1],
-                                                                 next_node,
-                                                                 s_route.vehicle_info(),
-                                                                 move_candidates.include_objective,
-                                                                 move_candidates.weights,
-                                                                 s_route.get_objective_cost(),
-                                                                 s_route.get_infeasibility_cost());
-
-    if (delta < -EPSILON) {
-      const double selection_delta =
+      const double delta =
         node_t<i_t, f_t, REQUEST>::cost_combine(nodes[window_size - 1],
                                                 next_node,
                                                 s_route.vehicle_info(),
                                                 move_candidates.include_objective,
-                                                move_candidates.selection_weights,
+                                                move_candidates.weights,
                                                 s_route.get_objective_cost(),
                                                 s_route.get_infeasibility_cost());
-      if (delta < found_sliding_solution.delta) {
-        found_sliding_solution.delta                 = selection_delta;
-        found_sliding_solution.window_size           = window_size;
-        found_sliding_solution.intra_insertion_index = i;
-        found_sliding_solution.permutation_index     = permutation_index;
-        found_sliding_solution.window_start          = window_start_idx;
+
+      if (delta < -EPSILON) {
+        const double selection_delta =
+          node_t<i_t, f_t, REQUEST>::cost_combine(nodes[window_size - 1],
+                                                  next_node,
+                                                  s_route.vehicle_info(),
+                                                  move_candidates.include_objective,
+                                                  move_candidates.selection_weights,
+                                                  s_route.get_objective_cost(),
+                                                  s_route.get_infeasibility_cost());
+        if (delta < found_sliding_solution.delta) {
+          found_sliding_solution.delta                 = selection_delta;
+          found_sliding_solution.window_size           = window_size;
+          found_sliding_solution.intra_insertion_index = i;
+          found_sliding_solution.permutation_index     = permutation_index;
+          found_sliding_solution.window_start          = window_start_idx;
+        }
       }
     }
 
