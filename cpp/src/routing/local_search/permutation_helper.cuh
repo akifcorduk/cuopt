@@ -81,8 +81,10 @@ __device__ void get_nth_permutation(i_t res[size], int index)
 {
   // Swap those two case to have the last trailing threads prioritizing the reverse order which is
   // usually better
-  if (index == 1) index = factorial(size) - 1;
-  if (index == factorial(size) - 1 && size > 1) index = 1;
+  if (index == 1)
+    index = factorial(size) - 1;
+  else if (index == factorial(size) - 1 && size > 1)
+    index = 1;
 
   cuopt_assert(index < factorial(size) && index >= 0, "Invalid index");
 
@@ -118,8 +120,10 @@ __device__ void get_nth_permutation(i_t* res, int index, i_t* values, int size)
 {
   // Swap those two case to have the last trailing threads prioritizing the reverse order which is
   // usually better
-  if (index == 1) index = factorial(size) - 1;
-  if (index == factorial(size) - 1 && size > 1) index = 1;
+  if (index == 1)
+    index = factorial(size) - 1;
+  else if (index == factorial(size) - 1 && size > 1)
+    index = 1;
 
   cuopt_assert(index < factorial(size) && index >= 0, "Invalid index");
 
