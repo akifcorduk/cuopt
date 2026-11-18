@@ -839,7 +839,7 @@ struct solve {
 
       auto& a = initial_islands.back();
 
-      timer_t island_creation_timer(max_island_generation_time);
+      timer_t island_creation_timer(timer.clamp_remaining_time(max_island_generation_time));
       for (int i = 0; i < min_island_size; ++i) {
         if (first_gen && routes_number == -1) {
           auto time_limit = timer.clamp_remaining_time(first_sol_gen_time);
@@ -901,8 +901,7 @@ struct solve {
 
       // Give all the island generation time as some problems might consume
       // all the time improving the first threshold.
-      double improve_time_limit =
-        std::max(0.0, max_island_generation_time - island_creation_timer.elapsed_time());
+      double improve_time_limit = island_creation_timer.remaining_time();
 
       improvement_timer = timer_t(improve_time_limit);
       benchmark_print(
