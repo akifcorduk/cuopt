@@ -817,7 +817,8 @@ struct OX {
       }
 
       // Cycle the offspring until we find some route start
-      j = 0;
+      int scan_start = S.routes.size() == 1 ? 0 : j + 1;
+      j              = 0;
       if (cycle_rotate_to_start) {
         helper.clear();
         for (auto& a : routesS) {
@@ -825,7 +826,7 @@ struct OX {
           helper.insert(b.start.node());
         }
 
-        for (size_t i = 0; i < offspring.size(); i++) {
+        for (size_t i = scan_start; i < offspring.size(); i++) {
           if (helper.count(offspring[i]) > 0) {
             j = i;
             break;
