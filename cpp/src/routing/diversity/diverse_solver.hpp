@@ -754,8 +754,7 @@ struct solve {
       else
         average = max;
 
-      average         = std::min(average, 0.99);
-      threshold_index = diversity_levels.size() - 1;
+      average = std::min(average, 0.99);
       for (size_t i = 0; i < diversity_levels.size(); i++) {
         if (diversity_levels[i] > average)
           threshold_index = i;
