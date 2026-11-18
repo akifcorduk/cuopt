@@ -328,7 +328,10 @@ __global__ void execute_vrp_moves_kernel(
 
   route_1.copy_from(s_route);
 
-  if (threadIdx.x == 0) { solution.routes_to_copy[s_route.get_id()] = 1; }
+  if (threadIdx.x == 0) {
+    solution.routes_to_copy[s_route.get_id()]   = 1;
+    solution.routes_to_search[s_route.get_id()] = 1;
+  }
 }
 
 template <typename i_t, typename f_t, request_t REQUEST>
