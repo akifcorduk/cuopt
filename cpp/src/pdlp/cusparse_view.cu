@@ -87,9 +87,8 @@ using cusparseSpMV_preprocess_sig = cusparse_sig<cusparseHandle_t,
                                                  void*>;
 
 // This is tmp until it's added to raft
-template <
-  typename T,
-  typename std::enable_if_t<std::is_same_v<T, float> || std::is_same_v<T, double>>* = nullptr>
+template <typename T,
+          typename std::enable_if_t<std::is_same_v<T, float> || std::is_same_v<T, double>>*>
 void my_cusparsespmv_preprocess(cusparseHandle_t handle,
                                 cusparseOperation_t opA,
                                 const T* alpha,
@@ -1264,6 +1263,30 @@ template class cusparse_view_t<int, double>;
 #endif
 
 #if CUDA_VER_12_4_UP
+#if MIP_INSTANTIATE_FLOAT || PDLP_INSTANTIATE_FLOAT
+template void my_cusparsespmv_preprocess<float>(cusparseHandle_t,
+                                                cusparseOperation_t,
+                                                const float*,
+                                                cusparseConstSpMatDescr_t,
+                                                cusparseConstDnVecDescr_t,
+                                                const float*,
+                                                cusparseDnVecDescr_t,
+                                                cusparseSpMVAlg_t,
+                                                void*,
+                                                cudaStream_t);
+#endif
+#if MIP_INSTANTIATE_DOUBLE
+template void my_cusparsespmv_preprocess<double>(cusparseHandle_t,
+                                                 cusparseOperation_t,
+                                                 const double*,
+                                                 cusparseConstSpMatDescr_t,
+                                                 cusparseConstDnVecDescr_t,
+                                                 const double*,
+                                                 cusparseDnVecDescr_t,
+                                                 cusparseSpMVAlg_t,
+                                                 void*,
+                                                 cudaStream_t);
+#endif
 #if MIP_INSTANTIATE_FLOAT || PDLP_INSTANTIATE_FLOAT
 template void my_cusparsespmm_preprocess<float>(cusparseHandle_t,
                                                 cusparseOperation_t,

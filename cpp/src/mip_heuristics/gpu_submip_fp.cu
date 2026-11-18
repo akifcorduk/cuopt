@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 #include <numeric>
@@ -149,7 +150,30 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
     fp.config.use_projection_warm_start = true;
     fp.config.log_descent_diagnostics   = true;
     fp.config.fused_adaptive_step       = fused_adaptive_step;
-    i_t free_integers                   = 0;
+    const char* pdfp                    = std::getenv("CUOPT_GPU_SUBMIP_PDFP");
+    fp.config.use_pdfp_projection       = pdfp != nullptr && pdfp[0] == '1';
+    const char* projection_seconds      = std::getenv("CUOPT_GPU_SUBMIP_PROJECTION_SECONDS");
+    if (projection_seconds != nullptr && projection_seconds[0] != '\0') {
+      fp.config.projection_time_limit = std::atof(projection_seconds);
+    }
+    const char* screen = std::getenv("CUOPT_GPU_SUBMIP_SCREEN_SECONDS");
+    if (screen != nullptr && screen[0] != '\0') { screen_seconds = std::atof(screen); }
+    const char* start = std::getenv("CUOPT_GPU_SUBMIP_LP_START");
+    lp_start          = start != nullptr && start[0] == '1';
+    const char* share = std::getenv("CUOPT_GPU_SUBMIP_TARGET_SHARE");
+    if (share != nullptr && share[0] != '\0') { target_share = std::atof(share); }
+    cuopt_expects(target_share >= 0 && target_share < 1,
+                  error_type_t::ValidationError,
+                  "The target share of the LP improvement lies in [0, 1)");
+    CUOPT_LOG_INFO(
+      "GpuSubmipFpProjector projector=%s projection_seconds=%.9g screen_seconds=%.9g lp_start=%d "
+      "target_share=%.9g",
+      fp.config.use_pdfp_projection ? "pdfp" : "pdlp_epigraph",
+      fp.config.projection_time_limit,
+      screen_seconds,
+      int(lp_start),
+      target_share);
+    i_t free_integers = 0;
     for (i_t j = 0; j < static_cast<i_t>(columns.reduced_types.size()); ++j) {
       if (columns.reduced_types[j] != simplex::variable_type_t::CONTINUOUS) {
         integer_columns.push_back(j);
@@ -290,13 +314,82 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
         ++fp.diagnostics.free_integers;
       }
     }
+    // The objective level the descent has to reach; the job's cutoff unless the screen sets more.
+    f_t fp_cutoff = local_cutoff;
+    if (fp.config.use_pdfp_projection && screen_seconds > 0) {
+      // The restricted LP without its cutoff row: can c'x get below the cutoff at all?
+      const auto stream    = handle->get_stream();
+      const auto row       = problem.n_constraints - 1;
+      const f_t no_bound   = std::numeric_limits<f_t>::infinity();
+      const auto unbounded = [](const auto& b) {
+        return !std::isfinite(get_lower(b)) || !std::isfinite(get_upper(b));
+      };
+      // The dual bound is valid only on a finite box, so the screen runs on the implied one.
+      const auto box   = implied_box(bounds);
+      const bool empty = std::any_of(
+        box.begin(), box.end(), [](const auto& b) { return get_lower(b) > get_upper(b); });
+      pdfp_projection_result_t screen;
+      // With an LP start or a target the screen goes on to the LP optimum and hands its point on.
+      const bool solve = lp_start || target_share > 0;
+      rmm::device_uvector<f_t> lp_point(0, stream);
+      problem.constraint_upper_bounds.set_element_async(row, no_bound, stream);
+      if (empty) {
+        screen.reach_verdict = 2;
+      } else {
+        raft::copy(problem.variable_bounds.data(), box.data(), box.size(), stream);
+        screen =
+          fp.pdfp_reach(solution, local_cutoff, screen_seconds, 1e-4, solve ? &lp_point : nullptr);
+        raft::copy(problem.variable_bounds.data(), bounds.data(), bounds.size(), stream);
+      }
+      if (screen.reach_verdict > 0) { cuopt_func_call(check_dropped(local_cutoff)); }
+      // An LP point at or below the cutoff: ask the descent for a share of what the LP gains. The
+      // dual bound corrects a last point that is below the optimum because it is not yet feasible.
+      const bool reached = screen.reach_verdict < 0;
+      if (reached && target_share > 0) {
+        const f_t lp_value = std::max(screen.linear_objective, screen.dual_bound);
+        fp_cutoff = local_cutoff - target_share * std::max(f_t(0), local_cutoff - lp_value);
+      }
+      problem.constraint_upper_bounds.set_element_async(row, fp_cutoff, stream);
+      pdlp::combine_constraint_bounds(problem, problem.combined_bounds);
+      if (reached && lp_start) {
+        solution.copy_new_assignment(lp_point);
+        solution.clamp_within_bounds();
+        raft::copy(fp.last_projection.data(),
+                   solution.assignment.data(),
+                   solution.assignment.size(),
+                   stream);
+        raft::copy(
+          lp_solution.data(), solution.assignment.data(), solution.assignment.size(), stream);
+      }
+      fp.diagnostics.cutoff = fp_cutoff;
+      CUOPT_LOG_INFO(
+        "GpuSubmipFpScreen job=%llu verdict=%d dual_bound=%.9g cutoff=%.9g linear=%.9g "
+        "iterations=%d seconds=%.6f converged=%d unbounded=%d left_unbounded=%d target=%.9g "
+        "lp_start=%d",
+        (unsigned long long)job_id,
+        screen.reach_verdict,
+        screen.dual_bound,
+        double(local_cutoff),
+        screen.linear_objective,
+        screen.iterations,
+        screen.elapsed_time,
+        int(screen.converged),
+        int(std::count_if(bounds.begin(), bounds.end(), unbounded)),
+        int(std::count_if(box.begin(), box.end(), unbounded)),
+        double(fp_cutoff),
+        int(reached && lp_start));
+      if (screen.reach_verdict > 0) {
+        run_info.exit_reason = "screened";
+        return false;
+      }
+    }
     const auto descent_begin      = fp.timer.elapsed_time();
     const auto projection_begin   = fp.total_lp_time;
     const auto projections_before = fp.n_lp_calls;
     const auto verification_begin = fp.total_verification_time;
     const auto verifies_before    = fp.n_verification_calls;
     run_info.started              = true;
-    const bool found              = fp.run_single_fp_descent(solution, local_cutoff);
+    const bool found              = fp.run_single_fp_descent(solution, fp_cutoff);
     run_info.projections          = fp.n_lp_calls - projections_before;
     run_info.exit_reason          = fp.diagnostics.exit_reason;
     const double descent_seconds  = fp.timer.elapsed_time() - descent_begin;
@@ -353,6 +446,89 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
     return true;
   }
 
+  // A box that holds every point of the restricted LP: each infinite bound is replaced by the one
+  // its rows imply from the other columns' bounds, widened by the row tolerance and by the
+  // rounding of the activity sums.
+  std::vector<typename type_2<f_t>::type> implied_box(
+    const std::vector<typename type_2<f_t>::type>& bounds) const
+  {
+    const auto& lp = columns.reduced_lp;
+    const f_t inf  = std::numeric_limits<f_t>::infinity();
+    std::vector<f_t> lowest(lp.num_rows, 0), highest(lp.num_rows, 0), magnitude(lp.num_rows, 0);
+    std::vector<i_t> lowest_open(lp.num_rows, 0), highest_open(lp.num_rows, 0);
+    // Least and largest value of a * x_j over the column's bounds.
+    const auto ends = [&](i_t j, f_t a) {
+      const f_t l = get_lower(bounds[j]), u = get_upper(bounds[j]);
+      return a > 0 ? std::pair{a * l, a * u} : std::pair{a * u, a * l};
+    };
+    for (i_t j = 0; j < lp.num_cols; ++j) {
+      for (i_t p = lp.A.col_start[j]; p < lp.A.col_start[j + 1]; ++p) {
+        if (lp.A.x[p] == 0) { continue; }
+        const i_t i         = lp.A.i[p];
+        const auto [lo, hi] = ends(j, lp.A.x[p]);
+        if (std::isfinite(lo)) {
+          lowest[i] += lo;
+          magnitude[i] += std::abs(lo);
+        } else {
+          ++lowest_open[i];
+        }
+        if (std::isfinite(hi)) {
+          highest[i] += hi;
+          magnitude[i] += std::abs(hi);
+        } else {
+          ++highest_open[i];
+        }
+      }
+    }
+    auto box = bounds;
+    for (i_t j = 0; j < lp.num_cols; ++j) {
+      f_t lower = get_lower(bounds[j]), upper = get_upper(bounds[j]);
+      if (std::isfinite(lower) && std::isfinite(upper)) { continue; }
+      f_t implied_lower = -inf, implied_upper = inf;
+      for (i_t p = lp.A.col_start[j]; p < lp.A.col_start[j + 1]; ++p) {
+        const f_t a = lp.A.x[p];
+        if (a == 0) { continue; }
+        const i_t i         = lp.A.i[p];
+        const auto [lo, hi] = ends(j, a);
+        const i_t lo_open = !std::isfinite(lo), hi_open = !std::isfinite(hi);
+        const f_t slack = problem.tolerances.absolute_tolerance +
+                          problem.tolerances.relative_tolerance * std::abs(lp.rhs[i]) +
+                          1e-9 * (magnitude[i] + std::abs(lp.rhs[i]));
+        // a * x_j is the right-hand side minus the other columns' activity.
+        f_t least = -inf, most = inf;
+        if (highest_open[i] == hi_open) {
+          least = lp.rhs[i] - (highest[i] - (hi_open ? 0 : hi)) - slack;
+        }
+        if (lowest_open[i] == lo_open) {
+          most = lp.rhs[i] - (lowest[i] - (lo_open ? 0 : lo)) + slack;
+        }
+        implied_lower = std::max(implied_lower, a > 0 ? least / a : most / a);
+        implied_upper = std::min(implied_upper, a > 0 ? most / a : least / a);
+      }
+      if (!std::isfinite(lower)) { lower = implied_lower; }
+      if (!std::isfinite(upper)) { upper = implied_upper; }
+      box[j] = {lower, upper};
+    }
+    return box;
+  }
+
+  // Runtime test of a neighbourhood the screen dropped: its objective LP, solved on to a tight
+  // tolerance without the early stop, must end above the cutoff. Runs with the cutoff row relaxed
+  // and on the node's own bounds, so it also tests the implied box.
+  void check_dropped(f_t local_cutoff)
+  {
+    const f_t no_level = std::numeric_limits<f_t>::infinity();
+    const auto solved  = fp.pdfp_reach(solution, no_level, 10., 1e-7);
+    CUOPT_LOG_INFO("GpuSubmipFpScreenCheck converged=%d linear=%.12g cutoff=%.12g seconds=%.6f",
+                   int(solved.converged),
+                   solved.linear_objective,
+                   double(local_cutoff),
+                   solved.elapsed_time);
+    cuopt_assert(!solved.converged || solved.linear_objective >
+                                        local_cutoff - 1e-5 * std::max(1., std::abs(local_cutoff)),
+                 "The screen dropped a neighbourhood whose LP reaches the cutoff");
+  }
+
   bool get_restart_seed(std::vector<f_t>& seed)
   {
     seed.clear();
@@ -385,6 +561,10 @@ struct gpu_submip_fp_t<i_t, f_t>::impl_t {
   feasibility_pump_t<i_t, f_t> fp;
   std::vector<i_t> integer_columns;
   bool has_projection{false};
+  // Seconds for the objective-only screen before a PDFP descent; zero skips it.
+  double screen_seconds{0.};
+  bool lp_start{false};
+  double target_share{0.};
   gpu_submip_fp_run_info_t run_info;
 };
 

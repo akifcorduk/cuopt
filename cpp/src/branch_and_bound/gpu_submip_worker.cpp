@@ -634,6 +634,7 @@ bool run_gpu_submip_job(const gpu_submip_job_t<i_t, f_t>& job,
       free_integer_columns += !fixed;
     }
   }
+  cuopt_assert(free_integer_columns > 0, "A GPU sub-MIP job needs a free integer column");
   const char* collection_directory = std::getenv("CUOPT_GPU_SUBMIP_JOB_COLLECTION_DIR");
   const bool collection            = collection_directory && *collection_directory;
   const auto snapshot_path =

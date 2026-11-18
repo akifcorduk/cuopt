@@ -2435,6 +2435,12 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
       seed.size());
     return {};
   }
+  // With every integer fixed the neighbourhood is an LP, which the CPU worker solves at once.
+  bool has_free_integer = false;
+  for (size_t j = 0; j < types.size() && !has_free_integer; ++j) {
+    has_free_integer = types[j] != variable_type_t::CONTINUOUS && lp.lower[j] != lp.upper[j];
+  }
+  if (!has_free_integer) { return {}; }
   auto& stats = shared->source_stats[static_cast<size_t>(gpu_submip_source_t::CPU_SUBMIP)];
   typename gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>>::reservation_t reservation;
   if (shared->options.independent) {

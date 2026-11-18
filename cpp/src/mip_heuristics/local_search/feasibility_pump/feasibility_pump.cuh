@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include "pdfp_projection.cuh"
+
 #include <mip_heuristics/feasibility_jump/feasibility_jump.cuh>
 #include <mip_heuristics/local_search/line_segment_search/line_segment_search.cuh>
 #include <mip_heuristics/local_search/rounding/constraint_prop.cuh>
@@ -113,6 +115,8 @@ struct fp_config_t {
   bool propagate_initial_rounding = false;
   bool log_descent_diagnostics    = false;
   bool fused_adaptive_step        = false;
+  // Project with PDFP on the problem itself instead of PDLP on the epigraph LP.
+  bool use_pdfp_projection = false;
 };
 
 template <typename i_t, typename f_t>
@@ -160,6 +164,16 @@ class feasibility_pump_t {
   bool linear_project_onto_polytope(solution_t<i_t, f_t>& solution,
                                     f_t proximity_to_polytope,
                                     bool longer_lp_run = false);
+  bool pdfp_project_onto_polytope(solution_t<i_t, f_t>& solution,
+                                  f_t ratio_of_set_integers,
+                                  bool longer_lp_run);
+  // Objective-only PDFP run from the solution's point, which it leaves untouched. With `optimum`
+  // the run goes on after the level is reached and its last point is returned there.
+  pdfp_projection_result_t pdfp_reach(solution_t<i_t, f_t>& solution,
+                                      f_t level,
+                                      f_t seconds,
+                                      f_t tolerance                     = 1e-4,
+                                      rmm::device_uvector<f_t>* optimum = nullptr);
 
   void perturbate(solution_t<i_t, f_t>& solution);
   bool run_fj_cycle_escape(solution_t<i_t, f_t>& solution);
@@ -178,6 +192,7 @@ class feasibility_pump_t {
   void revert_relaxation(solution_t<i_t, f_t>& solution);
   bool test_fj_feasible(solution_t<i_t, f_t>& solution, f_t time_limit);
   bool stop_requested();
+  bool halt_requested() const;
   void log_projection_diagnostics(const solution_t<i_t, f_t>& solution);
   bool finish_descent(bool feasible, const char* reason);
   // Private immutable-model sessions may cache these host inputs. Bounds must
@@ -199,6 +214,8 @@ class feasibility_pump_t {
   fp_config_t config;
   fp_descent_diagnostics_t diagnostics;
   std::optional<fp_projection_host_data_t<i_t, f_t>> projection_host_data;
+  std::unique_ptr<pdfp_projection_t<i_t, f_t>> pdfp_projector;
+  problem_t<i_t, f_t>* pdfp_problem = nullptr;
   rmm::device_uvector<f_t> last_rounding;
   rmm::device_uvector<f_t> last_projection;
   rmm::device_uvector<var_t> orig_variable_types;

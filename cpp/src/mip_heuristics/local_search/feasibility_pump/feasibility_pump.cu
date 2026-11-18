@@ -185,12 +185,130 @@ double get_tolerance_from_ratio(double ratio_integer, double absolute_tol)
 // single direction. we won't need a variable and two constraints for the abs value.
 
 template <typename i_t, typename f_t>
+bool feasibility_pump_t<i_t, f_t>::pdfp_project_onto_polytope(solution_t<i_t, f_t>& solution,
+                                                              f_t ratio_of_set_integers,
+                                                              bool longer_lp_run)
+{
+  auto& problem = *solution.problem_ptr;
+  auto stream   = solution.handle_ptr->get_stream();
+  if (!longer_lp_run) { config.alpha = config.alpha * config.alpha_decrease_factor; }
+  f_t objective_norm;
+  if (projection_host_data) {
+    objective_norm = projection_host_data->objective_norm;
+  } else {
+    auto objective = cuopt::host_copy(problem.objective_coefficients, stream);
+    objective_norm = vector_norm(objective.begin(), objective.end());
+  }
+  // The configuration benchmarked as G13 / F13: prox distance, certified unit-norm step with
+  // working-set weights, PDLP's stopping rule and row tolerance, target start.
+  pdfp_projection_settings_t settings;
+  settings.distance_weight =
+    problem.n_integer_vars > 0 ? (1. - config.alpha) / std::sqrt(f_t(problem.n_integer_vars)) : 0.;
+  settings.objective_weight = objective_norm > 0. ? config.alpha / objective_norm : 0.;
+  settings.tolerance =
+    get_tolerance_from_ratio(ratio_of_set_integers, context.settings.tolerances.absolute_tolerance);
+  settings.primal_ratio = 1.;
+  settings.primal_bound_ratio =
+    context.settings.tolerances.relative_tolerance / context.settings.tolerances.absolute_tolerance;
+  settings.duality_gap_test = true;
+  settings.balanced_weight  = true;
+  settings.weight_limit     = 1e12;
+  settings.start_at_target  = true;
+  settings.check_interval   = 50;
+  settings.original_units   = problem.n_integer_vars < problem.n_variables;
+  settings.held_weight      = .03;
+  const f_t rlp_base        = context.settings.heuristic_params.relaxed_lp_time_limit;
+  f_t time_limit            = longer_lp_run ? 5. * rlp_base : rlp_base;
+  time_limit                = std::max(0.05, std::min(time_limit, timer.remaining_time() / 10.));
+  if (config.projection_time_limit > 0) {
+    time_limit = std::min(time_limit, f_t(config.projection_time_limit));
+  }
+  if (context.diversity_manager_ptr == nullptr) {
+    time_limit = std::max(f_t(0), std::min(time_limit, f_t(timer.remaining_time())));
+  }
+  settings.time_limit = time_limit;
+  if (!pdfp_projector || pdfp_problem != solution.problem_ptr) {
+    pdfp_projector = std::make_unique<pdfp_projection_t<i_t, f_t>>(problem, true, true, true);
+    pdfp_problem   = solution.problem_ptr;
+  }
+  const double projection_begin = timer.elapsed_time();
+  const auto result = pdfp_projector->project(solution.assignment, solution.assignment, settings);
+  last_lp_time      = timer.elapsed_time() - projection_begin;
+  total_lp_time += last_lp_time;
+  n_lp_calls++;
+  cuopt_assert(solution.assignment.size() == size_t(problem.n_variables),
+               "The PDFP projection changed the size of the assignment");
+  cuopt_func_call(solution.test_variable_bounds(false));
+  raft::copy(
+    last_projection.data(), solution.assignment.data(), solution.assignment.size(), stream);
+  const bool is_feasible = solution.compute_feasibility();
+  if (config.log_descent_diagnostics) {
+    ++diagnostics.projections;
+    diagnostics.pdlp_limit_seconds = time_limit;
+    diagnostics.last_fractional =
+      solution.problem_ptr->n_integer_vars - solution.n_assigned_integers;
+    diagnostics.best_fractional =
+      std::min(diagnostics.best_fractional, diagnostics.last_fractional);
+    diagnostics.pdlp_status          = (int)(result.converged ? pdlp_termination_status_t::Optimal
+                                             : result.elapsed_time >= settings.time_limit
+                                               ? pdlp_termination_status_t::TimeLimit
+                                               : pdlp_termination_status_t::IterationLimit);
+    diagnostics.pdlp_steps           = result.iterations;
+    diagnostics.pdlp_primal_residual = result.primal_residual;
+  }
+  return is_feasible;
+}
+
+template <typename i_t, typename f_t>
+pdfp_projection_result_t feasibility_pump_t<i_t, f_t>::pdfp_reach(solution_t<i_t, f_t>& solution,
+                                                                  f_t level,
+                                                                  f_t seconds,
+                                                                  f_t tolerance,
+                                                                  rmm::device_uvector<f_t>* optimum)
+{
+  auto& problem            = *solution.problem_ptr;
+  auto stream              = solution.handle_ptr->get_stream();
+  auto objective           = cuopt::host_copy(problem.objective_coefficients, stream);
+  const f_t objective_norm = vector_norm(objective.begin(), objective.end());
+  pdfp_projection_result_t result;
+  if (!(objective_norm > 0.)) { return result; }
+  pdfp_projection_settings_t settings;
+  settings.distance_weight  = 0.;
+  settings.objective_weight = 1. / objective_norm;
+  settings.tolerance        = tolerance;
+  settings.primal_ratio     = 1.;
+  settings.primal_bound_ratio =
+    context.settings.tolerances.relative_tolerance / context.settings.tolerances.absolute_tolerance;
+  settings.duality_gap_test = true;
+  settings.balanced_weight  = true;
+  settings.weight_limit     = 1e12;
+  settings.start_at_target  = true;
+  settings.check_interval   = 50;
+  settings.original_units   = problem.n_integer_vars < problem.n_variables;
+  settings.held_weight      = .03;
+  settings.time_limit       = seconds;
+  settings.reach_level      = level;
+  settings.reach_optimum    = optimum != nullptr;
+  if (!pdfp_projector || pdfp_problem != solution.problem_ptr) {
+    pdfp_projector = std::make_unique<pdfp_projection_t<i_t, f_t>>(problem, true, true, true);
+    pdfp_problem   = solution.problem_ptr;
+  }
+  rmm::device_uvector<f_t> point(solution.assignment, stream);
+  result = pdfp_projector->project(solution.assignment, point, settings);
+  if (optimum != nullptr) { *optimum = std::move(point); }
+  return result;
+}
+
+template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, f_t>& solution,
                                                                 f_t ratio_of_set_integers,
                                                                 bool longer_lp_run)
 {
   raft::common::nvtx::range fun_scope("linear_project_onto_polytope");
   CUOPT_LOG_DEBUG("linear projection of fp");
+  if (config.use_pdfp_projection) {
+    return pdfp_project_onto_polytope(solution, ratio_of_set_integers, longer_lp_run);
+  }
   std::vector<f_t> h_assignment;
   std::vector<f_t> h_last_projection;
   std::vector<typename type_2<f_t>::type> uncached_bounds;
@@ -367,7 +485,12 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
   result = constraint_prop.apply_round(solution, lp_run_time_after_feasible, bounds_prop_timer);
   constraint_prop.round_all_vars           = old_var;
   constraint_prop.max_time_for_bounds_prop = old_time;
-  // result = solution.round_nearest();
+  // A halt cancels the propagation rounding part-way. FJ, the cycle test and the next projection
+  // all take an integral point, so the integers it left are rounded to the nearest value.
+  if (halt_requested() &&
+      solution.compute_number_of_integers() != solution.problem_ptr->n_integer_vars) {
+    result = solution.round_nearest(rng());
+  }
   cuopt_func_call(solution.test_variable_bounds(true));
   // copy the last rounding
   raft::copy(last_rounding.data(),
@@ -512,6 +635,7 @@ void feasibility_pump_t<i_t, f_t>::reset()
   config.alpha              = config.initial_alpha;
   last_distances.resize(0);
   if (config.log_descent_diagnostics) { diagnostics = {}; }
+  if (pdfp_projector) { pdfp_projector->reset(); }
 }
 
 template <typename i_t, typename f_t>
@@ -633,6 +757,14 @@ void feasibility_pump_t<i_t, f_t>::revert_relaxation(solution_t<i_t, f_t>& solut
   solution.problem_ptr->compute_n_integer_vars();
   solution.problem_ptr->compute_binary_var_table();
   solution.compute_feasibility();
+}
+
+// A halt cancels the rounding in progress, which then leaves integers unrounded.
+template <typename i_t, typename f_t>
+bool feasibility_pump_t<i_t, f_t>::halt_requested() const
+{
+  return (concurrent_halt && concurrent_halt->load(std::memory_order_acquire)) ||
+         context.preempt_heuristic_solver_.load();
 }
 
 template <typename i_t, typename f_t>

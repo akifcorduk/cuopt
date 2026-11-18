@@ -13,6 +13,8 @@
 #include <raft/core/resource/cuda_stream.hpp>
 #include <raft/core/resource/thrust_policy.hpp>
 
+#include <cuda/stream>
+
 #include <cuda.h>
 #include <cuda_runtime.h>
 
@@ -83,7 +85,7 @@ class mip_green_context_t {
       create_partition(submip, submip_context_, submip_stream_, submip_cuda_context_);
       create_partition(regular, regular_context_, regular_stream_, regular_cuda_context_);
       check(set_current_(submip_cuda_context_), "cuCtxSetCurrent");
-      submip_handle_ = std::make_unique<raft::handle_t>(rmm::cuda_stream_view{submip_stream_});
+      submip_handle_ = std::make_unique<raft::handle_t>(cuda::stream_ref{submip_stream_});
       raft::resource::get_device_properties(*submip_handle_).multiProcessorCount =
         submip.sm.smCount;
       check(set_current_(regular_cuda_context_), "cuCtxSetCurrent");
@@ -186,12 +188,11 @@ class mip_green_context_t {
   {
     std::exception_ptr cleanup_error;
     attempt_cleanup(cleanup_error, [&]() {
-      raft::resource::set_cuda_stream(*regular_handle_, rmm::cuda_stream_view{stream});
+      raft::resource::set_cuda_stream(*regular_handle_, cuda::stream_ref{stream});
     });
     attempt_cleanup(cleanup_error, [&]() {
       regular_handle_->add_resource_factory(
-        std::make_shared<raft::resource::thrust_policy_resource_factory>(
-          rmm::cuda_stream_view{stream}));
+        std::make_shared<raft::resource::thrust_policy_resource_factory>(cuda::stream_ref{stream}));
     });
     attempt_cleanup(cleanup_error, [&]() {
       RAFT_CUBLAS_TRY(cublasSetStream(regular_handle_->get_cublas_handle(), stream));
@@ -285,7 +286,7 @@ class mip_green_context_t {
   bool original_context_saved_{false};
 #endif
   raft::handle_t* regular_handle_;
-  rmm::cuda_stream_view original_stream_;
+  cuda::stream_ref original_stream_;
   std::unique_ptr<raft::handle_t> submip_handle_;
   std::atomic<bool> requested_{false};
   std::atomic<bool> ready_{false};
