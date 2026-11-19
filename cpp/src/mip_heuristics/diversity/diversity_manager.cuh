@@ -63,10 +63,12 @@ class diversity_manager_t {
   void recombine_and_ls_with_all(std::vector<solution_t<i_t, f_t>>& solutions,
                                  bool add_only_feasible = false);
   void recombine_and_ls_with_all(solution_t<i_t, f_t>& solution, bool add_only_feasible = false);
+  // work_timer bounds the local search and the LP that follow the recombiner.
   std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>> recombine_and_local_search(
     solution_t<i_t, f_t>& a,
     solution_t<i_t, f_t>& b,
-    recombiner_enum_t recombiner_type = recombiner_enum_t::SIZE);
+    recombiner_enum_t recombiner_type,
+    timer_t work_timer);
   void set_new_user_bound(f_t new_user_bound);
   void generate_quick_feasible_solution();
   bool check_b_b_preemption();

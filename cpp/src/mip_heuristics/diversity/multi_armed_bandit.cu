@@ -12,6 +12,7 @@
 
 #include <cuopt/error.hpp>
 
+#include <cmath>
 #include <numeric>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -97,6 +98,7 @@ int mab_t::select_among(const std::vector<int>& arms)
 void mab_t::add_reward(int option_id, double reward)
 {
   cuopt_assert(option_id >= 0 && option_id < (int)mab_arm_stats_.size(), "Unknown bandit arm");
+  cuopt_assert(std::isfinite(reward), "A bandit reward must be finite");
   auto& arm = mab_arm_stats_[option_id];
   arm.num_pulls++;
   arm.last_reward = reward;

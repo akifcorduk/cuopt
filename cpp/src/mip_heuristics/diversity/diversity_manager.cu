@@ -620,7 +620,7 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
         population.adjust_weights_according_to_best_feasible();
         constexpr bool tournament = true;
         auto [sol1, sol2]         = population.get_two_random(tournament);
-        auto [first, second]      = recombine_and_local_search(sol1, sol2, arm.recombiner);
+        auto [first, second]      = recombine_and_local_search(sol1, sol2, arm.recombiner, slice);
         inserted += population.add_solution(std::move(first)).first != -1;
         inserted += population.add_solution(std::move(second)).first != -1;
         ++offspring;
@@ -634,8 +634,10 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
     const f_t bound      = problem_ptr->get_solver_obj_from_user_obj(stats.get_solution_bound());
     const f_t gap_before = best_before - bound;
     const bool has_gap   = std::isfinite(gap_before) && gap_before > 0;
-    const double share   = has_gap ? (best_before - best_after) / gap_before : 0.;
-    const f_t epsilon    = std::max<f_t>(1e-6, 1e-4 * std::abs(best_before));
+    // The best member can be replaced by one a rounding error worse; that closes nothing.
+    const double share =
+      has_gap && best_after < best_before ? (best_before - best_after) / gap_before : 0.;
+    const f_t epsilon = std::max<f_t>(1e-6, 1e-4 * std::abs(best_before));
     const bool improved =
       gap_reward ? best_after < best_before : best_after + epsilon < best_before;
     // The gap reward grows with that share. The flat one gives 8 for a better incumbent and 1 for
@@ -985,7 +987,8 @@ void diversity_manager_t<i_t, f_t>::diversity_step(i_t max_iterations_without_im
       constexpr bool tournament = true;
       auto [sol1, sol2]         = population.get_two_random(tournament);
       cuopt_assert(population.test_invariant(), "");
-      auto [lp_offspring, offspring]        = recombine_and_local_search(sol1, sol2);
+      auto [lp_offspring, offspring] =
+        recombine_and_local_search(sol1, sol2, recombiner_enum_t::SIZE, timer);
       auto [inserted_pos_1, best_updated_1] = population.add_solution(std::move(lp_offspring));
       auto [inserted_pos_2, best_updated_2] = population.add_solution(std::move(offspring));
       if (best_updated_1 || best_updated_2) { recombine_stats.add_best_updated(); }
@@ -1027,7 +1030,7 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(solution_t<i_t, f_
       if (check_b_b_preemption()) { return; }
       if (curr_sol.get_feasible()) {
         auto [offspring, lp_offspring] =
-          recombine_and_local_search(curr_sol, solution, recombiner_type);
+          recombine_and_local_search(curr_sol, solution, recombiner_type, timer);
         if (!add_only_feasible || lp_offspring.get_feasible()) {
           population.add_solution(std::move(lp_offspring));
         }
@@ -1096,7 +1099,8 @@ template <typename i_t, typename f_t>
 std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>>
 diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& sol1,
                                                           solution_t<i_t, f_t>& sol2,
-                                                          recombiner_enum_t recombiner_type)
+                                                          recombiner_enum_t recombiner_type,
+                                                          timer_t work_timer)
 {
   raft::common::nvtx::range fun_scope("recombine_and_local_search");
   CUOPT_LOG_DEBUG("Recombining sol cost:feas %f : %d and %f : %d",
@@ -1128,7 +1132,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   ls_config.best_objective_of_parents    = best_objective_of_parents;
   ls_config.at_least_one_parent_feasible = at_least_one_parent_feasible;
   context.set_gpu_thread_phase("recombiner:local_search");
-  success = this->run_local_search(offspring, population.weights, timer, ls_config);
+  success = this->run_local_search(offspring, population.weights, work_timer, ls_config);
   if (!success) {
     // add the attempt
     mab_recombiner.add_mab_reward(mab_recombiner.last_chosen_option,
@@ -1151,7 +1155,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   cuopt_assert(lp_offspring.test_number_all_integer(), "All must be integers before LP");
   f_t lp_run_time = offspring.get_feasible() ? diversity_config.lp_run_time_if_feasible
                                              : diversity_config.lp_run_time_if_infeasible;
-  lp_run_time     = std::min(lp_run_time, timer.remaining_time());
+  lp_run_time     = std::min(lp_run_time, work_timer.remaining_time());
   relaxed_lp_settings_t lp_settings;
   lp_settings.time_limit              = lp_run_time;
   lp_settings.tolerance               = context.settings.tolerances.absolute_tolerance;
