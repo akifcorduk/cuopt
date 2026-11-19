@@ -55,7 +55,7 @@ inline constexpr double default_arm_seconds = 5.;
 inline constexpr bool default_dynamic_arm_seconds = false;
 // CUOPT_GPU_HEURISTIC_DIAGNOSTICS: log the phases of the regular GPU thread (HeurPhase) and each
 // iteration of its FP loop (HeurFpIteration).
-inline constexpr bool default_phase_diagnostics = false;
+inline constexpr bool default_phase_diagnostics = true;
 // CUOPT_FP_UNSTAGED: before the first solution, run the plain FP loop on problems with binaries
 // and general integers too, instead of the staged FP (binaries first, then all integers).
 inline constexpr bool default_unstaged_fp = false;
@@ -63,7 +63,7 @@ inline constexpr bool default_unstaged_fp = false;
 // Benchmark commits set this to false, so that their defaults hold whatever the environment
 // says: the cluster's benchmark script exports CUOPT_GPU_SUBMIP, CUOPT_SUBMIP_POOL_DIAGNOSTICS,
 // CUOPT_GPU_SUBMIP_CONFIG_FAMILY, CUOPT_CONFIG_ID and CUOPT_MAX_CONFIG.
-inline constexpr bool default_read_environment = true;
+inline constexpr bool default_read_environment = false;
 
 // The value of a variable of the experiment, or null when the environment is not read.
 inline const char* environment(const char* name)
