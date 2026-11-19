@@ -549,39 +549,41 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
                     search_strategy_t::BEST_FIRST,
                     base_seconds});
   }
-  for (auto strategy :
-       {search_strategy_t::RINS, search_strategy_t::RENS, search_strategy_t::MUTATION}) {
-    arms.push_back(
-      {search_strategy_to_string(strategy), true, recombiner_enum_t::SIZE, strategy, base_seconds});
+  if (gpu_submip_experiment::submip_arms()) {
+    for (auto strategy :
+         {search_strategy_t::RINS, search_strategy_t::RENS, search_strategy_t::MUTATION}) {
+      arms.push_back({search_strategy_to_string(strategy),
+                      true,
+                      recombiner_enum_t::SIZE,
+                      strategy,
+                      base_seconds});
+    }
   }
+  const bool gap_reward = gpu_submip_experiment::gap_reward();
   mab_t bandit(arms.size(),
                derive_seed(context.base_seed, rng_id_t::diversity_manager, 3),
                method_alpha,
                "method");
   const int device        = context.handle_ptr->get_device();
   double last_improvement = timer.elapsed_time();
-  double idle_seconds     = 0.;
   CUOPT_LOG_INFO(
-    "MethodBandit phase=start elapsed=%.3f arms=%zu arm_seconds=%.3f dynamic=%d population=%zu",
+    "MethodBandit phase=start elapsed=%.3f arms=%zu arm_seconds=%.3f dynamic=%d gap_reward=%d "
+    "population=%zu",
     timer.elapsed_time(),
     arms.size(),
     base_seconds,
     int(dynamic),
+    int(gap_reward),
     population.current_size());
-  while (!timer.check_time_limit() && !check_b_b_preemption()) {
+  // The phase lasts while there is a pair to recombine; without one the FP loop takes the thread
+  // back.
+  while (!timer.check_time_limit() && !check_b_b_preemption() && population.current_size() >= 2) {
     cuopt_assert(population.is_feasible(), "The bandit phase starts from a feasible population");
     std::vector<int> available;
     for (size_t a = 0; a < arms.size(); ++a) {
-      const bool ready = arms[a].submip
-                           ? branch_and_bound.has_pending_gpu_submip_job(arms[a].strategy)
-                           : population.current_size() >= 2;
-      if (ready) { available.push_back(a); }
-    }
-    if (available.empty()) {
-      context.set_gpu_thread_phase("bandit:idle");
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      idle_seconds += 0.05;
-      continue;
+      if (!arms[a].submip || branch_and_bound.has_pending_gpu_submip_job(arms[a].strategy)) {
+        available.push_back(a);
+      }
     }
     const int chosen           = bandit.select_among(available);
     auto& arm                  = arms[chosen];
@@ -589,7 +591,8 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
     const double start         = timer.elapsed_time();
     const double slice_seconds = std::min<double>(arm.seconds, timer.remaining_time());
     timer_t slice(slice_seconds);
-    i_t jobs = 0, offspring = 0, inserted = 0, rejected = 0;
+    [[maybe_unused]] i_t jobs = 0, offspring = 0, rejected = 0;
+    i_t inserted = 0;
     context.set_gpu_thread_phase(arm.name);
     if (arm.submip) {
       // A candidate joins the population through the solver's own feasibility test, like any
@@ -623,16 +626,25 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
         ++offspring;
       }
     }
+    // As after a recombiner round of the FP loop.
+    population.update_weights();
     const double used    = timer.elapsed_time() - start;
     const f_t best_after = population.best_feasible().get_objective();
+    // The share of the gap to the tree's bound that the slice closed.
+    const f_t bound      = problem_ptr->get_solver_obj_from_user_obj(stats.get_solution_bound());
+    const f_t gap_before = best_before - bound;
+    const bool has_gap   = std::isfinite(gap_before) && gap_before > 0;
+    const double share   = has_gap ? (best_before - best_after) / gap_before : 0.;
     const f_t epsilon    = std::max<f_t>(1e-6, 1e-4 * std::abs(best_before));
-    const bool improved  = best_after + epsilon < best_before;
-    // Per second, in units of the configured slice: 8 for a better incumbent, 1 for a new member
-    // of the population.
-    const double reward = (improved       ? 8.
-                           : inserted > 0 ? 1.
-                                          : 0.) *
-                          base_seconds / std::max(1., used);
+    const bool improved =
+      gap_reward ? best_after < best_before : best_after + epsilon < best_before;
+    // The gap reward grows with that share. The flat one gives 8 for a better incumbent and 1 for
+    // a new member of the population. Both are per second, in units of the configured slice.
+    const double value  = gap_reward     ? 8. * std::sqrt(share)
+                          : improved     ? 8.
+                          : inserted > 0 ? 1.
+                                         : 0.;
+    const double reward = value * base_seconds / used;
     bandit.add_reward(chosen, reward);
     ++arm.pulls;
     arm.improved += improved;
@@ -653,8 +665,8 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
     }
     CUOPT_LOG_INFO(
       "MethodBanditPull arm=%s elapsed=%.3f slice=%.3f seconds=%.3f jobs=%d offspring=%d "
-      "inserted=%d rejected=%d improved=%d best_before=%.10g best_after=%.10g reward=%.4f "
-      "q=%.4f next_slice=%.3f",
+      "inserted=%d rejected=%d improved=%d best_before=%.10g best_after=%.10g share=%.4g "
+      "tree_gap=%d reward=%.4f q=%.4f next_slice=%.3f",
       arm.name,
       timer.elapsed_time(),
       slice_seconds,
@@ -666,6 +678,8 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
       int(improved),
       problem_ptr->get_user_obj_from_solver_obj(best_before),
       problem_ptr->get_user_obj_from_solver_obj(best_after),
+      share,
+      int(has_gap),
       reward,
       bandit.mab_arm_stats_[chosen].q_value,
       arm.seconds);
@@ -678,8 +692,9 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
                    arms[a].improved,
                    bandit.mab_arm_stats_[a].q_value);
   }
-  CUOPT_LOG_INFO(
-    "MethodBandit phase=end elapsed=%.3f idle_seconds=%.3f", timer.elapsed_time(), idle_seconds);
+  CUOPT_LOG_INFO("MethodBandit phase=end elapsed=%.3f population=%zu",
+                 timer.elapsed_time(),
+                 population.current_size());
 }
 
 template <typename i_t, typename f_t>
@@ -937,8 +952,14 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
     return population.best_feasible();
   }
 
-  run_fp_alone();
-  if (context.method_bandit) { run_method_bandit(branch_and_bound); }
+  if (!ls.fp_stopped_for_bandit) { run_fp_alone(); }
+  // The FP loop hands the thread to the method bandit when it stops producing, and gets it back
+  // when the bandit has no pair left to recombine.
+  while (ls.fp_stopped_for_bandit) {
+    run_method_bandit(branch_and_bound);
+    if (timer.check_time_limit() || check_b_b_preemption()) { break; }
+    run_fp_alone();
+  }
   population.add_external_solutions_to_population();
   return population.best_feasible();
 };

@@ -112,6 +112,8 @@ class local_search_t {
   mip_solver_context_t<i_t, f_t>& context;
   rmm::device_uvector<f_t>& lp_optimal_solution;
   bool lp_optimal_exists{false};
+  // The last FP loop ended by the method bandit's rule (gpu_submip_experiment.hpp).
+  bool fp_stopped_for_bandit{false};
   rmm::device_uvector<f_t> fj_sol_on_lp_opt;
   fj_t<i_t, f_t> fj;
   constraint_prop_t<i_t, f_t> constraint_prop;

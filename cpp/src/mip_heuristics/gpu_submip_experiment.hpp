@@ -37,12 +37,28 @@ inline constexpr bool default_method_bandit = false;
 // CUOPT_GPU_METHOD_BANDIT_FP_FAILURES: failed FP iterations in a row that end the FP loop, once
 // the population has a feasible solution.
 inline constexpr int default_fp_failures = 5;
+// CUOPT_GPU_METHOD_BANDIT_FP_FAILURE_SECONDS: the FP loop also ends after a failed iteration when
+// the failures in a row have taken this long; 0 leaves only the count above.
+inline constexpr double default_fp_failure_seconds = 0.;
+// CUOPT_GPU_METHOD_BANDIT_SUBMIP_ARMS: the RINS / RENS / mutation neighbourhoods of the tree are
+// arms of the bandit, next to the recombiners.
+inline constexpr bool default_submip_arms = true;
+// CUOPT_GPU_METHOD_BANDIT_GAP_REWARD: a slice is rewarded by the share of the gap to the tree's
+// bound it closed (8 * sqrt(share)) and by nothing else; nothing while the tree has no bound. Off:
+// 8 for an improvement of more than 1e-4 relative, 1 for a new member of the population.
+inline constexpr bool default_gap_reward = false;
 // CUOPT_GPU_METHOD_BANDIT_ARM_SECONDS: seconds of one slice.
 inline constexpr double default_arm_seconds = 5.;
 // CUOPT_GPU_METHOD_BANDIT_DYNAMIC: each method's slice doubles (up to four times the setting above)
 // after a slice that improves the incumbent, halves (down to half of it) after one that adds
 // nothing to the population, and all go back to it after 60 s without an improvement.
 inline constexpr bool default_dynamic_arm_seconds = false;
+// CUOPT_GPU_HEURISTIC_DIAGNOSTICS: log the phases of the regular GPU thread (HeurPhase) and each
+// iteration of its FP loop (HeurFpIteration).
+inline constexpr bool default_phase_diagnostics = false;
+// CUOPT_FP_UNSTAGED: before the first solution, run the plain FP loop on problems with binaries
+// and general integers too, instead of the staged FP (binaries first, then all integers).
+inline constexpr bool default_unstaged_fp = false;
 
 // Benchmark commits set this to false, so that their defaults hold whatever the environment
 // says: the cluster's benchmark script exports CUOPT_GPU_SUBMIP, CUOPT_SUBMIP_POOL_DIAGNOSTICS,
@@ -102,6 +118,20 @@ inline double arm_seconds()
 inline bool dynamic_arm_seconds()
 {
   return flag("CUOPT_GPU_METHOD_BANDIT_DYNAMIC", default_dynamic_arm_seconds);
+}
+inline double fp_failure_seconds()
+{
+  return number("CUOPT_GPU_METHOD_BANDIT_FP_FAILURE_SECONDS", default_fp_failure_seconds);
+}
+inline bool submip_arms()
+{
+  return flag("CUOPT_GPU_METHOD_BANDIT_SUBMIP_ARMS", default_submip_arms);
+}
+inline bool gap_reward() { return flag("CUOPT_GPU_METHOD_BANDIT_GAP_REWARD", default_gap_reward); }
+inline bool unstaged_fp() { return flag("CUOPT_FP_UNSTAGED", default_unstaged_fp); }
+inline bool phase_diagnostics()
+{
+  return flag("CUOPT_GPU_HEURISTIC_DIAGNOSTICS", default_phase_diagnostics);
 }
 
 }  // namespace cuopt::mathematical_optimization::mip::gpu_submip_experiment

@@ -12,6 +12,8 @@
 
 #include <cuopt/error.hpp>
 
+#include <numeric>
+
 namespace cuopt::mathematical_optimization::mip {
 
 mab_t::mab_t(int n_arms, int seed, double alpha, std::string bandit_name)
@@ -52,55 +54,23 @@ int mab_t::select_mab_option()
 // UCB arm selection with confidence bounds
 int mab_t::select_ucb_arm()
 {
-  double max_ucb_value = -std::numeric_limits<double>::infinity();
-  std::vector<int> best_arms;
-
-  for (int i = 0; i < static_cast<int>(mab_arm_stats_.size()); ++i) {
-    // Calculate UCB value: Q(a) + 2*sqrt(ln(t)/N(a))
-    double confidence_bound = std::sqrt((2.0 * std::log(mab_total_steps_)) /
-                                        static_cast<double>(mab_arm_stats_[i].num_pulls));
-    double ucb_value        = mab_arm_stats_[i].q_value + confidence_bound;
-
-    CUOPT_LOG_DEBUG("MAB " + bandit_name + ": UCB: Arm " + std::to_string(i) +
-                    ", Q=" + std::to_string(mab_arm_stats_[i].q_value) + ", CB=" +
-                    std::to_string(confidence_bound) + ", UCB=" + std::to_string(ucb_value));
-
-    constexpr double tolerance = 1e-9;
-    if (ucb_value > max_ucb_value + tolerance) {
-      max_ucb_value = ucb_value;
-      best_arms.clear();
-      best_arms.push_back(i);
-    } else if (std::abs(ucb_value - max_ucb_value) < tolerance) {
-      best_arms.push_back(i);
-    }
-  }
-
-  if (!best_arms.empty()) {
-    std::uniform_int_distribution<int> dist_tie(0, best_arms.size() - 1);
-    int chosen_arm = best_arms[dist_tie(mab_rng_)];
-    CUOPT_LOG_DEBUG("MAB " + bandit_name + ": UCB Selected: Arm " + std::to_string(chosen_arm) +
-                    " (UCB Value: " + std::to_string(max_ucb_value) + ")");
-    return chosen_arm;
-  } else {
-    CUOPT_LOG_ERROR("MAB " + bandit_name + ": UCB: No best arm found, falling back to random.");
-    std::uniform_int_distribution<int> dist_arm(0, mab_arm_stats_.size() - 1);
-    return dist_arm(mab_rng_);
-  }
+  std::vector<int> arms(mab_arm_stats_.size());
+  std::iota(arms.begin(), arms.end(), 0);
+  return best_ucb_arm(arms);
 }
 
-int mab_t::select_among(const std::vector<int>& arms)
+// The arm of the subset with the largest Q(a) + sqrt(2 ln(t) / N(a)); every arm was pulled before.
+int mab_t::best_ucb_arm(const std::vector<int>& arms)
 {
-  cuopt_assert(!arms.empty(), "The bandit needs an arm to choose from");
-  mab_total_steps_++;
-  for (int arm : arms) {
-    if (mab_arm_stats_[arm].num_pulls == 0) { return arm; }
-  }
   double max_ucb_value = -std::numeric_limits<double>::infinity();
   std::vector<int> best_arms;
   for (int arm : arms) {
     const double confidence_bound =
       std::sqrt((2.0 * std::log(mab_total_steps_)) / (double)mab_arm_stats_[arm].num_pulls);
-    const double ucb_value     = mab_arm_stats_[arm].q_value + confidence_bound;
+    const double ucb_value = mab_arm_stats_[arm].q_value + confidence_bound;
+    CUOPT_LOG_DEBUG("MAB " + bandit_name + ": UCB: Arm " + std::to_string(arm) +
+                    ", Q=" + std::to_string(mab_arm_stats_[arm].q_value) + ", CB=" +
+                    std::to_string(confidence_bound) + ", UCB=" + std::to_string(ucb_value));
     constexpr double tolerance = 1e-9;
     if (ucb_value > max_ucb_value + tolerance) {
       max_ucb_value = ucb_value;
@@ -110,8 +80,18 @@ int mab_t::select_among(const std::vector<int>& arms)
       best_arms.push_back(arm);
     }
   }
+  cuopt_assert(!best_arms.empty(), "The bandit needs an arm to choose from");
   std::uniform_int_distribution<int> dist_tie(0, best_arms.size() - 1);
   return best_arms[dist_tie(mab_rng_)];
+}
+
+int mab_t::select_among(const std::vector<int>& arms)
+{
+  mab_total_steps_++;
+  for (int arm : arms) {
+    if (mab_arm_stats_[arm].num_pulls == 0) { return arm; }
+  }
+  return best_ucb_arm(arms);
 }
 
 void mab_t::add_reward(int option_id, double reward)

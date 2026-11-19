@@ -82,6 +82,7 @@ struct mab_t {
   // The same UCB choice over a subset of the arms; an arm of the subset that was never pulled
   // goes first.
   int select_among(const std::vector<int>& arms);
+  int best_ucb_arm(const std::vector<int>& arms);
   // Records a reward the caller computed.
   void add_reward(int option_id, double reward);
   int select_ucb_arm();

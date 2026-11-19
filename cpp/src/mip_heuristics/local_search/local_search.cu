@@ -43,6 +43,15 @@ static int feasibility_team_size(const mip_solver_context_t<i_t, f_t>& context)
 
 // Invoke only between complete GPU operations. The callback drains GPU work before migration
 // or parking, and temporary solutions must follow the handle's allocation stream.
+// The method bandit can take the thread over from FP: a feasible population with a pair to
+// recombine.
+template <typename i_t, typename f_t>
+static bool method_bandit_can_start(population_t<i_t, f_t>& population)
+{
+  return population.is_feasible() && population.current_size() >= 2 &&
+         !recombiner_t<i_t, f_t>::enabled_recombiners.empty();
+}
+
 template <typename i_t, typename f_t>
 static void apply_gpu_partition_safe_point(mip_solver_context_t<i_t, f_t>& context,
                                            solution_t<i_t, f_t>& solution)
@@ -710,19 +719,27 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
   auto integer_only = (n_binary_vars == 0);
   bool is_feasible  = false;
 
-  if (binary_only || integer_only) {
+  fp_stopped_for_bandit = false;
+  if (binary_only || integer_only || gpu_submip_experiment::unstaged_fp()) {
     return run_fp(solution, timer, population_ptr);
   } else {
     fp.improvement_callback   = make_fj_improvement_callback(solution.problem_ptr);
     const i_t n_fp_iterations = 1000000;
-    // As in run_fp: with the method bandit, stop once FP fails this often in a row while the
-    // population already has a feasible solution from elsewhere.
+    // As in run_fp: with the method bandit, stop once FP fails this often or this long in a row
+    // while the bandit can start from solutions that came from elsewhere.
     const i_t failures_to_stop = context.method_bandit ? gpu_submip_experiment::fp_failures() : 0;
-    i_t failed_in_a_row        = 0;
-    const auto stop_fp         = [&]() {
-      if (failures_to_stop == 0 || failed_in_a_row < failures_to_stop) { return false; }
+    const double failure_seconds =
+      context.method_bandit ? gpu_submip_experiment::fp_failure_seconds() : 0.;
+    const auto elapsed  = [this]() { return context.diversity_manager_ptr->timer.elapsed_time(); };
+    i_t failed_in_a_row = 0;
+    double streak_start = elapsed();
+    const auto stop_fp  = [&]() {
+      const bool too_many = failures_to_stop > 0 && failed_in_a_row >= failures_to_stop;
+      const bool too_long = failure_seconds > 0 && elapsed() - streak_start >= failure_seconds;
+      if (!too_many && !too_long) { return false; }
       population_ptr->add_external_solutions_to_population();
-      return population_ptr->is_feasible();
+      fp_stopped_for_bandit = method_bandit_can_start(*population_ptr);
+      return fp_stopped_for_bandit;
     };
     fp.cycle_queue.reset(solution);
     fp.reset();
@@ -772,7 +789,10 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
                       binary_it_counter,
                       i,
                       is_feasible);
-      if (is_feasible) { failed_in_a_row = 0; }
+      if (is_feasible) {
+        failed_in_a_row = 0;
+        streak_start    = elapsed();
+      }
       // TODO try resetting and not resetting the alpha
       fp.revert_relaxation(solution);
       fp.last_distances.resize(0);
@@ -947,18 +967,29 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     resize_to_new_problem();
   }
   i_t last_improved_iteration = 0;
-  // With the method bandit the loop ends for good after this many failed iterations in a row,
-  // provided the population has a feasible solution to continue from.
+  // With the method bandit the loop ends after this many failed iterations in a row, once the
+  // bandit can start.
   const i_t failures_to_stop = context.method_bandit ? gpu_submip_experiment::fp_failures() : 0;
-  i_t failed_in_a_row        = 0;
-  i_t iterations             = 0;
-  i_t feasible_iterations    = 0;
-  const char* end_reason     = "time_limit";
-  const auto elapsed = [this]() { return context.diversity_manager_ptr->timer.elapsed_time(); };
-  CUOPT_LOG_INFO("HeurPhase name=fp_loop_start elapsed=%.3f feasible_start=%d failures_to_stop=%d",
-                 elapsed(),
-                 int(is_feasible),
-                 int(failures_to_stop));
+  // It also ends after a failed iteration once the failures in a row have taken this long.
+  const double failure_seconds =
+    context.method_bandit ? gpu_submip_experiment::fp_failure_seconds() : 0.;
+  const bool diagnostics                   = gpu_submip_experiment::phase_diagnostics();
+  fp_stopped_for_bandit                    = false;
+  i_t failed_in_a_row                      = 0;
+  [[maybe_unused]] i_t iterations          = 0;
+  [[maybe_unused]] i_t feasible_iterations = 0;
+  [[maybe_unused]] const char* end_reason  = "time_limit";
+  const auto elapsed  = [this]() { return context.diversity_manager_ptr->timer.elapsed_time(); };
+  double streak_start = elapsed();
+  if (diagnostics) {
+    CUOPT_LOG_INFO(
+      "HeurPhase name=fp_loop_start elapsed=%.3f feasible_start=%d failures_to_stop=%d "
+      "failure_seconds=%.3f",
+      elapsed(),
+      int(is_feasible),
+      int(failures_to_stop),
+      failure_seconds);
+  }
   for (i_t i = 0; i < n_fp_iterations && !timer.check_time_limit(); ++i) {
     apply_gpu_partition_safe_point(context, solution);
     if (timer.check_time_limit()) {
@@ -966,15 +997,17 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       break;
     }
     ++iterations;
-    const double iteration_start = elapsed();
-    const auto log_iteration     = [&](bool feasible) {
-      CUOPT_LOG_INFO(
-        "HeurFpIteration iteration=%d elapsed=%.3f seconds=%.3f feasible=%d failed_in_a_row=%d",
-        int(iterations),
-        elapsed(),
-        elapsed() - iteration_start,
-        int(feasible),
-        int(failed_in_a_row));
+    [[maybe_unused]] const double iteration_start = elapsed();
+    const auto log_iteration                      = [&]([[maybe_unused]] bool feasible) {
+      if (diagnostics) {
+        CUOPT_LOG_INFO(
+          "HeurFpIteration iteration=%d elapsed=%.3f seconds=%.3f feasible=%d failed_in_a_row=%d",
+          int(iterations),
+          elapsed(),
+          elapsed() - iteration_start,
+          int(feasible),
+          int(failed_in_a_row));
+      }
     };
     CUOPT_LOG_DEBUG("fp_loop it %d last_improved_iteration %d", i, last_improved_iteration);
     population_ptr->add_external_solutions_to_population();
@@ -1005,6 +1038,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       failed_in_a_row         = 0;
       ++feasible_iterations;
       log_iteration(true);
+      streak_start = elapsed();
     }
     // if not feasible, it means it is a cycle
     else {
@@ -1033,12 +1067,15 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
         failed_in_a_row         = 0;
         ++feasible_iterations;
         log_iteration(true);
+        streak_start = elapsed();
       } else {
         ++failed_in_a_row;
         log_iteration(false);
-        if (failures_to_stop > 0 && failed_in_a_row >= failures_to_stop &&
-            population_ptr->is_feasible()) {
-          end_reason = "failures";
+        const bool too_many = failures_to_stop > 0 && failed_in_a_row >= failures_to_stop;
+        const bool too_long = failure_seconds > 0 && elapsed() - streak_start >= failure_seconds;
+        if ((too_many || too_long) && method_bandit_can_start(*population_ptr)) {
+          end_reason            = too_many ? "failures" : "failure_seconds";
+          fp_stopped_for_bandit = true;
           break;
         }
         reset_alpha_and_run_recombiners(solution,
@@ -1051,15 +1088,18 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       }
     }
   }
-  CUOPT_LOG_INFO(
-    "HeurPhase name=fp_loop_end elapsed=%.3f reason=%s iterations=%d feasible_iterations=%d "
-    "failed_in_a_row=%d population_feasible=%d",
-    elapsed(),
-    end_reason,
-    int(iterations),
-    int(feasible_iterations),
-    int(failed_in_a_row),
-    int(population_ptr->is_feasible()));
+  if (diagnostics) {
+    CUOPT_LOG_INFO(
+      "HeurPhase name=fp_loop_end elapsed=%.3f reason=%s iterations=%d feasible_iterations=%d "
+      "failed_in_a_row=%d population_feasible=%d population=%zu",
+      elapsed(),
+      end_reason,
+      int(iterations),
+      int(feasible_iterations),
+      int(failed_in_a_row),
+      int(population_ptr->is_feasible()),
+      population_ptr->current_size());
+  }
   raft::copy(solution.assignment.data(),
              best_solution.data(),
              solution.assignment.size(),
@@ -1080,14 +1120,19 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   raft::common::nvtx::range fun_scope("generate_solution");
   cuopt_assert(population_ptr != nullptr, "Population pointer must not be null");
   timer_t timer(time_limit);
-  auto n_vars         = solution.problem_ptr->n_variables;
-  auto n_binary_vars  = solution.problem_ptr->get_n_binary_variables();
-  auto n_integer_vars = solution.problem_ptr->n_integer_vars;
-  const auto elapsed  = [this]() { return context.diversity_manager_ptr->timer.elapsed_time(); };
-  CUOPT_LOG_INFO("HeurPhase name=fj_lp_opt_start elapsed=%.3f", elapsed());
+  auto n_vars                         = solution.problem_ptr->n_variables;
+  auto n_binary_vars                  = solution.problem_ptr->get_n_binary_variables();
+  auto n_integer_vars                 = solution.problem_ptr->n_integer_vars;
+  const bool diagnostics              = gpu_submip_experiment::phase_diagnostics();
+  [[maybe_unused]] const auto elapsed = [this]() {
+    return context.diversity_manager_ptr->timer.elapsed_time();
+  };
+  if (diagnostics) { CUOPT_LOG_INFO("HeurPhase name=fj_lp_opt_start elapsed=%.3f", elapsed()); }
   bool is_feasible = check_fj_on_lp_optimal(solution, perturb, timer);
-  CUOPT_LOG_INFO(
-    "HeurPhase name=fj_lp_opt_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
+  if (diagnostics) {
+    CUOPT_LOG_INFO(
+      "HeurPhase name=fj_lp_opt_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
+  }
   if (is_feasible) {
     CUOPT_LOG_DEBUG("Solution generated with FJ on LP optimal: is_feasible %d", is_feasible);
     return true;
@@ -1104,8 +1149,10 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
                solution.handle_ptr->get_stream());
     fj.reset_weights(solution.handle_ptr->get_stream());
     is_feasible = run_fj_on_zero(solution, timer);
-    CUOPT_LOG_INFO(
-      "HeurPhase name=fj_zero_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
+    if (diagnostics) {
+      CUOPT_LOG_INFO(
+        "HeurPhase name=fj_zero_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
+    }
     if (is_feasible) {
       CUOPT_LOG_DEBUG("Solution generated with FJ on zero solution: is_feasible %d", is_feasible);
       return true;
@@ -1125,10 +1172,19 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   fp.cycle_queue.reset(solution);
   fp.reset();
   fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
-  CUOPT_LOG_INFO("HeurPhase name=staged_fp_start elapsed=%.3f", elapsed());
+  if (diagnostics) {
+    CUOPT_LOG_INFO("HeurPhase name=staged_fp_start elapsed=%.3f binaries=%d integers=%d",
+                   elapsed(),
+                   int(n_binary_vars),
+                   int(n_integer_vars));
+  }
   is_feasible = run_staged_fp(solution, timer, population_ptr);
-  CUOPT_LOG_INFO(
-    "HeurPhase name=staged_fp_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
+  if (diagnostics) {
+    CUOPT_LOG_INFO("HeurPhase name=staged_fp_end elapsed=%.3f feasible=%d stopped_for_bandit=%d",
+                   elapsed(),
+                   int(is_feasible),
+                   int(fp_stopped_for_bandit));
+  }
   // is_feasible = run_fp(solution, timer);
   CUOPT_LOG_DEBUG("Solution generated with FP: is_feasible %d", is_feasible);
   return is_feasible;

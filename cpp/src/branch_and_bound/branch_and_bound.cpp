@@ -2829,9 +2829,9 @@ bool branch_and_bound_t<i_t, f_t>::run_pending_gpu_submip_job(
   if (!job) { return false; }
   auto& stats = shared->source_stats[static_cast<size_t>(job->source)];
   stats.dequeued.fetch_add(1, std::memory_order_relaxed);
-  auto options         = shared->options;
-  options.time_limit   = seconds;
-  const double started = tic();
+  auto options                          = shared->options;
+  options.time_limit                    = seconds;
+  [[maybe_unused]] const double started = tic();
   CUOPT_LOG_INFO("GpuSubmipIndependentStart job=%llu elapsed=%.6f queue_seconds=%.6f",
                  (unsigned long long)job->job_id,
                  started - shared->root_start,
@@ -2855,7 +2855,7 @@ bool branch_and_bound_t<i_t, f_t>::run_pending_gpu_submip_job(
                  toc(shared->root_start),
                  toc(started),
                  int(valid),
-                 static_cast<int>(strategy));
+                 (int)strategy);
   return true;
 }
 
