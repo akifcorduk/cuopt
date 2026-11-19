@@ -16,15 +16,15 @@ inline constexpr bool default_enabled = false;
 // CUOPT_SUBMIP_POOL_DIAGNOSTICS: log the CPU sub-MIP pool's tasks and schedule.
 inline constexpr bool default_pool_diagnostics = false;
 // CUOPT_GPU_SUBMIP_PDFP: PDFP instead of PDLP as the FP session's projector.
-inline constexpr bool default_pdfp = false;
+inline constexpr bool default_pdfp = true;
 // CUOPT_GPU_SUBMIP_PROJECTION_SECONDS: time limit of one projection; 0 keeps the FP preset's.
 inline constexpr double default_projection_seconds = 0.;
 // CUOPT_GPU_SUBMIP_SCREEN_SECONDS: time for the screen's LP run before the descent; 0 turns the
 // screen off. Needs PDFP.
-inline constexpr double default_screen_seconds = 0.;
+inline constexpr double default_screen_seconds = 0.2;
 // CUOPT_GPU_SUBMIP_TARGET_SHARE: share of the screen's LP gain the descent has to reach. Needs
 // the screen.
-inline constexpr double default_target_share = 0.;
+inline constexpr double default_target_share = 0.25;
 // CUOPT_GPU_SUBMIP_LP_START: start the descent from the screen's LP point. Needs the screen.
 inline constexpr bool default_lp_start = false;
 // CUOPT_GPU_SUBMIP_RENS_NO_INCUMBENT: before the first incumbent, give the worker the RENS
@@ -33,12 +33,12 @@ inline constexpr bool default_rens_without_incumbent = false;
 // CUOPT_GPU_METHOD_BANDIT: no GPU sub-MIP worker thread. The regular GPU thread leaves the FP loop
 // when it stops producing and then gives its time, one slice at a time, to the recombiners and to
 // the RINS / RENS / mutation neighbourhoods of the tree, chosen by a bandit.
-inline constexpr bool default_method_bandit = false;
+inline constexpr bool default_method_bandit = true;
 // CUOPT_GPU_METHOD_BANDIT_FP_FAILURES: failed FP iterations in a row that end the FP loop, once
 // the population has a feasible solution.
 inline constexpr int default_fp_failures = 5;
 // CUOPT_GPU_METHOD_BANDIT_ARM_SECONDS: seconds of one slice.
-inline constexpr double default_arm_seconds = 5.;
+inline constexpr double default_arm_seconds = 10.;
 // CUOPT_GPU_METHOD_BANDIT_DYNAMIC: each method's slice doubles (up to four times the setting above)
 // after a slice that improves the incumbent, halves (down to half of it) after one that adds
 // nothing to the population, and all go back to it after 60 s without an improvement.
@@ -47,7 +47,7 @@ inline constexpr bool default_dynamic_arm_seconds = false;
 // Benchmark commits set this to false, so that their defaults hold whatever the environment
 // says: the cluster's benchmark script exports CUOPT_GPU_SUBMIP, CUOPT_SUBMIP_POOL_DIAGNOSTICS,
 // CUOPT_GPU_SUBMIP_CONFIG_FAMILY, CUOPT_CONFIG_ID and CUOPT_MAX_CONFIG.
-inline constexpr bool default_read_environment = true;
+inline constexpr bool default_read_environment = false;
 
 // The value of a variable of the experiment, or null when the environment is not read.
 inline const char* environment(const char* name)
