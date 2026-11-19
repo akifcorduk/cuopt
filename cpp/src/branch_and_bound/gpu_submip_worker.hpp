@@ -102,6 +102,17 @@ inline gpu_submip_source_t gpu_submip_source(bool inside_submip, search_strategy
                                                    : gpu_submip_source_t::DIVE;
 }
 
+// The pull queue of a sub-MIP type; -1 for any other strategy.
+inline int gpu_submip_pull_index(search_strategy_t strategy)
+{
+  switch (strategy) {
+    case search_strategy_t::RINS: return 0;
+    case search_strategy_t::RENS: return 1;
+    case search_strategy_t::MUTATION: return 2;
+    default: return -1;
+  }
+}
+
 inline bool gpu_submip_source_applies_rins(gpu_submip_source_t source)
 {
   return source != gpu_submip_source_t::CPU_SUBMIP;

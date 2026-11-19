@@ -30,6 +30,19 @@ inline constexpr bool default_lp_start = false;
 // CUOPT_GPU_SUBMIP_RENS_NO_INCUMBENT: before the first incumbent, give the worker the RENS
 // neighbourhoods of the tree nodes, searched without a cutoff.
 inline constexpr bool default_rens_without_incumbent = false;
+// CUOPT_GPU_METHOD_BANDIT: no GPU sub-MIP worker thread. The regular GPU thread leaves the FP loop
+// when it stops producing and then gives its time, one slice at a time, to the recombiners and to
+// the RINS / RENS / mutation neighbourhoods of the tree, chosen by a bandit.
+inline constexpr bool default_method_bandit = false;
+// CUOPT_GPU_METHOD_BANDIT_FP_FAILURES: failed FP iterations in a row that end the FP loop, once
+// the population has a feasible solution.
+inline constexpr int default_fp_failures = 5;
+// CUOPT_GPU_METHOD_BANDIT_ARM_SECONDS: seconds of one slice.
+inline constexpr double default_arm_seconds = 5.;
+// CUOPT_GPU_METHOD_BANDIT_DYNAMIC: each method's slice doubles (up to four times the setting above)
+// after a slice that improves the incumbent, halves (down to half of it) after one that adds
+// nothing to the population, and all go back to it after 60 s without an improvement.
+inline constexpr bool default_dynamic_arm_seconds = false;
 
 // Benchmark commits set this to false, so that their defaults hold whatever the environment
 // says: the cluster's benchmark script exports CUOPT_GPU_SUBMIP, CUOPT_SUBMIP_POOL_DIAGNOSTICS,
@@ -76,6 +89,19 @@ inline bool lp_start() { return flag("CUOPT_GPU_SUBMIP_LP_START", default_lp_sta
 inline bool rens_without_incumbent()
 {
   return flag("CUOPT_GPU_SUBMIP_RENS_NO_INCUMBENT", default_rens_without_incumbent);
+}
+inline bool method_bandit() { return flag("CUOPT_GPU_METHOD_BANDIT", default_method_bandit); }
+inline int fp_failures()
+{
+  return (int)number("CUOPT_GPU_METHOD_BANDIT_FP_FAILURES", default_fp_failures);
+}
+inline double arm_seconds()
+{
+  return number("CUOPT_GPU_METHOD_BANDIT_ARM_SECONDS", default_arm_seconds);
+}
+inline bool dynamic_arm_seconds()
+{
+  return flag("CUOPT_GPU_METHOD_BANDIT_DYNAMIC", default_dynamic_arm_seconds);
 }
 
 }  // namespace cuopt::mathematical_optimization::mip::gpu_submip_experiment

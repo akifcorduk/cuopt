@@ -2504,6 +2504,12 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
     return {};
   }
   typename gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>>::reservation_t reservation;
+  const int pull_index = gpu_submip_pull_index(strategy);
+  cuopt_assert(!shared->pull || (pull_index >= 0 && shared->options.independent),
+               "Pull mode takes the sub-MIP pool's neighbourhoods");
+  auto& queue = shared->pull ? shared->pull_queues[pull_index] : shared->queue;
+  // A neighbourhood the GPU thread has not asked for is replaced once it is a second old.
+  const double pending_max_age = shared->pull ? 1. : shared->options.pending_max_age;
   if (shared->options.independent) {
     stats.callbacks.fetch_add(1, std::memory_order_relaxed);
     // Leave the regular GPU worker running until an improving cutoff is available, unless the
@@ -2514,18 +2520,18 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
     if (!has_cutoff && !rens_alone) { return {}; }
     if (!has_cutoff) { stats.without_cutoff.fetch_add(1, std::memory_order_relaxed); }
     stats.eligible.fetch_add(1, std::memory_order_relaxed);
-    if (shared->options.pending_max_age > 0) {
+    if (pending_max_age > 0) {
       const double now       = tic();
       bool replaced          = false;
       uint64_t replaced_job  = 0;
       double replaced_age    = 0.;
       const auto replace_old = [&](const auto& pending) {
-        if (now - pending.enqueued_at < shared->options.pending_max_age) { return false; }
+        if (now - pending.enqueued_at < pending_max_age) { return false; }
         replaced_job = pending.job_id;
         replaced_age = now - pending.enqueued_at;
         return true;
       };
-      reservation = shared->queue.try_reserve_if(replace_old, &replaced);
+      reservation = queue.try_reserve_if(replace_old, &replaced);
       if (replaced) {
         stats.replaced_pending.fetch_add(1, std::memory_order_relaxed);
         CUOPT_LOG_INFO(
@@ -2538,7 +2544,7 @@ std::unique_ptr<gpu_submip_pair_t> branch_and_bound_t<i_t, f_t>::launch_gpu_subm
           now - shared->root_start);
       }
     } else {
-      reservation = shared->queue.try_reserve(false);
+      reservation = queue.try_reserve(false);
     }
     if (!reservation) {
       stats.enqueue_failed.fetch_add(1, std::memory_order_relaxed);
@@ -2800,6 +2806,57 @@ f_t branch_and_bound_t<i_t, f_t>::publish_gpu_submip_solution(
     return std::abs(previous_user - new_user) / std::max(f_t(1), std::abs(previous_user));
   }
   return 0.;
+}
+
+template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::has_pending_gpu_submip_job(search_strategy_t strategy) const
+{
+  if (!gpu_submip_pull_ready_.load(std::memory_order_acquire)) { return false; }
+  return gpu_submip_shared_->pull_queues[gpu_submip_pull_index(strategy)].has_pending();
+}
+
+template <typename i_t, typename f_t>
+bool branch_and_bound_t<i_t, f_t>::run_pending_gpu_submip_job(
+  search_strategy_t strategy,
+  double seconds,
+  int device,
+  const std::function<void(const std::vector<f_t>&, f_t)>& publish)
+{
+  if (!gpu_submip_pull_ready_.load(std::memory_order_acquire)) { return false; }
+  const auto shared = gpu_submip_shared_;
+  auto job =
+    shared->pull_queues[gpu_submip_pull_index(strategy)].pop_for(std::chrono::milliseconds(0));
+  if (!job) { return false; }
+  auto& stats = shared->source_stats[static_cast<size_t>(job->source)];
+  stats.dequeued.fetch_add(1, std::memory_order_relaxed);
+  auto options         = shared->options;
+  options.time_limit   = seconds;
+  const double started = tic();
+  CUOPT_LOG_INFO("GpuSubmipIndependentStart job=%llu elapsed=%.6f queue_seconds=%.6f",
+                 (unsigned long long)job->job_id,
+                 started - shared->root_start,
+                 started - job->enqueued_at);
+  const bool valid =
+    run_gpu_submip_job_full_device_continuous<i_t, f_t>(*job,
+                                                        *gpu_submip_settings_,
+                                                        shared->root_halt,
+                                                        shared->root_halt,
+                                                        options,
+                                                        shared->current_user_cutoff,
+                                                        publish,
+                                                        device,
+                                                        shared->device_pool.get(),
+                                                        true,
+                                                        nullptr,
+                                                        &gpu_submip_pull_seed_cache_);
+  if (valid) { stats.valid.fetch_add(1, std::memory_order_relaxed); }
+  CUOPT_LOG_INFO("GpuSubmipIndependentEnd job=%llu elapsed=%.6f seconds=%.6f valid=%d strategy=%d",
+                 (unsigned long long)job->job_id,
+                 toc(shared->root_start),
+                 toc(started),
+                 int(valid),
+                 static_cast<int>(strategy));
+  return true;
 }
 
 template <typename i_t, typename f_t>
@@ -5603,9 +5660,11 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   print_table_header();
 
   if (tree_entry_callback_) { tree_entry_callback_(); }
-  if (gpu_submip_handle_ && !settings_.inside_submip && !settings_.deterministic) {
+  if ((gpu_submip_handle_ || gpu_submip_pull_) && !settings_.inside_submip &&
+      !settings_.deterministic) {
     gpu_submip_shared_ = std::make_shared<gpu_submip_shared_t>(
       gpu_submip_options_from_environment(), exploration_stats_.start_time + settings_.time_limit);
+    gpu_submip_shared_->pull           = gpu_submip_pull_;
     gpu_submip_shared_->ready_handle   = gpu_submip_handle_;
     gpu_submip_shared_->demand_acquire = gpu_submip_demand_acquire_;
     gpu_submip_shared_->demand_release = gpu_submip_demand_release_;
@@ -5634,13 +5693,25 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       return true;
     };
     enqueue_gpu_submip_job(original_lp_, var_types_, root_relax_soln_.x, 0, 0, num_fractional);
+    gpu_submip_pull_ready_.store(gpu_submip_pull_, std::memory_order_release);
   }
 
   // A dedicated thread keeps its CUDA context bound to one OS thread and cannot
   // occupy an included OpenMP task before the existing search workers are launched.
   std::thread gpu_submip_thread;
+  const auto close_gpu_submip_queues = [this]() {
+    if (!gpu_submip_shared_) { return; }
+    if (gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
+    if (gpu_submip_pull_) {
+      for (auto& queue : gpu_submip_shared_->pull_queues) {
+        queue.close();
+      }
+      // Stops a neighbourhood the GPU heuristic thread is still running.
+      node_concurrent_halt_.store(1, std::memory_order_release);
+    }
+  };
   scope_guard join_gpu_submip([&]() {
-    if (gpu_submip_shared_ && gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
+    close_gpu_submip_queues();
     stop_and_join_gpu_submip(gpu_submip_thread, node_concurrent_halt_);
   });
   if (gpu_submip_handle_ && !settings_.inside_submip && !settings_.deterministic &&
@@ -5686,7 +5757,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                                seed_generator_);
 
       if (gpu_submip_experiment::pool_diagnostics() ||
-          (gpu_submip_shared_ &&
+          (gpu_submip_shared_ && !gpu_submip_shared_->pull &&
            gpu_submip_shared_->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU)) {
         static std::atomic<uint64_t> next_pool_id{0};
         submip_worker_pool_.enable_idle_diagnostics(
@@ -5722,7 +5793,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   }  // Implicit barrier for all tasks created within the group (RINS, B&B workers)
   submip_worker_pool_.close_idle_diagnostics();
 
-  if (gpu_submip_shared_ && gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
+  close_gpu_submip_queues();
   stop_and_join_gpu_submip(gpu_submip_thread, node_concurrent_halt_);
   if (gpu_submip_shared_ && gpu_submip_handle_ &&
       gpu_submip_shared_->options.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU &&
@@ -5739,7 +5810,7 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       shared->paired_join_wait_seconds.load());
     if (shared->async_error) { std::rethrow_exception(shared->async_error); }
   }
-  if (gpu_submip_shared_ && gpu_submip_handle_ &&
+  if (gpu_submip_shared_ && (gpu_submip_handle_ || gpu_submip_pull_) &&
       (gpu_submip_shared_->options.mode == gpu_submip_mode_t::NODE_QUEUE ||
        gpu_submip_shared_->options.independent)) {
     for (size_t source = 0; source < gpu_submip_source_count; ++source) {

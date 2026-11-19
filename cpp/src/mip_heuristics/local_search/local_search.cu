@@ -13,6 +13,7 @@
 #include <branch_and_bound/branch_and_bound.hpp>
 #include <math_optimization/tic_toc.hpp>
 #include <mip_heuristics/diversity/diversity_manager.cuh>
+#include <mip_heuristics/gpu_submip_experiment.hpp>
 #include <mip_heuristics/lns/cpufj.cuh>
 #include <mip_heuristics/lns/thread_budget.hpp>
 #include <mip_heuristics/relaxed_lp/relaxed_lp.cuh>
@@ -416,6 +417,7 @@ bool local_search_t<i_t, f_t>::do_fj_solve(solution_t<i_t, f_t>& solution,
     in_fj.settings.time_limit = timer.remaining_time();
     in_fj.solve(solution, make_fj_improvement_callback(solution.problem_ptr));
     CUOPT_LOG_DEBUG("GPU solver finished");
+    context.set_gpu_thread_phase("fj:join_cpu_lanes");
 
     halt_signal_time = tic();
     run_before_halt  = toc(launch_time);
@@ -631,6 +633,7 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
                                                       timer_t timer)
 {
   raft::common::nvtx::range fun_scope("check_fj_on_lp_optimal");
+  context.set_gpu_thread_phase("fj_lp_opt:round");
   apply_gpu_partition_safe_point(context, solution);
   if (lp_optimal_exists) {
     raft::copy(solution.assignment.data(),
@@ -654,6 +657,7 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
     relaxed_lp_settings_t lp_settings;
     lp_settings.time_limit = std::min(lp_run_time, timer.remaining_time());
     lp_settings.tolerance  = solution.problem_ptr->tolerances.absolute_tolerance;
+    context.set_gpu_thread_phase("fj_lp_opt:lp");
     run_lp_with_vars_fixed(
       *solution.problem_ptr, solution, solution.problem_ptr->integer_indices, lp_settings);
   } else {
@@ -666,6 +670,7 @@ bool local_search_t<i_t, f_t>::check_fj_on_lp_optimal(solution_t<i_t, f_t>& solu
   fj.settings.feasibility_run        = false;
   apply_gpu_partition_safe_point(context, solution);
   f_t time_limit = std::min(30., timer.remaining_time());
+  context.set_gpu_thread_phase("fj_lp_opt:fj");
   do_fj_solve(solution, fj, time_limit, "on_lp_optimal");
   return solution.get_feasible();
 }
@@ -674,6 +679,7 @@ template <typename i_t, typename f_t>
 bool local_search_t<i_t, f_t>::run_fj_on_zero(solution_t<i_t, f_t>& solution, timer_t timer)
 {
   raft::common::nvtx::range fun_scope("run_fj_on_zero");
+  context.set_gpu_thread_phase("fj_zero");
   apply_gpu_partition_safe_point(context, solution);
   thrust::fill(solution.handle_ptr->get_thrust_policy(),
                solution.assignment.begin(),
@@ -709,6 +715,15 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
   } else {
     fp.improvement_callback   = make_fj_improvement_callback(solution.problem_ptr);
     const i_t n_fp_iterations = 1000000;
+    // As in run_fp: with the method bandit, stop once FP fails this often in a row while the
+    // population already has a feasible solution from elsewhere.
+    const i_t failures_to_stop = context.method_bandit ? gpu_submip_experiment::fp_failures() : 0;
+    i_t failed_in_a_row        = 0;
+    const auto stop_fp         = [&]() {
+      if (failures_to_stop == 0 || failed_in_a_row < failures_to_stop) { return false; }
+      population_ptr->add_external_solutions_to_population();
+      return population_ptr->is_feasible();
+    };
     fp.cycle_queue.reset(solution);
     fp.reset();
     fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
@@ -741,6 +756,12 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
         }
         is_feasible = fp.restart_fp(solution);
         if (is_feasible) { break; }
+        ++failed_in_a_row;
+        if (stop_fp()) {
+          fp.revert_relaxation(solution);
+          solution.round_nearest(rng());
+          return false;
+        }
         // give the integer FP some chance
         if (binary_timer.check_time_limit()) {
           CUOPT_LOG_DEBUG("Binary FP time limit reached during binary stage!");
@@ -751,6 +772,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
                       binary_it_counter,
                       i,
                       is_feasible);
+      if (is_feasible) { failed_in_a_row = 0; }
       // TODO try resetting and not resetting the alpha
       fp.revert_relaxation(solution);
       fp.last_distances.resize(0);
@@ -768,6 +790,11 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
         }
         is_feasible = fp.restart_fp(solution);
         if (is_feasible) { return true; }
+        ++failed_in_a_row;
+        if (stop_fp()) {
+          solution.round_nearest(rng());
+          return false;
+        }
       }
     }
   }
@@ -874,6 +901,7 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   if (population_ptr->current_size() > 1 &&
       i - last_improved_iteration > iterations_for_stagnation) {
     fp.config.alpha = default_alpha;
+    context.set_gpu_thread_phase("fp_loop:recombiner_round");
     population_ptr->diversity_step(max_iterations_without_improvement);
     population_ptr->print();
     population_ptr->update_weights();
@@ -919,16 +947,40 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     resize_to_new_problem();
   }
   i_t last_improved_iteration = 0;
+  // With the method bandit the loop ends for good after this many failed iterations in a row,
+  // provided the population has a feasible solution to continue from.
+  const i_t failures_to_stop = context.method_bandit ? gpu_submip_experiment::fp_failures() : 0;
+  i_t failed_in_a_row        = 0;
+  i_t iterations             = 0;
+  i_t feasible_iterations    = 0;
+  const char* end_reason     = "time_limit";
+  const auto elapsed = [this]() { return context.diversity_manager_ptr->timer.elapsed_time(); };
+  CUOPT_LOG_INFO("HeurPhase name=fp_loop_start elapsed=%.3f feasible_start=%d failures_to_stop=%d",
+                 elapsed(),
+                 int(is_feasible),
+                 int(failures_to_stop));
   for (i_t i = 0; i < n_fp_iterations && !timer.check_time_limit(); ++i) {
     apply_gpu_partition_safe_point(context, solution);
     if (timer.check_time_limit()) {
       is_feasible = false;
       break;
     }
+    ++iterations;
+    const double iteration_start = elapsed();
+    const auto log_iteration     = [&](bool feasible) {
+      CUOPT_LOG_INFO(
+        "HeurFpIteration iteration=%d elapsed=%.3f seconds=%.3f feasible=%d failed_in_a_row=%d",
+        int(iterations),
+        elapsed(),
+        elapsed() - iteration_start,
+        int(feasible),
+        int(failed_in_a_row));
+    };
     CUOPT_LOG_DEBUG("fp_loop it %d last_improved_iteration %d", i, last_improved_iteration);
     population_ptr->add_external_solutions_to_population();
     if (context.preempt_heuristic_solver_.load()) {
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
+      end_reason = "preempted";
       break;
     }
     is_feasible = fp.run_single_fp_descent(solution);
@@ -936,6 +988,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     CUOPT_LOG_DEBUG("Population size at iteration %d: %d", i, population_ptr->current_size());
     if (context.preempt_heuristic_solver_.load()) {
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
+      end_reason = "preempted";
       break;
     }
     if (is_feasible) {
@@ -949,6 +1002,9 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
                                     best_solution,
                                     best_objective);
       last_improved_iteration = i;
+      failed_in_a_row         = 0;
+      ++feasible_iterations;
+      log_iteration(true);
     }
     // if not feasible, it means it is a cycle
     else {
@@ -960,6 +1016,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       population_ptr->add_external_solutions_to_population();
       if (context.preempt_heuristic_solver_.load()) {
         CUOPT_LOG_DEBUG("Preempting heuristic solver!");
+        end_reason = "preempted";
         break;
       }
       if (is_feasible) {
@@ -973,7 +1030,17 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
                                       best_solution,
                                       best_objective);
         last_improved_iteration = i;
+        failed_in_a_row         = 0;
+        ++feasible_iterations;
+        log_iteration(true);
       } else {
+        ++failed_in_a_row;
+        log_iteration(false);
+        if (failures_to_stop > 0 && failed_in_a_row >= failures_to_stop &&
+            population_ptr->is_feasible()) {
+          end_reason = "failures";
+          break;
+        }
         reset_alpha_and_run_recombiners(solution,
                                         old_problem_ptr,
                                         population_ptr,
@@ -984,6 +1051,15 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       }
     }
   }
+  CUOPT_LOG_INFO(
+    "HeurPhase name=fp_loop_end elapsed=%.3f reason=%s iterations=%d feasible_iterations=%d "
+    "failed_in_a_row=%d population_feasible=%d",
+    elapsed(),
+    end_reason,
+    int(iterations),
+    int(feasible_iterations),
+    int(failed_in_a_row),
+    int(population_ptr->is_feasible()));
   raft::copy(solution.assignment.data(),
              best_solution.data(),
              solution.assignment.size(),
@@ -1007,7 +1083,11 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   auto n_vars         = solution.problem_ptr->n_variables;
   auto n_binary_vars  = solution.problem_ptr->get_n_binary_variables();
   auto n_integer_vars = solution.problem_ptr->n_integer_vars;
-  bool is_feasible    = check_fj_on_lp_optimal(solution, perturb, timer);
+  const auto elapsed  = [this]() { return context.diversity_manager_ptr->timer.elapsed_time(); };
+  CUOPT_LOG_INFO("HeurPhase name=fj_lp_opt_start elapsed=%.3f", elapsed());
+  bool is_feasible = check_fj_on_lp_optimal(solution, perturb, timer);
+  CUOPT_LOG_INFO(
+    "HeurPhase name=fj_lp_opt_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
   if (is_feasible) {
     CUOPT_LOG_DEBUG("Solution generated with FJ on LP optimal: is_feasible %d", is_feasible);
     return true;
@@ -1024,6 +1104,8 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
                solution.handle_ptr->get_stream());
     fj.reset_weights(solution.handle_ptr->get_stream());
     is_feasible = run_fj_on_zero(solution, timer);
+    CUOPT_LOG_INFO(
+      "HeurPhase name=fj_zero_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
     if (is_feasible) {
       CUOPT_LOG_DEBUG("Solution generated with FJ on zero solution: is_feasible %d", is_feasible);
       return true;
@@ -1043,7 +1125,10 @@ bool local_search_t<i_t, f_t>::generate_solution(solution_t<i_t, f_t>& solution,
   fp.cycle_queue.reset(solution);
   fp.reset();
   fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
+  CUOPT_LOG_INFO("HeurPhase name=staged_fp_start elapsed=%.3f", elapsed());
   is_feasible = run_staged_fp(solution, timer, population_ptr);
+  CUOPT_LOG_INFO(
+    "HeurPhase name=staged_fp_end elapsed=%.3f feasible=%d", elapsed(), int(is_feasible));
   // is_feasible = run_fp(solution, timer);
   CUOPT_LOG_DEBUG("Solution generated with FP: is_feasible %d", is_feasible);
   return is_feasible;

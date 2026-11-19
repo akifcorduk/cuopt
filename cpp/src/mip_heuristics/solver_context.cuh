@@ -14,6 +14,8 @@
 #include <utilities/work_limit_context.hpp>
 #include <utilities/work_unit_scheduler.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -73,6 +75,23 @@ struct mip_solver_context_t {
   // CPUFJ can publish directly to B&B while the regular GPU population consumer is parked.
   // The second argument identifies incumbents already accepted by B&B.
   std::function<bool(const std::vector<f_t>&, bool)> gpu_handoff_host_solution;
+  // What the GPU heuristic thread is doing and since when, for the log line written when it has
+  // not returned after B&B ended. Labels are string literals.
+  std::atomic<const char*> gpu_thread_phase{"not_started"};
+  std::atomic<double> gpu_thread_phase_start{0.};
+  static double steady_seconds()
+  {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+  }
+  void set_gpu_thread_phase(const char* phase)
+  {
+    gpu_thread_phase.store(phase, std::memory_order_relaxed);
+    gpu_thread_phase_start.store(steady_seconds(), std::memory_order_relaxed);
+  }
+  // The GPU heuristic thread ends its FP loop when it stops producing and then allocates its time
+  // across the recombiners and the tree's sub-MIP neighbourhoods (gpu_submip_experiment.hpp).
+  bool method_bandit{false};
   // Owned by solve_mip and rethrown after its OpenMP team joins. Tasks write it inside
   // omp critical(cuopt_mip_task_exception).
   std::exception_ptr* task_exception{nullptr};

@@ -160,6 +160,22 @@ static void finish_regular_gpu_worker(cuopt::mip_gpu_handoff_t& handoff)
   handoff.regular_finished();
 }
 
+// Diagnostic for a hang: if the GPU heuristic thread has not returned 30 s after B&B did, log
+// what it was doing.
+template <typename i_t, typename f_t>
+static void log_late_gpu_thread(const mip_solver_context_t<i_t, f_t>& context,
+                                const std::atomic<bool>& returned)
+{
+  for (int check = 0; check < 300 && !returned.load(std::memory_order_acquire); ++check) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (returned.load(std::memory_order_acquire)) { return; }
+  CUOPT_LOG_INFO("GpuHeuristicThreadLate phase=%s seconds_in_phase=%.1f",
+                 context.gpu_thread_phase.load(std::memory_order_relaxed),
+                 mip_solver_context_t<i_t, f_t>::steady_seconds() -
+                   context.gpu_thread_phase_start.load(std::memory_order_relaxed));
+}
+
 template <typename i_t, typename f_t>
 static bool publish_handoff_host_solution(mip_solver_context_t<i_t, f_t>& context,
                                           const cuopt::mip_gpu_handoff_t& handoff,
@@ -331,17 +347,23 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     [&]() { restore_gpu_partition_at_scope_exit(context, dm, gpu_partition, sol); });
   const char* disable_gpu_env     = std::getenv("CUOPT_DISABLE_GPU_HEURISTICS");
   const bool gpu_submip_requested = gpu_submip_experiment::enabled();
-  const bool gpu_submip_enabled =
-    gpu_submip_requested && omp_get_num_threads() >= 4 &&
+  const bool gpu_submip_possible =
+    omp_get_num_threads() >= 4 &&
     (disable_gpu_env == nullptr || std::strcmp(disable_gpu_env, "1") != 0) &&
     context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC && context.settings.num_gpus == 1;
+  // The method bandit runs the tree's neighbourhoods inside the regular GPU thread, so it
+  // replaces the GPU sub-MIP worker and its handoff.
+  context.method_bandit = gpu_submip_experiment::method_bandit() && gpu_submip_possible;
+  const bool gpu_submip_enabled =
+    gpu_submip_requested && gpu_submip_possible && !context.method_bandit;
   if (gpu_submip_requested && omp_get_num_threads() < 4) {
     CUOPT_LOG_WARN("GPU subMIP disabled: at least four OpenMP threads are required");
   }
   CUOPT_LOG_INFO(
     "GpuSubmipExperiment requested=%d enabled=%d threads=%d pool_diagnostics=%d pdfp=%d "
     "projection_seconds=%.9g screen_seconds=%.9g target_share=%.9g lp_start=%d "
-    "rens_without_incumbent=%d read_environment=%d",
+    "rens_without_incumbent=%d read_environment=%d method_bandit=%d fp_failures=%d "
+    "arm_seconds=%.9g dynamic_arm_seconds=%d",
     int(gpu_submip_requested),
     int(gpu_submip_enabled),
     omp_get_num_threads(),
@@ -352,7 +374,11 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     gpu_submip_experiment::target_share(),
     int(gpu_submip_experiment::lp_start()),
     int(gpu_submip_experiment::rens_without_incumbent()),
-    int(gpu_submip_experiment::default_read_environment));
+    int(gpu_submip_experiment::default_read_environment),
+    int(context.method_bandit),
+    gpu_submip_experiment::fp_failures(),
+    gpu_submip_experiment::arm_seconds(),
+    int(gpu_submip_experiment::dynamic_arm_seconds()));
   const bool full_gpu_handoff = gpu_submip_enabled && gpu_submip_options_from_environment().mode ==
                                                         gpu_submip_mode_t::CPUFJ_FULL_GPU;
   if (full_gpu_handoff) {
@@ -620,6 +646,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     branch_and_bound->set_gpu_submip_configuration([&]() { return gpu_partition.submip_handle(); },
                                                    context.settings,
                                                    [&]() { gpu_partition.release_submip(); });
+  } else if (context.method_bandit) {
+    branch_and_bound->set_gpu_submip_pull_configuration(context.settings);
   }
 
   // Convert the best external upper bound from user-space to B&B's internal objective space.
@@ -679,18 +707,22 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   }
 
   std::exception_ptr parallel_exception;
+  std::atomic<bool> gpu_thread_returned{false};
 
 #pragma omp taskgroup
   {
 #pragma omp task default(shared) priority(CUOPT_CRITICAL_TASK_PRIORITY)
     {
-      auto handoff_completion =
-        cuopt::scope_guard([&]() { finish_gpu_handoff(context, gpu_handoff, full_gpu_handoff); });
-      try {
-        branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
-      } catch (...) {
-        record_parallel_exception(context, dm, branch_and_bound.get(), parallel_exception);
+      {
+        auto handoff_completion =
+          cuopt::scope_guard([&]() { finish_gpu_handoff(context, gpu_handoff, full_gpu_handoff); });
+        try {
+          branch_and_bound_status = branch_and_bound->solve(branch_and_bound_solution);
+        } catch (...) {
+          record_parallel_exception(context, dm, branch_and_bound.get(), parallel_exception);
+        }
       }
+      log_late_gpu_thread(context, gpu_thread_returned);
     }
 
     if (root_structural) {
@@ -708,6 +740,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     } catch (...) {
       record_parallel_exception(context, dm, branch_and_bound.get(), parallel_exception);
     }
+    gpu_thread_returned.store(true, std::memory_order_release);
   }  // implicit barrier for all tasks created in B&B and heuristics
 
   if (parallel_exception) { std::rethrow_exception(parallel_exception); }

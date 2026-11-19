@@ -332,6 +332,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
                                                                 bool longer_lp_run)
 {
   raft::common::nvtx::range fun_scope("linear_project_onto_polytope");
+  context.set_gpu_thread_phase("fp:projection");
   CUOPT_LOG_DEBUG("linear projection of fp");
   if (config.use_pdfp_projection) {
     return pdfp_project_onto_polytope(solution, ratio_of_set_integers, longer_lp_run);
@@ -491,6 +492,7 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
 template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
 {
+  context.set_gpu_thread_phase("fp:round");
   const double rounding_begin = config.log_descent_diagnostics ? timer.elapsed_time() : 0.;
   bool result;
   CUOPT_LOG_DEBUG("Rounding the point");
@@ -558,6 +560,7 @@ void feasibility_pump_t<i_t, f_t>::perturbate(solution_t<i_t, f_t>& solution)
 template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::run_fj_cycle_escape(solution_t<i_t, f_t>& solution)
 {
+  context.set_gpu_thread_phase("fp:cycle_escape_fj");
   bool is_feasible;
   fj.settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;
   fj.settings.update_weights         = true;
@@ -580,6 +583,7 @@ bool feasibility_pump_t<i_t, f_t>::run_fj_cycle_escape(solution_t<i_t, f_t>& sol
 template <typename i_t, typename f_t>
 bool feasibility_pump_t<i_t, f_t>::test_fj_feasible(solution_t<i_t, f_t>& solution, f_t time_limit)
 {
+  context.set_gpu_thread_phase("fp:fj");
   CUOPT_LOG_DEBUG("Running 20%% with %f time limit", time_limit);
   bool is_feasible;
   fj.settings.mode                   = fj_mode_t::EXIT_NON_IMPROVING;

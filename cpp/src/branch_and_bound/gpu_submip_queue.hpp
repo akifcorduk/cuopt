@@ -111,6 +111,12 @@ class gpu_submip_queue_t {
     return job;
   }
 
+  bool has_pending() const
+  {
+    std::lock_guard lock(state_->mutex);
+    return !state_->closed && !state_->pending.empty();
+  }
+
   void close()
   {
     std::deque<std::unique_ptr<Job>> discarded;

@@ -9,6 +9,7 @@
 #include "diversity_manager.cuh"
 
 #include <mip_heuristics/feasibility_jump/early_cpufj.cuh>
+#include <mip_heuristics/gpu_submip_experiment.hpp>
 #include <mip_heuristics/lns/thread_budget.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include <presolve/third_party_presolve.hpp>
@@ -34,6 +35,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <thread>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -523,6 +525,164 @@ void diversity_manager_t<i_t, f_t>::run_fp_alone()
 }
 
 template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::run_method_bandit(
+  branch_and_bound_t<i_t, f_t>& branch_and_bound)
+{
+  raft::common::nvtx::range fun_scope("run_method_bandit");
+  struct arm_t {
+    const char* name;
+    bool submip;
+    recombiner_enum_t recombiner;
+    search_strategy_t strategy;
+    double seconds;
+    int pulls{0};
+    int improved{0};
+    double used{0.};
+  };
+  const double base_seconds = gpu_submip_experiment::arm_seconds();
+  const bool dynamic        = gpu_submip_experiment::dynamic_arm_seconds();
+  std::vector<arm_t> arms;
+  for (auto recombiner : recombiner_t<i_t, f_t>::enabled_recombiners) {
+    arms.push_back({all_recombine_stats::recombiner_labels[(size_t)recombiner],
+                    false,
+                    recombiner,
+                    search_strategy_t::BEST_FIRST,
+                    base_seconds});
+  }
+  for (auto strategy :
+       {search_strategy_t::RINS, search_strategy_t::RENS, search_strategy_t::MUTATION}) {
+    arms.push_back(
+      {search_strategy_to_string(strategy), true, recombiner_enum_t::SIZE, strategy, base_seconds});
+  }
+  mab_t bandit(arms.size(),
+               derive_seed(context.base_seed, rng_id_t::diversity_manager, 3),
+               method_alpha,
+               "method");
+  const int device        = context.handle_ptr->get_device();
+  double last_improvement = timer.elapsed_time();
+  double idle_seconds     = 0.;
+  CUOPT_LOG_INFO(
+    "MethodBandit phase=start elapsed=%.3f arms=%zu arm_seconds=%.3f dynamic=%d population=%zu",
+    timer.elapsed_time(),
+    arms.size(),
+    base_seconds,
+    int(dynamic),
+    population.current_size());
+  while (!timer.check_time_limit() && !check_b_b_preemption()) {
+    cuopt_assert(population.is_feasible(), "The bandit phase starts from a feasible population");
+    std::vector<int> available;
+    for (size_t a = 0; a < arms.size(); ++a) {
+      const bool ready = arms[a].submip
+                           ? branch_and_bound.has_pending_gpu_submip_job(arms[a].strategy)
+                           : population.current_size() >= 2;
+      if (ready) { available.push_back(a); }
+    }
+    if (available.empty()) {
+      context.set_gpu_thread_phase("bandit:idle");
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      idle_seconds += 0.05;
+      continue;
+    }
+    const int chosen           = bandit.select_among(available);
+    auto& arm                  = arms[chosen];
+    const f_t best_before      = population.best_feasible().get_objective();
+    const double start         = timer.elapsed_time();
+    const double slice_seconds = std::min<double>(arm.seconds, timer.remaining_time());
+    timer_t slice(slice_seconds);
+    i_t jobs = 0, offspring = 0, inserted = 0, rejected = 0;
+    context.set_gpu_thread_phase(arm.name);
+    if (arm.submip) {
+      // A candidate joins the population through the solver's own feasibility test, like any
+      // offspring; the population then publishes it.
+      const auto publish = [&](const std::vector<f_t>& assignment, f_t) {
+        cuopt_assert(assignment.size() == (size_t)problem_ptr->n_variables,
+                     "A sub-MIP candidate must be in the solver's columns");
+        solution_t<i_t, f_t> candidate(*problem_ptr);
+        candidate.copy_new_assignment(assignment);
+        ++offspring;
+        if (!candidate.compute_feasibility()) {
+          ++rejected;
+          return;
+        }
+        inserted += population.add_solution(std::move(candidate)).first != -1;
+      };
+      while (!slice.check_time_limit() && !context.preempt_heuristic_solver_.load() &&
+             branch_and_bound.run_pending_gpu_submip_job(
+               arm.strategy, slice.remaining_time(), device, publish)) {
+        ++jobs;
+      }
+    } else {
+      while (!slice.check_time_limit() && !context.preempt_heuristic_solver_.load() &&
+             population.current_size() >= 2) {
+        population.adjust_weights_according_to_best_feasible();
+        constexpr bool tournament = true;
+        auto [sol1, sol2]         = population.get_two_random(tournament);
+        auto [first, second]      = recombine_and_local_search(sol1, sol2, arm.recombiner);
+        inserted += population.add_solution(std::move(first)).first != -1;
+        inserted += population.add_solution(std::move(second)).first != -1;
+        ++offspring;
+      }
+    }
+    const double used    = timer.elapsed_time() - start;
+    const f_t best_after = population.best_feasible().get_objective();
+    const f_t epsilon    = std::max<f_t>(1e-6, 1e-4 * std::abs(best_before));
+    const bool improved  = best_after + epsilon < best_before;
+    // Per second, in units of the configured slice: 8 for a better incumbent, 1 for a new member
+    // of the population.
+    const double reward = (improved       ? 8.
+                           : inserted > 0 ? 1.
+                                          : 0.) *
+                          base_seconds / std::max(1., used);
+    bandit.add_reward(chosen, reward);
+    ++arm.pulls;
+    arm.improved += improved;
+    arm.used += used;
+    if (improved) { last_improvement = timer.elapsed_time(); }
+    if (dynamic) {
+      if (improved) {
+        arm.seconds = std::min(4 * base_seconds, 2 * arm.seconds);
+      } else if (inserted == 0) {
+        arm.seconds = std::max(base_seconds / 2, arm.seconds / 2);
+      }
+      if (timer.elapsed_time() - last_improvement > 60.) {
+        for (auto& other : arms) {
+          other.seconds = base_seconds;
+        }
+        last_improvement = timer.elapsed_time();
+      }
+    }
+    CUOPT_LOG_INFO(
+      "MethodBanditPull arm=%s elapsed=%.3f slice=%.3f seconds=%.3f jobs=%d offspring=%d "
+      "inserted=%d rejected=%d improved=%d best_before=%.10g best_after=%.10g reward=%.4f "
+      "q=%.4f next_slice=%.3f",
+      arm.name,
+      timer.elapsed_time(),
+      slice_seconds,
+      used,
+      int(jobs),
+      int(offspring),
+      int(inserted),
+      int(rejected),
+      int(improved),
+      problem_ptr->get_user_obj_from_solver_obj(best_before),
+      problem_ptr->get_user_obj_from_solver_obj(best_after),
+      reward,
+      bandit.mab_arm_stats_[chosen].q_value,
+      arm.seconds);
+  }
+  for (size_t a = 0; a < arms.size(); ++a) {
+    CUOPT_LOG_INFO("MethodBanditArm arm=%s pulls=%d seconds=%.3f improved=%d q=%.4f",
+                   arms[a].name,
+                   arms[a].pulls,
+                   arms[a].used,
+                   arms[a].improved,
+                   bandit.mab_arm_stats_[a].q_value);
+  }
+  CUOPT_LOG_INFO(
+    "MethodBandit phase=end elapsed=%.3f idle_seconds=%.3f", timer.elapsed_time(), idle_seconds);
+}
+
+template <typename i_t, typename f_t>
 struct ls_cpufj_raii_guard_t {
   ls_cpufj_raii_guard_t(local_search_t<i_t, f_t>& ls) : ls(ls) {}
   ~ls_cpufj_raii_guard_t() { ls.stop_cpufj_lns_improvement_thread(); }
@@ -641,7 +801,9 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
     pdlp_settings.per_constraint_residual = true;
     set_pdlp_solver_mode(pdlp_settings);
     timer_t lp_timer(lp_time_limit);
+    context.set_gpu_thread_phase("root_lp");
     auto lp_result = solve_lp_with_method<i_t, f_t>(*problem_ptr, pdlp_settings, lp_timer);
+    context.set_gpu_thread_phase("after_root_lp");
 
     // The concurrent root LP can fail to produce a usable solution -- e.g. the barrier
     // hits a numerical error on an infeasible problem and PDLP returns NumericalError
@@ -776,6 +938,7 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
   }
 
   run_fp_alone();
+  if (context.method_bandit) { run_method_bandit(branch_and_bound); }
   population.add_external_solutions_to_population();
   return population.best_feasible();
 };
@@ -943,6 +1106,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   ls_config_t<i_t, f_t> ls_config;
   ls_config.best_objective_of_parents    = best_objective_of_parents;
   ls_config.at_least_one_parent_feasible = at_least_one_parent_feasible;
+  context.set_gpu_thread_phase("recombiner:local_search");
   success = this->run_local_search(offspring, population.weights, timer, ls_config);
   if (!success) {
     // add the attempt
@@ -973,6 +1137,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   lp_settings.return_first_feasible   = false;
   lp_settings.save_state              = true;
   lp_settings.per_constraint_residual = true;
+  context.set_gpu_thread_phase("recombiner:lp");
   run_lp_with_vars_fixed(*lp_offspring.problem_ptr,
                          lp_offspring,
                          lp_offspring.problem_ptr->integer_indices,
@@ -1040,6 +1205,7 @@ std::pair<solution_t<i_t, f_t>, bool> diversity_manager_t<i_t, f_t>::recombine(
     }
   }
   mab_recombiner.set_last_chosen_option(selected_index);
+  context.set_gpu_thread_phase(all_recombine_stats::recombiner_labels[(size_t)recombiner]);
   recombine_stats.add_attempt((recombiner_enum_t)recombiner);
   recombine_stats.start_recombiner_time();
   // Refactored code using a switch statement

@@ -88,6 +88,41 @@ int mab_t::select_ucb_arm()
   }
 }
 
+int mab_t::select_among(const std::vector<int>& arms)
+{
+  cuopt_assert(!arms.empty(), "The bandit needs an arm to choose from");
+  mab_total_steps_++;
+  for (int arm : arms) {
+    if (mab_arm_stats_[arm].num_pulls == 0) { return arm; }
+  }
+  double max_ucb_value = -std::numeric_limits<double>::infinity();
+  std::vector<int> best_arms;
+  for (int arm : arms) {
+    const double confidence_bound =
+      std::sqrt((2.0 * std::log(mab_total_steps_)) / (double)mab_arm_stats_[arm].num_pulls);
+    const double ucb_value     = mab_arm_stats_[arm].q_value + confidence_bound;
+    constexpr double tolerance = 1e-9;
+    if (ucb_value > max_ucb_value + tolerance) {
+      max_ucb_value = ucb_value;
+      best_arms.clear();
+      best_arms.push_back(arm);
+    } else if (std::abs(ucb_value - max_ucb_value) < tolerance) {
+      best_arms.push_back(arm);
+    }
+  }
+  std::uniform_int_distribution<int> dist_tie(0, best_arms.size() - 1);
+  return best_arms[dist_tie(mab_rng_)];
+}
+
+void mab_t::add_reward(int option_id, double reward)
+{
+  cuopt_assert(option_id >= 0 && option_id < (int)mab_arm_stats_.size(), "Unknown bandit arm");
+  auto& arm = mab_arm_stats_[option_id];
+  arm.num_pulls++;
+  arm.last_reward = reward;
+  arm.q_value += mab_alpha_ * (reward - arm.q_value);
+}
+
 // Fallback epsilon-greedy method (preserved for compatibility)
 int mab_t::select_epsilon_greedy_arm()
 {

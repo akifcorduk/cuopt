@@ -177,6 +177,22 @@ class branch_and_bound_t {
     gpu_submip_release_  = std::move(release);
   }
 
+  // Pull mode: no GPU sub-MIP worker thread. The sub-MIP pool keeps one pending neighbourhood per
+  // type (RINS, RENS, mutation) and the GPU heuristic thread runs them itself with
+  // run_pending_gpu_submip_job.
+  void set_gpu_submip_pull_configuration(const mip_solver_settings_t<i_t, f_t>& settings)
+  {
+    gpu_submip_pull_     = true;
+    gpu_submip_settings_ = std::make_shared<mip_solver_settings_t<i_t, f_t>>(settings);
+  }
+  bool has_pending_gpu_submip_job(search_strategy_t strategy) const;
+  // Runs the pending neighbourhood of the type on the caller's thread and device for at most
+  // `seconds`; `publish` gets each candidate in the user's columns. False if none was pending.
+  bool run_pending_gpu_submip_job(search_strategy_t strategy,
+                                  double seconds,
+                                  int device,
+                                  const std::function<void(const std::vector<f_t>&, f_t)>& publish);
+
   void set_gpu_submip_handoff_callbacks(
     std::function<bool()> acquire,
     std::function<void()> release,
@@ -307,13 +323,18 @@ class branch_and_bound_t {
   std::function<bool(double, const std::atomic<int>*)> gpu_submip_regular_turn_;
   std::shared_ptr<mip_solver_settings_t<i_t, f_t>> gpu_submip_settings_;
   struct gpu_submip_shared_t {
+    using queue_t = gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>>;
     gpu_submip_shared_t(gpu_submip_options_t options_, double deadline_)
       : queue(options_.independent && options_.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? 1 : 2),
+        pull_queues{{queue_t(1), queue_t(1), queue_t(1)}},
         options(std::move(options_)),
         deadline(deadline_)
     {
     }
-    gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>> queue;
+    queue_t queue;
+    // Pull mode: one pending neighbourhood per type, indexed by gpu_submip_pull_index.
+    std::array<queue_t, 3> pull_queues;
+    bool pull{false};
     const gpu_submip_options_t options;
     const double deadline;
     std::atomic<uint64_t> next_job{0};
@@ -354,6 +375,11 @@ class branch_and_bound_t {
     std::array<source_stats_t, gpu_submip_source_count> source_stats;
   };
   std::shared_ptr<gpu_submip_shared_t> gpu_submip_shared_;
+  bool gpu_submip_pull_{false};
+  // Set once the shared state exists; the GPU heuristic thread reads it before using that state.
+  std::atomic<bool> gpu_submip_pull_ready_{false};
+  // Used by the GPU heuristic thread only.
+  gpu_submip_seed_cache_t<i_t, f_t> gpu_submip_pull_seed_cache_;
   std::function<bool(const std::vector<f_t>&, std::vector<f_t>&)> gpu_submip_to_user_;
   uint64_t gpu_submip_source_id_{0};
   // Quick sub-MIP DFS shares this B&B owner; each source keeps its own initial/stride slots.

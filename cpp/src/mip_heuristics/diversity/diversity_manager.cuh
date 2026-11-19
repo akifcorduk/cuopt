@@ -47,6 +47,9 @@ class diversity_manager_t {
   void update_solution_streams();
   void generate_solution(f_t time_limit, bool random_start = true);
   void run_fp_alone();
+  // After the FP loop: a bandit gives the thread's time, one slice at a time, to one recombiner
+  // or to the pending tree neighbourhoods of one sub-MIP type (gpu_submip_experiment.hpp).
+  void run_method_bandit(branch_and_bound_t<i_t, f_t>& branch_and_bound);
   // main loop of diversity improvements
   void main_loop();
   // randomly chooses a recombiner and returns the offspring
