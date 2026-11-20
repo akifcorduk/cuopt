@@ -218,6 +218,8 @@ class population_t {
   // Best known primal upper bound used to gate callbacks and external-solution handling. This may
   // be seeded from an early-FJ incumbent objective before a matching population solution exists.
   f_t best_feasible_objective = std::numeric_limits<f_t>::max();
+  // What the solutions taken from the external queue have gained on the best feasible objective.
+  f_t external_gain = 0;
   assignment_hash_map_t<i_t, f_t> population_hash_map;
   cuopt::timer_t timer;
 

@@ -652,8 +652,9 @@ TEST_F(GpuSubmipFullDevice, ContinuousSessionWaitsForAnIncumbentThenUsesInitialS
 
 TEST_F(GpuSubmipFullDevice, UnperturbableSessionWaitsForCpuAndMirrorsRootCancellation)
 {
-  auto job        = make_job();
-  job.lp.upper[0] = 0.;
+  auto job = make_job();
+  // A job needs a free integer: x0 stays free, with one integer value inside its bounds.
+  job.lp.upper[0] = 0.5;
   job.lp.lower[1] = 0.;
   job.deadline    = tic() + 10.;
   std::atomic<int> root_halt{0}, pair_halt{0};
@@ -671,7 +672,7 @@ TEST_F(GpuSubmipFullDevice, UnperturbableSessionWaitsForCpuAndMirrorsRootCancell
   });
   const auto ready = published_first.get_future().wait_for(std::chrono::seconds(3));
   EXPECT_EQ(ready, std::future_status::ready);
-  // The GPU session has no free integer to perturb but must keep its ownership
+  // The GPU session has no integer it can perturb but must keep its ownership
   // until the paired CPU scope stops, rather than returning after its first FP.
   EXPECT_EQ(result.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
   root_halt.store(1, std::memory_order_release);

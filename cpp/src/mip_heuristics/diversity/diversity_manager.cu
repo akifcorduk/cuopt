@@ -588,6 +588,7 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
     const int chosen           = bandit.select_among(available);
     auto& arm                  = arms[chosen];
     const f_t best_before      = population.best_feasible().get_objective();
+    const f_t external_before  = population.external_gain;
     const double start         = timer.elapsed_time();
     const double slice_seconds = std::min<double>(arm.seconds, timer.remaining_time());
     timer_t slice(slice_seconds);
@@ -630,16 +631,18 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
     population.update_weights();
     const double used    = timer.elapsed_time() - start;
     const f_t best_after = population.best_feasible().get_objective();
+    // The local search takes the tree's solutions into the population during a pull; what they
+    // gain on the best is not the arm's.
+    const f_t tree_gain = population.external_gain - external_before;
+    const f_t own_gain  = best_before - best_after - tree_gain;
+    // The flat reward asks for more than 1e-4 relative, the gap reward for any real gain.
+    const f_t epsilon   = std::max<f_t>(1e-6, (gap_reward ? 1e-9 : 1e-4) * std::abs(best_before));
+    const bool improved = own_gain > epsilon;
     // The share of the gap to the tree's bound that the slice closed.
     const f_t bound      = problem_ptr->get_solver_obj_from_user_obj(stats.get_solution_bound());
     const f_t gap_before = best_before - bound;
     const bool has_gap   = std::isfinite(gap_before) && gap_before > 0;
-    // The best member can be replaced by one a rounding error worse; that closes nothing.
-    const double share =
-      has_gap && best_after < best_before ? (best_before - best_after) / gap_before : 0.;
-    const f_t epsilon = std::max<f_t>(1e-6, 1e-4 * std::abs(best_before));
-    const bool improved =
-      gap_reward ? best_after < best_before : best_after + epsilon < best_before;
+    const double share   = has_gap && improved ? own_gain / gap_before : 0.;
     // The gap reward grows with that share. The flat one gives 8 for a better incumbent and 1 for
     // a new member of the population. Both are per second, in units of the configured slice.
     const double value  = gap_reward     ? 8. * std::sqrt(share)
@@ -668,7 +671,7 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
     CUOPT_LOG_INFO(
       "MethodBanditPull arm=%s elapsed=%.3f slice=%.3f seconds=%.3f jobs=%d offspring=%d "
       "inserted=%d rejected=%d improved=%d best_before=%.10g best_after=%.10g share=%.4g "
-      "tree_gap=%d reward=%.4f q=%.4f next_slice=%.3f",
+      "tree_gap=%d reward=%.4f q=%.4f next_slice=%.3f own_gain=%.6g tree_gain=%.6g",
       arm.name,
       timer.elapsed_time(),
       slice_seconds,
@@ -684,7 +687,9 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
       int(has_gap),
       reward,
       bandit.mab_arm_stats_[chosen].q_value,
-      arm.seconds);
+      arm.seconds,
+      double(own_gain),
+      double(tree_gain));
   }
   for (size_t a = 0; a < arms.size(); ++a) {
     CUOPT_LOG_INFO("MethodBanditArm arm=%s pulls=%d seconds=%.3f improved=%d q=%.4f",

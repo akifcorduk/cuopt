@@ -39,7 +39,7 @@ inline constexpr bool default_method_bandit = false;
 inline constexpr int default_fp_failures = 5;
 // CUOPT_GPU_METHOD_BANDIT_FP_FAILURE_SECONDS: the FP loop also ends after a failed iteration when
 // the failures in a row have taken this long; 0 leaves only the count above.
-inline constexpr double default_fp_failure_seconds = 0.;
+inline constexpr double default_fp_failure_seconds = 60.;
 // CUOPT_GPU_METHOD_BANDIT_SUBMIP_ARMS: the RINS / RENS / mutation neighbourhoods of the tree are
 // arms of the bandit, next to the recombiners.
 inline constexpr bool default_submip_arms = true;

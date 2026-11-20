@@ -18,10 +18,13 @@ ConfigureTest(LP_UNIT_TEST
 # ci/test_cpp_multi_gpu.sh picks it up via its *_MG_TEST glob. Each test
 # calls GTEST_SKIP when fewer than 2 GPUs are visible so the binary is
 # harmless on single-GPU runners. STATIC_LIB: needs internal (hidden) PDLP symbols.
-ConfigureTest(PDLP_MG_TEST
-    ${CMAKE_CURRENT_SOURCE_DIR}/pdlp_distributed_test.cu
-    LABELS numopt
-    STATIC_LIB)
+# It also solves through the C API.
+if (NOT SKIP_C_PYTHON_ADAPTERS)
+    ConfigureTest(PDLP_MG_TEST
+        ${CMAKE_CURRENT_SOURCE_DIR}/pdlp_distributed_test.cu
+        LABELS numopt
+        STATIC_LIB)
+endif()
 
 # ##################################################################################################
 # - MPS / LP parser tests --------------------------------------------------------------------------
