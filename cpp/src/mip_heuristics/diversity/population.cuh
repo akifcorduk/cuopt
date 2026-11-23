@@ -73,7 +73,6 @@ class population_t {
   // initializes the population lazily. after presolve and var removals
   void initialize_population();
   bool is_better_than_best_feasible(solution_t<i_t, f_t>& sol);
-  void run_all_recombiners(solution_t<i_t, f_t>& sol);
 
   using feasible_solution_callback_t = std::function<void(const std::vector<f_t>&, f_t, f_t)>;
   // One consumer receives the current best feasible solution, then every best-slot update.

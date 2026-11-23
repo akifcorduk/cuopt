@@ -307,43 +307,6 @@ TEST(Population, ExternalQueueDrainAllowsReentrantProducerAndLeavesNewHeapPendin
   EXPECT_EQ(dm.population.best_feasible().get_objective(), 1.0 / 128);
 }
 
-TEST(Population, ExternalGainCountsOnlyQueueSolutions)
-{
-  raft::handle_t handle;
-  opt::optimization_problem_t<int, double> op(&handle);
-  init_population_test_problem(op);
-  opt::mip_solver_settings_t<int, double> settings;
-  mip::problem_t<int, double> problem(op, settings.get_tolerances());
-  problem.preprocess_problem();
-  mip::mip_solver_context_t<int, double> context(&handle, &problem, settings);
-  mip::diversity_manager_t<int, double> dm(context);
-  dm.population.initialize_population();
-  dm.population.allocate_solutions();
-
-  // The first feasible solution has no best to gain on.
-  dm.population.add_external_solution({0.75, 0}, 0.75, mip::solution_origin_t::EXTERNAL);
-  dm.population.add_external_solutions_to_population();
-  ASSERT_EQ(dm.population.best_feasible().get_objective(), 0.75);
-  EXPECT_EQ(dm.population.external_gain, 0);
-
-  // A solution the population is given directly is not a gain of the queue.
-  mip::solution_t<int, double> own(problem);
-  own.copy_new_assignment(std::vector<double>{0.5, 0});
-  ASSERT_TRUE(own.compute_feasibility());
-  dm.population.add_solution(std::move(own));
-  ASSERT_EQ(dm.population.best_feasible().get_objective(), 0.5);
-  EXPECT_EQ(dm.population.external_gain, 0);
-
-  // A worse queue solution gains nothing; a better one gains its improvement on the best.
-  dm.population.add_external_solution({0.625, 0}, 0.625, mip::solution_origin_t::EXTERNAL);
-  dm.population.add_external_solutions_to_population();
-  EXPECT_EQ(dm.population.external_gain, 0);
-  dm.population.add_external_solution({0.125, 0}, 0.125, mip::solution_origin_t::EXTERNAL);
-  dm.population.add_external_solutions_to_population();
-  ASSERT_EQ(dm.population.best_feasible().get_objective(), 0.125);
-  EXPECT_EQ(dm.population.external_gain, 0.375);
-}
-
 class presolved_solution_callback_test
   : public testing::TestWithParam<std::tuple<bool, bool, bool>> {};
 

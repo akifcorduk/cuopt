@@ -40,13 +40,10 @@ class diversity_manager_t {
   void run_fp_alone();
   // Gives the thread's time, slice by slice, to a recombiner chosen by a bandit.
   void run_method_bandit();
-  // main loop of diversity improvements
-  void main_loop();
   // randomly chooses a recombiner and returns the offspring
   std::pair<solution_t<i_t, f_t>, bool> recombine(solution_t<i_t, f_t>& a,
                                                   solution_t<i_t, f_t>& b,
                                                   recombiner_enum_t recombiner_type);
-  void average_fj_weights(i_t i);
   void diversity_step(i_t max_iterations_without_improvement);
   void add_user_given_solutions(std::vector<solution_t<i_t, f_t>>& initial_sol_vector);
   population_t<i_t, f_t>* get_population_pointer() { return &population; }

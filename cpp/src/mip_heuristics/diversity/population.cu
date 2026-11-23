@@ -911,14 +911,6 @@ void population_t<i_t, f_t>::print()
 }
 
 template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::run_all_recombiners(solution_t<i_t, f_t>& sol)
-{
-  std::vector<solution_t<i_t, f_t>> sol_vec;
-  sol_vec.emplace_back(std::move(solution_t<i_t, f_t>(sol)));
-  dm.recombine_and_ls_with_all(sol_vec, true);
-}
-
-template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::diversity_step(i_t max_iterations_without_improvement)
 {
   raft::common::nvtx::range fun_scope("diversity_step");
