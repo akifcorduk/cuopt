@@ -2829,9 +2829,9 @@ bool branch_and_bound_t<i_t, f_t>::run_pending_gpu_submip_job(
   if (!job) { return false; }
   auto& stats = shared->source_stats[static_cast<size_t>(job->source)];
   stats.dequeued.fetch_add(1, std::memory_order_relaxed);
-  auto options                          = shared->options;
-  options.time_limit                    = seconds;
-  [[maybe_unused]] const double started = tic();
+  auto options         = shared->options;
+  options.time_limit   = seconds;
+  const double started = tic();
   CUOPT_LOG_INFO("GpuSubmipIndependentStart job=%llu elapsed=%.6f queue_seconds=%.6f",
                  (unsigned long long)job->job_id,
                  started - shared->root_start,
@@ -2857,6 +2857,20 @@ bool branch_and_bound_t<i_t, f_t>::run_pending_gpu_submip_job(
                  int(valid),
                  (int)strategy);
   return true;
+}
+
+template <typename i_t, typename f_t>
+void branch_and_bound_t<i_t, f_t>::close_gpu_submip_queues()
+{
+  if (!gpu_submip_shared_) { return; }
+  if (gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
+  if (gpu_submip_pull_) {
+    for (auto& queue : gpu_submip_shared_->pull_queues) {
+      queue.close();
+    }
+    // Stops a neighbourhood the GPU heuristic thread is still running.
+    node_concurrent_halt_.store(1, std::memory_order_release);
+  }
 }
 
 template <typename i_t, typename f_t>
@@ -5699,17 +5713,6 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
   // A dedicated thread keeps its CUDA context bound to one OS thread and cannot
   // occupy an included OpenMP task before the existing search workers are launched.
   std::thread gpu_submip_thread;
-  const auto close_gpu_submip_queues = [this]() {
-    if (!gpu_submip_shared_) { return; }
-    if (gpu_submip_handle_) { gpu_submip_shared_->queue.close(); }
-    if (gpu_submip_pull_) {
-      for (auto& queue : gpu_submip_shared_->pull_queues) {
-        queue.close();
-      }
-      // Stops a neighbourhood the GPU heuristic thread is still running.
-      node_concurrent_halt_.store(1, std::memory_order_release);
-    }
-  };
   scope_guard join_gpu_submip([&]() {
     close_gpu_submip_queues();
     stop_and_join_gpu_submip(gpu_submip_thread, node_concurrent_halt_);

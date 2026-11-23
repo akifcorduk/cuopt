@@ -47,8 +47,7 @@ class diversity_manager_t {
   void update_solution_streams();
   void generate_solution(f_t time_limit, bool random_start = true);
   void run_fp_alone();
-  // After the FP loop: a bandit gives the thread's time, one slice at a time, to one recombiner
-  // or to the pending tree neighbourhoods of one sub-MIP type (gpu_submip_experiment.hpp).
+  // Gives the thread's time, slice by slice, to a recombiner or to a sub-MIP type of the tree.
   void run_method_bandit(branch_and_bound_t<i_t, f_t>& branch_and_bound);
   // main loop of diversity improvements
   void main_loop();
@@ -67,8 +66,8 @@ class diversity_manager_t {
   std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>> recombine_and_local_search(
     solution_t<i_t, f_t>& a,
     solution_t<i_t, f_t>& b,
-    recombiner_enum_t recombiner_type,
-    timer_t work_timer);
+    timer_t work_timer,
+    recombiner_enum_t recombiner_type = recombiner_enum_t::SIZE);
   void set_new_user_bound(f_t new_user_bound);
   void generate_quick_feasible_solution();
   bool check_b_b_preemption();

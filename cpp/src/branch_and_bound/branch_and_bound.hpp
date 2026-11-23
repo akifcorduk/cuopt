@@ -178,8 +178,7 @@ class branch_and_bound_t {
   }
 
   // Pull mode: no GPU sub-MIP worker thread. The sub-MIP pool keeps one pending neighbourhood per
-  // type (RINS, RENS, mutation) and the GPU heuristic thread runs them itself with
-  // run_pending_gpu_submip_job.
+  // type (RINS, RENS, mutation) for the GPU heuristic thread to run.
   void set_gpu_submip_pull_configuration(const mip_solver_settings_t<i_t, f_t>& settings)
   {
     gpu_submip_pull_     = true;
@@ -326,14 +325,13 @@ class branch_and_bound_t {
     using queue_t = gpu_submip_queue_t<gpu_submip_job_t<i_t, f_t>>;
     gpu_submip_shared_t(gpu_submip_options_t options_, double deadline_)
       : queue(options_.independent && options_.mode == gpu_submip_mode_t::CPUFJ_FULL_GPU ? 1 : 2),
-        pull_queues{{queue_t(1), queue_t(1), queue_t(1)}},
         options(std::move(options_)),
         deadline(deadline_)
     {
     }
     queue_t queue;
     // Pull mode: one pending neighbourhood per type, indexed by gpu_submip_pull_index.
-    std::array<queue_t, 3> pull_queues;
+    std::array<queue_t, 3> pull_queues{queue_t(1), queue_t(1), queue_t(1)};
     bool pull{false};
     const gpu_submip_options_t options;
     const double deadline;
@@ -390,6 +388,7 @@ class branch_and_bound_t {
   void run_gpu_submip_worker_impl();
   bool capture_gpu_submip_snapshot(const char* stage);
   void release_gpu_submip_worker() noexcept;
+  void close_gpu_submip_queues();
   f_t publish_gpu_submip_solution(const std::vector<f_t>& user_assignment);
   void enqueue_gpu_submip_job(const simplex::lp_problem_t<i_t, f_t>& lp,
                               const std::vector<simplex::variable_type_t>& types,

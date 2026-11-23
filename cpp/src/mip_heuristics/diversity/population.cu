@@ -230,7 +230,7 @@ template <typename i_t, typename f_t>
 void population_t<i_t, f_t>::add_external_solutions_to_population()
 {
   const bool had_feasible = is_feasible();
-  const f_t before        = had_feasible ? best_feasible().get_objective() : f_t(0);
+  const f_t before        = had_feasible ? best_feasible().get_objective() : 0;
   add_solutions_from_vec(get_external_solutions());
   if (had_feasible) { external_gain += before - best_feasible().get_objective(); }
 }

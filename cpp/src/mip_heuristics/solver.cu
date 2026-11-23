@@ -35,13 +35,11 @@
 
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <future>
 #include <memory>
-#include <mutex>
 #include <thread>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -162,28 +160,18 @@ static void finish_regular_gpu_worker(cuopt::mip_gpu_handoff_t& handoff)
   handoff.regular_finished();
 }
 
-// Set when the GPU heuristic thread has returned.
-struct gpu_thread_return_t {
-  std::mutex mutex;
-  std::condition_variable changed;
-  bool returned{false};
-};
-
 // Diagnostic for a hang: if the GPU heuristic thread has not returned 30 s after B&B did, log
 // what it was doing.
 template <typename i_t, typename f_t>
 static void log_late_gpu_thread(const mip_solver_context_t<i_t, f_t>& context,
-                                gpu_thread_return_t& gpu_thread)
+                                const std::future<void>& gpu_thread_returned)
 {
-  std::unique_lock lock(gpu_thread.mutex);
-  if (gpu_thread.changed.wait_for(
-        lock, std::chrono::seconds(30), [&]() { return gpu_thread.returned; })) {
+  if (gpu_thread_returned.wait_for(std::chrono::seconds(30)) == std::future_status::ready) {
     return;
   }
   CUOPT_LOG_INFO("GpuHeuristicThreadLate phase=%s seconds_in_phase=%.1f",
                  context.gpu_thread_phase.load(std::memory_order_relaxed),
-                 mip_solver_context_t<i_t, f_t>::steady_seconds() -
-                   context.gpu_thread_phase_start.load(std::memory_order_relaxed));
+                 toc(context.gpu_thread_phase_start.load(std::memory_order_relaxed)));
 }
 
 template <typename i_t, typename f_t>
@@ -723,7 +711,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
   }
 
   std::exception_ptr parallel_exception;
-  gpu_thread_return_t gpu_thread;
+  std::promise<void> gpu_thread_done;
+  const std::future<void> gpu_thread_returned = gpu_thread_done.get_future();
 
 #pragma omp taskgroup
   {
@@ -738,7 +727,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
           record_parallel_exception(context, dm, branch_and_bound.get(), parallel_exception);
         }
       }
-      log_late_gpu_thread(context, gpu_thread);
+      log_late_gpu_thread(context, gpu_thread_returned);
     }
 
     if (root_structural) {
@@ -756,11 +745,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     } catch (...) {
       record_parallel_exception(context, dm, branch_and_bound.get(), parallel_exception);
     }
-    {
-      std::lock_guard lock(gpu_thread.mutex);
-      gpu_thread.returned = true;
-    }
-    gpu_thread.changed.notify_all();
+    gpu_thread_done.set_value();
   }  // implicit barrier for all tasks created in B&B and heuristics
 
   if (parallel_exception) { std::rethrow_exception(parallel_exception); }

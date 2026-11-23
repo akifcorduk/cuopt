@@ -85,6 +85,7 @@ class local_search_t {
     problem_t<i_t, f_t>* publication_problem);
 
   i_t ls_threads() const { return ls_cpu_fj.size(); }
+  double elapsed() const { return context.diversity_manager_ptr->timer.elapsed_time(); }
 
   // Start CPUFJ thread for deterministic mode with B&B integration
   void start_cpufj_deterministic(mip::branch_and_bound_t<i_t, f_t>& bb);

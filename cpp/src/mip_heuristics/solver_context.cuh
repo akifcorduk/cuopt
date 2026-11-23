@@ -7,6 +7,7 @@
 
 #include <cuopt/mathematical_optimization/mip/solver_stats.hpp>
 
+#include <math_optimization/tic_toc.hpp>
 #include <mip_heuristics/mip_constants.hpp>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/relaxed_lp/lp_state.cuh>
@@ -15,7 +16,6 @@
 #include <utilities/work_unit_scheduler.hpp>
 
 #include <atomic>
-#include <chrono>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -79,18 +79,12 @@ struct mip_solver_context_t {
   // not returned after B&B ended. Labels are string literals.
   std::atomic<const char*> gpu_thread_phase{"not_started"};
   std::atomic<double> gpu_thread_phase_start{0.};
-  static double steady_seconds()
-  {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-  }
   void set_gpu_thread_phase(const char* phase)
   {
     gpu_thread_phase.store(phase, std::memory_order_relaxed);
-    gpu_thread_phase_start.store(steady_seconds(), std::memory_order_relaxed);
+    gpu_thread_phase_start.store(tic(), std::memory_order_relaxed);
   }
-  // The GPU heuristic thread ends its FP loop when it stops producing and then allocates its time
-  // across the recombiners and the tree's sub-MIP neighbourhoods (gpu_submip_experiment.hpp).
+  // The GPU heuristic thread runs the method bandit after its FP loop (gpu_submip_experiment.hpp).
   bool method_bandit{false};
   // Owned by solve_mip and rethrown after its OpenMP team joins. Tasks write it inside
   // omp critical(cuopt_mip_task_exception).

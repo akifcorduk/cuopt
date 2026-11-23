@@ -111,14 +111,6 @@ inline int fp_failures()
 {
   return (int)number("CUOPT_GPU_METHOD_BANDIT_FP_FAILURES", default_fp_failures);
 }
-inline double arm_seconds()
-{
-  return number("CUOPT_GPU_METHOD_BANDIT_ARM_SECONDS", default_arm_seconds);
-}
-inline bool dynamic_arm_seconds()
-{
-  return flag("CUOPT_GPU_METHOD_BANDIT_DYNAMIC", default_dynamic_arm_seconds);
-}
 inline double fp_failure_seconds()
 {
   return number("CUOPT_GPU_METHOD_BANDIT_FP_FAILURE_SECONDS", default_fp_failure_seconds);
@@ -128,10 +120,18 @@ inline bool submip_arms()
   return flag("CUOPT_GPU_METHOD_BANDIT_SUBMIP_ARMS", default_submip_arms);
 }
 inline bool gap_reward() { return flag("CUOPT_GPU_METHOD_BANDIT_GAP_REWARD", default_gap_reward); }
-inline bool unstaged_fp() { return flag("CUOPT_FP_UNSTAGED", default_unstaged_fp); }
+inline double arm_seconds()
+{
+  return number("CUOPT_GPU_METHOD_BANDIT_ARM_SECONDS", default_arm_seconds);
+}
+inline bool dynamic_arm_seconds()
+{
+  return flag("CUOPT_GPU_METHOD_BANDIT_DYNAMIC", default_dynamic_arm_seconds);
+}
 inline bool phase_diagnostics()
 {
   return flag("CUOPT_GPU_HEURISTIC_DIAGNOSTICS", default_phase_diagnostics);
 }
+inline bool unstaged_fp() { return flag("CUOPT_FP_UNSTAGED", default_unstaged_fp); }
 
 }  // namespace cuopt::mathematical_optimization::mip::gpu_submip_experiment

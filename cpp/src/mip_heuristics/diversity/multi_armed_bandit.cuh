@@ -79,13 +79,10 @@ struct mab_t {
                       double best_feasible_quality,
                       double offspring_quality,
                       Func work_normalized_reward);
-  // The same UCB choice over a subset of the arms; an arm of the subset that was never pulled
-  // goes first.
+  // The choice of select_mab_option over a subset of the arms.
   int select_among(const std::vector<int>& arms);
-  int best_ucb_arm(const std::vector<int>& arms);
-  // Records a reward the caller computed.
   void add_reward(int option_id, double reward);
-  int select_ucb_arm();
+  int select_ucb_arm(const std::vector<int>& arms);
   int select_epsilon_greedy_arm();
   void set_last_chosen_option(int option_id);
 

@@ -35,7 +35,6 @@
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <thread>
 
 namespace cuopt::mathematical_optimization::mip {
 
@@ -531,32 +530,25 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
   raft::common::nvtx::range fun_scope("run_method_bandit");
   struct arm_t {
     const char* name;
-    bool submip;
-    recombiner_enum_t recombiner;
-    search_strategy_t strategy;
     double seconds;
-    int pulls{0};
+    recombiner_enum_t recombiner{recombiner_enum_t::SIZE};
+    search_strategy_t strategy{search_strategy_t::BEST_FIRST};
     int improved{0};
     double used{0.};
+    bool submip() const { return recombiner == recombiner_enum_t::SIZE; }
   };
   const double base_seconds = gpu_submip_experiment::arm_seconds();
   const bool dynamic        = gpu_submip_experiment::dynamic_arm_seconds();
   std::vector<arm_t> arms;
   for (auto recombiner : recombiner_t<i_t, f_t>::enabled_recombiners) {
-    arms.push_back({all_recombine_stats::recombiner_labels[(size_t)recombiner],
-                    false,
-                    recombiner,
-                    search_strategy_t::BEST_FIRST,
-                    base_seconds});
+    arms.push_back(
+      {all_recombine_stats::recombiner_labels[(size_t)recombiner], base_seconds, recombiner});
   }
   if (gpu_submip_experiment::submip_arms()) {
     for (auto strategy :
          {search_strategy_t::RINS, search_strategy_t::RENS, search_strategy_t::MUTATION}) {
-      arms.push_back({search_strategy_to_string(strategy),
-                      true,
-                      recombiner_enum_t::SIZE,
-                      strategy,
-                      base_seconds});
+      arms.push_back(
+        {search_strategy_to_string(strategy), base_seconds, recombiner_enum_t::SIZE, strategy});
     }
   }
   const bool gap_reward = gpu_submip_experiment::gap_reward();
@@ -575,40 +567,31 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
     int(dynamic),
     int(gap_reward),
     population.current_size());
-  // The phase lasts while there is a pair to recombine; without one the FP loop takes the thread
-  // back.
   while (!timer.check_time_limit() && !check_b_b_preemption() && population.current_size() >= 2) {
     cuopt_assert(population.is_feasible(), "The bandit phase starts from a feasible population");
     std::vector<int> available;
     for (size_t a = 0; a < arms.size(); ++a) {
-      if (!arms[a].submip || branch_and_bound.has_pending_gpu_submip_job(arms[a].strategy)) {
+      if (!arms[a].submip() || branch_and_bound.has_pending_gpu_submip_job(arms[a].strategy)) {
         available.push_back(a);
       }
     }
-    const int chosen           = bandit.select_among(available);
-    auto& arm                  = arms[chosen];
-    const f_t best_before      = population.best_feasible().get_objective();
-    const f_t external_before  = population.external_gain;
-    const double start         = timer.elapsed_time();
-    const double slice_seconds = std::min<double>(arm.seconds, timer.remaining_time());
-    timer_t slice(slice_seconds);
-    [[maybe_unused]] i_t jobs = 0, offspring = 0, rejected = 0;
-    i_t inserted = 0;
+    const int chosen          = bandit.select_among(available);
+    auto& arm                 = arms[chosen];
+    const f_t best_before     = population.best_feasible().get_objective();
+    const f_t external_before = population.external_gain;
+    timer_t slice(timer.clamp_remaining_time(arm.seconds));
+    [[maybe_unused]] i_t jobs = 0, offspring = 0, rejected = 0, inserted = 0;
     context.set_gpu_thread_phase(arm.name);
-    if (arm.submip) {
-      // A candidate joins the population through the solver's own feasibility test, like any
-      // offspring; the population then publishes it.
+    if (arm.submip()) {
       const auto publish = [&](const std::vector<f_t>& assignment, f_t) {
         cuopt_assert(assignment.size() == (size_t)problem_ptr->n_variables,
                      "A sub-MIP candidate must be in the solver's columns");
         solution_t<i_t, f_t> candidate(*problem_ptr);
         candidate.copy_new_assignment(assignment);
         ++offspring;
-        if (!candidate.compute_feasibility()) {
-          ++rejected;
-          return;
-        }
-        inserted += population.add_solution(std::move(candidate)).first != -1;
+        const bool feasible = candidate.compute_feasibility();
+        rejected += !feasible;
+        if (feasible) { inserted += population.add_solution(std::move(candidate)).first != -1; }
       };
       while (!slice.check_time_limit() && !context.preempt_heuristic_solver_.load() &&
              branch_and_bound.run_pending_gpu_submip_job(
@@ -621,43 +604,38 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
         population.adjust_weights_according_to_best_feasible();
         constexpr bool tournament = true;
         auto [sol1, sol2]         = population.get_two_random(tournament);
-        auto [first, second]      = recombine_and_local_search(sol1, sol2, arm.recombiner, slice);
+        auto [first, second]      = recombine_and_local_search(sol1, sol2, slice, arm.recombiner);
         inserted += population.add_solution(std::move(first)).first != -1;
         inserted += population.add_solution(std::move(second)).first != -1;
         ++offspring;
       }
     }
-    // As after a recombiner round of the FP loop.
     population.update_weights();
-    const double used    = timer.elapsed_time() - start;
+    const double used    = slice.elapsed_time();
     const f_t best_after = population.best_feasible().get_objective();
     // The local search takes the tree's solutions into the population during a pull; what they
     // gain on the best is not the arm's.
-    const f_t tree_gain = population.external_gain - external_before;
-    const f_t own_gain  = best_before - best_after - tree_gain;
-    // The flat reward asks for more than 1e-4 relative, the gap reward for any real gain.
-    const f_t epsilon   = std::max<f_t>(1e-6, (gap_reward ? 1e-9 : 1e-4) * std::abs(best_before));
-    const bool improved = own_gain > epsilon;
-    // The share of the gap to the tree's bound that the slice closed.
+    const f_t tree_gain  = population.external_gain - external_before;
+    const f_t own_gain   = best_before - best_after - tree_gain;
+    const f_t epsilon    = std::max<f_t>(1e-6, (gap_reward ? 1e-9 : 1e-4) * std::abs(best_before));
+    const bool improved  = own_gain > epsilon;
     const f_t bound      = problem_ptr->get_solver_obj_from_user_obj(stats.get_solution_bound());
     const f_t gap_before = best_before - bound;
     const bool has_gap   = std::isfinite(gap_before) && gap_before > 0;
     const double share   = has_gap && improved ? own_gain / gap_before : 0.;
-    // The gap reward grows with that share. The flat one gives 8 for a better incumbent and 1 for
-    // a new member of the population. Both are per second, in units of the configured slice.
+    // Per second, in units of the configured slice.
     const double value  = gap_reward     ? 8. * std::sqrt(share)
                           : improved     ? 8.
                           : inserted > 0 ? 1.
                                          : 0.;
     const double reward = value * base_seconds / used;
     bandit.add_reward(chosen, reward);
-    ++arm.pulls;
     arm.improved += improved;
     arm.used += used;
-    if (improved) { last_improvement = timer.elapsed_time(); }
     if (dynamic) {
       if (improved) {
-        arm.seconds = std::min(4 * base_seconds, 2 * arm.seconds);
+        arm.seconds      = std::min(4 * base_seconds, 2 * arm.seconds);
+        last_improvement = timer.elapsed_time();
       } else if (inserted == 0) {
         arm.seconds = std::max(base_seconds / 2, arm.seconds / 2);
       }
@@ -674,12 +652,12 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
       "tree_gap=%d reward=%.4f q=%.4f next_slice=%.3f own_gain=%.6g tree_gain=%.6g",
       arm.name,
       timer.elapsed_time(),
-      slice_seconds,
+      slice.get_time_limit(),
       used,
-      int(jobs),
-      int(offspring),
-      int(inserted),
-      int(rejected),
+      jobs,
+      offspring,
+      inserted,
+      rejected,
       int(improved),
       problem_ptr->get_user_obj_from_solver_obj(best_before),
       problem_ptr->get_user_obj_from_solver_obj(best_after),
@@ -688,13 +666,13 @@ void diversity_manager_t<i_t, f_t>::run_method_bandit(
       reward,
       bandit.mab_arm_stats_[chosen].q_value,
       arm.seconds,
-      double(own_gain),
-      double(tree_gain));
+      own_gain,
+      tree_gain);
   }
   for (size_t a = 0; a < arms.size(); ++a) {
     CUOPT_LOG_INFO("MethodBanditArm arm=%s pulls=%d seconds=%.3f improved=%d q=%.4f",
                    arms[a].name,
-                   arms[a].pulls,
+                   bandit.mab_arm_stats_[a].num_pulls,
                    arms[a].used,
                    arms[a].improved,
                    bandit.mab_arm_stats_[a].q_value);
@@ -992,8 +970,7 @@ void diversity_manager_t<i_t, f_t>::diversity_step(i_t max_iterations_without_im
       constexpr bool tournament = true;
       auto [sol1, sol2]         = population.get_two_random(tournament);
       cuopt_assert(population.test_invariant(), "");
-      auto [lp_offspring, offspring] =
-        recombine_and_local_search(sol1, sol2, recombiner_enum_t::SIZE, timer);
+      auto [lp_offspring, offspring]        = recombine_and_local_search(sol1, sol2, timer);
       auto [inserted_pos_1, best_updated_1] = population.add_solution(std::move(lp_offspring));
       auto [inserted_pos_2, best_updated_2] = population.add_solution(std::move(offspring));
       if (best_updated_1 || best_updated_2) { recombine_stats.add_best_updated(); }
@@ -1035,7 +1012,7 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(solution_t<i_t, f_
       if (check_b_b_preemption()) { return; }
       if (curr_sol.get_feasible()) {
         auto [offspring, lp_offspring] =
-          recombine_and_local_search(curr_sol, solution, recombiner_type, timer);
+          recombine_and_local_search(curr_sol, solution, timer, recombiner_type);
         if (!add_only_feasible || lp_offspring.get_feasible()) {
           population.add_solution(std::move(lp_offspring));
         }
@@ -1104,8 +1081,8 @@ template <typename i_t, typename f_t>
 std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>>
 diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& sol1,
                                                           solution_t<i_t, f_t>& sol2,
-                                                          recombiner_enum_t recombiner_type,
-                                                          timer_t work_timer)
+                                                          timer_t work_timer,
+                                                          recombiner_enum_t recombiner_type)
 {
   raft::common::nvtx::range fun_scope("recombine_and_local_search");
   CUOPT_LOG_DEBUG("Recombining sol cost:feas %f : %d and %f : %d",
