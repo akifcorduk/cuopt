@@ -30,6 +30,29 @@
 
 namespace cuopt::mathematical_optimization::mip {
 
+// Failed FP iterations in a row, by count and by time.
+struct fp_failure_streak_t {
+  static constexpr int max_failures   = 5;
+  static constexpr double max_seconds = 60.;
+  void reset() { *this = fp_failure_streak_t{}; }
+  bool at_limit() const { return failures >= max_failures || timer.check_time_limit(); }
+  int failures{0};
+  timer_t timer{max_seconds};
+};
+
+// After a failed FP iteration: whether the method bandit takes the thread from the FP loop. It
+// does once the streak is at its limit and the population has a feasible pair to recombine.
+template <typename i_t, typename f_t>
+static bool method_bandit_takes_over(fp_failure_streak_t& streak,
+                                     population_t<i_t, f_t>& population)
+{
+  ++streak.failures;
+  if (!streak.at_limit()) { return false; }
+  population.add_external_solutions_to_population();
+  return population.is_feasible() && population.current_size() >= 2 &&
+         !recombiner_t<i_t, f_t>::enabled_recombiners.empty();
+}
+
 // Apply the existing feasibility-portfolio thresholds to the capacity remaining
 // after reserving the persistent CPUFJ LNS worker.
 template <typename i_t, typename f_t>
@@ -689,11 +712,13 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
   auto integer_only = (n_binary_vars == 0);
   bool is_feasible  = false;
 
+  fp_stopped_for_bandit = false;
   if (binary_only || integer_only) {
     return run_fp(solution, timer, population_ptr);
   } else {
     fp.improvement_callback   = make_fj_improvement_callback(solution.problem_ptr);
     const i_t n_fp_iterations = 1000000;
+    fp_failure_streak_t streak;
     fp.cycle_queue.reset(solution);
     fp.reset();
     fp.resize_vectors(*solution.problem_ptr, solution.handle_ptr);
@@ -725,6 +750,12 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
         }
         is_feasible = fp.restart_fp(solution);
         if (is_feasible) { break; }
+        fp_stopped_for_bandit = method_bandit_takes_over(streak, *population_ptr);
+        if (fp_stopped_for_bandit) {
+          fp.revert_relaxation(solution);
+          solution.round_nearest(rng());
+          return false;
+        }
         // give the integer FP some chance
         if (binary_timer.check_time_limit()) {
           CUOPT_LOG_DEBUG("Binary FP time limit reached during binary stage!");
@@ -735,6 +766,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
                       binary_it_counter,
                       i,
                       is_feasible);
+      if (is_feasible) { streak.reset(); }
       // TODO try resetting and not resetting the alpha
       fp.revert_relaxation(solution);
       fp.last_distances.resize(0);
@@ -751,6 +783,11 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
         }
         is_feasible = fp.restart_fp(solution);
         if (is_feasible) { return true; }
+        fp_stopped_for_bandit = method_bandit_takes_over(streak, *population_ptr);
+        if (fp_stopped_for_bandit) {
+          solution.round_nearest(rng());
+          return false;
+        }
       }
     }
   }
@@ -902,6 +939,8 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     resize_to_new_problem();
   }
   i_t last_improved_iteration = 0;
+  fp_stopped_for_bandit       = false;
+  fp_failure_streak_t streak;
   for (i_t i = 0; i < n_fp_iterations && !timer.check_time_limit(); ++i) {
     if (timer.check_time_limit()) {
       is_feasible = false;
@@ -931,6 +970,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
                                     best_solution,
                                     best_objective);
       last_improved_iteration = i;
+      streak.reset();
     }
     // if not feasible, it means it is a cycle
     else {
@@ -955,7 +995,10 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
                                       best_solution,
                                       best_objective);
         last_improved_iteration = i;
+        streak.reset();
       } else {
+        fp_stopped_for_bandit = method_bandit_takes_over(streak, *population_ptr);
+        if (fp_stopped_for_bandit) { break; }
         reset_alpha_and_run_recombiners(solution,
                                         old_problem_ptr,
                                         population_ptr,

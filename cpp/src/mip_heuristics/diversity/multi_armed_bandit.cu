@@ -12,6 +12,8 @@
 
 #include <cuopt/error.hpp>
 
+#include <cmath>
+
 namespace cuopt::mathematical_optimization::mip {
 
 mab_t::mab_t(int n_arms, int seed, double alpha, std::string bandit_name)
@@ -86,6 +88,16 @@ int mab_t::select_ucb_arm()
     std::uniform_int_distribution<int> dist_arm(0, mab_arm_stats_.size() - 1);
     return dist_arm(mab_rng_);
   }
+}
+
+void mab_t::add_reward(int option_id, double reward)
+{
+  cuopt_assert(option_id >= 0 && option_id < (int)mab_arm_stats_.size(), "Unknown bandit arm");
+  cuopt_assert(std::isfinite(reward), "A bandit reward must be finite");
+  auto& arm = mab_arm_stats_[option_id];
+  arm.num_pulls++;
+  arm.last_reward = reward;
+  arm.q_value += mab_alpha_ * (reward - arm.q_value);
 }
 
 // Fallback epsilon-greedy method (preserved for compatibility)

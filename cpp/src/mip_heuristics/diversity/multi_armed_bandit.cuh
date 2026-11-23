@@ -17,6 +17,9 @@ namespace cuopt::mathematical_optimization::mip {
 
 constexpr double recombiner_alpha = 0.05;
 constexpr double ls_alpha         = 0.03;
+// The method bandit pulls once per time slice, far less often than the recombiner bandit, so its
+// estimate has to follow the last few pulls.
+constexpr double method_alpha = 0.2;
 
 template <typename i_t, typename f_t>
 struct mab_ls_config_t {
@@ -76,6 +79,7 @@ struct mab_t {
                       double best_feasible_quality,
                       double offspring_quality,
                       Func work_normalized_reward);
+  void add_reward(int option_id, double reward);
   int select_ucb_arm();
   int select_epsilon_greedy_arm();
   void set_last_chosen_option(int option_id);

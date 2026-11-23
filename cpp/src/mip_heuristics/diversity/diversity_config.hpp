@@ -24,6 +24,7 @@ struct diversity_config_t {
   double lp_run_time_if_feasible     = 2.;
   double lp_run_time_if_infeasible   = 1.;
   bool halve_population              = false;
+  double method_bandit_slice_seconds = 5.;
 };
 
 }  // namespace cuopt::mathematical_optimization::mip

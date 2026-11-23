@@ -465,6 +465,50 @@ void diversity_manager_t<i_t, f_t>::run_fp_alone()
 }
 
 template <typename i_t, typename f_t>
+void diversity_manager_t<i_t, f_t>::run_method_bandit()
+{
+  raft::common::nvtx::range fun_scope("run_method_bandit");
+  const auto& recombiners    = recombiner_t<i_t, f_t>::enabled_recombiners;
+  const double slice_seconds = diversity_config.method_bandit_slice_seconds;
+  mab_t bandit(recombiners.size(),
+               derive_seed(context.base_seed, rng_id_t::diversity_manager, 3),
+               method_alpha,
+               "method");
+  while (!timer.check_time_limit() && !check_b_b_preemption() && population.current_size() >= 2) {
+    cuopt_assert(population.is_feasible(), "The method bandit starts from a feasible population");
+    const int arm             = bandit.select_mab_option();
+    const f_t best_before     = population.best_feasible().get_objective();
+    const f_t external_before = population.external_gain;
+    timer_t slice(timer.clamp_remaining_time(slice_seconds));
+    i_t inserted = 0;
+    while (!slice.check_time_limit() && !context.preempt_heuristic_solver_.load() &&
+           population.current_size() >= 2) {
+      population.adjust_weights_according_to_best_feasible();
+      constexpr bool tournament = true;
+      auto [sol1, sol2]         = population.get_two_random(tournament);
+      auto [first, second]      = recombine_and_local_search(sol1, sol2, slice, recombiners[arm]);
+      inserted += population.add_solution(std::move(first)).first != -1;
+      inserted += population.add_solution(std::move(second)).first != -1;
+    }
+    population.update_weights();
+    // The local search takes the tree's solutions into the population during a slice; what they
+    // gain on the best is not the recombiner's.
+    const f_t tree_gain = population.external_gain - external_before;
+    const f_t own_gain  = best_before - population.best_feasible().get_objective() - tree_gain;
+    const bool improved = own_gain > std::max<f_t>(1e-6, 1e-4 * std::abs(best_before));
+    // 8 for a better incumbent, 1 for a new member of the population, per slice of time used.
+    const double value  = improved ? 8. : inserted > 0 ? 1. : 0.;
+    const double reward = value * slice_seconds / slice.elapsed_time();
+    bandit.add_reward(arm, reward);
+    CUOPT_LOG_DEBUG("Method bandit: %s inserted %d own gain %g reward %g",
+                    all_recombine_stats::recombiner_labels[(size_t)recombiners[arm]],
+                    inserted,
+                    own_gain,
+                    reward);
+  }
+}
+
+template <typename i_t, typename f_t>
 struct ls_cpufj_raii_guard_t {
   ls_cpufj_raii_guard_t(local_search_t<i_t, f_t>& ls) : ls(ls) {}
   ~ls_cpufj_raii_guard_t() { ls.stop_cpufj_lns_improvement_thread(); }
@@ -734,7 +778,14 @@ solution_t<i_t, f_t> diversity_manager_t<i_t, f_t>::run_solver(
     return population.best_feasible();
   }
 
-  run_fp_alone();
+  if (!ls.fp_stopped_for_bandit) { run_fp_alone(); }
+  // The FP loop gives the thread to the method bandit when it stops producing, and takes it back
+  // when the bandit has no pair left to recombine.
+  while (ls.fp_stopped_for_bandit) {
+    run_method_bandit();
+    if (timer.check_time_limit() || check_b_b_preemption()) { break; }
+    run_fp_alone();
+  }
   population.add_external_solutions_to_population();
   return population.best_feasible();
 };
@@ -760,7 +811,7 @@ void diversity_manager_t<i_t, f_t>::diversity_step(i_t max_iterations_without_im
       constexpr bool tournament = true;
       auto [sol1, sol2]         = population.get_two_random(tournament);
       cuopt_assert(population.test_invariant(), "");
-      auto [lp_offspring, offspring]        = recombine_and_local_search(sol1, sol2);
+      auto [lp_offspring, offspring]        = recombine_and_local_search(sol1, sol2, timer);
       auto [inserted_pos_1, best_updated_1] = population.add_solution(std::move(lp_offspring));
       auto [inserted_pos_2, best_updated_2] = population.add_solution(std::move(offspring));
       if (best_updated_1 || best_updated_2) { recombine_stats.add_best_updated(); }
@@ -802,7 +853,7 @@ void diversity_manager_t<i_t, f_t>::recombine_and_ls_with_all(solution_t<i_t, f_
       if (check_b_b_preemption()) { return; }
       if (curr_sol.get_feasible()) {
         auto [offspring, lp_offspring] =
-          recombine_and_local_search(curr_sol, solution, recombiner_type);
+          recombine_and_local_search(curr_sol, solution, timer, recombiner_type);
         if (!add_only_feasible || lp_offspring.get_feasible()) {
           population.add_solution(std::move(lp_offspring));
         }
@@ -871,6 +922,7 @@ template <typename i_t, typename f_t>
 std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>>
 diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& sol1,
                                                           solution_t<i_t, f_t>& sol2,
+                                                          timer_t work_timer,
                                                           recombiner_enum_t recombiner_type)
 {
   raft::common::nvtx::range fun_scope("recombine_and_local_search");
@@ -902,7 +954,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   ls_config_t<i_t, f_t> ls_config;
   ls_config.best_objective_of_parents    = best_objective_of_parents;
   ls_config.at_least_one_parent_feasible = at_least_one_parent_feasible;
-  success = this->run_local_search(offspring, population.weights, timer, ls_config);
+  success = this->run_local_search(offspring, population.weights, work_timer, ls_config);
   if (!success) {
     // add the attempt
     mab_recombiner.add_mab_reward(mab_recombiner.last_chosen_option,
@@ -925,7 +977,7 @@ diversity_manager_t<i_t, f_t>::recombine_and_local_search(solution_t<i_t, f_t>& 
   cuopt_assert(lp_offspring.test_number_all_integer(), "All must be integers before LP");
   f_t lp_run_time = offspring.get_feasible() ? diversity_config.lp_run_time_if_feasible
                                              : diversity_config.lp_run_time_if_infeasible;
-  lp_run_time     = std::min(lp_run_time, timer.remaining_time());
+  lp_run_time     = std::min(lp_run_time, work_timer.remaining_time());
   relaxed_lp_settings_t lp_settings;
   lp_settings.time_limit              = lp_run_time;
   lp_settings.tolerance               = context.settings.tolerances.absolute_tolerance;

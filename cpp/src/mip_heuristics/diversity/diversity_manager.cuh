@@ -38,6 +38,8 @@ class diversity_manager_t {
   solution_t<i_t, f_t> run_solver(branch_and_bound_t<i_t, f_t>& branch_and_bound);
   void generate_solution(f_t time_limit, bool random_start = true);
   void run_fp_alone();
+  // Gives the thread's time, slice by slice, to a recombiner chosen by a bandit.
+  void run_method_bandit();
   // main loop of diversity improvements
   void main_loop();
   // randomly chooses a recombiner and returns the offspring
@@ -51,9 +53,11 @@ class diversity_manager_t {
   void recombine_and_ls_with_all(std::vector<solution_t<i_t, f_t>>& solutions,
                                  bool add_only_feasible = false);
   void recombine_and_ls_with_all(solution_t<i_t, f_t>& solution, bool add_only_feasible = false);
+  // work_timer bounds the local search and the LP that follow the recombiner.
   std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>> recombine_and_local_search(
     solution_t<i_t, f_t>& a,
     solution_t<i_t, f_t>& b,
+    timer_t work_timer,
     recombiner_enum_t recombiner_type = recombiner_enum_t::SIZE);
   void set_new_user_bound(f_t new_user_bound);
   void generate_quick_feasible_solution();
