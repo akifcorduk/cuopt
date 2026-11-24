@@ -910,13 +910,6 @@ void population_t<i_t, f_t>::print()
   CUOPT_LOG_DEBUG(" -------------- ");
 }
 
-template <typename i_t, typename f_t>
-void population_t<i_t, f_t>::diversity_step(i_t max_iterations_without_improvement)
-{
-  raft::common::nvtx::range fun_scope("diversity_step");
-  dm.diversity_step(max_iterations_without_improvement);
-}
-
 #if MIP_INSTANTIATE_FLOAT
 template class population_t<int, float>;
 #endif

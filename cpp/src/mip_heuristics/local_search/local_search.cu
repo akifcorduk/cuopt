@@ -877,7 +877,7 @@ void local_search_t<i_t, f_t>::reset_alpha_and_save_solution(
 }
 
 template <typename i_t, typename f_t>
-void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
+void local_search_t<i_t, f_t>::reset_alpha_and_restart_from_best(
   solution_t<i_t, f_t>& solution,
   problem_t<i_t, f_t>* old_problem_ptr,
   population_t<i_t, f_t>* population_ptr,
@@ -886,16 +886,13 @@ void local_search_t<i_t, f_t>::reset_alpha_and_run_recombiners(
   rmm::device_uvector<f_t>& best_solution,
   f_t& best_objective)
 {
-  raft::common::nvtx::range fun_scope("reset_alpha_and_run_recombiners");
-  const auto& hp                               = context.settings.mip_hyper_params;
-  const i_t iterations_for_stagnation          = hp.heuristic_stagnation_trigger;
-  const i_t max_iterations_without_improvement = hp.heuristic_max_iterations_without_improvement;
+  raft::common::nvtx::range fun_scope("reset_alpha_and_restart_from_best");
+  const i_t iterations_for_stagnation =
+    context.settings.mip_hyper_params.heuristic_stagnation_trigger;
   population_ptr->add_external_solutions_to_population();
   if (population_ptr->current_size() > 1 &&
       i - last_improved_iteration > iterations_for_stagnation) {
     fp.config.alpha = default_alpha;
-    population_ptr->diversity_step(max_iterations_without_improvement);
-    population_ptr->print();
     population_ptr->update_weights();
     save_solution_and_add_cutting_plane(
       population_ptr->best_feasible(), best_solution, best_objective);
@@ -999,13 +996,13 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       } else {
         fp_stopped_for_bandit = method_bandit_takes_over(streak, *population_ptr);
         if (fp_stopped_for_bandit) { break; }
-        reset_alpha_and_run_recombiners(solution,
-                                        old_problem_ptr,
-                                        population_ptr,
-                                        i,
-                                        last_improved_iteration,
-                                        best_solution,
-                                        best_objective);
+        reset_alpha_and_restart_from_best(solution,
+                                          old_problem_ptr,
+                                          population_ptr,
+                                          i,
+                                          last_improved_iteration,
+                                          best_solution,
+                                          best_objective);
       }
     }
   }

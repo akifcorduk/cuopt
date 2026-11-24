@@ -44,12 +44,8 @@ class diversity_manager_t {
   std::pair<solution_t<i_t, f_t>, bool> recombine(solution_t<i_t, f_t>& a,
                                                   solution_t<i_t, f_t>& b,
                                                   recombiner_enum_t recombiner_type);
-  void diversity_step(i_t max_iterations_without_improvement);
   void add_user_given_solutions(std::vector<solution_t<i_t, f_t>>& initial_sol_vector);
   population_t<i_t, f_t>* get_population_pointer() { return &population; }
-  void recombine_and_ls_with_all(std::vector<solution_t<i_t, f_t>>& solutions,
-                                 bool add_only_feasible = false);
-  void recombine_and_ls_with_all(solution_t<i_t, f_t>& solution, bool add_only_feasible = false);
   // work_timer bounds the local search and the LP that follow the recombiner.
   std::pair<solution_t<i_t, f_t>, solution_t<i_t, f_t>> recombine_and_local_search(
     solution_t<i_t, f_t>& a,

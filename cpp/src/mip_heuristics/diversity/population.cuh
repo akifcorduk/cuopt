@@ -167,8 +167,6 @@ class population_t {
 
   void start_threshold_adjustment();
 
-  void diversity_step(i_t max_iterations_without_improvement);
-
   // does some consistency tests
   bool test_invariant();
 
