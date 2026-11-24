@@ -197,8 +197,7 @@ static bool publish_handoff_host_solution(mip_solver_context_t<i_t, f_t>& contex
     return false;
   }
   if (accepted_by_bnb) { return true; }
-  return context.problem_ptr->branch_and_bound_callback(assignment,
-                                                        heuristics_origin_t::HEURISTICS);
+  return context.problem_ptr->branch_and_bound_callback(assignment);
 }
 
 // Extract probing cache into CPU-only CSR struct for implied bounds cuts
@@ -687,8 +686,8 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     branch_and_bound->set_concurrent_lp_root_solve(true);
 
     context.problem_ptr->branch_and_bound_callback =
-      [bb = branch_and_bound.get()](const std::vector<f_t>& solution, heuristics_origin_t origin) {
-        return bb->set_solution_from_heuristics(solution, origin);
+      [bb = branch_and_bound.get()](const std::vector<f_t>& solution) {
+        return bb->set_solution_from_heuristics(solution, 'H');
       };
   } else if (context.settings.determinism_mode == CUOPT_MODE_DETERMINISTIC) {
     branch_and_bound->set_concurrent_lp_root_solve(false);

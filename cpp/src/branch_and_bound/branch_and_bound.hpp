@@ -51,6 +51,7 @@
 #include <limits>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -124,6 +125,11 @@ class branch_and_bound_t {
   }
 
   // Set the root solution found by PDLP
+  // A valid lower bound on the root LP (solver space) from a root solver still running (PDLP dual
+  // iterate, dual simplex). Keeps the best one; reported while no node bound exists yet. PDLP
+  // improvements are logged; dual simplex shows its progress in its own log.
+  void set_root_lower_bound(f_t lower_bound, bool from_pdlp);
+
   void set_root_relaxation_solution(const std::vector<f_t>& primal,
                                     const std::vector<f_t>& dual,
                                     const std::vector<f_t>& reduced_costs,
@@ -147,7 +153,7 @@ class branch_and_bound_t {
 
   // Set a solution based on the user problem during the course of the solve
   bool set_solution_from_heuristics(const std::vector<f_t>& solution,
-                                    heuristics_origin_t origin,
+                                    char symbol,
                                     f_t* previous_upper = nullptr);
 
   // Apply a solution found by a CPU FJ worker.
@@ -311,6 +317,7 @@ class branch_and_bound_t {
   std::atomic<bool> root_crossover_solution_set_{false};
   omp_atomic_t<f_t> root_lp_current_lower_bound_;
   omp_atomic_t<bool> solving_root_relaxation_{false};
+  std::mutex root_lower_bound_mutex_;
   bool enable_concurrent_lp_root_solve_{false};
   std::atomic<int> root_concurrent_halt_{0};
   std::atomic<int> node_concurrent_halt_{0};
@@ -447,7 +454,7 @@ class branch_and_bound_t {
   std::function<void(f_t)> user_bound_callback_;
 
   void print_table_header();
-  void report_heuristic(f_t obj, heuristics_origin_t origin);
+  void report_heuristic(f_t obj, char symbol);
   void report(const simplex::lp_problem_t<i_t, f_t>& lp,
               char symbol,
               f_t obj,
@@ -541,6 +548,7 @@ class branch_and_bound_t {
   void set_solution_from_submip(const simplex::lp_problem_t<i_t, f_t>& lp,
                                 const std::vector<f_t>& solution,
                                 const third_party_presolve_t<i_t, f_t>& presolver,
+                                search_strategy_t type,
                                 submip_stats_t& submip_stats,
                                 f_t fixrate,
                                 std::string_view log_prefix,
