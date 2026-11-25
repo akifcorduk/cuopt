@@ -19,6 +19,8 @@
 #include <utilities/pcgenerator.hpp>
 #include <utilities/splitmix64.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -326,6 +328,10 @@ struct submip_stats_t {
   omp_atomic_t<double> infeasible_fixrate_sum = 0;
   omp_atomic_t<int> total_calls               = 0;
   omp_atomic_t<int> total_empty               = 0;
+  // Rises when presolve leaves nothing of a neighbourhood, falls when a sub-MIP is solved.
+  omp_atomic_t<int> empty_level           = 0;
+  static constexpr int max_empty_level    = 6;
+  static constexpr double empty_level_mul = 0.7;
 
   void save_success(double fixrate)
   {
@@ -339,7 +345,22 @@ struct submip_stats_t {
     infeasible_fixrate_sum += fixrate;
   }
 
-  void save_empty() { ++total_empty; }
+  void save_empty()
+  {
+    ++total_empty;
+    if (empty_level < max_empty_level) { ++empty_level; }
+  }
+
+  void save_nonempty()
+  {
+    if (empty_level > 0) { --empty_level; }
+  }
+
+  double empty_level_factor() const
+  {
+    return std::pow(empty_level_mul, std::clamp<int>(empty_level, 0, max_empty_level));
+  }
+
   double average_infeasible_fixrate() const { return infeasible_fixrate_sum / total_infeasible; }
   double average_success_fixrate() const { return success_fixrate_sum / total_success; }
 };
