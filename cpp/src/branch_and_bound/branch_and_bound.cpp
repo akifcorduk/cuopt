@@ -2508,6 +2508,7 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
     submip_stats.save_empty();
     return;
   }
+  submip_stats.save_nonempty();
 
   if (toc(exploration_stats_.start_time) > settings_.time_limit) {
     solver_status_ = mip_status_t::TIME_LIMIT;
@@ -2698,7 +2699,7 @@ f_t submip_get_max_fixrate(const submip_stats_t& stats,
   high        = std::min(high, 0.9);
   low         = std::max(low, 0.1);
   f_t fixrate = high > low ? rng.uniform(low, high) : low;
-  return fixrate;
+  return fixrate * stats.empty_level_factor();
 }
 
 template <typename i_t, typename f_t>
