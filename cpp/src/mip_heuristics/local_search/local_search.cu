@@ -24,6 +24,7 @@
 #include <mip_heuristics/feasibility_jump/fj_cpu.cuh>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -715,6 +716,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
         }
         CUOPT_LOG_DEBUG(
           "Running binary problem from it %d large_restart_it %d", binary_it_counter, i);
+        if (fp_alpha_reset()) { fp.config.alpha = default_alpha; }
         is_feasible = fp.run_single_fp_descent(solution);
         if (is_feasible) { break; }
         if (timer.check_time_limit()) {
@@ -742,6 +744,7 @@ bool local_search_t<i_t, f_t>::run_staged_fp(solution_t<i_t, f_t>& solution,
       for (i_t integer_it_counter = 0; integer_it_counter < 500; ++integer_it_counter) {
         CUOPT_LOG_DEBUG(
           "Running integer problem from it %d large_restart_it %d", integer_it_counter, i);
+        if (fp_alpha_reset()) { fp.config.alpha = default_alpha; }
         is_feasible = fp.run_single_fp_descent(solution);
         if (is_feasible) { return true; }
         if (timer.check_time_limit()) {
@@ -902,6 +905,12 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
     resize_to_new_problem();
   }
   i_t last_improved_iteration = 0;
+  static std::atomic<bool> switches_logged{false};
+  if (!switches_logged.exchange(true)) {
+    CUOPT_LOG_INFO("FP objective weight: floor %g, reset every iteration %d",
+                   fp_alpha_floor(),
+                   int(fp_alpha_reset()));
+  }
   for (i_t i = 0; i < n_fp_iterations && !timer.check_time_limit(); ++i) {
     if (timer.check_time_limit()) {
       is_feasible = false;
@@ -913,6 +922,7 @@ bool local_search_t<i_t, f_t>::run_fp(solution_t<i_t, f_t>& solution,
       CUOPT_LOG_DEBUG("Preempting heuristic solver!");
       break;
     }
+    if (fp_alpha_reset()) { fp.config.alpha = default_alpha; }
     is_feasible = fp.run_single_fp_descent(solution);
     population_ptr->add_external_solutions_to_population();
     CUOPT_LOG_DEBUG("Population size at iteration %d: %d", i, population_ptr->current_size());

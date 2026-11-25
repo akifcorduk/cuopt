@@ -74,7 +74,8 @@ void feasibility_pump_t<i_t, f_t>::adjust_objective_with_original(solution_t<i_t
   if (!longer_fp_run) {
     CUOPT_LOG_TRACE(
       "changing alpha from %f to %f", config.alpha, config.alpha * config.alpha_decrease_factor);
-    config.alpha = config.alpha * config.alpha_decrease_factor;
+    config.previous_alpha = config.alpha;
+    config.alpha          = std::max(config.alpha * config.alpha_decrease_factor, fp_alpha_floor());
   }
   f_t distance_weight         = 1. - config.alpha;
   std::vector<f_t> obj_vector = cuopt::host_copy(solution.problem_ptr->objective_coefficients,
@@ -565,7 +566,9 @@ bool feasibility_pump_t<i_t, f_t>::run_single_fp_descent(solution_t<i_t, f_t>& s
       return true;
     }
     // do the cycle check if alpha diff is small enough
-    f_t alpha_at_earlier_iter = config.alpha / config.alpha_decrease_factor;
+    // With a floor the weight stops changing at the floor, which the decay formula cannot see.
+    f_t alpha_at_earlier_iter =
+      fp_alpha_floor() > 0 ? config.previous_alpha : config.alpha / config.alpha_decrease_factor;
     if (alpha_at_earlier_iter - config.alpha < 0.005) {
       is_cycle = cycle_queue.check_cycle(solution);
     }

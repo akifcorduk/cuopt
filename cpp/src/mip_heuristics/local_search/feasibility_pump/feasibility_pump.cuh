@@ -15,6 +15,7 @@
 
 #include <thrust/count.h>
 
+#include <cstdlib>
 #include <deque>
 
 namespace cuopt::mathematical_optimization::mip {
@@ -92,9 +93,37 @@ struct cycle_queue_t {
   i_t n_iterations_without_cycle = 0;
 };
 
+// The weight of the original objective in the projection (alpha) is not decayed below the floor,
+// so a descent that needs many projections still pulls toward the objective when it becomes
+// feasible. CUOPT_FP_ALPHA_FLOOR overrides it; 0 = no floor.
+constexpr double default_fp_alpha_floor = 0.3;
+// Every FP iteration starts at default_alpha, also after a failed one. CUOPT_FP_ALPHA_RESET
+// overrides it.
+constexpr bool default_fp_alpha_reset = false;
+
+inline double fp_alpha_floor()
+{
+  static const double value = [] {
+    const char* env = std::getenv("CUOPT_FP_ALPHA_FLOOR");
+    return env ? std::atof(env) : default_fp_alpha_floor;
+  }();
+  return value;
+}
+
+inline bool fp_alpha_reset()
+{
+  static const bool value = [] {
+    const char* env = std::getenv("CUOPT_FP_ALPHA_RESET");
+    return env ? std::atoi(env) != 0 : default_fp_alpha_reset;
+  }();
+  return value;
+}
+
 struct fp_config_t {
-  double alpha                           = default_alpha;
-  double alpha_decrease_factor           = 0.9;
+  double alpha                 = default_alpha;
+  double alpha_decrease_factor = 0.9;
+  // alpha before its last decay, for the cycle check when a floor is set
+  double previous_alpha                  = default_alpha;
   bool check_distance_cycle              = true;
   int first_stage_kk                     = 70;
   double cycle_distance_reduction_ration = 0.1;
