@@ -167,7 +167,7 @@ solver_settings_t<i_t, f_t>::solver_settings_t() : pdlp_settings(), mip_settings
     // Branch-and-bound hyper-parameters (hidden from default --help: name contains "hyper_")
     {CUOPT_MIP_HYPER_BNB_BFS_WORKERS_RATIO, &mip_settings.mip_hyper_params.bnb_bfs_workers_ratio, f_t(0.0), f_t(1.0), f_t(0.5), "best-first search workers as a fraction of the B&B threads (at least 1)"},
     {CUOPT_MIP_HYPER_BNB_DIVING_WORKERS_RATIO, &mip_settings.mip_hyper_params.bnb_diving_workers_ratio, f_t(0.0), f_t(1.0), f_t(0.5), "diving workers as a fraction of the B&B threads (at least 1)"},
-    {CUOPT_MIP_HYPER_BNB_SUBMIP_WORKERS_RATIO, &mip_settings.mip_hyper_params.bnb_submip_workers_ratio, f_t(0.0), f_t(1.0), f_t(0.125), "sub-MIP workers as a fraction of the B&B threads (at least 1)"},
+    {CUOPT_MIP_HYPER_BNB_SUBMIP_WORKERS_RATIO, &mip_settings.mip_hyper_params.bnb_submip_workers_ratio, f_t(0.0), f_t(1.0), f_t(0.25), "sub-MIP workers as a fraction of the B&B threads (at least 1)"},
     {CUOPT_MIP_HYPER_BNB_STEAL_CHANCE, &mip_settings.mip_hyper_params.bnb_steal_chance, f_t(0.0), f_t(1.0), f_t(0.05), "probability that a best-first worker steals nodes from another worker"},
    };
 
