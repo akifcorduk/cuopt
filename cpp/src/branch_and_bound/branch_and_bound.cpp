@@ -82,6 +82,32 @@ using simplex::variable_type_t;
 
 namespace {
 
+// A presolved sub-MIP with more integer columns than this skips its branch-and-cut and runs the
+// CPU FJ worker alone. 0 keeps the branch-and-cut for every size. CUOPT_SUBMIP_FJ_ONLY_INTEGERS
+// overrides it.
+constexpr int default_submip_fj_only_integers = 500;
+// The work limit of the FJ worker in that case, as a multiple of the usual one.
+// CUOPT_SUBMIP_FJ_ONLY_WORK overrides it.
+constexpr double default_submip_fj_only_work = 1.;
+
+int submip_fj_only_integers()
+{
+  static const int value = [] {
+    const char* env = std::getenv("CUOPT_SUBMIP_FJ_ONLY_INTEGERS");
+    return env ? std::atoi(env) : default_submip_fj_only_integers;
+  }();
+  return value;
+}
+
+double submip_fj_only_work()
+{
+  static const double value = [] {
+    const char* env = std::getenv("CUOPT_SUBMIP_FJ_ONLY_WORK");
+    return env ? std::atof(env) : default_submip_fj_only_work;
+  }();
+  return value;
+}
+
 template <typename i_t, typename f_t>
 void full_variable_types(const user_problem_t<i_t, f_t>& original_problem,
                          const lp_problem_t<i_t, f_t>& original_lp,
@@ -373,6 +399,7 @@ void branch_and_bound_t<i_t, f_t>::halt_solver()
 {
   std::lock_guard lock(active_submip_solvers_mutex_);
   node_concurrent_halt_.store(true, std::memory_order::release);
+  if (fj_only_stop_) { fj_only_stop_->store(true); }
 
   for (i_t i = 0; i < active_submip_solvers_.size(); ++i) {
     if (active_submip_solvers_[i]) { active_submip_solvers_[i]->halt_solver(); }
@@ -720,7 +747,7 @@ void branch_and_bound_t<i_t, f_t>::set_solution_from_cpu_fj(f_t obj,
 // expects a solution on the user space. So we go from presolved space -> augmented space ->
 // user space.
 template <typename i_t, typename f_t>
-void branch_and_bound_t<i_t, f_t>::set_solution_from_submip(
+bool branch_and_bound_t<i_t, f_t>::set_solution_from_submip(
   const lp_problem_t<i_t, f_t>& lp,
   const std::vector<f_t>& solution,
   const third_party_presolve_t<i_t, f_t>& presolver,
@@ -749,6 +776,7 @@ void branch_and_bound_t<i_t, f_t>::set_solution_from_submip(
     submip_stats.save_success(fixrate);
     if (settings_.solution_callback != nullptr) { settings_.solution_callback(user_sol, obj); }
   }
+  return success;
 }
 
 template <typename i_t, typename f_t>
@@ -2522,16 +2550,19 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   submip_settings.heuristic_preemption_callback   = nullptr;
   submip_settings.dual_simplex_objective_callback = nullptr;
   submip_settings.set_simplex_solution_callback   = nullptr;
+  std::atomic<bool> improved{false};
   submip_settings.solution_callback =
-    [this, &presolver, fixrate, &submip_stats, log_prefix, worker](const std::vector<f_t>& solution,
-                                                                   f_t obj) {
-      this->set_solution_from_submip(worker->leaf_problem,
-                                     solution,
-                                     presolver,
-                                     worker->search_strategy,
-                                     submip_stats,
-                                     fixrate,
-                                     log_prefix);
+    [this, &presolver, fixrate, &submip_stats, log_prefix, worker, &improved](
+      const std::vector<f_t>& solution, f_t obj) {
+      if (this->set_solution_from_submip(worker->leaf_problem,
+                                         solution,
+                                         presolver,
+                                         worker->search_strategy,
+                                         submip_stats,
+                                         fixrate,
+                                         log_prefix)) {
+        improved = true;
+      }
     };
 
   DEBUG_SUBMIP("{}Sub-MIP: {} constraints, {} variables, {} nonzeros\n",
@@ -2590,6 +2621,17 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   }
 
   fj_cpu_worker_t<i_t, f_t> submip_fj_cpu_worker;
+  // On a large neighbourhood the branch-and-cut rarely gets past its root, and the improving
+  // solutions come from the CPU FJ worker: run that worker alone.
+  const auto submip_integers = std::count_if(
+    submip_problem.var_types.begin(), submip_problem.var_types.end(), [](variable_type_t t) {
+      return t != variable_type_t::CONTINUOUS;
+    });
+  const bool fj_only = submip_fj_only_integers() > 0 &&
+                       settings_.mip_hyper_params.submip_enable_cpufj &&
+                       submip_integers > submip_fj_only_integers();
+  f_t fj_time_limit    = 0;
+  double fj_work_limit = 0;
 
   if (settings_.mip_hyper_params.submip_enable_cpufj) {
     // Since we do not have an incumbent, use the LP solution of the last round of variable fixing
@@ -2624,7 +2666,13 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
                                        submip_bnb.settings_,
                                        std::format("{} [CPU FJ]", log_prefix),
                                        worker->rng.next_i64());
-    submip_fj_cpu_worker.run_async(time_limit, work_limit);
+    if (fj_only) {
+      fj_time_limit            = time_limit;
+      fj_work_limit            = work_limit * submip_fj_only_work();
+      submip_bnb.fj_only_stop_ = &submip_fj_cpu_worker.preemption_flag;
+    } else {
+      submip_fj_cpu_worker.run_async(time_limit, work_limit);
+    }
   }
 
   active_submip_solvers_mutex_.lock();
@@ -2639,6 +2687,14 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
   });
 
   if (halted) { submip_bnb.halt_solver(); }
+
+  if (fj_only) {
+    if (!halted) { submip_fj_cpu_worker.run_sync(fj_time_limit, fj_work_limit); }
+    ++fj_only_solves_;
+    if (improved) { ++fj_only_improving_; }
+    fj_only_seconds_ += toc(start_time);
+    return;
+  }
 
   mip_status_t submip_status = submip_bnb.solve(submip_solution);
   f_t submip_time            = toc(start_time);
@@ -4889,6 +4945,15 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
                rens_stats_.total_infeasible.load(std::memory_order::relaxed),
                rens_stats_.total_empty.load(std::memory_order::relaxed),
                rens_stats_.total_calls.load(std::memory_order::relaxed));
+
+  if (!settings_.inside_submip) {
+    settings_.log.printf(
+      "Sub-MIPs run by FJ alone (above %d integers): %d, %d improved the incumbent, %.1f s\n",
+      submip_fj_only_integers(),
+      int(fj_only_solves_),
+      int(fj_only_improving_),
+      double(fj_only_seconds_));
+  }
 
   set_final_solution(solution, lower_bound);
   return solver_status_;

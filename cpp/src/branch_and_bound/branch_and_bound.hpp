@@ -283,6 +283,13 @@ class branch_and_bound_t {
   diving_worker_pool_t<i_t, f_t> submip_worker_pool_;
   std::vector<branch_and_bound_t*> active_submip_solvers_;
   omp_mutex_t active_submip_solvers_mutex_;
+  // Set while this sub-MIP runs its CPU FJ worker alone: the worker's stop flag, raised by
+  // halt_solver().
+  std::atomic<bool>* fj_only_stop_ = nullptr;
+  // Sub-MIPs of this tree that ran the CPU FJ worker alone.
+  omp_atomic_t<int> fj_only_solves_     = 0;
+  omp_atomic_t<int> fj_only_improving_  = 0;
+  omp_atomic_t<double> fj_only_seconds_ = 0;
   submip_stats_t rins_stats_;
   submip_stats_t rens_stats_;
   submip_stats_t mutation_stats_;
@@ -394,7 +401,7 @@ class branch_and_bound_t {
 
   // Launch a new RINS worker
   bool launch_submip_worker(const std::vector<f_t>& sol);
-  void set_solution_from_submip(const simplex::lp_problem_t<i_t, f_t>& lp,
+  bool set_solution_from_submip(const simplex::lp_problem_t<i_t, f_t>& lp,
                                 const std::vector<f_t>& solution,
                                 const third_party_presolve_t<i_t, f_t>& presolver,
                                 search_strategy_t type,
