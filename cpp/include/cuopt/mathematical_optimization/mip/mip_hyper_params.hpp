@@ -84,7 +84,7 @@ struct mip_hyper_params_t {
   // workers to execute.
   f_t bnb_bfs_workers_ratio    = 0.5;
   f_t bnb_diving_workers_ratio = 0.5;
-  f_t bnb_submip_workers_ratio = 0.125;
+  f_t bnb_submip_workers_ratio = 0.25;
 
   // Indicate the chance in which a worker can steal a node from another worker.
   f_t bnb_steal_chance = 0.05;

@@ -2369,7 +2369,7 @@ bool branch_and_bound_t<i_t, f_t>::launch_submip_worker(const std::vector<f_t>& 
 
   mutex_upper_.lock();
   bool has_incumbent = incumbent_.has_incumbent;
-  bool use_mutation  = has_incumbent && enable_mutation && worker->worker_id == 0;
+  bool use_mutation  = has_incumbent && enable_mutation && worker->worker_id % 2 == 0;
   bool use_rins      = has_incumbent && enable_rins && !use_mutation;
   if (use_mutation || use_rins) worker->current_incumbent = incumbent_.x;
   mutex_upper_.unlock();
