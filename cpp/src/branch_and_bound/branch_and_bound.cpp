@@ -4798,6 +4798,10 @@ mip_status_t branch_and_bound_t<i_t, f_t>::solve(mip_solution_t<i_t, f_t>& solut
       const i_t num_bfs_workers    = std::max(num_workers * params.bnb_bfs_workers_ratio, 1.0);
       const i_t num_submip_workers = std::max(num_workers * params.bnb_submip_workers_ratio, 1.0);
       const i_t num_diving_workers = std::max(num_workers * params.bnb_diving_workers_ratio, 1.0);
+      settings_.log.printf("Tree workers: %d best-first, %d diving, %d sub-MIP\n",
+                           num_bfs_workers,
+                           num_diving_workers,
+                           num_submip_workers);
       bfs_worker_pool_.init(num_bfs_workers,
                             original_lp_,
                             Arow_,
