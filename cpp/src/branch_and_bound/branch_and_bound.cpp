@@ -1940,8 +1940,10 @@ void branch_and_bound_t<i_t, f_t>::plunge_with(bfs_worker_t<i_t, f_t>* worker,
     worker->recompute_bounds = node_status != node_status_t::HAS_CHILDREN;
 
     if (node_status == node_status_t::HAS_CHILDREN) {
-      if (can_launch_new_submip) {
-        can_launch_new_submip = !launch_submip_worker(worker->leaf_solution.x);
+      // The tree launches a sub-MIP whenever a worker is idle. A sub-MIP runs its own
+      // neighbourhoods inline, so it keeps one per plunge.
+      if (can_launch_new_submip && launch_submip_worker(worker->leaf_solution.x)) {
+        can_launch_new_submip = !settings_.inside_submip;
       }
 
       // The stack should only contain the children of the current parent.
