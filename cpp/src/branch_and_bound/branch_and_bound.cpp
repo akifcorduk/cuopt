@@ -2369,7 +2369,7 @@ bool branch_and_bound_t<i_t, f_t>::launch_submip_worker(const std::vector<f_t>& 
 
   mutex_upper_.lock();
   bool has_incumbent = incumbent_.has_incumbent;
-  bool use_mutation  = has_incumbent && enable_mutation && worker->worker_id == 0;
+  bool use_mutation  = has_incumbent && enable_mutation && worker->worker_id != 1;
   bool use_rins      = has_incumbent && enable_rins && !use_mutation;
   if (use_mutation || use_rins) worker->current_incumbent = incumbent_.x;
   mutex_upper_.unlock();
@@ -2508,6 +2508,7 @@ void branch_and_bound_t<i_t, f_t>::solve_submip(diving_worker_t<i_t, f_t>* worke
     submip_stats.save_empty();
     return;
   }
+  submip_stats.save_nonempty();
 
   if (toc(exploration_stats_.start_time) > settings_.time_limit) {
     solver_status_ = mip_status_t::TIME_LIMIT;
@@ -2698,7 +2699,7 @@ f_t submip_get_max_fixrate(const submip_stats_t& stats,
   high        = std::min(high, 0.9);
   low         = std::max(low, 0.1);
   f_t fixrate = high > low ? rng.uniform(low, high) : low;
-  return fixrate;
+  return fixrate * stats.empty_level_factor();
 }
 
 template <typename i_t, typename f_t>
