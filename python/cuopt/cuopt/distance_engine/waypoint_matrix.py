@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 from cuopt.distance_engine import waypoint_matrix_wrapper
@@ -146,6 +146,8 @@ class WaypointMatrix(waypoint_matrix_wrapper.WaypointMatrix):
             with respect to the graph.
             Target locations indices must be in the range [0, V]
             (V: number of vertices).
+            Each of them must be among the target locations of the last
+            compute_cost_matrix call.
         route_df: cudf.DataFrame
             Contains route, vehicle_id, arrival_stamp,
             and locations. Contains an extra 'sequence_offset' field
@@ -272,6 +274,8 @@ class WaypointMatrix(waypoint_matrix_wrapper.WaypointMatrix):
             with respect to the graph.
             Target locations indices must be in the range [0, V)
             (V: number of vertices).
+            Each of them must be among the target locations of the last
+            compute_cost_matrix call.
         weights : numpy.ndarray
             numpy.ndarray of size E (E: number of edges).
             It contains the weight value for each edge.

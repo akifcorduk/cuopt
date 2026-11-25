@@ -103,6 +103,7 @@ class waypoint_matrix_t {
    * @param[in] target_locations Host memory pointer of size T (T: n_target_locations)
    * representing the target locations indices with respect to the graph.
    * Target locations indices must be in the range [0, V) (V: number of vertices).
+   * Each of them must be among the target locations of the last compute_cost_matrix call.
    * @param n_target_locations Number of target locations
    * @param[in] locations Device memory pointer of size L (L: n_locations) containing the location
    * of orders
@@ -139,6 +140,7 @@ class waypoint_matrix_t {
    * @param[in] target_locations Host memory pointer of size T (T: n_target_locations)
    * representing the target locations indices with respect to the graph.
    * Target locations indices must be in the range [0, V) (V: number of vertices).
+   * Each of them must be among the target locations of the last compute_cost_matrix call.
    * @param n_target_locations Number of target locations.
    * @param[in] weights Host memory pointer of size E (E: number of edges).
    * It contains the weight value for each edge.
@@ -178,6 +180,7 @@ class waypoint_matrix_t {
   bool is_int16_{false};
   std::vector<std::vector<int32_t>> predecessor_matrix32_{};
   std::vector<std::vector<uint16_t>> predecessor_matrix16_{};
+  std::vector<i_t> vertex_to_row_{};
 };
 }  // namespace distance_engine
 }  // namespace cuopt

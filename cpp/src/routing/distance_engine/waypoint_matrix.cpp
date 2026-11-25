@@ -137,6 +137,10 @@ std::vector<f_t> waypoint_matrix_t<i_t, f_t>::mpsp(i_t const* target_locations,
       std::vector<std::vector<int32_t>>(n_target_locations, std::vector<int32_t>(n_vertices_, -1));
   }
 
+  vertex_to_row_.assign(n_vertices_, -1);
+  for (i_t i = 0; i < n_target_locations; ++i)
+    vertex_to_row_[target_locations[i]] = i;
+
 // Run n_target_locations dijkstras in parallel with each target as source
 #pragma omp parallel for
   for (std::size_t i = 0; i < n_target_locations; ++i)
@@ -229,6 +233,20 @@ static void check_target_locations(i_t const* targets, i_t n_targets, i_t n_vert
   }
 }
 
+// Targets without shortest paths from compute_cost_matrix
+template <typename i_t>
+static void check_target_rows(std::vector<i_t> const& vertex_to_row,
+                              i_t const* targets,
+                              i_t n_targets)
+{
+  for (i_t i = 0; i < n_targets; ++i) {
+    cuopt_expects(vertex_to_row[targets[i]] >= 0,
+                  error_type_t::ValidationError,
+                  "Target location %d was not passed to the last compute_cost_matrix call.",
+                  targets[i]);
+  }
+}
+
 template <typename i_t, typename f_t>
 void waypoint_matrix_t<i_t, f_t>::compute_cost_matrix(f_t* d_cost_matrix,
                                                       i_t const* target_locations,
@@ -290,6 +308,7 @@ waypoint_matrix_t<i_t, f_t>::compute_waypoint_sequence(i_t const* target_locatio
 
   // Target locations validity checks
   check_target_locations(target_locations, n_target_locations, n_vertices_);
+  check_target_rows(vertex_to_row_, target_locations, n_target_locations);
 
   std::vector<i_t> h_locations(n_locations);
   raft::copy(h_locations.data(), locations, n_locations, stream_view_);
@@ -311,7 +330,7 @@ waypoint_matrix_t<i_t, f_t>::compute_waypoint_sequence(i_t const* target_locatio
   */
   paths_offsets[0] = 0;
   for (i_t i = 1; i != n_locations; ++i) {
-    const auto src_matrix_id = h_locations[i - 1];
+    const auto src_matrix_id = vertex_to_row_[target_locations[h_locations[i - 1]]];
     const auto dst_graph_id  = target_locations[h_locations[i]];
     dispatch(add_path, src_matrix_id, dst_graph_id, paths_list, i, paths_offsets);
   }
@@ -374,8 +393,11 @@ std::vector<f_t> waypoint_matrix_t<i_t, f_t>::_compute_shortest_path_costs(
     if (target_locations[src] == target_locations[dst])
       shortest_path_matrix[i] = 0.0f;
     else
-      dispatch(
-        compute_secondary_cost, src, target_locations[dst], weights, shortest_path_matrix[i]);
+      dispatch(compute_secondary_cost,
+               vertex_to_row_[target_locations[src]],
+               target_locations[dst],
+               weights,
+               shortest_path_matrix[i]);
   }
 
   return shortest_path_matrix;
@@ -383,22 +405,20 @@ std::vector<f_t> waypoint_matrix_t<i_t, f_t>::_compute_shortest_path_costs(
 
 template <typename pm_t, typename i_t>
 static void check_target_paths(pm_t const& predecessor_matrix,
+                               std::vector<i_t> const& vertex_to_row,
                                i_t const* target_locations,
                                i_t n_target_locations)
 {
-  cuopt_expects(predecessor_matrix.size() >= n_target_locations,
-                error_type_t::ValidationError,
-                "compute_shortest_path_costs must be called after compute_cost_matrix, with at "
-                "most as many target locations.");
   for (i_t src = 0; src < n_target_locations; ++src) {
+    const auto& predecessors = predecessor_matrix[vertex_to_row[target_locations[src]]];
     for (i_t dst = 0; dst < n_target_locations; ++dst) {
       if (target_locations[src] == target_locations[dst]) { continue; }
-      cuopt_expects(predecessor_matrix[src][target_locations[dst]] !=
-                      (typename pm_t::value_type::value_type)(-1),
-                    error_type_t::ValidationError,
-                    "Target location %d is not reachable from target location %d.",
-                    target_locations[dst],
-                    target_locations[src]);
+      cuopt_expects(
+        predecessors[target_locations[dst]] != (typename pm_t::value_type::value_type)(-1),
+        error_type_t::ValidationError,
+        "Target location %d is not reachable from target location %d.",
+        target_locations[dst],
+        target_locations[src]);
     }
   }
 }
@@ -420,9 +440,14 @@ void waypoint_matrix_t<i_t, f_t>::compute_shortest_path_costs(f_t* d_custom_matr
                 "Number of target locations should be positive.");
   cuopt_expects(weights != nullptr, error_type_t::ValidationError, "Weights input cannot be null.");
 
+  cuopt_expects(!vertex_to_row_.empty(),
+                error_type_t::ValidationError,
+                "compute_shortest_path_costs cannot be called before compute_cost_matrix.");
+
   // Target locations validity checks
   check_target_locations(target_locations, n_target_locations, n_vertices_);
-  dispatch(check_target_paths, target_locations, n_target_locations);
+  check_target_rows(vertex_to_row_, target_locations, n_target_locations);
+  dispatch(check_target_paths, vertex_to_row_, target_locations, n_target_locations);
 
   std::vector<f_t> shortest_path_matrix =
     _compute_shortest_path_costs(target_locations, n_target_locations, weights);
