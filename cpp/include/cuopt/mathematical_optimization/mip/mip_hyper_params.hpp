@@ -71,7 +71,7 @@ struct mip_hyper_params_t {
   //   M = mutation
   //   J = CPU FJ
   //   U = unknown
-  bool heuristic_show_type = false;
+  bool heuristic_show_type = true;
 
   // ---------------------------------------------------------------------------------------------
   // Branch-and-bound
