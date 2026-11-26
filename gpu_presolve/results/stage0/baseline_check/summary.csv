@@ -1,0 +1,5 @@
+name,band,where,status,rows,cols,nnz,rows_after,cols_after,nnz_after,rows_removed_pct,cols_removed_pct,nnz_removed_pct,presolve_seconds,presolve_core_seconds,read_seconds,reached_time_limit,peak_rss_mb
+wachplan,A1,dev,Reduced,1553,3361,89361,650,2288,12024,58.1455,31.925,86.5445,0.223458,0.220388,0.0607007,0,42.7656
+trento1,A1,dev,Reduced,1265,7687,93571,1192,7606,89185,5.77075,1.05373,4.68735,0.31785,0.312714,0.0636488,0,49.5469
+ns1830653,A2,dev,Reduced,2932,1629,100933,1433,587,24263,51.1255,63.9656,75.9613,0.196482,0.194805,0.0491856,0,21.8516
+uccase9,A3,dev,Reduced,49565,33242,332316,32847,22474,256250,33.7294,32.3928,22.8897,2.03763,1.98774,0.349179,0,156.883

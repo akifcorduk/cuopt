@@ -1,0 +1,13 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/trento1.mps",
+  "gpu_presolve/results/stage0/baseline_check/trento1.json",
+  "--time-limit",
+  "1800.0"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 0.4199668890069006
+}

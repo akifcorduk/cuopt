@@ -1,0 +1,129 @@
+
+launch: microseconds, median (p10, p90)
+sync_idle_stream                                   0.143 (0.140, 0.152)
+empty_kernel_launch_sync                           9.014 (8.811, 9.661)
+empty_kernel_launch_no_sync                        1.954 (1.793, 2.478)
+empty_kernel_10_launches_one_sync                  37.89 (37.48, 38.66)
+
+readback: microseconds, median (p10, p90)
+kernel_write_8_bytes_copy_to_host [pageable]       14.93 (14.57, 22.70)
+kernel_write_8_bytes_copy_to_host [pinned]         13.84 (12.95, 21.50)
+
+library: median microseconds
+                                                                1e3         1e4         1e5         1e6         1e7
+thrust::reduce<double> [rmm_pool]                             28.18       36.10       35.70       39.85       93.98
+thrust::reduce_by_key<int,double> [rmm_pool]                  37.10       41.93       44.01       65.90       275.2
+thrust::sort<u64> [rmm_pool]                                  94.16       373.7       446.5       734.8        3857
+thrust::sort_by_key<u64,u64> [rmm_pool]                       115.9       426.4       500.7       905.7        5256
+thrust::copy_if<u64> [rmm_pool]                               40.85       44.53       45.51       57.09       230.8
+thrust::exclusive_scan<i64> [rmm_pool]                        22.62       27.09       29.75       46.75       230.6
+thrust::reduce<double> [cuda_malloc]                          274.2       283.9       283.4       287.9       345.6
+thrust::reduce_by_key<int,double> [cuda_malloc]               283.5       289.5       291.5       312.2       525.9
+thrust::sort<u64> [cuda_malloc]                               338.3       616.9       691.8       980.1        4540
+thrust::sort_by_key<u64,u64> [cuda_malloc]                    360.6       669.7       743.8        1149        6366
+thrust::copy_if<u64> [cuda_malloc]                            289.3       292.5       292.8       305.4       481.0
+thrust::exclusive_scan<i64> [cuda_malloc]                     269.2       274.4       276.0       293.1       479.9
+cub::DeviceRadixSort::SortPairs<u64,u64> [preallocated]       107.4       426.5       499.9       908.3        5257
+
+library: million elements per second
+                                                                1e3         1e4         1e5         1e6         1e7
+thrust::reduce<double> [rmm_pool]                             35.49       277.0        2801       25093      106403
+thrust::reduce_by_key<int,double> [rmm_pool]                  26.96       238.5        2272       15175       36343
+thrust::sort<u64> [rmm_pool]                                  10.62       26.76       224.0        1361        2592
+thrust::sort_by_key<u64,u64> [rmm_pool]                       8.628       23.45       199.7        1104        1902
+thrust::copy_if<u64> [rmm_pool]                               24.48       224.6        2197       17517       43324
+thrust::exclusive_scan<i64> [rmm_pool]                        44.21       369.2        3362       21392       43360
+thrust::reduce<double> [cuda_malloc]                          3.648       35.22       352.9        3474       28932
+thrust::reduce_by_key<int,double> [cuda_malloc]               3.528       34.55       343.0        3203       19016
+thrust::sort<u64> [cuda_malloc]                               2.956       16.21       144.5        1020        2203
+thrust::sort_by_key<u64,u64> [cuda_malloc]                    2.774       14.93       134.4       870.6        1571
+thrust::copy_if<u64> [cuda_malloc]                            3.457       34.19       341.6        3274       20791
+thrust::exclusive_scan<i64> [cuda_malloc]                     3.715       36.44       362.3        3412       20836
+cub::DeviceRadixSort::SortPairs<u64,u64> [preallocated]       9.312       23.45       200.1        1101        1902
+
+handover_copy: median microseconds
+                                 4 KB       64 KB        1 MB       16 MB      256 MB        2 GB
+host_to_device [pinned]         7.540       9.782       27.42       310.9        4839       38649
+device_to_host [pinned]         8.703       9.582       27.26       301.6        4686       37422
+host_to_device [pageable]       7.623       17.30       97.14        1417       22442      208962
+device_to_host [pageable]       10.14       17.67       121.9        1611       25291      201634
+
+handover_copy: GB per second
+                                 4 KB       64 KB        1 MB       16 MB      256 MB        2 GB
+host_to_device [pinned]         0.506       6.240       35.62       50.26       51.66       51.75
+device_to_host [pinned]         0.438       6.370       35.82       51.80       53.35       53.44
+host_to_device [pageable]       0.500       3.527       10.05       11.03       11.14       9.571
+device_to_host [pageable]       0.376       3.455       8.009       9.696       9.885       9.919
+
+allocation: median microseconds
+                           1 MB       64 MB        1 GB        4 GB
+cudaHostAlloc             649.6       18234      384225     1530424
+cudaFreeHost              232.1        5259       74030      307420
+cudaMalloc                139.1       164.4       684.4        1084
+cudaFree                  143.7       164.8       389.6        1335
+rmm_pool_allocate         0.075       0.074       0.076       0.074
+rmm_pool_deallocate       0.198       0.196       0.203       0.198
+
+dirty_list: median microseconds
+                                                                 1e2         1e3         1e4         1e5         1e6         1e7
+host_to_device [pinned_copy_scatter]                           13.35       18.98       70.56       591.8        5753       65262
+host_to_device [pinned_copy_scatter] / host_fill               0.084       0.866       36.03       505.4        5165       59456
+host_to_device [pinned_copy_scatter] / copy_scatter_sync       13.26       18.12       34.49       86.53       586.1        5782
+device_to_host [flag_scan_atomic]                              122.7       123.7       131.9       186.5       713.1        4624
+device_to_host [flag_scan_atomic] / compact_count              113.1       113.7       119.2       135.7       283.6       428.2
+device_to_host [flag_scan_atomic] / copy_records               9.476       10.11       12.70       50.74       428.9        4199
+device_to_host [flag_scan_ordered]                             128.0       128.6       135.1       181.3       642.8        4996
+device_to_host [flag_scan_ordered] / select_count              106.4       106.7       111.4       111.5       118.4       141.1
+device_to_host [flag_scan_ordered] / gather_copy_records       21.53       21.95       23.76       69.72       523.9        4854
+device_to_host [frontier_emit_atomic]                          32.84       33.53       33.53       79.87       563.3        5348
+device_to_host [frontier_emit_atomic] / compact_count          23.23       23.53       20.81       29.14       134.8        1147
+device_to_host [frontier_emit_atomic] / copy_records           9.631       9.998       12.76       50.72       428.4        4200
+
+dirty_list: million elements per second
+                                              1e2         1e3         1e4         1e5         1e6         1e7
+host_to_device [pinned_copy_scatter]        7.491       52.68       141.7       169.0       173.8       153.2
+device_to_host [flag_scan_atomic]           0.815       8.082       75.81       536.3        1402        2163
+device_to_host [flag_scan_ordered]          0.781       7.773       74.00       551.6        1556        2002
+device_to_host [frontier_emit_atomic]       3.045       29.83       298.2        1252        1775        1870
+
+gather: median microseconds
+                                                                          1e3         1e4         1e5         1e6         1e7
+frontier_upload                                                         7.779       7.943       7.980       10.38       29.70
+gather_rows_to_host [thread_per_row]                                    70.55       196.6       218.4       451.6        3726
+gather_rows_to_host [thread_per_row] / scan_gather_count                60.75       183.3       188.1       228.8        1574
+gather_rows_to_host [thread_per_row] / copy_buffer                      9.756       13.35       30.28       222.9        2150
+gather_rows_to_host [thread_per_row_block_32]                           70.49       92.14       112.7       435.8        3599
+gather_rows_to_host [thread_per_row_block_32] / scan_gather_count       60.70       81.43       82.37       212.9        1448
+gather_rows_to_host [thread_per_row_block_32] / copy_buffer             9.749       10.72       30.23       222.8        2150
+gather_rows_to_host [warp_per_row]                                      53.02       67.39       87.47       324.8        2610
+gather_rows_to_host [warp_per_row] / scan_gather_count                  43.42       56.69       57.12       101.7       461.6
+gather_rows_to_host [warp_per_row] / copy_buffer                        9.675       10.75       30.32       222.8        2149
+
+gather: million elements per second
+                                                      1e3         1e4         1e5         1e6         1e7
+frontier_upload                                     3.728       36.64       376.2        2838        9901
+gather_rows_to_host [thread_per_row]                14.10       50.59       457.9        2214        2684
+gather_rows_to_host [thread_per_row_block_32]       14.12       108.0       887.3        2295        2778
+gather_rows_to_host [warp_per_row]                  18.77       147.6        1143        3079        3831
+
+unified_memory: median microseconds
+                                        64 MB
+cudaMallocManaged [managed]             21.02
+host_first_touch [managed]              16128
+kernel_touch_after_host [managed]        6254
+host_touch_after_kernel [managed]       14377
+cudaFree [managed]                       1182
+host_touch_reference [pinned]            2842
+kernel_touch_reference [device]         103.7
+
+unified_memory: GB per second
+                                        64 MB
+host_first_touch [managed]              3.875
+kernel_touch_after_host [managed]       9.994
+host_touch_after_kernel [managed]       4.347
+host_touch_reference [pinned]           21.99
+kernel_touch_reference [device]         602.5
+
+GPU: NVIDIA H200 NVL, driver 615.71.10, CUDA runtime 12090; CPU: Intel(R) Xeon(R) 6960P
+other GPU processes observed: no; other CPU load observed: yes (load average 6.55 6.64 7.89 4/9580 38938)
+JSON written to gpu_presolve/results/stage0/fixed_costs.json
