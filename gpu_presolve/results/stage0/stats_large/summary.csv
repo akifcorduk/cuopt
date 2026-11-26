@@ -1,2 +1,10 @@
 name,band,where,status,rows,cols,nnz,rows_after,cols_after,nnz_after,rows_removed_pct,cols_removed_pct,nnz_removed_pct,presolve_seconds,presolve_core_seconds,read_seconds,reached_time_limit,peak_rss_mb
-square47,C,dev-large,stats_only,61591,95030,27329856,,,,,,,,,14.3822,,1068.14
+usafa,C,dev-large,stats_only,1377561,228648,16485102,,,,,,,,,12.7432,,849.777
+a2864-99blp,C,dev-large,stats_only,22117,200787,20078717,,,,,,,,,10.3281,,806.082
+neos-3740487-motru,C,dev-large,stats_only,4936372,1689612,26433474,,,,,,,,,30.5224,,1838.68
+square47,C,dev-large,stats_only,61591,95030,27329856,,,,,,,,,14.2968,,1070.3
+t11nonreg,C,dev-large,stats_only,27375,4596905,46841437,,,,,,,,,47.2012,,2766.05
+neos-4332810-sesia,C,dev-large,stats_only,19912111,20682487,47513027,,,,,,,,,129.677,,7014.74
+dlr2,D,dev-large,stats_only,7132926,38868107,78091589,,,,,,,,,127.078,,9070.14
+hawaiiv10-130,D,dev-large,stats_only,1388052,685130,183263061,,,,,,,,,112.652,,7284.68
+neos-4535459-waipa,D,dev-large,stats_only,163001,961401,256963402,,,,,,,,,139.895,,9951.68

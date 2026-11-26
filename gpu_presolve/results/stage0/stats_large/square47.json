@@ -7,7 +7,7 @@
     "highsint_bytes": 8,
     "library": "/home/scratch.acoerduek_sw/gpu_presolve_deps/highs_stock_install/lib/libhighs.so.1.16.0"
   },
-  "read_seconds": 14.382204449,
+  "read_seconds": 14.296833518,
   "read_status": "ok",
   "objective_sense": "min",
   "original": {
@@ -108,11 +108,11 @@
       }
     }
   },
-  "stats_seconds": 0.93968479100000002,
+  "stats_seconds": 0.86551497799999999,
   "dump_csr": {
     "file": "/tmp/gprs_csr/square47.csr",
     "bytes": 331812254,
     "objective_negated": false
   },
-  "peak_rss_mb": 1068.140625
+  "peak_rss_mb": 1070.3046875
 }

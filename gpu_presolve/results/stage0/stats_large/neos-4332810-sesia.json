@@ -1,0 +1,118 @@
+{
+  "instance": "neos-4332810-sesia",
+  "mps_file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/miplib_extra/neos-4332810-sesia.mps.gz",
+  "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "highsint_bytes": 8,
+    "library": "/home/scratch.acoerduek_sw/gpu_presolve_deps/highs_stock_install/lib/libhighs.so.1.16.0"
+  },
+  "read_seconds": 129.677250233,
+  "read_status": "ok",
+  "objective_sense": "min",
+  "original": {
+    "rows": 19912111,
+    "cols": 20682487,
+    "nnz": 47513027,
+    "col_types": {
+      "binary": 20677405,
+      "general_integer": 20,
+      "implied_integer": 0,
+      "continuous": 5062,
+      "semi": 0
+    },
+    "row_sides": {
+      "equation": 6534647,
+      "ranged": 0,
+      "one_sided": 13377464,
+      "free": 0
+    },
+    "row_length": {
+      "min": 2,
+      "p10": 2,
+      "p50": 2,
+      "p90": 2,
+      "p99": 3,
+      "max": 3732481,
+      "mean": 2.3861371102240239
+    },
+    "col_length": {
+      "min": 0,
+      "p10": 2,
+      "p50": 2,
+      "p90": 3,
+      "p99": 3,
+      "max": 8161,
+      "mean": 2.2972588838083157
+    },
+    "long_cols": {
+      "threshold": 199121,
+      "count": 0
+    },
+    "long_rows": {
+      "threshold": 206824,
+      "count": 2
+    },
+    "row_classes": {
+      "empty": 0,
+      "singleton": 0,
+      "doubleton_equation": 6531937,
+      "set_packing": 228638,
+      "set_partitioning": 2700,
+      "set_covering": 74685,
+      "cardinality": 12,
+      "binary_knapsack_non_unit": 13063712,
+      "variable_bound": 3489,
+      "other_two_entry": 3436,
+      "all_integer": 8,
+      "mixed": 3494,
+      "all_continuous": 0
+    },
+    "two_binary_rows": 19701147,
+    "coefficient": {
+      "min_abs": 0.10000000000000001,
+      "max_abs": 100000
+    },
+    "row_dynamism": {
+      "rows": 19912111,
+      "p50": 2,
+      "p99": 2,
+      "max": 100000
+    },
+    "row_dynamism_highs_scaled": {
+      "rows": 19912111,
+      "p50": 2,
+      "p99": 2,
+      "max": 100000
+    },
+    "bounds": {
+      "lower_infinite": 2,
+      "upper_infinite": 5042,
+      "free_cols": 2,
+      "huge_threshold": 100000000,
+      "lower_huge": 0,
+      "upper_huge": 0,
+      "cols_with_huge_bound": 0,
+      "rows_with_huge_bound_col": 0
+    },
+    "rows_by_infinite_activity_terms": {
+      "min_activity": {
+        "none": 19912076,
+        "one": 29,
+        "two_or_more": 6
+      },
+      "max_activity": {
+        "none": 19901787,
+        "one": 10322,
+        "two_or_more": 2
+      }
+    }
+  },
+  "stats_seconds": 2.0678472239999999,
+  "dump_csr": {
+    "file": "/tmp/gprs_csr/neos-4332810-sesia.csr",
+    "bytes": 1565109211,
+    "objective_negated": false
+  },
+  "peak_rss_mb": 7014.73828125
+}

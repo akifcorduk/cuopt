@@ -1,0 +1,16 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/miplib_extra/hawaiiv10-130.mps.gz",
+  "/home/scratch.acoerduek_sw/cuopt_dev/.wt/gpu-presolve/gpu_presolve/results/stage0/stats_large/hawaiiv10-130.json",
+  "--time-limit",
+  "1800.0",
+  "--stats-only",
+  "--dump-csr",
+  "/tmp/gprs_csr/hawaiiv10-130.csr"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 120.20749255199917
+}
