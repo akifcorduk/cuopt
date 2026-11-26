@@ -1,0 +1,1636 @@
+SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Diagnostic patch for the HiGHS MIP presolve, against HiGHS commit 283bfc859.
+Apply in the HiGHS source root with: git apply highs_diag.patch
+Output lines and switches are described in HIGHS_DIAG.md.
+
+diff --git a/cmake/sources.cmake b/cmake/sources.cmake
+index 356ffba..5b0bc63 100644
+--- a/cmake/sources.cmake
++++ b/cmake/sources.cmake
+@@ -628,6 +628,7 @@ set(highs_headers
+     util/HighsCDouble.h
+     util/HighsComponent.h
+     util/HighsDataStack.h
++    util/HighsDiag.h
+     util/HighsDisjointSets.h
+     util/HighsDynamicLibrary.h
+     util/HighsHash.h
+diff --git a/highs/mip/HighsCliqueTable.cpp b/highs/mip/HighsCliqueTable.cpp
+index 9635137..c51ac30 100644
+--- a/highs/mip/HighsCliqueTable.cpp
++++ b/highs/mip/HighsCliqueTable.cpp
+@@ -20,6 +20,7 @@
+ #include "parallel/HighsCombinable.h"
+ #include "parallel/HighsParallel.h"
+ #include "presolve/HighsPostsolveStack.h"
++#include "util/HighsDiag.h"
+ #include "util/HighsSplay.h"
+ 
+ #define ADD_ZERO_WEIGHT_VARS
+@@ -610,6 +611,8 @@ bool HighsCliqueTable::processNewEdge(HighsDomain& globaldom, CliqueVar v1,
+     fixCol(globaldom, v1, true);
+     return false;
+   } else {
++    if (inPresolveProbing && highsDiagOff(kDiagOffCliqueSubstitutions))
++      return false;
+     // return if complements are not in a clique
+     if (!foundCover(globaldom, v1.complement(), v2.complement())) return false;
+     if (globaldom.infeasible()) return true;
+diff --git a/highs/mip/HighsDomain.cpp b/highs/mip/HighsDomain.cpp
+index 1390eb2..bf76909 100644
+--- a/highs/mip/HighsDomain.cpp
++++ b/highs/mip/HighsDomain.cpp
+@@ -16,6 +16,7 @@
+ #include "mip/HighsConflictPool.h"
+ #include "mip/HighsCutPool.h"
+ #include "mip/HighsMipSolverData.h"
++#include "util/HighsDiag.h"
+ 
+ static HighsCDouble activityContributionMin(double coef, const double& lb,
+                                             const double& ub) {
+@@ -1781,6 +1782,7 @@ void HighsDomain::updateActivityLbChange(HighsInt col, double oldbound,
+   auto mip = mipsolver->model_;
+   HighsInt start = mip->a_matrix_.start_[col];
+   HighsInt end = mip->a_matrix_.start_[col + 1];
++  highsDiagWork().activity_entries += end - start;
+ 
+   assert(!infeasible_);
+ 
+@@ -1948,6 +1950,7 @@ void HighsDomain::updateActivityUbChange(HighsInt col, double oldbound,
+   auto mip = mipsolver->model_;
+   HighsInt start = mip->a_matrix_.start_[col];
+   HighsInt end = mip->a_matrix_.start_[col + 1];
++  highsDiagWork().activity_entries += end - start;
+ 
+   assert(!infeasible_);
+ 
+@@ -2659,6 +2662,7 @@ bool HighsDomain::propagate() {
+ 
+     if (!propagateinds_.empty()) {
+       propagateinds.swap(propagateinds_);
++      ++highsDiagWork().prop_sweeps;
+ 
+       HighsInt numproprows = static_cast<HighsInt>(propagateinds.size());
+       for (HighsInt i = 0; i != numproprows; ++i) {
+@@ -2679,8 +2683,11 @@ bool HighsDomain::propagate() {
+           const HighsInt* Rindex = mipsolver->mipdata_->ARindex_.data() + start;
+           const double* Rvalue = mipsolver->mipdata_->ARvalue_.data() + start;
+           bool recomputeCapThreshold = false;
++          HighsDiagWork& diagWork = highsDiagWork();
++          ++diagWork.prop_rows;
+ 
+           if (!isRowUpperRedundant(i)) {
++            diagWork.prop_entries += Rlen;
+             // computeMinActivity(start, end, mipsolver->ARstart_.data(),
+             // mipsolver->ARvalue_.data(), activitymininf_[i],
+             //           activitymin_[i]);
+@@ -2693,6 +2700,7 @@ bool HighsDomain::propagate() {
+           }
+ 
+           if (!isRowLowerRedundant(i)) {
++            diagWork.prop_entries += Rlen;
+             // computeMaxActivity(start, end, mipsolver->ARstart_.data(),
+             // mipsolver->ARvalue_.data(), activitymaxinf_[i],
+             //           activitymax_[i]);
+@@ -2764,6 +2772,9 @@ bool HighsDomain::propagate() {
+             const double* Rvalue;
+             cutpoolprop.cutpool->getCut(i, Rlen, Rindex, Rvalue);
+             cutpoolprop.activitycuts_[i].renormalize();
++            HighsDiagWork& diagWork = highsDiagWork();
++            ++diagWork.prop_rows;
++            diagWork.prop_entries += Rlen;
+ 
+             propRowNumChangedBounds_[k].first = propagateRowUpper(
+                 Rindex, Rvalue, Rlen, cutpoolprop.cutpool->getRhs()[i],
+diff --git a/highs/mip/HighsImplications.cpp b/highs/mip/HighsImplications.cpp
+index 20c3a00..24c2726 100644
+--- a/highs/mip/HighsImplications.cpp
++++ b/highs/mip/HighsImplications.cpp
+@@ -11,6 +11,7 @@
+ #include "mip/HighsCliqueTable.h"
+ #include "mip/HighsMipSolverData.h"
+ #include "mip/MipTimer.h"
++#include "util/HighsDiag.h"
+ 
+ bool HighsImplications::computeImplications(HighsInt col, bool val) {
+   HighsDomain& globaldomain = mipsolver.mipdata_->getDomain();
+@@ -456,7 +457,8 @@ bool HighsImplications::runProbing(HighsInt col, HighsInt& numReductions) {
+         if (colsubstituted[implcol] || globaldomain.isFixed(implcol)) continue;
+ 
+         if (lbDown == ubDown && lbUp == ubUp &&
+-            std::abs(lbDown - lbUp) > mipsolver.mipdata_->feastol) {
++            std::abs(lbDown - lbUp) > mipsolver.mipdata_->feastol &&
++            !highsDiagOff(kDiagOffCliqueSubstitutions)) {
+           HighsSubstitution substitution;
+           substitution.substcol = implcol;
+           substitution.staycol = col;
+diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
+index 401382e..727cb79 100644
+--- a/highs/presolve/HPresolve.cpp
++++ b/highs/presolve/HPresolve.cpp
+@@ -102,7 +102,7 @@ void HPresolve::setInput(HighsMipSolver& mipsolver,
+   this->mipsolver = &mipsolver;
+   presolveCliqueTable.rebuild(mipsolver.mipdata_->cliquetable);
+ 
+-  probingContingent = 1000;
++  probingContingent = highsDiagSwitches().probing_contingent;
+   probingNumDelCol = 0;
+   numProbed = 0;
+   numProbes.assign(mipsolver.numCol(), 0);
+@@ -125,6 +125,7 @@ void HPresolve::setInput(HighsMipSolver& mipsolver,
+ }
+ 
+ bool HPresolve::okSetupPresolveDataStructures() {
++  DiagStageScope diagScope(*this, kDiagSetup);
+   // Lambda for resizing the implied bound data
+   auto okResizeImpliedBoundData = [&]() {
+     PresolveTimerScope timer(analysis_, kPresolveClockSetupResize);
+@@ -183,6 +184,7 @@ bool HPresolve::okSetupPresolveDataStructures() {
+ 
+   if (!okResizeImpliedBoundData()) return false;
+   if (!okSetupMatrix()) return false;
++  diag_.have_matrix = true;
+ 
+   // numDeletedCols and numDeletedRows are not cumulative through the
+   // whole of presolve, but "since the last time the model had no
+@@ -200,6 +202,7 @@ bool HPresolve::okSetupPresolveDataStructures() {
+ }
+ 
+ void HPresolve::setupSubstitutionOpportunities() {
++  DiagStageScope diagScope(*this, kDiagSetup);
+   for (HighsInt row = 0; row != model->num_row_; ++row) {
+     if (!isDualImpliedFree(row)) continue;
+     for (const HighsSliceNonzero& nonzero : getRowVector(row)) {
+@@ -525,6 +528,19 @@ void HPresolve::chooseRules() {
+       ruleOffForPostsolve("dual or basis", kPresolveRuleDominatedCol);
+     }
+   }
++  if (mipsolver != nullptr) {
++    if (highsDiagOff(kDiagOffAggregator))
++      allow_rule_[kPresolveRuleAggregator] = false;
++    if (highsDiagOff(kDiagOffSparsify))
++      allow_rule_[kPresolveRuleSparsify] = false;
++    if (highsDiagOff(kDiagOffFourierMotzkin))
++      allow_rule_[kPresolveRuleFourierMotzkin] = false;
++    if (highsDiagOff(kDiagOffEnumeration))
++      allow_rule_[kPresolveRuleEnumeration] = false;
++    if (highsDiagOff(kDiagOffParallelColumns) &&
++        highsDiagOff(kDiagOffParallelRows))
++      allow_rule_[kPresolveRuleParallelRowsAndCols] = false;
++  }
+   // If dominated column rule is off, weakly dominated column rule
+   // isn't currently considered, because checks for weakly dominated
+   // columns are currently only in HPresolve::detectDominatedCol, but
+@@ -1772,6 +1788,7 @@ void HPresolve::changeImplRowDualLower(HighsInt row, double newLower,
+ }
+ 
+ HPresolve::Result HPresolve::scaleMIP(HighsPostsolveStack& postsolve_stack) {
++  DiagStageScope diagScope(*this, kDiagFinalScaling);
+   for (HighsInt i = 0; i < model->num_row_; ++i) {
+     if (rowDeleted[i] || rowsize[i] < 1 ||
+         rowsizeInteger[i] + rowsizeImplInt[i] == rowsize[i])
+@@ -2304,6 +2321,7 @@ HPresolve::Result HPresolve::doubletonEq(HighsPostsolveStack& postsolve_stack,
+   // finally modify matrix
+   HPRESOLVE_CHECKED_CALL(substitute(substcol, staycol, rhs / substcoef,
+                                     -staycoef / substcoef, row));
++  ++diag_.doubleton_removed[diag_.active_stage + 1];
+ 
+   analysis_.logging_on_ = logging_on;
+   if (logging_on) analysis_.stopPresolveRuleLog(kPresolveRuleDoubletonEquation);
+@@ -2773,6 +2791,7 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+               double bound = direction >= 0 ? upper : lower;
+               double scale = direction * (lower - upper);
+               double offset = bound - model->col_lower_[binCol] * scale;
++              ++diag_.substitutions_simple_probing;
+               postsolve_stack.doubletonEquation(
+                   -1, col, binCol, 1.0, -scale, offset, lower, upper, 0.0,
+                   false, false, HighsPostsolveStack::RowType::kEq,
+@@ -3863,6 +3882,7 @@ HPresolve::Result HPresolve::checkOriginalModelBounds() {
+ 
+ HPresolve::Result HPresolve::initialRowAndColPresolve(
+     HighsPostsolveStack& postsolve_stack) {
++  DiagStageScope diagScope(*this, kDiagInitialScan);
+   // Lambda for a full scan over the rows
+   auto presolveRows = [&]() {
+     PresolveTimerScope timer(analysis_, kPresolveClockInitialRow);
+@@ -3894,6 +3914,7 @@ HPresolve::Result HPresolve::initialRowAndColPresolve(
+ 
+ HPresolve::Result HPresolve::fastPresolveLoop(
+     HighsPostsolveStack& postsolve_stack) {
++  DiagStageScope diagScope(*this, kDiagFastLoop);
+   do {
+     storeCurrentProblemSize();
+ 
+@@ -4140,6 +4161,7 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+           numParallelRowColCalls < 5) {
+         if (shrinkProblemEnabled && (numDeletedCols >= model->num_col_ / 2 ||
+                                      numDeletedRows >= model->num_row_ / 2)) {
++          DiagStageScope diagScope(*this, kDiagShrink);
+           analysis_.presolveTimerStart(kPresolveClockShrinkProblem);
+           shrinkProblem(postsolve_stack);
+           analysis_.presolveTimerStop(kPresolveClockShrinkProblem);
+@@ -4162,7 +4184,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+       HPRESOLVE_TIMED_CHECKED_CALL(kPresolveClockFastLoop,
+                                    fastPresolveLoop(postsolve_stack));
+ 
+-      if (mipsolver != nullptr) {
++      if (mipsolver != nullptr &&
++          !highsDiagOff(kDiagOffStrengthenInequalities)) {
+         HighsInt num_strengthened = -1;
+         HPRESOLVE_CHECKED_CALL(
+             strengthenInequalities(postsolve_stack, num_strengthened));
+@@ -4179,7 +4202,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+       if (mipsolver != nullptr && numCliquesBeforeProbing == -1) {
+         numCliquesBeforeProbing = mipsolver->mipdata_->cliquetable.numCliques();
+         storeCurrentProblemSize();
+-        HPRESOLVE_CHECKED_CALL(dominatedColumns(postsolve_stack));
++        if (!highsDiagOff(kDiagOffDominatedColumns))
++          HPRESOLVE_CHECKED_CALL(dominatedColumns(postsolve_stack));
+         if (problemSizeReduction() > 0.0)
+           HPRESOLVE_CHECKED_CALL(fastPresolveLoop(postsolve_stack));
+         if (problemSizeReduction() > 0.05) continue;
+@@ -4193,12 +4217,17 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+       }
+ 
+       if (tryProbing && this->allow_rule_[kPresolveRuleProbing]) {
+-        HPRESOLVE_CHECKED_CALL(detectImpliedIntegers());
++        if (!highsDiagOff(kDiagOffImpliedIntegers))
++          HPRESOLVE_CHECKED_CALL(detectImpliedIntegers());
+         storeCurrentProblemSize();
+-        HPRESOLVE_CHECKED_CALL(runProbing(postsolve_stack));
+-        tryProbing = probingContingent > numProbed &&
+-                     (problemSizeReduction() > 1.0 || probingEarlyAbort);
+-        trySparsify = true;
++        if (highsDiagOff(kDiagOffProbing)) {
++          tryProbing = false;
++        } else {
++          HPRESOLVE_CHECKED_CALL(runProbing(postsolve_stack));
++          tryProbing = probingContingent > numProbed &&
++                       (problemSizeReduction() > 1.0 || probingEarlyAbort);
++          trySparsify = true;
++        }
+         if (problemSizeReduction() > 0.05 || tryProbing) continue;
+         HPRESOLVE_CHECKED_CALL(fastPresolveLoop(postsolve_stack));
+       }
+@@ -4206,6 +4235,7 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+       if (!dependentEquationsCalled) {
+         if (shrinkProblemEnabled && (numDeletedCols >= model->num_col_ / 2 ||
+                                      numDeletedRows >= model->num_row_ / 2)) {
++          DiagStageScope diagScope(*this, kDiagShrink);
+           analysis_.presolveTimerStart(kPresolveClockShrinkProblem);
+           shrinkProblem(postsolve_stack);
+           analysis_.presolveTimerStop(kPresolveClockShrinkProblem);
+@@ -4236,7 +4266,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+           !domcolAfterProbingCalled) {
+         domcolAfterProbingCalled = true;
+         storeCurrentProblemSize();
+-        HPRESOLVE_CHECKED_CALL(dominatedColumns(postsolve_stack));
++        if (!highsDiagOff(kDiagOffDominatedColumns))
++          HPRESOLVE_CHECKED_CALL(dominatedColumns(postsolve_stack));
+         if (problemSizeReduction() > 0.0)
+           HPRESOLVE_CHECKED_CALL(fastPresolveLoop(postsolve_stack));
+         if (problemSizeReduction() > 0.05) continue;
+@@ -4558,6 +4589,23 @@ void HPresolve::moveCutsToPool(HighsPostsolveStack& postsolve_stack) {
+ }
+ 
+ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
++  const double start = highsDiagSeconds();
++  int64_t rows;
++  int64_t cols;
++  int64_t nnz;
++  diagSize(rows, cols, nnz);
++  diag_.postsolve_stack = &postsolve_stack;
++  diag_.reductions_start = postsolve_stack.numReductions();
++  const int64_t integerCols =
++      std::count(model->integrality_.begin(), model->integrality_.end(),
++                 HighsVarType::kInteger);
++  const HighsModelStatus status = runPresolve(postsolve_stack);
++  if (mipsolver != nullptr && !mipsolver->submip)
++    diagReport(highsDiagSeconds() - start, rows, cols, nnz, integerCols);
++  return status;
++}
++
++HighsModelStatus HPresolve::runPresolve(HighsPostsolveStack& postsolve_stack) {
+   presolve_status_ = HighsPresolveStatus::kNotSet;
+   shrinkProblemEnabled = true;
+   postsolve_stack.debug_prev_numreductions = 0;
+@@ -4593,6 +4641,7 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
+                  ? Result::kOutOfMemory
+                  : Result::kException;
+   }
++  diag_.stopped = result == Result::kStopped;
+   // Stop any presolve rule logging that is currently running, check
+   // the presolve rule logging for errors, and analyse it
+   analysis_.stopPresolveRuleLog();
+@@ -4624,7 +4673,10 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
+   // limit, in which case any reductions performed are retained, so
+   // complete presolve as if it had run to completion
+   reportReductions();
+-  shrinkProblem(postsolve_stack);
++  {
++    DiagStageScope diagScope(*this, kDiagShrink);
++    shrinkProblem(postsolve_stack);
++  }
+ 
+   if (mipsolver != nullptr) {
+     mipsolver->mipdata_->cliquetable.setMaxEntries(numNonzeros());
+@@ -4638,9 +4690,11 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
+ 
+   // Possibly populate the model matrix from the presolve matrix data
+   // structure
+-  if (hasPresolveDataStructures())
++  if (hasPresolveDataStructures()) {
++    DiagStageScope diagScope(*this, kDiagShrink);
+     toCSC(model->a_matrix_.value_, model->a_matrix_.index_,
+           model->a_matrix_.start_);
++  }
+ 
+   reportProfiling();
+ 
+@@ -5043,4 +5097,311 @@ HighsInt HPresolve::debugGetCheckRow() const {
+   return check_row;
+ }
+ 
++const char* HPresolve::diagStageName(HighsInt stage) {
++  static const char* const names[kDiagStageCount] = {
++      "setup",
++      "initial_scan",
++      "fast_loop",
++      "clique_substitutions",
++      "fourier_motzkin",
++      "aggregator",
++      "sparsify",
++      "parallel_rows_cols",
++      "strengthen_inequalities",
++      "dominated_columns",
++      "enumeration",
++      "implied_integers",
++      "probing",
++      "shrink",
++      "final_scaling"};
++  return names[stage];
++}
++
++void HPresolve::diagSize(int64_t& rows, int64_t& cols, int64_t& nnz) const {
++  if (diag_.have_matrix) {
++    rows = model->num_row_ - numDeletedRows;
++    cols = model->num_col_ - numDeletedCols;
++    nnz = numNonzeros();
++  } else {
++    rows = model->num_row_;
++    cols = model->num_col_;
++    nnz = model->a_matrix_.numNz();
++  }
++}
++
++HPresolve::DiagStageScope::DiagStageScope(HPresolve& presolve, DiagStage stage)
++    : presolve(presolve), active(presolve.diag_.active_stage == -1) {
++  if (!active) return;
++  presolve.diag_.active_stage = stage;
++  presolve.diagSize(rows, cols, nnz);
++  reductions = presolve.diag_.postsolve_stack->numReductions();
++  start = highsDiagSeconds();
++}
++
++HPresolve::DiagStageScope::~DiagStageScope() {
++  if (!active) return;
++  const double seconds = highsDiagSeconds() - start;
++  Diag& diag = presolve.diag_;
++  DiagStageData& data = diag.stage[diag.active_stage];
++  int64_t rowsNow;
++  int64_t colsNow;
++  int64_t nnzNow;
++  presolve.diagSize(rowsNow, colsNow, nnzNow);
++  ++data.calls;
++  data.seconds += seconds;
++  data.rows += rows - rowsNow;
++  data.cols += cols - colsNow;
++  data.nnz += nnz - nnzNow;
++  diag.postsolve_stack->diagCountReductions(
++      reductions, diag.reductions[diag.active_stage]);
++  diag.active_stage = -1;
++}
++
++void HPresolve::diagReport(double seconds, int64_t rows, int64_t cols,
++                           int64_t nnz, int64_t integerCols) const {
++  const HighsLogOptions& log_options = options->log_options;
++  const HighsDiagSwitches& switches = highsDiagSwitches();
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG switches off=%s probing_contingent=%" PRId64
++               " probing_nostop=%d\n",
++               switches.off_list.c_str(), switches.probing_contingent,
++               switches.probing_nostop);
++
++  int64_t rowsNow;
++  int64_t colsNow;
++  int64_t nnzNow;
++  diagSize(rowsNow, colsNow, nnzNow);
++  DiagStageData other;
++  other.seconds = seconds;
++  other.rows = rows - rowsNow;
++  other.cols = cols - colsNow;
++  other.nnz = nnz - nnzNow;
++  const char* stageFormat = "DIAG stage name=%s calls=%" PRId64
++                            " seconds=%.6f rows_removed=%" PRId64
++                            " cols_removed=%" PRId64 " nnz_removed=%" PRId64
++                            "\n";
++  for (HighsInt stage = 0; stage != kDiagStageCount; ++stage) {
++    const DiagStageData& data = diag_.stage[stage];
++    highsLogUser(log_options, HighsLogType::kInfo, stageFormat,
++                 diagStageName(stage), data.calls, data.seconds, data.rows,
++                 data.cols, data.nnz);
++    other.seconds -= data.seconds;
++    other.rows -= data.rows;
++    other.cols -= data.cols;
++    other.nnz -= data.nnz;
++  }
++  highsLogUser(log_options, HighsLogType::kInfo, stageFormat, "other",
++               other.calls, other.seconds, other.rows, other.cols, other.nnz);
++
++  static const char* const reductionNames
++      [HighsPostsolveStack::kDiagReductionTypeCount] = {
++          "linear_transform",
++          "free_col_substitution",
++          "doubleton_equation",
++          "equality_row_addition",
++          "equality_row_additions",
++          "singleton_row",
++          "fixed_col",
++          "redundant_row",
++          "implied_equation",
++          "forcing_row",
++          "forcing_column",
++          "forcing_column_removed_row",
++          "duplicate_row",
++          "duplicate_column",
++          "zero_obj_singleton_col",
++          "fourier_motzkin_block",
++          "fourier_motzkin_obj_col"};
++  auto logReductions = [&](const char* stage, const int64_t* counts,
++                              bool always) {
++    int64_t sum = 0;
++    std::string fields;
++    for (HighsInt type = 0;
++         type != HighsPostsolveStack::kDiagReductionTypeCount; ++type) {
++      sum += counts[type];
++      fields += std::string(" ") + reductionNames[type] + "=" +
++                std::to_string(counts[type]);
++    }
++    if (sum != 0 || always)
++      highsLogUser(log_options, HighsLogType::kInfo,
++                   "DIAG reductions stage=%s%s\n", stage, fields.c_str());
++  };
++  int64_t allReductions[HighsPostsolveStack::kDiagReductionTypeCount] = {};
++  diag_.postsolve_stack->diagCountReductions(diag_.reductions_start,
++                                             allReductions);
++  int64_t otherReductions[HighsPostsolveStack::kDiagReductionTypeCount];
++  std::copy(allReductions,
++            allReductions + HighsPostsolveStack::kDiagReductionTypeCount,
++            otherReductions);
++  for (HighsInt stage = 0; stage != kDiagStageCount; ++stage) {
++    logReductions(diagStageName(stage), diag_.reductions[stage], false);
++    for (HighsInt type = 0;
++         type != HighsPostsolveStack::kDiagReductionTypeCount; ++type)
++      otherReductions[type] -= diag_.reductions[stage][type];
++  }
++  logReductions("other", otherReductions, false);
++  logReductions("all", allReductions, true);
++
++  highsLogUser(
++      log_options, HighsLogType::kInfo,
++      "DIAG probing binaries=%" PRId64 " probed=%" PRId64 " rounds=%" PRId64
++      " stop=%s fixed=%" PRId64 " substitutions=%" PRId64
++      " cliques_before=%" PRId64 " cliques_after=%" PRId64
++      " implications=%" PRId64 " seconds=%.6f probing_work=%" PRId64
++      " attempted=%" PRId64 " bounds_tightened=%" PRId64
++      " lifted_nonzeros=%" PRId64 " loop_seconds=%.6f prop_sweeps=%" PRId64
++      " prop_rows=%" PRId64 " prop_entries=%" PRId64
++      " activity_entries=%" PRId64 " max_probe_work=%" PRId64
++      " max_probe_sweeps=%" PRId64 "\n",
++      diag_.probing_binaries, diag_.probing_probed, diag_.probing_rounds,
++      diag_.probing_stop, diag_.probing_fixed, diag_.probing_substitutions,
++      diag_.probing_cliques_before, diag_.probing_cliques_after,
++      diag_.probing_implications, diag_.probing_seconds,
++      diag_.probing_work.prop_entries + diag_.probing_work.activity_entries,
++      diag_.probing_attempted, diag_.probing_bounds_tightened,
++      diag_.probing_lifted_nonzeros, diag_.probing_loop_seconds,
++      diag_.probing_work.prop_sweeps, diag_.probing_work.prop_rows,
++      diag_.probing_work.prop_entries, diag_.probing_work.activity_entries,
++      diag_.probing_max_probe_work, diag_.probing_max_probe_sweeps);
++
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG cliquemerge calls=%" PRId64
++               " seconds=%.6f rows_changed=%" PRId64 " rows_deleted=%" PRId64
++               " nnz_delta=%" PRId64 " nnz_added=%" PRId64
++               " nnz_removed=%" PRId64 " fixings=%" PRId64 "\n",
++               diag_.cliquemerge_calls, diag_.cliquemerge_seconds,
++               diag_.cliquemerge_rows_changed, diag_.cliquemerge_rows_deleted,
++               diag_.cliquemerge_nnz_added - diag_.cliquemerge_nnz_removed,
++               diag_.cliquemerge_nnz_added, diag_.cliquemerge_nnz_removed,
++               diag_.cliquemerge_fixings);
++
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG aggregator candidates=%" PRId64 " substituted=%" PRId64
++               " size2=%" PRId64 " rejected_pivot=%" PRId64
++               " rejected_fillin=%" PRId64 " stopped_by_failures=%" PRId64
++               " examined=%" PRId64 " stale=%" PRId64
++               " rejected_integer=%" PRId64 "\n",
++               diag_.aggregator_candidates, diag_.aggregator_substituted,
++               diag_.aggregator_size2, diag_.aggregator_rejected_pivot,
++               diag_.aggregator_rejected_fillin,
++               diag_.aggregator_stopped_by_failures, diag_.aggregator_examined,
++               diag_.aggregator_stale, diag_.aggregator_rejected_integer);
++
++  int64_t doubletonRemoved = diag_.doubleton_removed[0];
++  std::string doubletonByStage;
++  for (HighsInt stage = 0; stage != kDiagStageCount; ++stage) {
++    doubletonRemoved += diag_.doubleton_removed[stage + 1];
++    doubletonByStage += std::string(" ") + diagStageName(stage) + "=" +
++                        std::to_string(diag_.doubleton_removed[stage + 1]);
++  }
++  doubletonByStage += " other=" + std::to_string(diag_.doubleton_removed[0]);
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG doubleton removed=%" PRId64 "%s\n", doubletonRemoved,
++               doubletonByStage.c_str());
++
++  int64_t substitutionsImplication = 0;
++  int64_t substitutionsClique = 0;
++  for (HighsInt stage = 0; stage != kDiagStageCount + 1; ++stage) {
++    substitutionsImplication += diag_.substitutions_implication[stage];
++    substitutionsClique += diag_.substitutions_clique[stage];
++  }
++  highsLogUser(
++      log_options, HighsLogType::kInfo,
++      "DIAG substitutions applied=%" PRId64 " from_implications=%" PRId64
++      " from_cliques=%" PRId64 " in_clique_substitutions=%" PRId64
++      " in_enumeration=%" PRId64 " in_probing=%" PRId64
++      " simple_probing=%" PRId64 " dual_fixing=%" PRId64 "\n",
++      substitutionsImplication + substitutionsClique, substitutionsImplication,
++      substitutionsClique,
++      diag_.substitutions_implication[kDiagCliqueSubstitutions + 1] +
++          diag_.substitutions_clique[kDiagCliqueSubstitutions + 1],
++      diag_.substitutions_implication[kDiagEnumeration + 1] +
++          diag_.substitutions_clique[kDiagEnumeration + 1],
++      diag_.substitutions_implication[kDiagProbing + 1] +
++          diag_.substitutions_clique[kDiagProbing + 1],
++      diag_.substitutions_simple_probing, diag_.substitutions_dual_fixing);
++
++  for (HighsInt k = 0; k != 2; ++k) {
++    const DiagVarBound& data = diag_.varbound[k];
++    highsLogUser(log_options, HighsLogType::kInfo,
++                 "DIAG varbound_aggregation name=%s calls=%" PRId64
++                 " seconds=%.6f rows_removed=%" PRId64
++                 " rows_modified=%" PRId64 " vars_lifted=%" PRId64
++                 " nnz_removed=%" PRId64 "\n",
++                 diagStageName(k == 0 ? kDiagEnumeration : kDiagProbing),
++                 data.calls, data.seconds, data.rows_removed,
++                 data.rows_modified, data.vars_lifted, data.nnz_removed);
++  }
++
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG parallel duplicate_rows=%" PRId64
++               " row_additions=%" PRId64 " cols_merged=%" PRId64
++               " cols_dominated=%" PRId64 " rows_removed=%" PRId64
++               " cols_removed=%" PRId64
++               " hash_seconds=%.6f col_seconds=%.6f row_seconds=%.6f\n",
++               diag_.parallel_duplicate_rows, diag_.parallel_row_additions,
++               diag_.parallel_cols_merged,
++               diag_.parallel_col_reductions - diag_.parallel_cols_merged,
++               diag_.parallel_rows_removed, diag_.parallel_cols_removed,
++               diag_.parallel_hash_seconds, diag_.parallel_col_seconds,
++               diag_.parallel_row_seconds);
++
++  const int64_t integerColsNow =
++      std::count(model->integrality_.begin(), model->integrality_.end(),
++                 HighsVarType::kInteger);
++  const int64_t impliedIntegerCols =
++      std::count(model->integrality_.begin(), model->integrality_.end(),
++                 HighsVarType::kImplicitInteger);
++  const char* status = "not_set";
++  switch (presolve_status_) {
++    case HighsPresolveStatus::kNotSet:
++      break;
++    case HighsPresolveStatus::kNotPresolved:
++      status = "not_presolved";
++      break;
++    case HighsPresolveStatus::kNotReduced:
++      status = "not_reduced";
++      break;
++    case HighsPresolveStatus::kInfeasible:
++      status = "infeasible";
++      break;
++    case HighsPresolveStatus::kUnboundedOrInfeasible:
++      status = "unbounded_or_infeasible";
++      break;
++    case HighsPresolveStatus::kReduced:
++      status = "reduced";
++      break;
++    case HighsPresolveStatus::kReducedToEmpty:
++      status = "reduced_to_empty";
++      break;
++    case HighsPresolveStatus::kTimeout:
++      status = "timeout";
++      break;
++    case HighsPresolveStatus::kNullError:
++      status = "null_error";
++      break;
++    case HighsPresolveStatus::kOptionsError:
++      status = "options_error";
++      break;
++    case HighsPresolveStatus::kOutOfMemory:
++      status = "out_of_memory";
++      break;
++    case HighsPresolveStatus::kException:
++      status = "exception";
++      break;
++    case HighsPresolveStatus::kMatrixValueError:
++      status = "matrix_value_error";
++      break;
++  }
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG total presolve_seconds=%.6f rows=%" PRId64 ":%" PRId64
++               " cols=%" PRId64 ":%" PRId64 " nnz=%" PRId64 ":%" PRId64
++               " integer_cols=%" PRId64 ":%" PRId64
++               " implied_integer_cols=%" PRId64
++               " status=%s stopped=%d restart=%" HIGHSINT_FORMAT "\n",
++               seconds, rows, rowsNow, cols, colsNow, nnz, nnzNow, integerCols,
++               integerColsNow, impliedIntegerCols, status, diag_.stopped,
++               mipsolver->mipdata_->numRestarts);
++}
++
+ }  // namespace presolve
+diff --git a/highs/presolve/HPresolve.h b/highs/presolve/HPresolve.h
+index e06e1d7..ffddc57 100644
+--- a/highs/presolve/HPresolve.h
++++ b/highs/presolve/HPresolve.h
+@@ -27,6 +27,7 @@
+ #include "presolve/HPresolveAnalysis.h"
+ #include "presolve/HPresolveCliqueTable.h"
+ #include "util/HighsCDouble.h"
++#include "util/HighsDiag.h"
+ #include "util/HighsHash.h"
+ #include "util/HighsHashTree.h"
+ #include "util/HighsLinearSumBounds.h"
+@@ -178,6 +179,164 @@ class HPresolve {
+   HighsPresolveStatus presolve_status_;
+   HPresolveAnalysis analysis_;
+ 
++  enum DiagStage {
++    kDiagSetup = 0,
++    kDiagInitialScan,
++    kDiagFastLoop,
++    kDiagCliqueSubstitutions,
++    kDiagFourierMotzkin,
++    kDiagAggregator,
++    kDiagSparsify,
++    kDiagParallelRowsCols,
++    kDiagStrengthenInequalities,
++    kDiagDominatedColumns,
++    kDiagEnumeration,
++    kDiagImpliedIntegers,
++    kDiagProbing,
++    kDiagShrink,
++    kDiagFinalScaling,
++    kDiagStageCount
++  };
++
++  struct DiagStageData {
++    int64_t calls = 0;
++    double seconds = 0;
++    int64_t rows = 0;
++    int64_t cols = 0;
++    int64_t nnz = 0;
++  };
++
++  struct DiagVarBound {
++    int64_t calls = 0;
++    double seconds = 0;
++    int64_t rows_removed = 0;
++    int64_t rows_modified = 0;
++    int64_t vars_lifted = 0;
++    int64_t nnz_removed = 0;
++  };
++
++  struct Diag {
++    DiagStageData stage[kDiagStageCount];
++    int64_t reductions[kDiagStageCount]
++                      [HighsPostsolveStack::kDiagReductionTypeCount] = {};
++    const HighsPostsolveStack* postsolve_stack = nullptr;
++    size_t reductions_start = 0;
++    HighsInt active_stage = -1;
++    bool have_matrix = false;
++    bool stopped = false;
++
++    int64_t probing_rounds = 0;
++    int64_t probing_binaries = 0;
++    int64_t probing_attempted = 0;
++    int64_t probing_probed = 0;
++    int64_t probing_fixed = 0;
++    int64_t probing_bounds_tightened = 0;
++    int64_t probing_substitutions = 0;
++    int64_t probing_cliques_before = 0;
++    int64_t probing_cliques_after = 0;
++    int64_t probing_implications = 0;
++    int64_t probing_lifted_nonzeros = 0;
++    int64_t probing_max_probe_work = 0;
++    int64_t probing_max_probe_sweeps = 0;
++    double probing_seconds = 0;
++    double probing_loop_seconds = 0;
++    HighsDiagWork probing_work;
++    const char* probing_stop = "not_run";
++
++    int64_t cliquemerge_calls = 0;
++    double cliquemerge_seconds = 0;
++    int64_t cliquemerge_rows_changed = 0;
++    int64_t cliquemerge_rows_deleted = 0;
++    int64_t cliquemerge_nnz_added = 0;
++    int64_t cliquemerge_nnz_removed = 0;
++    int64_t cliquemerge_fixings = 0;
++
++    int64_t aggregator_candidates = 0;
++    int64_t aggregator_examined = 0;
++    int64_t aggregator_substituted = 0;
++    int64_t aggregator_size2 = 0;
++    int64_t aggregator_stale = 0;
++    int64_t aggregator_rejected_integer = 0;
++    int64_t aggregator_rejected_pivot = 0;
++    int64_t aggregator_rejected_fillin = 0;
++    int64_t aggregator_stopped_by_failures = 0;
++
++    // indexed by active_stage + 1
++    int64_t doubleton_removed[kDiagStageCount + 1] = {};
++    int64_t substitutions_implication[kDiagStageCount + 1] = {};
++    int64_t substitutions_clique[kDiagStageCount + 1] = {};
++
++    int64_t substitutions_simple_probing = 0;
++    int64_t substitutions_dual_fixing = 0;
++
++    // [0] in enumeration, [1] in probing
++    DiagVarBound varbound[2];
++
++    double parallel_hash_seconds = 0;
++    double parallel_col_seconds = 0;
++    double parallel_row_seconds = 0;
++    int64_t parallel_cols_removed = 0;
++    int64_t parallel_rows_removed = 0;
++    int64_t parallel_col_reductions = 0;
++    int64_t parallel_cols_merged = 0;
++    int64_t parallel_duplicate_rows = 0;
++    int64_t parallel_row_additions = 0;
++  };
++
++  Diag diag_;
++
++  // Accounts a top-level stage call; a scope opened inside another one is
++  // attributed to the outer stage
++  struct DiagStageScope {
++    HPresolve& presolve;
++    const bool active;
++    double start;
++    int64_t rows;
++    int64_t cols;
++    int64_t nnz;
++    size_t reductions;
++    DiagStageScope(HPresolve& presolve, DiagStage stage);
++    ~DiagStageScope();
++  };
++
++  struct DiagProbingRound {
++    HPresolve& presolve;
++    const double start;
++    bool in_loop = false;
++    double loop_start = 0;
++    double loop_end = 0;
++    HighsDiagWork loop_work;
++    const char* stop = "aborted";
++    const int64_t probed_start;
++    int64_t binaries = 0;
++    int64_t attempted = 0;
++    int64_t fixed = 0;
++    int64_t bounds_tightened = 0;
++    int64_t substitutions = 0;
++    int64_t cliques_entry = 0;
++    int64_t cliques_before = 0;
++    int64_t cliques_after = 0;
++    int64_t implications_before = 0;
++    int64_t implications = 0;
++    int64_t lifted_nonzeros = 0;
++    int64_t max_probe_work = 0;
++    int64_t max_probe_sweeps = 0;
++    explicit DiagProbingRound(HPresolve& presolve);
++    void beginLoop();
++    void endProbe(const HighsDiagWork& before);
++    void endLoop();
++    ~DiagProbingRound();
++  };
++
++  static const char* diagStageName(HighsInt stage);
++
++  void diagSize(int64_t& rows, int64_t& cols, int64_t& nnz) const;
++
++  void diagReport(double seconds, int64_t rows, int64_t cols, int64_t nnz,
++                  int64_t integerCols) const;
++
++  HighsModelStatus runPresolve(HighsPostsolveStack& postsolve_stack);
++
+   // private functions for different shared functionality and matrix
+   // modification
+ 
+diff --git a/highs/presolve/HPresolveAggregator.cpp b/highs/presolve/HPresolveAggregator.cpp
+index 0a033a9..5b6518d 100644
+--- a/highs/presolve/HPresolveAggregator.cpp
++++ b/highs/presolve/HPresolveAggregator.cpp
+@@ -13,6 +13,7 @@ namespace presolve {
+ 
+ HPresolve::Result HPresolve::aggregator(HighsPostsolveStack& postsolve_stack) {
+   assert(this->allow_rule_[kPresolveRuleAggregator]);
++  DiagStageScope diagScope(*this, kDiagAggregator);
+   const bool logging_on = analysis_.logging_on_;
+   if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleAggregator);
+   substitutionOpportunities.erase(
+@@ -50,26 +51,33 @@ HPresolve::Result HPresolve::aggregator(HighsPostsolveStack& postsolve_stack) {
+                                nz2.first, nz2.second);
+       });
+ 
++  diag_.aggregator_candidates += substitutionOpportunities.size();
+   HighsInt nfail = 0;
+   for (size_t i = 0; i < substitutionOpportunities.size(); ++i) {
+     HighsInt row = substitutionOpportunities[i].first;
+     HighsInt col = substitutionOpportunities[i].second;
++    ++diag_.aggregator_examined;
+ 
+     if (rowDeleted[row] || colDeleted[col] || !isImpliedFree(col) ||
+         !isDualImpliedFree(row)) {
++      ++diag_.aggregator_stale;
+       substitutionOpportunities[i].first = -1;
+       continue;
+     }
+ 
+     HighsInt nzPos = findNonzero(row, col);
+     if (nzPos == -1) {
++      ++diag_.aggregator_stale;
+       substitutionOpportunities[i].first = -1;
+       continue;
+     }
+     if (model->integrality_[col] == HighsVarType::kInteger) {
+       StatusResult impliedIntegral = isImpliedIntegral(col);
+       HPRESOLVE_CHECKED_CALL(static_cast<Result>(impliedIntegral));
+-      if (!impliedIntegral) continue;
++      if (!impliedIntegral) {
++        ++diag_.aggregator_rejected_integer;
++        continue;
++      }
+     }
+ 
+     // in the case where the row has length two or the column has length two
+@@ -77,6 +85,8 @@ HPresolve::Result HPresolve::aggregator(HighsPostsolveStack& postsolve_stack) {
+     if (rowsize[row] == 2 || colsize[col] == 2) {
+       storeRow(row);
+       substituteFreeCol(postsolve_stack, row, col, true);
++      ++diag_.aggregator_substituted;
++      ++diag_.aggregator_size2;
+       substitutionOpportunities[i].first = -1;
+       HPRESOLVE_CHECKED_CALL(removeRowSingletons(postsolve_stack));
+       HPRESOLVE_CHECKED_CALL(checkLimits(postsolve_stack));
+@@ -90,6 +100,7 @@ HPresolve::Result HPresolve::aggregator(HighsPostsolveStack& postsolve_stack) {
+                                            : getMaxAbsRowVal(row);
+       if (std::fabs(Avalue[nzPos]) <
+           maxVal * options->presolve_pivot_threshold) {
++        ++diag_.aggregator_rejected_pivot;
+         substitutionOpportunities[i].first = -1;
+         continue;
+       }
+@@ -106,15 +117,20 @@ HPresolve::Result HPresolve::aggregator(HighsPostsolveStack& postsolve_stack) {
+ 
+     if (fillin > options->presolve_substitution_maxfillin) {
+       ++nfail;
++      ++diag_.aggregator_rejected_fillin;
+       // if the fill in is too much for multiple tries, then we stop
+       // as this indicates that the rows/columns are becoming too dense
+       // for substitutions
+-      if (nfail == 3) break;
++      if (nfail == 3) {
++        ++diag_.aggregator_stopped_by_failures;
++        break;
++      }
+       continue;
+     }
+ 
+     nfail = 0;
+     substituteFreeCol(postsolve_stack, row, col, true);
++    ++diag_.aggregator_substituted;
+     substitutionOpportunities[i].first = -1;
+     HPRESOLVE_CHECKED_CALL(removeRowSingletons(postsolve_stack));
+     HPRESOLVE_CHECKED_CALL(checkLimits(postsolve_stack));
+diff --git a/highs/presolve/HPresolveDominatedCols.cpp b/highs/presolve/HPresolveDominatedCols.cpp
+index 968f7e6..87af592 100644
+--- a/highs/presolve/HPresolveDominatedCols.cpp
++++ b/highs/presolve/HPresolveDominatedCols.cpp
+@@ -13,6 +13,7 @@ namespace presolve {
+ 
+ HPresolve::Result HPresolve::dominatedColumns(
+     HighsPostsolveStack& postsolve_stack) {
++  DiagStageScope diagScope(*this, kDiagDominatedColumns);
+   // See section 6.4 "Dominated columns", Achterberg et al., Presolve Reductions
+   // in Mixed Integer Programming, INFORMS Journal on Computing 32(2):473-506.
+   // See also Gamrath, G., Koch, T., Martin, A. et al., Progress in presolving
+diff --git a/highs/presolve/HPresolveDualFixing.cpp b/highs/presolve/HPresolveDualFixing.cpp
+index 334dc54..4362503 100644
+--- a/highs/presolve/HPresolveDualFixing.cpp
++++ b/highs/presolve/HPresolveDualFixing.cpp
+@@ -94,6 +94,7 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
+         // substitute variable
+         double offset = otherColBound;
+         double scale = colBound - otherColBound;
++        ++diag_.substitutions_dual_fixing;
+         postsolve_stack.doubletonEquation(
+             -1, col, rowNz.index(), 1.0, -scale, offset, model->col_lower_[col],
+             model->col_upper_[col], 0.0, false, false,
+diff --git a/highs/presolve/HPresolveEnumeration.cpp b/highs/presolve/HPresolveEnumeration.cpp
+index ba75ef1..aa4b314 100644
+--- a/highs/presolve/HPresolveEnumeration.cpp
++++ b/highs/presolve/HPresolveEnumeration.cpp
+@@ -15,6 +15,7 @@ namespace presolve {
+ 
+ HPresolve::Result HPresolve::enumerateSolutions(
+     HighsPostsolveStack& postsolve_stack) {
++  DiagStageScope diagScope(*this, kDiagEnumeration);
+   // enumerate all solutions for pure binary constraints with a small number of
+   // variables
+   HighsProfilingScope clock(*mipsolver->profiling_,
+diff --git a/highs/presolve/HPresolveFourierMotzkin.cpp b/highs/presolve/HPresolveFourierMotzkin.cpp
+index 1b74984..295c776 100644
+--- a/highs/presolve/HPresolveFourierMotzkin.cpp
++++ b/highs/presolve/HPresolveFourierMotzkin.cpp
+@@ -14,6 +14,7 @@ namespace presolve {
+ HPresolve::Result HPresolve::fourierMotzkin(
+     HighsPostsolveStack& postsolve_stack, HighsInt& numColsEliminated) {
+   assert(this->allow_rule_[kPresolveRuleFourierMotzkin]);
++  DiagStageScope diagScope(*this, kDiagFourierMotzkin);
+   const bool logging_on = analysis_.logging_on_;
+   if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleFourierMotzkin);
+ 
+diff --git a/highs/presolve/HPresolveImpliedInts.cpp b/highs/presolve/HPresolveImpliedInts.cpp
+index 905940d..91cf9d4 100644
+--- a/highs/presolve/HPresolveImpliedInts.cpp
++++ b/highs/presolve/HPresolveImpliedInts.cpp
+@@ -184,6 +184,7 @@ HPresolve::StatusResult HPresolve::convertImpliedInteger(HighsInt col,
+ }
+ 
+ HPresolve::Result HPresolve::detectImpliedIntegers() {
++  DiagStageScope diagScope(*this, kDiagImpliedIntegers);
+   for (HighsInt col = 0; col != model->num_col_; ++col)
+     HPRESOLVE_CHECKED_CALL(static_cast<Result>(convertImpliedInteger(col)));
+   return Result::kOk;
+diff --git a/highs/presolve/HPresolveParallelRowsAndCols.cpp b/highs/presolve/HPresolveParallelRowsAndCols.cpp
+index 281dbbc..67a7458 100644
+--- a/highs/presolve/HPresolveParallelRowsAndCols.cpp
++++ b/highs/presolve/HPresolveParallelRowsAndCols.cpp
+@@ -15,6 +15,12 @@ namespace presolve {
+ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+     HighsPostsolveStack& postsolve_stack) {
+   assert(this->allow_rule_[kPresolveRuleParallelRowsAndCols]);
++  DiagStageScope diagScope(*this, kDiagParallelRowsCols);
++  const double diagHashStart = highsDiagSeconds();
++  const HighsInt diagNumCol =
++      highsDiagOff(kDiagOffParallelColumns) ? 0 : model->num_col_;
++  const HighsInt diagNumRow =
++      highsDiagOff(kDiagOffParallelRows) ? 0 : model->num_row_;
+   const bool logging_on = analysis_.logging_on_;
+   if (logging_on)
+     analysis_.startPresolveRuleLog(kPresolveRuleParallelRowsAndCols);
+@@ -91,7 +97,10 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+   std::unordered_multimap<std::uint64_t, HighsInt> buckets;
+ 
+   const bool debug_report = false;
+-  for (HighsInt i = 0; i != model->num_col_; ++i) {
++  const double diagColStart = highsDiagSeconds();
++  const HighsInt diagColsDeleted = numDeletedCols;
++  diag_.parallel_hash_seconds += diagColStart - diagHashStart;
++  for (HighsInt i = 0; i != diagNumCol; ++i) {
+     if (colDeleted[i]) continue;
+     if (colsize[i] == 0) {
+       HPRESOLVE_CHECKED_CALL(colPresolve(postsolve_stack, i));
+@@ -438,6 +447,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+           // set cost to zero
+           model->col_cost_[duplicateCol] = 0;
+           delCol = duplicateCol;
++          ++diag_.parallel_cols_merged;
+ 
+           // remove implied bounds, since they might in general not be valid
+           // anymore
+@@ -458,6 +468,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+     }
+ 
+     if (delCol != -1) {
++      ++diag_.parallel_col_reductions;
+       if (delCol != i) buckets.erase(last);
+ 
+       // we could have new row singletons since a column was removed. Remove
+@@ -470,6 +481,10 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+   }
+ 
+   buckets.clear();
++  const double diagRowStart = highsDiagSeconds();
++  const HighsInt diagRowsDeleted = numDeletedRows;
++  diag_.parallel_col_seconds += diagRowStart - diagColStart;
++  diag_.parallel_cols_removed += numDeletedCols - diagColsDeleted;
+ 
+   // Iterate non-cut rows before cut rows so that when a cut is
+   // parallel to a non-cut, the non-cut is already in the bucket as
+@@ -484,7 +499,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+     return a < b;
+   });
+ 
+-  for (HighsInt rowIndex = 0; rowIndex != model->num_row_; ++rowIndex) {
++  for (HighsInt rowIndex = 0; rowIndex != diagNumRow; ++rowIndex) {
+     HighsInt i = rowOrder[rowIndex];
+     if (rowDeleted[i]) continue;
+     if (rowsize[i] <= 1 || (rowsize[i] == 2 && isEquation(i)) ||
+@@ -641,6 +656,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+         postsolve_stack.duplicateRow(parallelRowCand, rowUpperTightened,
+                                      rowLowerTightened, i, rowScale);
+         delRow = i;
++        ++diag_.parallel_duplicate_rows;
+         markRowDeleted(i);
+         for (HighsInt rowiter : rowpositions) unlink(rowiter);
+         break;
+@@ -657,6 +673,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+         HPRESOLVE_CHECKED_CALL(equalityRowAddition(
+             postsolve_stack, i, parallelRowCand, -rowScale, getStoredRow()));
+         delRow = parallelRowCand;
++        ++diag_.parallel_row_additions;
+         // the candidate row has changed, remove it from the buckets
+         last = buckets.erase(last);
+         // equalityRowAddition calls rowPresolve, which can delete or change
+@@ -677,6 +694,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+             getRowVector(parallelRowCand)));
+         // row i has changed or has been deleted, stop scanning
+         delRow = i;
++        ++diag_.parallel_row_additions;
+         break;
+       } else {
+         assert(numSingleton == 1);
+@@ -713,6 +731,8 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+ 
+     if (delRow != -1) HPRESOLVE_CHECKED_CALL(checkLimits(postsolve_stack));
+   }
++  diag_.parallel_row_seconds += highsDiagSeconds() - diagRowStart;
++  diag_.parallel_rows_removed += numDeletedRows - diagRowsDeleted;
+ 
+   analysis_.logging_on_ = logging_on;
+   if (logging_on)
+diff --git a/highs/presolve/HPresolveProbing.cpp b/highs/presolve/HPresolveProbing.cpp
+index 807478a..22d5983 100644
+--- a/highs/presolve/HPresolveProbing.cpp
++++ b/highs/presolve/HPresolveProbing.cpp
+@@ -25,9 +25,110 @@ std::pair<int64_t, HighsInt> HPresolve::computeProbingScore(
+       std::min(HighsInt{100}, implicsUp + implicsDown));
+ }
+ 
++HPresolve::DiagProbingRound::DiagProbingRound(HPresolve& presolve)
++    : presolve(presolve),
++      start(highsDiagSeconds()),
++      probed_start(presolve.numProbed) {
++  cliques_entry = presolve.mipsolver->mipdata_->cliquetable.numCliques();
++}
++
++void HPresolve::DiagProbingRound::beginLoop() {
++  const HighsMipSolverData& mipdata = *presolve.mipsolver->mipdata_;
++  cliques_before = mipdata.cliquetable.numCliques();
++  implications_before = mipdata.implications.getNumImplications();
++  in_loop = true;
++  loop_work = highsDiagWork();
++  loop_start = highsDiagSeconds();
++}
++
++void HPresolve::DiagProbingRound::endProbe(const HighsDiagWork& before) {
++  const HighsDiagWork& work = highsDiagWork();
++  max_probe_work = std::max(
++      max_probe_work, work.prop_entries - before.prop_entries +
++                          work.activity_entries - before.activity_entries);
++  max_probe_sweeps =
++      std::max(max_probe_sweeps, work.prop_sweeps - before.prop_sweeps);
++}
++
++void HPresolve::DiagProbingRound::endLoop() {
++  loop_end = highsDiagSeconds();
++  in_loop = false;
++  const HighsDiagWork& work = highsDiagWork();
++  loop_work.prop_sweeps = work.prop_sweeps - loop_work.prop_sweeps;
++  loop_work.prop_rows = work.prop_rows - loop_work.prop_rows;
++  loop_work.prop_entries = work.prop_entries - loop_work.prop_entries;
++  loop_work.activity_entries =
++      work.activity_entries - loop_work.activity_entries;
++  const HighsMipSolverData& mipdata = *presolve.mipsolver->mipdata_;
++  cliques_after = mipdata.cliquetable.numCliques();
++  implications = mipdata.implications.getNumImplications();
++}
++
++HPresolve::DiagProbingRound::~DiagProbingRound() {
++  if (in_loop) endLoop();
++  const double end = highsDiagSeconds();
++  const bool looped = loop_end != 0;
++  if (!looped) {
++    cliques_before = presolve.mipsolver->mipdata_->cliquetable.numCliques();
++    cliques_after = cliques_before;
++  }
++  const int64_t probed = presolve.numProbed - probed_start;
++  Diag& diag = presolve.diag_;
++  if (diag.probing_rounds == 0) {
++    diag.probing_binaries = binaries;
++    diag.probing_cliques_before = cliques_before;
++  }
++  ++diag.probing_rounds;
++  diag.probing_attempted += attempted;
++  diag.probing_probed += probed;
++  diag.probing_fixed += fixed;
++  diag.probing_bounds_tightened += bounds_tightened;
++  diag.probing_substitutions += substitutions;
++  diag.probing_lifted_nonzeros += lifted_nonzeros;
++  diag.probing_cliques_after = cliques_after;
++  if (looped) diag.probing_implications = implications;
++  diag.probing_max_probe_work =
++      std::max(diag.probing_max_probe_work, max_probe_work);
++  diag.probing_max_probe_sweeps =
++      std::max(diag.probing_max_probe_sweeps, max_probe_sweeps);
++  diag.probing_stop = stop;
++  diag.probing_seconds += end - start;
++  diag.probing_loop_seconds += loop_end - loop_start;
++  diag.probing_work.prop_sweeps += loop_work.prop_sweeps;
++  diag.probing_work.prop_rows += loop_work.prop_rows;
++  diag.probing_work.prop_entries += loop_work.prop_entries;
++  diag.probing_work.activity_entries += loop_work.activity_entries;
++  if (presolve.mipsolver->submip) return;
++  highsLogUser(
++      presolve.options->log_options, HighsLogType::kInfo,
++      "DIAG probing_round round=%" PRId64 " binaries=%" PRId64
++      " attempted=%" PRId64 " probed=%" PRId64
++      " stop=%s fixed=%" PRId64 " bounds_tightened=%" PRId64
++      " substitutions=%" PRId64 " cliques_entry=%" PRId64
++      " cliques_before=%" PRId64 " cliques_after=%" PRId64
++      " implications_before=%" PRId64 " implications=%" PRId64
++      " lifted_nonzeros=%" PRId64
++      " seconds=%.6f prepare_seconds=%.6f loop_seconds=%.6f"
++      " finalise_seconds=%.6f prop_sweeps=%" PRId64 " prop_rows=%" PRId64
++      " prop_entries=%" PRId64 " activity_entries=%" PRId64
++      " probing_work=%" PRId64 " max_probe_work=%" PRId64
++      " max_probe_sweeps=%" PRId64 "\n",
++      diag.probing_rounds, binaries, attempted, probed, stop, fixed,
++      bounds_tightened, substitutions, cliques_entry, cliques_before,
++      cliques_after, implications_before, implications, lifted_nonzeros,
++      end - start, (looped ? loop_start : end) - start, loop_end - loop_start,
++      looped ? end - loop_end : 0.0, loop_work.prop_sweeps,
++      loop_work.prop_rows, loop_work.prop_entries, loop_work.activity_entries,
++      loop_work.prop_entries + loop_work.activity_entries, max_probe_work,
++      max_probe_sweeps);
++}
++
+ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
++  DiagStageScope diagScope(*this, kDiagProbing);
++  DiagProbingRound diagRound(*this);
+   HighsProfilingScope clock(*mipsolver->profiling_, kMipClockProbingPresolve);
+   probingEarlyAbort = false;
++  const bool nostop = highsDiagSwitches().probing_nostop;
+ 
+   HighsInt oldNumProbed = numProbed;
+ 
+@@ -44,7 +145,7 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+   // other binaries
+   std::vector<std::tuple<int64_t, HighsInt, HighsInt, HighsInt>> binaries;
+ 
+-  if (!cliquetable.isFull()) {
++  if (!cliquetable.isFull() || nostop) {
+     binaries.reserve(model->num_col_);
+     HighsRandom random(options->random_seed);
+     for (HighsInt i = 0; i != model->num_col_; ++i) {
+@@ -55,6 +156,9 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+       }
+     }
+   }
++  diagRound.binaries = binaries.size();
++  diagRound.stop =
++      cliquetable.isFull() && !nostop ? "table_full" : "no_binaries";
+   if (!binaries.empty()) {
+     // sort variables with many implications on other binaries first
+     pdqsort(binaries.begin(), binaries.end());
+@@ -166,6 +270,8 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+       domain.getDualFixProbingPropagation().recomputeLocks();
+     }
+ 
++    diagRound.stop = "finished";
++    diagRound.beginLoop();
+     for (const auto& binvar : binaries) {
+       // Count the binaries considered
+       iBin++;
+@@ -180,6 +286,7 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+       // Check for timeout
+       tt = this->timer->read();
+       if (tt > options->time_limit) {
++        diagRound.stop = "time";
+         highsLogUser(
+             options->log_options, HighsLogType::kInfo,
+             "Time limit reached in probing: "
+@@ -207,16 +314,30 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+             numDel >
+             std::min(HighsInt{1000}, (model->num_row_ + model->num_col_) / 20);
+       }
+-      if (probingEarlyAbort) break;
++      if (nostop) probingEarlyAbort = false;
++      if (probingEarlyAbort) {
++        diagRound.stop = "deletions";
++        break;
++      }
+ 
+       // break in case of too many new implications to not spent ages in
+       // probing
+-      if (cliquetable.isFull() ||
+-          cliquetable.numCliques() - numCliquesStart >
+-              std::max(HighsInt{1000000}, 2 * numNonzeros()) ||
+-          implications.getNumImplications() - numImplicsStart >
+-              std::max(HighsInt{1000000}, 2 * numNonzeros()))
+-        break;
++      if (!nostop) {
++        if (cliquetable.isFull()) {
++          diagRound.stop = "table_full";
++          break;
++        }
++        if (cliquetable.numCliques() - numCliquesStart >
++            std::max(HighsInt{1000000}, 2 * numNonzeros())) {
++          diagRound.stop = "clique_limit";
++          break;
++        }
++        if (implications.getNumImplications() - numImplicsStart >
++            std::max(HighsInt{1000000}, 2 * numNonzeros())) {
++          diagRound.stop = "implication_limit";
++          break;
++        }
++      }
+ 
+       // if (numProbed % 10 == 0)
+       //   printf(
+@@ -225,15 +346,26 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+       //       "splayContingent=%ld\n",
+       //       numProbed, numDel, cliquetable.numCliques() - numCliquesStart,
+       //       cliquetable.numNeighbourhoodQueries, splayContingent);
+-      if (cliquetable.numNeighbourhoodQueries > splayContingent) break;
++      if (!nostop) {
++        if (cliquetable.numNeighbourhoodQueries > splayContingent) {
++          diagRound.stop = "neighbourhood";
++          break;
++        }
+ 
+-      if (probingContingent - numProbed < 0) break;
++        if (probingContingent - numProbed < 0) {
++          diagRound.stop = "contingent";
++          break;
++        }
++      }
+ 
++      ++diagRound.attempted;
++      const HighsDiagWork diagProbeWork = highsDiagWork();
+       HighsInt numBoundChgs = 0;
+       HighsInt numNewCliques = -cliquetable.numCliques();
+       domain.setDualFixProbingActive(dualFixProbingEnabled);
+       const bool probing_result = implications.runProbing(i, numBoundChgs);
+       domain.setDualFixProbingActive(false);
++      diagRound.endProbe(diagProbeWork);
+       if (!probing_result) continue;
+       probingContingent += numBoundChgs;
+       numNewCliques += cliquetable.numCliques();
+@@ -267,8 +399,12 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+       if (numLiftOpps >= maxNumLiftOpps)
+         implications.storeLiftingOpportunity = nullptr;
+ 
+-      if (domain.infeasible()) return Result::kPrimalInfeasible;
++      if (domain.infeasible()) {
++        diagRound.stop = "infeasible";
++        return Result::kPrimalInfeasible;
++      }
+     }
++    diagRound.endLoop();
+ 
+     // finalise probing
+     HighsInt numVarsFixed = 0;
+@@ -280,6 +416,10 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+                                            numVarsSubstituted, liftedNonzeros));
+ 
+     probingNumDelCol += numVarsSubstituted;
++    diagRound.fixed = numVarsFixed;
++    diagRound.bounds_tightened = numBndsTightened;
++    diagRound.substitutions = numVarsSubstituted;
++    diagRound.lifted_nonzeros = liftedNonzeros;
+ 
+     highsLogDev(options->log_options, HighsLogType::kInfo,
+                 "%" HIGHSINT_FORMAT " probing evaluations: %" HIGHSINT_FORMAT
+diff --git a/highs/presolve/HPresolveProbingUtil.cpp b/highs/presolve/HPresolveProbingUtil.cpp
+index f8914ab..0002c89 100644
+--- a/highs/presolve/HPresolveProbingUtil.cpp
++++ b/highs/presolve/HPresolveProbingUtil.cpp
+@@ -256,24 +256,49 @@ HPresolve::Result HPresolve::finaliseProbing(
+   cliquetable.cleanupFixed(domain);
+ 
+   if (!firstCall) cliquetable.extractCliques(*mipsolver, false);
+-  cliquetable.runCliqueMerging(domain);
++  const size_t diagDeletedBeforeMerge = cliquetable.getDeletedRows().size();
++  const int64_t diagCliquesBeforeMerge = cliquetable.numCliques();
++  const int64_t diagFixingsBeforeMerge = cliquetable.getNumFixings();
++  const double diagMergeStart = highsDiagSeconds();
++  const bool diagMerge = !highsDiagOff(kDiagOffCliqueMerging);
++  if (diagMerge) cliquetable.runCliqueMerging(domain);
++  const double diagMergeSeconds = highsDiagSeconds() - diagMergeStart;
++  const int64_t diagCliquesAfterMerge = cliquetable.numCliques();
++  const int64_t diagMergeFixings =
++      cliquetable.getNumFixings() - diagFixingsBeforeMerge;
+ 
+   // apply changes from probing
+ 
+   // first delete redundant clique inequalities
+-  for (HighsInt delrow : cliquetable.getDeletedRows())
+-    if (!rowDeleted[delrow]) removeRow(delrow);
++  int64_t diagRowsDeleted = 0;
++  int64_t diagRowsDeletedBeforeMerge = 0;
++  int64_t diagNnzRemoved = 0;
++  size_t diagDeletedPos = 0;
++  for (HighsInt delrow : cliquetable.getDeletedRows()) {
++    if (!rowDeleted[delrow]) {
++      if (diagDeletedPos < diagDeletedBeforeMerge) {
++        ++diagRowsDeletedBeforeMerge;
++      } else {
++        ++diagRowsDeleted;
++        diagNnzRemoved += rowsize[delrow];
++      }
++      removeRow(delrow);
++    }
++    ++diagDeletedPos;
++  }
+   cliquetable.getDeletedRows().clear();
+ 
+   // add nonzeros from clique lifting before removing fixed variables, since
+   // this might lead to stronger constraint sides
+   auto& extensionvars = cliquetable.getCliqueExtensions();
++  std::vector<HighsInt> diagChangedRows;
+   liftedNonZeros += static_cast<HighsInt>(extensionvars.size());
+   for (const auto& cliqueextension : extensionvars) {
+     if (rowDeleted[cliqueextension.first]) {
+       --liftedNonZeros;
+       continue;
+     }
++    diagChangedRows.push_back(cliqueextension.first);
+     double val = 1.0;
+     if (cliqueextension.second.val == 0) {
+       addToRowLower(cliqueextension.first, HighsCDouble{-1});
+@@ -284,6 +309,30 @@ HPresolve::Result HPresolve::finaliseProbing(
+   }
+   extensionvars.clear();
+ 
++  const int64_t diagNnzAdded = diagChangedRows.size();
++  pdqsort(diagChangedRows.begin(), diagChangedRows.end());
++  const int64_t diagRowsChanged =
++      std::unique(diagChangedRows.begin(), diagChangedRows.end()) -
++      diagChangedRows.begin();
++  diag_.cliquemerge_calls += diagMerge;
++  diag_.cliquemerge_seconds += diagMergeSeconds;
++  diag_.cliquemerge_rows_changed += diagRowsChanged;
++  diag_.cliquemerge_rows_deleted += diagRowsDeleted;
++  diag_.cliquemerge_nnz_added += diagNnzAdded;
++  diag_.cliquemerge_nnz_removed += diagNnzRemoved;
++  diag_.cliquemerge_fixings += diagMergeFixings;
++  if (!mipsolver->submip)
++    highsLogUser(options->log_options, HighsLogType::kInfo,
++                 "DIAG cliquemerge_call stage=%s seconds=%.6f rows_changed=%"
++                 PRId64 " rows_deleted=%" PRId64 " nnz_added=%" PRId64
++                 " nnz_removed=%" PRId64 " fixings=%" PRId64
++                 " cliques_before=%" PRId64 " cliques_after=%" PRId64
++                 " rows_deleted_before_merge=%" PRId64 "\n",
++                 diagStageName(diag_.active_stage), diagMergeSeconds,
++                 diagRowsChanged, diagRowsDeleted, diagNnzAdded,
++                 diagNnzRemoved, diagMergeFixings, diagCliquesBeforeMerge,
++                 diagCliquesAfterMerge, diagRowsDeletedBeforeMerge);
++
+   // now remove fixed columns and tighten domains
+   for (HighsInt i = 0; i != model->num_col_; ++i) {
+     if (colDeleted[i]) continue;
+@@ -313,13 +362,21 @@ HPresolve::Result HPresolve::finaliseProbing(
+       applyConflictGraphSubstitutions(postsolve_stack, numVarsSubstituted));
+ 
+   // aggregate variable bounds now that the clique table is populated
++  DiagVarBound& diagVarBound =
++      diag_.varbound[diag_.active_stage == kDiagProbing];
++  const int64_t diagVarBoundNnz = numNonzeros();
++  const double diagVarBoundStart = highsDiagSeconds();
+   aggregateVarBounds();
++  diagVarBound.seconds += highsDiagSeconds() - diagVarBoundStart;
++  diagVarBound.nnz_removed += diagVarBoundNnz - numNonzeros();
++  ++diagVarBound.calls;
+ 
+   return checkLimits(postsolve_stack);
+ }
+ 
+ HPresolve::Result HPresolve::applyConflictGraphSubstitutions(
+     HighsPostsolveStack& postsolve_stack, HighsInt& numDelCol) {
++  DiagStageScope diagScope(*this, kDiagCliqueSubstitutions);
+   HighsCliqueTable& cliquetable = mipsolver->mipdata_->cliquetable;
+   HighsImplications& implications = mipsolver->mipdata_->implications;
+   for (const auto& substitution : implications.substitutions) {
+@@ -327,6 +384,7 @@ HPresolve::Result HPresolve::applyConflictGraphSubstitutions(
+       continue;
+ 
+     ++numDelCol;
++    ++diag_.substitutions_implication[diag_.active_stage + 1];
+ 
+     postsolve_stack.doubletonEquation(
+         -1, substitution.substcol, substitution.staycol, 1.0,
+@@ -349,6 +407,7 @@ HPresolve::Result HPresolve::applyConflictGraphSubstitutions(
+     double offset;
+ 
+     ++numDelCol;
++    ++diag_.substitutions_clique[diag_.active_stage + 1];
+ 
+     if (subst.replace.val == 0) {
+       scale = -1.0;
+diff --git a/highs/presolve/HPresolveSparsify.cpp b/highs/presolve/HPresolveSparsify.cpp
+index 8535e53..c4bcab6 100644
+--- a/highs/presolve/HPresolveSparsify.cpp
++++ b/highs/presolve/HPresolveSparsify.cpp
+@@ -13,6 +13,7 @@ namespace presolve {
+ HPresolve::Result HPresolve::sparsify(HighsPostsolveStack& postsolve_stack) {
+   assert(!may_require_basis_postsolve_);
+   assert(allow_rule_[kPresolveRuleSparsify]);
++  DiagStageScope diagScope(*this, kDiagSparsify);
+   std::vector<HighsPostsolveStack::Nonzero> sparsifyRows;
+   const bool logging_on = analysis_.logging_on_;
+   if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleSparsify);
+diff --git a/highs/presolve/HPresolveStrengthenIneq.cpp b/highs/presolve/HPresolveStrengthenIneq.cpp
+index b1e9298..4bc7011 100644
+--- a/highs/presolve/HPresolveStrengthenIneq.cpp
++++ b/highs/presolve/HPresolveStrengthenIneq.cpp
+@@ -13,6 +13,7 @@ namespace presolve {
+ 
+ HPresolve::Result HPresolve::strengthenInequalities(
+     HighsPostsolveStack& postsolve_stack, HighsInt& num_strengthened) {
++  DiagStageScope diagScope(*this, kDiagStrengthenInequalities);
+   std::vector<int8_t> complementation;
+   std::vector<HighsCDouble> reducedcost;
+   std::vector<HighsCDouble> upper;
+diff --git a/highs/presolve/HPresolveVarBndAggregation.cpp b/highs/presolve/HPresolveVarBndAggregation.cpp
+index d190f4b..bb5d76d 100644
+--- a/highs/presolve/HPresolveVarBndAggregation.cpp
++++ b/highs/presolve/HPresolveVarBndAggregation.cpp
+@@ -318,6 +318,12 @@ void HPresolve::aggregateVarBounds() {
+     if (ub < kHighsInf) mergeCliques(vubsCover, vubs, ub, HighsInt{-1});
+   }
+ 
++  DiagVarBound& diagVarBound =
++      diag_.varbound[diag_.active_stage == kDiagProbing];
++  diagVarBound.rows_removed += numRowsRemoved;
++  diagVarBound.rows_modified += numRowsModified;
++  diagVarBound.vars_lifted += numVarsLifted;
++
+   if (numRowsRemoved > 0 || numRowsModified > 0)
+     highsLogDev(options->log_options, HighsLogType::kInfo,
+                 "Implied variable bound aggregation: %" HIGHSINT_FORMAT
+diff --git a/highs/presolve/HighsPostsolveStack.h b/highs/presolve/HighsPostsolveStack.h
+index 6f8e5a5..f7c34f9 100644
+--- a/highs/presolve/HighsPostsolveStack.h
++++ b/highs/presolve/HighsPostsolveStack.h
+@@ -1326,6 +1326,16 @@ class HighsPostsolveStack {
+   }
+ 
+   size_t numReductions() const { return reductions.size(); }
++
++  enum { kDiagReductionTypeCount = 17 };
++  static_assert((int)ReductionType::kFourierMotzkinObjCol + 1 ==
++                    kDiagReductionTypeCount,
++                "reduction type count");
++
++  void diagCountReductions(size_t from, int64_t* counts) const {
++    for (size_t i = from; i != reductions.size(); ++i)
++      ++counts[(size_t)reductions[i].first];
++  }
+ };
+ 
+ }  // namespace presolve
+diff --git a/highs/util/HighsDiag.h b/highs/util/HighsDiag.h
+new file mode 100644
+index 0000000..d89bc20
+--- /dev/null
++++ b/highs/util/HighsDiag.h
+@@ -0,0 +1,115 @@
++/* clang-format off */
++/*
++ * SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++ * SPDX-License-Identifier: Apache-2.0
++ */
++/* clang-format on */
++
++#ifndef HIGHS_UTIL_DIAG_H_
++#define HIGHS_UTIL_DIAG_H_
++
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++
++enum HighsDiagOff {
++  kDiagOffStrengthenInequalities = 0,
++  kDiagOffDominatedColumns,
++  kDiagOffParallelColumns,
++  kDiagOffParallelRows,
++  kDiagOffSparsify,
++  kDiagOffAggregator,
++  kDiagOffFourierMotzkin,
++  kDiagOffEnumeration,
++  kDiagOffProbing,
++  kDiagOffCliqueSubstitutions,
++  kDiagOffImpliedIntegers,
++  kDiagOffCliqueMerging,
++  kDiagOffCount
++};
++
++struct HighsDiagSwitches {
++  bool off[kDiagOffCount];
++  std::string off_list;
++  int64_t probing_contingent;
++  bool probing_nostop;
++};
++
++inline HighsDiagSwitches highsDiagReadSwitches() {
++  static const char* const names[kDiagOffCount] = {
++      "strengthen_inequalities", "dominated_columns", "parallel_columns",
++      "parallel_rows",           "sparsify",          "aggregator",
++      "fourier_motzkin",         "enumeration",       "probing",
++      "clique_substitutions",    "implied_integers",  "clique_merging"};
++  HighsDiagSwitches switches;
++  for (int k = 0; k < kDiagOffCount; ++k) switches.off[k] = false;
++  const char* off = std::getenv("HIGHS_DIAG_OFF");
++  const std::string list = off ? off : "";
++  size_t begin = 0;
++  while (begin < list.size()) {
++    size_t end = list.find(',', begin);
++    if (end == std::string::npos) end = list.size();
++    const std::string name = list.substr(begin, end - begin);
++    int k = 0;
++    while (k < kDiagOffCount && name != names[k]) ++k;
++    if (k == kDiagOffCount) {
++      fprintf(stderr, "HIGHS_DIAG_OFF: unknown stage name \"%s\"\n",
++              name.c_str());
++      std::abort();
++    }
++    switches.off[k] = true;
++    begin = end + 1;
++  }
++  for (int k = 0; k < kDiagOffCount; ++k) {
++    if (!switches.off[k]) continue;
++    if (!switches.off_list.empty()) switches.off_list += ",";
++    switches.off_list += names[k];
++  }
++  if (switches.off_list.empty()) switches.off_list = "none";
++  switches.probing_contingent = 1000;
++  const char* contingent = std::getenv("HIGHS_DIAG_PROBING_CONTINGENT");
++  if (contingent) {
++    char* end;
++    switches.probing_contingent = std::strtoll(contingent, &end, 10);
++    if (end == contingent || *end != '\0') {
++      fprintf(stderr, "HIGHS_DIAG_PROBING_CONTINGENT: not an integer \"%s\"\n",
++              contingent);
++      std::abort();
++    }
++  }
++  const char* nostop = std::getenv("HIGHS_DIAG_PROBING_NOSTOP");
++  switches.probing_nostop = nostop && std::string(nostop) == "1";
++  return switches;
++}
++
++inline const HighsDiagSwitches& highsDiagSwitches() {
++  static const HighsDiagSwitches switches = highsDiagReadSwitches();
++  return switches;
++}
++
++inline bool highsDiagOff(const HighsDiagOff stage) {
++  return highsDiagSwitches().off[stage];
++}
++
++// Matrix entries visited by HighsDomain on the calling thread
++struct HighsDiagWork {
++  int64_t prop_sweeps = 0;
++  int64_t prop_rows = 0;
++  int64_t prop_entries = 0;
++  int64_t activity_entries = 0;
++};
++
++inline HighsDiagWork& highsDiagWork() {
++  static thread_local HighsDiagWork work;
++  return work;
++}
++
++inline double highsDiagSeconds() {
++  return std::chrono::duration<double>(
++             std::chrono::steady_clock::now().time_since_epoch())
++      .count();
++}
++
++#endif
