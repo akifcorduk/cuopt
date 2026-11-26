@@ -42,7 +42,7 @@ constexpr int default_fj_check_min_ms        = 0;
 constexpr int default_pdfp_time_cap_ms       = 500;
 constexpr double default_fp_cut_slack        = -0.001;
 constexpr double default_pdfp_objective_pull = 0.;
-constexpr int default_fp_round_limit_ms      = 100;
+constexpr int default_fp_round_limit_ms      = 500;
 constexpr int default_pdfp_start_selection   = 0;
 
 inline bool env_flag(const char* name, bool compiled_default)
