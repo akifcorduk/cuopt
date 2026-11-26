@@ -166,11 +166,11 @@ each.
 | `--stats-only` | structure statistics only |
 | `--dump-csr-dir <dir>` | also write `<dir>/<name>.csr`; must be outside the worktree |
 | `--summarize-only` | run nothing, rebuild the summary of the set from the files in `--out` |
-| `--testbed`, `--dataset-dir` | default `gpu_presolve/testbed/testbed.json` and its `dataset_dir` |
+| `--testbed`, `--dataset-dir` | default `gpu_presolve/testbed/testbed.json`, and its `dataset_dir` followed by its `extra_dataset_dirs` (the instances downloaded for this project). `--dataset-dir` can be repeated; the first directory that holds the instance wins |
 
 Per instance in `--out`: `<name>.json` (tool output), `<name>.json.log` (HiGHS log), `<name>.out`
 (stdout and stderr of the tool), `<name>.run.json` (command, environment, exit code, wall time).
-An instance without `<name>.mps` (or `.mps.gz`) in the dataset directory is reported as `missing`
+An instance without `<name>.mps` (or `.mps.gz`) in any dataset directory is reported as `missing`
 and skipped.
 
 `summary.csv` has one row per instance: band, where, status, sizes before and after, percent

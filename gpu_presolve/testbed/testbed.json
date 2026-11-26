@@ -1,6 +1,9 @@
 {
  "source": "MIPLIB 2017 collection table (miplib.zib.de/tag_collection.html), drawn 2026-11-26",
  "dataset_dir": "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017",
+ "extra_dataset_dirs": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/miplib_extra"
+ ],
  "main": [
   {
    "name": "ns1208400",

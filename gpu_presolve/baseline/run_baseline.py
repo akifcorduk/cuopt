@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument(
         "--testbed", default=str(PROJECT_DIR / "testbed" / "testbed.json")
     )
-    parser.add_argument("--dataset-dir")
+    parser.add_argument("--dataset-dir", action="append")
     args = parser.parse_args()
 
     args.only = args.only.split(",") if args.only else []
@@ -108,11 +108,12 @@ def select_instances(testbed, set_name, only):
     return selected
 
 
-def find_mps(dataset_dir, name):
-    for suffix in (".mps", ".mps.gz"):
-        path = Path(dataset_dir) / (name + suffix)
-        if path.exists():
-            return path
+def find_mps(dataset_dirs, name):
+    for dataset_dir in dataset_dirs:
+        for suffix in (".mps", ".mps.gz"):
+            path = Path(dataset_dir) / (name + suffix)
+            if path.exists():
+                return path
     return None
 
 
@@ -330,7 +331,9 @@ def main():
     with open(args.testbed) as f:
         testbed = json.load(f)
     if args.dataset_dir is None:
-        args.dataset_dir = testbed["dataset_dir"]
+        args.dataset_dir = [testbed["dataset_dir"]] + testbed.get(
+            "extra_dataset_dirs", []
+        )
     entries = select_instances(testbed, args.set, args.only)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
