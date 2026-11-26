@@ -1,0 +1,16 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/neos-5114902-kasavu.mps",
+  "/home/scratch.acoerduek_sw/cuopt_dev/.wt/gpu-presolve/gpu_presolve/results/stage0/stats/neos-5114902-kasavu.json",
+  "--time-limit",
+  "1800.0",
+  "--stats-only",
+  "--dump-csr",
+  "/tmp/gprs_csr/neos-5114902-kasavu.csr"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 4.579526432004059
+}

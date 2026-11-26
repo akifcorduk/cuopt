@@ -1,0 +1,2 @@
+name,band,where,status,rows,cols,nnz,rows_after,cols_after,nnz_after,rows_removed_pct,cols_removed_pct,nnz_removed_pct,presolve_seconds,presolve_core_seconds,read_seconds,reached_time_limit,peak_rss_mb
+square47,C,dev-large,stats_only,61591,95030,27329856,,,,,,,,,14.3822,,1068.14

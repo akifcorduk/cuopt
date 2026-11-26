@@ -1,0 +1,16 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/sp98ar.mps",
+  "/home/scratch.acoerduek_sw/cuopt_dev/.wt/gpu-presolve/gpu_presolve/results/stage0/stats/sp98ar.json",
+  "--time-limit",
+  "1800.0",
+  "--stats-only",
+  "--dump-csr",
+  "/tmp/gprs_csr/sp98ar.csr"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 0.26887856199755333
+}

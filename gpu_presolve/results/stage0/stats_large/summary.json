@@ -1,0 +1,32 @@
+{
+ "variant": "stats_large",
+ "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+ "set": "large",
+ "time_limit": 1800.0,
+ "env": {},
+ "stats_only": true,
+ "instances": [
+  {
+   "name": "square47",
+   "band": "C",
+   "where": "dev-large",
+   "status": "stats_only",
+   "rows": 61591,
+   "cols": 95030,
+   "nnz": 27329856,
+   "rows_after": null,
+   "cols_after": null,
+   "nnz_after": null,
+   "rows_removed_pct": null,
+   "cols_removed_pct": null,
+   "nnz_removed_pct": null,
+   "presolve_seconds": null,
+   "presolve_core_seconds": null,
+   "read_seconds": 14.382204449,
+   "reached_time_limit": null,
+   "peak_rss_mb": 1068.140625,
+   "tool_wall_seconds": 15.556832962000044,
+   "diag": {}
+  }
+ ]
+}
