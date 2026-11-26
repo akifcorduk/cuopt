@@ -603,3 +603,35 @@ not made.
   neos-4332810-sesia loses 99.6% in 50 s.
 - hawaiiv10-130 stops on the time limit, so its sizes are those reached after an hour.
 - Reading these instances takes 10 to 138 s and at most 35 GB of memory in the tool.
+
+## 13. Addendum: probing with HiGHS's limits off (2026-11-27)
+
+Patched HiGHS on the 31 instances with `HIGHS_DIAG_PROBING_NOSTOP=1`: a probing round stops only
+when every candidate was visited, on infeasibility or on the time limit (600 s here). Results in
+`results/stage0/diag_nostop`. This answers what section 4 left open: what the candidates HiGHS
+never probes would yield.
+
+| | Full HiGHS | Limits off |
+|---|---|---|
+| Probes | 66,435 | 2,078,003 |
+| Fixings and substitutions | 12,230 | 28,071 |
+| Probing time, summed | 77 s | 1,160 s |
+| Remaining nonzeros, geometric mean | 1.000 | 0.982 |
+
+- Probing every candidate leaves 1.8% fewer nonzeros in the geometric mean, for 15 times the
+  probing time and 31 times the probes. supportcase6 stops on the time limit after 595 s with
+  nothing found.
+- The gain sits on a few instances: supportcase7 (179,880 nonzeros instead of 231,498), bab6
+  (828,782 instead of 986,387, and 25,486 rows instead of 29,306), brazil3 (37,785 instead of
+  42,182), and 1% to 2% on wachplan, triptim1 and neos-4306827-ravan. piperout-d27 ends 1.1%
+  larger.
+- neos-5116085-kenana and neos-5114902-kasavu get 1,440 and 2,016 substitutions where the
+  limited run gets none; their models shrink by 0.2% to 0.3%.
+- On the other instances full probing finds nothing more: supportcase19 makes 1.3 million probes
+  in 43 s, savsched1 247,949 probes for 3 substitutions, splice1k1 3,252 probes in 59 s for
+  nothing.
+
+For the Stage 2 budget: the surplus that complete probing can add over HiGHS on this testbed is
+about 2% of the nonzeros in the geometric mean and up to 22% on single instances. A probing
+phase that covers every candidate has to be at least 15 times cheaper per probe than HiGHS's to
+stay inside HiGHS's probing time, or it has to choose its candidates.

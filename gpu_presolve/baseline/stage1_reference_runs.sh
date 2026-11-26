@@ -51,21 +51,21 @@ trap 'kill $HEARTBEAT 2> /dev/null; rm -rf "$LOCK"' EXIT
 say "start, pid $$, load $(cut -d' ' -f1-3 /proc/loadavg)"
 
 step() {
-  name=$1
+  local step_name=$1
   shift
-  if [ -f "$STATE/$name.done" ]; then
-    say "step $name: already done"
+  if [ -f "$STATE/$step_name.done" ]; then
+    say "step $step_name: already done"
     return
   fi
-  say "step $name: start, load $(cut -d' ' -f1-3 /proc/loadavg)"
+  say "step $step_name: start, load $(cut -d' ' -f1-3 /proc/loadavg)"
   "$@" >> "$LOG" 2>&1
   code=$?
   if [ "$code" -eq 0 ]; then
-    touch "$STATE/$name.done"
+    touch "$STATE/$step_name.done"
   else
-    FAILED="$FAILED $name"
+    FAILED="$FAILED $step_name"
   fi
-  say "step $name: end, exit $code"
+  say "step $step_name: end, exit $code"
 }
 
 ref() {
@@ -91,6 +91,11 @@ step stage12c ref stage12c 1 --env "HIGHS_DIAG_OFF=$STAGE12_OFF" --env HIGHS_DIA
 # Full HiGHS with every counter of the extended patch (fixings by rule, rows touched per probe,
 # pair tests of dominated columns). Not a timing run.
 step full_counters ref full_counters 4
+
+# The Stage 1 reference on the nine instances above 1e7 nonzeros.
+step stage1c_large python3 "$RUN" --set large --variant stage1c_large --tool "$DIAG2" --jobs 1 \
+  --time-limit 3600 --out "$OUT/stage1c_large" --skip-done --env "HIGHS_DIAG_OFF=$STAGE1_OFF" \
+  --presolve-rule-off "$COLUMN_RULES_OFF"
 
 echo "$FAILED" > "$STATE/ENDED"
 say "end; failed steps:${FAILED:- none}"

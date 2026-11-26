@@ -57,21 +57,21 @@ trap 'kill $HEARTBEAT 2> /dev/null; rm -rf "$LOCK"' EXIT
 say "driver start, pid $$, load $(cut -d' ' -f1-3 /proc/loadavg), gpu apps $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2> /dev/null | wc -l)"
 
 step() {
-  name=$1
+  local step_name=$1
   shift
-  if [ -f "$STATE/$name.done" ]; then
-    say "step $name: already done"
+  if [ -f "$STATE/$step_name.done" ]; then
+    say "step $step_name: already done"
     return
   fi
-  say "step $name: start, load $(cut -d' ' -f1-3 /proc/loadavg), gpu apps $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2> /dev/null | wc -l)"
+  say "step $step_name: start, load $(cut -d' ' -f1-3 /proc/loadavg), gpu apps $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2> /dev/null | wc -l)"
   "$@" >> "$LOG" 2>&1
   code=$?
   if [ "$code" -eq 0 ]; then
-    touch "$STATE/$name.done"
+    touch "$STATE/$step_name.done"
   else
-    FAILED="$FAILED $name"
+    FAILED="$FAILED $step_name"
   fi
-  say "step $name: end, exit $code"
+  say "step $step_name: end, exit $code"
 }
 
 build_tools() {
