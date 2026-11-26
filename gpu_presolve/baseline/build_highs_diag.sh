@@ -5,15 +5,28 @@
 # Builds HiGHS 283bfc859 with highs_diag.patch. Run on the node, inside the dev container:
 #   bash gpu_presolve/baseline/build_highs_diag.sh
 # JOBS sets the number of build jobs (default 8).
+# NAME names the build (default diag): source copy highs_<NAME>_src, build tree
+# build/highs_<NAME>, install highs_<NAME>_install. A second name builds the patch next to an
+# install that is in use:
+#   NAME=diag2 bash gpu_presolve/baseline/build_highs_diag.sh
 
 set -euo pipefail
 
 DEPS=/home/scratch.acoerduek_sw/gpu_presolve_deps
 COMMIT=283bfc859
+NAME=${NAME:-diag}
+if [[ ! "$NAME" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "NAME must be letters, digits and underscores: \"$NAME\"" >&2
+  exit 2
+fi
+if [ "$NAME" = stock ]; then
+  echo "NAME=stock would overwrite the unpatched install highs_stock_install" >&2
+  exit 2
+fi
 PATCH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/highs_diag.patch
-SRC=$DEPS/highs_diag_src
-BUILD=$DEPS/build/highs_diag
-INSTALL=$DEPS/highs_diag_install
+SRC=$DEPS/highs_${NAME}_src
+BUILD=$DEPS/build/highs_$NAME
+INSTALL=$DEPS/highs_${NAME}_install
 STAMP=$SRC/.git/highs_diag_patch.sha256
 
 if [ ! -d "$SRC/.git" ]; then

@@ -27,6 +27,13 @@ cmake -S gpu_presolve/baseline -B $DEPS/build/baseline_diag -G Ninja \
 cmake --build $DEPS/build/baseline_diag -j 8
 ```
 
+A second patched build can live next to the first one: `NAME=diag2 bash
+gpu_presolve/baseline/build_highs_diag.sh` builds and installs under `highs_diag2_*`, and the tool
+is then configured with `-B $DEPS/build/baseline_diag2 -DHIGHS_ROOT=$DEPS/highs_diag2_install`.
+Use a second name whenever a measurement is running on the first build, because a rebuild replaces
+the library under the running tool. `stage1_reference_runs.sh` runs the references for the Stage 1
+and Stage 2 gates with the `diag2` tool.
+
 The binary finds `libhighs.so` through its run path. At start it aborts if the library that was
 loaded is not below the `HIGHS_ROOT` it was built with, and the JSON records the library file
 (`highs.library`).
