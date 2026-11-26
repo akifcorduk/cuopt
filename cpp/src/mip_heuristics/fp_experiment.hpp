@@ -42,6 +42,8 @@ constexpr int default_fj_check_min_ms        = 0;
 constexpr int default_pdfp_time_cap_ms       = 0;
 constexpr double default_fp_cut_slack        = -0.001;
 constexpr double default_pdfp_objective_pull = 0.;
+constexpr int default_fp_round_limit_ms      = 500;
+constexpr int default_pdfp_start_selection   = 0;
 
 inline bool env_flag(const char* name, bool compiled_default)
 {
@@ -214,6 +216,21 @@ inline double fp_cut_slack() { return env_double("CUOPT_FP_EXP_CUT_SLACK", defau
 inline double pdfp_objective_pull()
 {
   return env_double("CUOPT_FP_EXP_PDFP_PULL", default_pdfp_objective_pull);
+}
+
+// Time the bounds-propagation rounding of an FP iteration gives its repair of a rounding that
+// propagation finds infeasible, in milliseconds (the solver's value is 500).
+inline int fp_round_limit_ms()
+{
+  return env_int("CUOPT_FP_EXP_ROUND_MS", default_fp_round_limit_ms);
+}
+
+// How a warm PDFP projection chooses its primal start. 0: as the target-start switch says. 1: it
+// takes one step from the target and one from the previous projection and starts from the one
+// closer to a fixed point. 2: it measures both and keeps the start of the target-start switch.
+inline int pdfp_start_selection()
+{
+  return env_int("CUOPT_FP_EXP_PDFP_SELECT", default_pdfp_start_selection);
 }
 
 // PDFP adapts its step to the iterates as PDLP's adaptive rule does, instead of keeping the step

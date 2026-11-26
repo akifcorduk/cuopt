@@ -133,6 +133,11 @@ struct fp_projection_trace_t {
   int pull_updates        = 0;
   double linear_objective = NAN;
   double objective_bound  = INFINITY;
+  // PDFP start selection: residual of one step from the target and from the previous projection,
+  // and whether the projection started from the previous projection (-1 for the epigraph).
+  double start_residual_target   = NAN;
+  double start_residual_previous = NAN;
+  int started_at_previous        = -1;
 };
 
 struct fp_trace_totals_t {

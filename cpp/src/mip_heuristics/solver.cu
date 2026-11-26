@@ -482,7 +482,7 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     "tolerance %d, PDFP check interval %d, PDFP gap test %d, PDFP weight init/damped/wide "
     "%d/%d/%d, PDFP target start %d, PDFP shadow %d, FJ check floor %d ms, PDFP held weight %g, "
     "PDFP adaptive step %d, FJ check every %d, FJ check min %d ms, PDFP time cap %d ms, "
-    "FP cut slack %g, PDFP objective pull %g",
+    "FP cut slack %g, PDFP objective pull %g, FP rounding limit %d ms, PDFP start selection %d",
     fp_experiment::use_pdfp_projection() ? "pdfp" : "epigraph",
     (int)gpu_heuristics_only,
     (int)fp_experiment::pdfp_cusparse_spmv(),
@@ -505,7 +505,9 @@ solution_t<i_t, f_t> mip_solver_t<i_t, f_t>::run_solver()
     fp_experiment::fj_check_min_ms(),
     fp_experiment::pdfp_time_cap_ms(),
     fp_experiment::fp_cut_slack(),
-    fp_experiment::pdfp_objective_pull());
+    fp_experiment::pdfp_objective_pull(),
+    fp_experiment::fp_round_limit_ms(),
+    fp_experiment::pdfp_start_selection());
 
   // Set the primal heuristics -> branch and bound callback
   if (context.settings.determinism_mode == CUOPT_MODE_OPPORTUNISTIC) {

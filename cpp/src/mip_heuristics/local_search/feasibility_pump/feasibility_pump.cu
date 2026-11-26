@@ -157,6 +157,7 @@ pdfp_projection_settings_t feasibility_pump_t<i_t, f_t>::pdfp_settings(problem_t
   if (fp_experiment::pdfp_damped_weight()) { settings.weight_gain = .5; }
   if (fp_experiment::pdfp_wide_weight()) { settings.weight_limit = 1e12; }
   settings.start_at_target   = fp_experiment::pdfp_target_start();
+  settings.start_selection   = fp_experiment::pdfp_start_selection();
   settings.check_interval    = fp_experiment::pdfp_check_interval();
   settings.original_units    = problem.n_integer_vars < problem.n_variables;
   settings.anchor_halpern    = fp_experiment::pdfp_paper_warm_start();
@@ -316,12 +317,15 @@ bool feasibility_pump_t<i_t, f_t>::linear_project_onto_polytope(solution_t<i_t, 
     trace.acting_rows      = last_pdfp_result.acting_rows;
     trace.pull =
       settings.pull_limit > 0. ? last_pdfp_result.objective_pull / settings.pull_limit : 0.;
-    trace.pull_updates     = last_pdfp_result.pull_updates;
-    trace.linear_objective = last_pdfp_result.linear_objective;
-    trace.objective_bound  = settings.objective_bound;
-    trace.n_rows           = problem.n_constraints;
-    trace.n_cols           = problem.n_variables;
-    trace.n_aux            = 0;
+    trace.pull_updates            = last_pdfp_result.pull_updates;
+    trace.linear_objective        = last_pdfp_result.linear_objective;
+    trace.objective_bound         = settings.objective_bound;
+    trace.start_residual_target   = last_pdfp_result.start_residual_target;
+    trace.start_residual_previous = last_pdfp_result.start_residual_previous;
+    trace.started_at_previous     = last_pdfp_result.started_at_previous;
+    trace.n_rows                  = problem.n_constraints;
+    trace.n_cols                  = problem.n_variables;
+    trace.n_aux                   = 0;
     return solution.compute_feasibility();
   }
   if (fp_experiment::pdfp_shadow()) {
@@ -486,7 +490,8 @@ bool feasibility_pump_t<i_t, f_t>::round(solution_t<i_t, f_t>& solution)
   bool result;
   CUOPT_LOG_DEBUG("Rounding the point");
   const auto round_start = std::chrono::steady_clock::now();
-  timer_t bounds_prop_timer(std::max(0.05, std::min(0.5, timer.remaining_time() / 10.)));
+  timer_t bounds_prop_timer(std::max(
+    0.05, std::min(1e-3 * fp_experiment::fp_round_limit_ms(), timer.remaining_time() / 10.)));
   const f_t lp_run_time_after_feasible     = 0.;
   bool old_var                             = constraint_prop.round_all_vars;
   f_t old_time                             = constraint_prop.max_time_for_bounds_prop;
@@ -823,7 +828,7 @@ void feasibility_pump_t<i_t, f_t>::trace_projection(solution_t<i_t, f_t>& soluti
     "dist=%.6g dred=%.4g pinf_max=%.3e pinf_l2=%.3e pinf_sum=%.3e nviol=%d pres=%.3e dres=%.3e "
     "gap=%.3e obj=%.10g rows=%d cols=%d naux=%d step=%.4g weight=%.4g restarts=%d cuts=%d "
     "moving=%d "
-    "acting=%d pull=%.4g pullup=%d cx=%.10g bound=%.10g",
+    "acting=%d pull=%.4g pullup=%d cx=%.10g bound=%.10g rtarget=%.3e rprev=%.3e sprev=%d",
     trace_source,
     trace_run,
     trace_descent,
@@ -864,7 +869,10 @@ void feasibility_pump_t<i_t, f_t>::trace_projection(solution_t<i_t, f_t>& soluti
     p.pull,
     p.pull_updates,
     p.linear_objective,
-    p.objective_bound);
+    p.objective_bound,
+    p.start_residual_target,
+    p.start_residual_previous,
+    p.started_at_previous);
 }
 
 template <typename i_t, typename f_t>

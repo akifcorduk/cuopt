@@ -765,6 +765,52 @@ TEST(PdfpProjection, ProxDistanceMatchesBoundedDualOnWarmProjections)
     EXPECT_NEAR(objectives[0][run], objectives[1][run], 1e-4 * (1. + std::abs(objectives[0][run])));
 }
 
+// A warm projection that measures its two starts reaches the objective of the target start, and
+// starts from the previous projection when the target has not changed.
+TEST(PdfpProjection, StartSelectionKeepsObjectiveAndReusesAnUnchangedTarget)
+{
+  constexpr int n    = 400;
+  const auto model   = paired_model(n);
+  constexpr int runs = 5;
+  std::vector<double> objectives[2];
+  for (int selection = 0; selection < 2; ++selection) {
+    raft::handle_t handle;
+    auto op_problem = model.device_problem(handle);
+    mip::problem_t<int, double> problem(op_problem);
+    mip::pdfp_projection_t<int, double> projector(problem, false, true, true);
+    rmm::device_uvector<double> target(n, handle.get_stream());
+    rmm::device_uvector<double> output(n, handle.get_stream());
+    auto settings            = accurate_settings();
+    settings.start_at_target = true;
+    settings.start_selection = selection;
+    for (int run = 0; run < runs; ++run) {
+      // Run 1 repeats the target of run 0.
+      const int shift = run == 0 ? 0 : run - 1;
+      std::vector<double> h_target(n);
+      for (int j = 0; j < n; ++j) {
+        const int kind = (j + shift) % 4;
+        h_target[j]    = kind == 0 ? -10. : kind == 1 ? 10. : kind == 2 ? 3. : -1. - shift;
+      }
+      raft::copy(target.data(), h_target.data(), n, handle.get_stream());
+      const auto result = projector.project(target, output, settings);
+      EXPECT_TRUE(result.converged);
+      const auto x       = cuopt::host_copy(output, handle.get_stream());
+      const auto metrics = measure(model, h_target, x, settings);
+      EXPECT_LT(metrics.row_violation, 2e-5);
+      objectives[selection].push_back(metrics.objective);
+      if (selection == 1) {
+        EXPECT_EQ(std::isfinite(result.start_residual_target), run > 0);
+        EXPECT_EQ(std::isfinite(result.start_residual_previous), run > 0);
+        if (run == 1) { EXPECT_TRUE(result.started_at_previous); }
+      } else {
+        EXPECT_FALSE(result.started_at_previous);
+      }
+    }
+  }
+  for (int run = 0; run < runs; ++run)
+    EXPECT_NEAR(objectives[0][run], objectives[1][run], 1e-4 * (1. + std::abs(objectives[0][run])));
+}
+
 TEST(PdfpProjection, DISABLED_Benchmark100kGeneralIntegers)
 {
   constexpr int n = 100000;

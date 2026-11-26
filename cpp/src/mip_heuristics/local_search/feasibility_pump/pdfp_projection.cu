@@ -475,7 +475,7 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
 
   problem_t<i_t, f_t>& problem;
   rmm::device_uvector<f_t> col_scale, row_scale, current, point, anchor, target;
-  rmm::device_uvector<f_t> ax, atz, atz_point, reflected_x, slack, start;
+  rmm::device_uvector<f_t> ax, atz, atz_point, reflected_x, slack, start, previous_x;
   // Per-variable and per-row multipliers of the primal and dual step, the working-set weights
   // they come from, and the square roots of the Pock-Chambolle l1 sums.
   rmm::device_uvector<f_t> col_step, row_step, col_weight, row_weight, col_root, row_root;
@@ -511,6 +511,7 @@ struct pdfp_projection_t<i_t, f_t>::impl_t {
       reflected_x(p.n_variables, p.handle_ptr->get_stream()),
       slack(p.n_variables, p.handle_ptr->get_stream()),
       start(0, p.handle_ptr->get_stream()),
+      previous_x(0, p.handle_ptr->get_stream()),
       col_step(p.n_variables, p.handle_ptr->get_stream()),
       row_step(p.n_constraints, p.handle_ptr->get_stream()),
       col_weight(p.n_variables, p.handle_ptr->get_stream()),
@@ -989,7 +990,9 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   active.objective_weight = settings.objective_weight + pull;
   if (s.cold)
     thrust::fill(p.handle_ptr->get_thrust_policy(), s.current.begin(), s.current.end(), 0.);
-  if (p.n_variables)
+  // A warm projection that measures its two starts keeps the previous projection first.
+  const bool measure_starts = settings.start_selection != 0 && !s.cold && p.n_variables > 0;
+  auto initialize           = [&](bool at_target) {
     initialize_projection<i_t, f_t><<<(p.n_variables + 255) / 256, 256, 0, stream.get()>>>(
       p.view(),
       s.col_scale.data(),
@@ -999,12 +1002,11 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
       s.current.data(),
       s.prox ? f_t(0) : f_t(settings.distance_weight),
       s.cold,
-      settings.start_at_target);
-  s.cold = false;
-  raft::copy(s.anchor.data(), s.current.data(), s.current.size(), stream);
-  raft::copy(s.point.data(), s.current.data(), s.current.size(), stream);
-  thrust::fill(p.handle_ptr->get_thrust_policy(), s.slack.begin(), s.slack.end(), 0.);
-  thrust::fill(p.handle_ptr->get_thrust_policy(), s.atz.begin(), s.atz.end(), 0.);
+      at_target);
+  };
+  if (p.n_variables) { initialize(settings.start_at_target && !measure_starts); }
+  result.started_at_previous = !s.cold && !settings.start_at_target;
+  s.cold                     = false;
   f_t weight = std::sqrt(1. + double(p.n_integer_vars) / std::max(1, p.n_constraints));
   if (settings.balanced_weight) {
     const auto norms = thrust::transform_reduce(
@@ -1028,6 +1030,32 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
   cuopt_expects(!weighted_steps || (s.prox && s.unit_norm),
                 error_type_t::ValidationError,
                 "Working-set steps need the prox distance and the unit-norm step");
+  const f_t safe_step = s.eta;
+  f_t step            = settings.adaptive_step && s.carried_step > 0. ? s.carried_step : safe_step;
+  if (measure_starts) {
+    // Fixed-point residual of one step from `current`, with the steps of the last projection.
+    auto start_residual = [&]() {
+      s.set_state(step, weight, active, 0);
+      s.template iteration<false>();
+      const auto m = s.metrics(active);
+      return std::sqrt(std::max(0., weight * m.dx + m.dy / weight - 2 * step * m.cross));
+    };
+    s.previous_x.resize(p.n_variables, stream);
+    raft::copy(s.previous_x.data(), s.current.data(), p.n_variables, stream);
+    result.start_residual_previous = start_residual();
+    initialize(true);
+    result.start_residual_target = start_residual();
+    result.started_at_previous   = settings.start_selection == 1
+                                     ? result.start_residual_previous < result.start_residual_target
+                                     : !settings.start_at_target;
+    if (result.started_at_previous) {
+      raft::copy(s.current.data(), s.previous_x.data(), p.n_variables, stream);
+    }
+  }
+  raft::copy(s.anchor.data(), s.current.data(), s.current.size(), stream);
+  raft::copy(s.point.data(), s.current.data(), s.current.size(), stream);
+  thrust::fill(p.handle_ptr->get_thrust_policy(), s.slack.begin(), s.slack.end(), 0.);
+  thrust::fill(p.handle_ptr->get_thrust_policy(), s.atz.begin(), s.atz.end(), 0.);
   if (weighted_steps) {
     s.multiply(s.a_point);
     s.multiply(s.at_point);
@@ -1037,8 +1065,6 @@ pdfp_projection_result_t pdfp_projection_t<i_t, f_t>::project(
     thrust::fill(p.handle_ptr->get_thrust_policy(), s.row_step.begin(), s.row_step.end(), f_t(1));
     s.uniform_steps = true;
   }
-  const f_t safe_step = s.eta;
-  f_t step            = settings.adaptive_step && s.carried_step > 0. ? s.carried_step : safe_step;
   // Smallest step bound seen at the checks since the last restart.
   double step_bound       = INFINITY;
   double initial_residual = -1., last_residual = INFINITY, integral = 0.;

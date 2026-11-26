@@ -42,6 +42,10 @@ struct pdfp_projection_settings_t {
   // Start the primal iterate at the target (as the epigraph LP is warm-started) instead of at the
   // previous projection; the duals carry over either way.
   bool start_at_target = false;
+  // Choice of the primal start of a warm projection. 0: fixed by start_at_target. 1: one step is
+  // taken from the target and one from the previous projection, and the projection starts from
+  // the one with the smaller fixed-point residual. 2: both are measured, the start stays fixed.
+  int start_selection = 0;
   // Between residual checks, fuse the Halpern update into the primal and dual steps and replay the
   // iterations as captured CUDA graphs; false launches the unfused kernels per iteration.
   bool fused_graph = true;
@@ -91,6 +95,11 @@ struct pdfp_projection_result_t {
   double linear_objective = NAN;
   double objective_pull   = 0.;
   int pull_updates        = 0;
+  // Fixed-point residual of one step from the target and from the previous projection (measured
+  // with start_selection), and whether the projection started from the previous projection.
+  double start_residual_target   = NAN;
+  double start_residual_previous = NAN;
+  bool started_at_previous       = false;
 };
 
 // Solves min distance_weight * sum_{j in I}|x_j-target_j| + objective_weight*c'x
