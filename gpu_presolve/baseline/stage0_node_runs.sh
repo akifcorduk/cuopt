@@ -3,14 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Runs the remaining Stage 0 measurements on the node, one step after the other, and can be
-# started again after a disconnect or a node change: a finished step leaves a marker and is
-# skipped, and inside a step the runner skips the instances that already have a result.
+# started again after a disconnect or a node change: a step that ended with exit code 0 leaves a
+# marker and is skipped, a failed step is tried again at the next start, and inside a step the
+# runner skips the instances that already have a result.
 # Everything it needs or writes is on the scratch (builds, downloads, dumps, markers, log) or in
 # the synced worktree (results).
 #
 # Start it detached from the worktree root, inside the dev container:
 #   setsid nohup bash gpu_presolve/baseline/stage0_node_runs.sh > /dev/null 2>&1 < /dev/null &
-# Progress: tail $DEPS/results/stage0/node_runs.log. All steps done: $STATE/ALL_DONE exists.
+# Progress: tail $DEPS/results/stage0/node_runs.log. When the driver ends it writes $STATE/ENDED
+# with the names of the steps that failed (empty: all done).
 
 set -u
 
@@ -28,6 +30,8 @@ STAGE1_OFF=probing,enumeration,clique_substitutions,clique_merging,implied_integ
 COLUMN_RULES_OFF=9175456
 
 mkdir -p "$STATE"
+rm -f "$STATE/ENDED"
+FAILED=""
 say() { echo "$(date +%F\ %T) $(hostname) $*" >> "$LOG"; }
 
 # One driver at a time. The lock holds a heartbeat; a lock without a heartbeat in the last five
@@ -56,13 +60,17 @@ step() {
   name=$1
   shift
   if [ -f "$STATE/$name.done" ]; then
-    say "step $name: already done (exit $(cat "$STATE/$name.done"))"
+    say "step $name: already done"
     return
   fi
   say "step $name: start, load $(cut -d' ' -f1-3 /proc/loadavg), gpu apps $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2> /dev/null | wc -l)"
   "$@" >> "$LOG" 2>&1
   code=$?
-  echo "$code" > "$STATE/$name.done"
+  if [ "$code" -eq 0 ]; then
+    touch "$STATE/$name.done"
+  else
+    FAILED="$FAILED $name"
+  fi
   say "step $name: end, exit $code"
 }
 
@@ -73,6 +81,11 @@ build_tools() {
 }
 
 sweeps_large() {
+  # Fails at once when the GPU this slot is pinned to is not visible in the container.
+  if ! nvidia-smi -L | grep -q "${CUDA_VISIBLE_DEVICES:-GPU}"; then
+    echo "pinned GPU ${CUDA_VISIBLE_DEVICES:-} is not visible here: $(nvidia-smi -L | head -2)"
+    return 1
+  fi
   mkdir -p "$OUT/sweeps" "$DEPS/results/stage0/sweeps_txt"
   status=0
   for dump in $(stat -c '%s %n' "$DUMPS"/*.csr | sort -n | cut -d' ' -f2-); do
@@ -118,5 +131,5 @@ step stock_large python3 "$RUN" --set large --variant stock_large --tool "$STOCK
   --time-limit 3600 --skip-done
 step diag_nostop probing_without_limits
 
-touch "$STATE/ALL_DONE"
-say "driver end: all steps done"
+echo "$FAILED" > "$STATE/ENDED"
+say "driver end; failed steps:${FAILED:- none}"
