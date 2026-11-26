@@ -34,8 +34,8 @@ TEST(PdfpIntegration, DispatchPreservesObjectiveMixingAndAlphaSchedule)
 
   mip::problem_t<int, double> problem(input);
   mip_solver_settings_t<int, double> settings;
-  settings.tolerances.absolute_tolerance          = 1e-7;
-  settings.heuristic_params.relaxed_lp_time_limit = 5.;
+  settings.tolerances.absolute_tolerance                    = 1e-7;
+  settings.mip_hyper_params.heuristic_relaxed_lp_time_limit = 5.;
   mip::mip_solver_context_t<int, double> context(&handle, &problem, settings);
   mip::fj_t<int, double> fj(context);
   mip::constraint_prop_t<int, double> propagation(context);
