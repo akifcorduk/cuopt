@@ -1,0 +1,13 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_diag/baseline_tool",
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/miplib_extra/hawaiiv10-130.mps.gz",
+  "/home/scratch.acoerduek_sw/cuopt_dev/.wt/gpu-presolve/gpu_presolve/results/stage0/diag_large/hawaiiv10-130.json",
+  "--time-limit",
+  "3600.0"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 3729.9485241599905
+}

@@ -577,3 +577,29 @@ What the runs show:
 - **Probing, per probe** (instance means on the six instances with the most probes): 34 to 1,614
   bound changes, 147 to 1,634 rows touched, 1,731 to 515,910 entries in those rows; the largest
   single probes touch 14,357 to 559,296 entries.
+
+## 12. Addendum: HiGHS on the nine instances above 1e7 nonzeros (2026-11-27)
+
+Patched HiGHS (first version of the patch, which gives the same models and times as stock on the
+smaller instances), one thread, one instance at a time, time limit 3,600 s, other jobs on the
+node. Results in `results/stage0/diag_large`; the sweep benchmark on these instances is in
+`results/stage0/sweeps_large`. The stock run and the Stage 1 reference on these instances are
+not made.
+
+| Band | Instance | Nonzeros | Rows removed | Columns removed | Nonzeros removed | Presolve time | Largest HiGHS stages |
+|---|---|---|---|---|---|---|---|
+| C | usafa | 16,485,102 | 84.7% | 0.9% | 81.8% | 28 s | fast loop 30%, parallel rows 26% |
+| C | a2864-99blp | 20,078,717 | 6.7% | 93.1% | 93.1% | 136 s | enumeration 49%, probing 22% |
+| C | neos-3740487-motru | 26,433,474 | 0.0% | 0.0% | 0.0% | 177 s | probing 54%, shrink 12% |
+| C | square47 | 27,329,856 | 96.3% | 62.4% | 69.0% | 281 s | probing 69%, dominated columns 16% |
+| C | t11nonreg | 46,841,437 | 67.9% | 29.2% | 44.4% | 3,357 s | fast loop 62%, dominated columns 28% |
+| C | neos-4332810-sesia | 47,513,027 | 99.6% | 99.8% | 99.6% | 50 s | initial scan 50%, setup 20% |
+| D | dlr2 | 78,091,589 | 71.7% | 94.7% | 88.3% | 175 s | Fourier-Motzkin 41%, fast loop 24% |
+| D | hawaiiv10-130 | 183,263,061 | 71.3% | 22.0% | 32.8% | 3,603 s (time limit) | inequality strengthening 62%, enumeration 22% |
+| D | neos-4535459-waipa | 256,963,402 | 0.0% | 0.1% | 2.0% | 544 s | sparsify 33%, dominated columns 29% |
+
+- HiGHS needs 28 s to an hour here, and the time does not follow the reduction: neos-3740487-motru
+  takes 177 s and removes nothing, neos-4535459-waipa takes 544 s for 2% of the nonzeros, while
+  neos-4332810-sesia loses 99.6% in 50 s.
+- hawaiiv10-130 stops on the time limit, so its sizes are those reached after an hour.
+- Reading these instances takes 10 to 138 s and at most 35 GB of memory in the tool.
