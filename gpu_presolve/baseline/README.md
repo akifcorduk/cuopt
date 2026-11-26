@@ -164,7 +164,9 @@ each.
 | `--only a,b` | only these instances of the set |
 | `--env KEY=VALUE` | repeatable; added to the tool's environment (the `HIGHS_DIAG_*` switches) |
 | `--stats-only` | structure statistics only |
+| `--presolve-rule-off <bits>` | passed to the tool, which sets the HiGHS option `presolve_rule_off` (stock HiGHS rule switches, one bit per rule in the order of `PresolveRuleType` in `HConst.h`: 5 dominated column, 7 forcing column, 8 free column substitution, 17 dual fixing, 18 zero-cost singleton, 19 column stuffing, 23 weakly dominated column). Default 0 |
 | `--dump-csr-dir <dir>` | also write `<dir>/<name>.csr`; must be outside the worktree |
+| `--skip-done` | an instance whose earlier run in `--out` ended with exit code 0 is not run again, so an interrupted run can be continued with the same command |
 | `--summarize-only` | run nothing, rebuild the summary of the set from the files in `--out` |
 | `--testbed`, `--dataset-dir` | default `gpu_presolve/testbed/testbed.json`, and its `dataset_dir` followed by its `extra_dataset_dirs` (the instances downloaded for this project). `--dataset-dir` can be repeated; the first directory that holds the instance wins |
 

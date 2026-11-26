@@ -53,6 +53,8 @@ def parse_args():
         "--env", action="append", default=[], metavar="KEY=VALUE"
     )
     parser.add_argument("--stats-only", action="store_true")
+    parser.add_argument("--presolve-rule-off", type=int, default=0)
+    parser.add_argument("--skip-done", action="store_true")
     parser.add_argument("--dump-csr-dir")
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument(
@@ -127,10 +129,23 @@ def instance_files(out_dir, name):
     }
 
 
+def finished(files):
+    """Return True when an earlier run of this instance ended normally."""
+    if not (files["run"].exists() and files["json"].exists()):
+        return False
+    try:
+        with open(files["run"]) as f:
+            return json.load(f).get("returncode") == 0
+    except (OSError, ValueError):
+        return False
+
+
 def run_one(entry, args, out_dir):
     name = entry["name"]
     mps = find_mps(args.dataset_dir, name)
     files = instance_files(out_dir, name)
+    if args.skip_done and finished(files):
+        return
     for path in files.values():
         if path.exists():
             path.unlink()
@@ -140,6 +155,8 @@ def run_one(entry, args, out_dir):
     command += ["--time-limit", repr(args.time_limit)]
     if args.stats_only:
         command.append("--stats-only")
+    if args.presolve_rule_off:
+        command += ["--presolve-rule-off", str(args.presolve_rule_off)]
     if args.dump_csr_dir:
         command += [
             "--dump-csr",
@@ -302,6 +319,7 @@ def write_summary(rows, args, out_dir):
         "set": args.set,
         "time_limit": args.time_limit,
         "env": args.env,
+        "presolve_rule_off": args.presolve_rule_off,
         "stats_only": args.stats_only,
         "instances": rows,
     }

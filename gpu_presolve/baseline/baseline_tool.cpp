@@ -604,9 +604,10 @@ int main(int argc, char** argv)
 {
   std::vector<std::string> positional;
   std::string dump_path;
-  double time_limit = 1800;
-  bool stats_only   = false;
-  bool usage_error  = false;
+  double time_limit     = 1800;
+  int presolve_rule_off = 0;
+  bool stats_only       = false;
+  bool usage_error      = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--stats-only")
@@ -615,6 +616,8 @@ int main(int argc, char** argv)
       time_limit = std::stod(argv[++i]);
     else if (arg == "--dump-csr" && i + 1 < argc)
       dump_path = argv[++i];
+    else if (arg == "--presolve-rule-off" && i + 1 < argc)
+      presolve_rule_off = std::stoi(argv[++i]);
     else if (arg.rfind("--", 0) == 0)
       usage_error = true;
     else
@@ -623,7 +626,7 @@ int main(int argc, char** argv)
   if (usage_error || positional.size() != 2) {
     fprintf(stderr,
             "usage: baseline_tool <instance.mps> <out.json> [--time-limit <s>] "
-            "[--dump-csr <file>] [--stats-only]\n");
+            "[--dump-csr <file>] [--stats-only] [--presolve-rule-off <bits>]\n");
     return 2;
   }
   const std::string& mps_path = positional[0];
@@ -641,6 +644,7 @@ int main(int argc, char** argv)
   set_option(highs, "threads", 1);
   set_option(highs, "time_limit", time_limit);
   set_option(highs, "presolve", "on");
+  set_option(highs, "presolve_rule_off", (HighsInt)presolve_rule_off);
 
   auto start              = std::chrono::steady_clock::now();
   HighsStatus read_status = highs.readModel(mps_path);
@@ -704,6 +708,7 @@ int main(int argc, char** argv)
     js.open("presolve");
     js.put_int("threads", 1);
     js.put_real("time_limit", time_limit);
+    js.put_int("presolve_rule_off", presolve_rule_off);
     js.put_string("log_file", log_path);
     js.put_real("seconds", presolve_seconds);
     if (marks.started) js.put_real("setup_seconds", seconds_between(start, marks.start));
