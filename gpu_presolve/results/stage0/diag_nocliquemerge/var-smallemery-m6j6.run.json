@@ -1,0 +1,15 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_diag/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/var-smallemery-m6j6.mps",
+  "/home/scratch.acoerduek_sw/cuopt_dev/.wt/gpu-presolve/gpu_presolve/results/stage0/diag_nocliquemerge/var-smallemery-m6j6.json",
+  "--time-limit",
+  "1800.0"
+ ],
+ "env": {
+  "HIGHS_DIAG_OFF": "clique_merging"
+ },
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 21.1708547330054
+}
