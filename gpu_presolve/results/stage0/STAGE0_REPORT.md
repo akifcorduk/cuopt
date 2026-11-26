@@ -604,6 +604,25 @@ not made.
 - hawaiiv10-130 stops on the time limit, so its sizes are those reached after an hour.
 - Reading these instances takes 10 to 138 s and at most 35 GB of memory in the tool.
 
+The Stage 1 reference of section 11 on the same instances (`results/stage1/refs/stage1c_large`,
+no time limit reached):
+
+| Instance | Stage 1 reference: nonzeros removed | Time | Full HiGHS: nonzeros removed | Time |
+|---|---|---|---|---|
+| usafa | 81.6% | 13 s | 81.8% | 28 s |
+| a2864-99blp | 93.1% | 34 s | 93.1% | 136 s |
+| neos-3740487-motru | 0.0% | 38 s | 0.0% | 177 s |
+| square47 | 69.0% | 32 s | 69.0% | 281 s |
+| t11nonreg | 30.7% | 50 s | 44.4% | 3,357 s |
+| neos-4332810-sesia | 27.8% | 119 s | 99.6% | 50 s |
+| dlr2 | 7.0% | 67 s | 88.3% | 175 s |
+| hawaiiv10-130 | 1.2% | 139 s | 32.8% | 3,603 s |
+| neos-4535459-waipa | 0.0% | 93 s | 2.0% | 544 s |
+
+On four of the nine the Stage 1 rules reach what full HiGHS reaches. On neos-4332810-sesia and
+dlr2 nearly all of the reduction needs the later stages, and on sesia the restricted run is
+slower than full HiGHS because the model stays large.
+
 ## 13. Addendum: probing with HiGHS's limits off (2026-11-27)
 
 Patched HiGHS on the 31 instances with `HIGHS_DIAG_PROBING_NOSTOP=1`: a probing round stops only
