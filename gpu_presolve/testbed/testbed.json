@@ -6,6 +6,21 @@
  ],
  "main": [
   {
+   "name": "istanbul-no-cutoff",
+   "role": "main",
+   "band": "A1",
+   "rows": 20346,
+   "cols": 5282,
+   "nnz": 71477,
+   "binaries": 30,
+   "integers": 0,
+   "continuous": 5252,
+   "miplib_status": "easy",
+   "objective": "204.08170701",
+   "in_benchmark_set": true,
+   "where": "dev"
+  },
+  {
    "name": "ns1208400",
    "role": "main",
    "band": "A1",
@@ -48,21 +63,6 @@
    "miplib_status": "easy",
    "objective": "5189487",
    "in_benchmark_set": true,
-   "where": "dev"
-  },
-  {
-   "name": "supportcase21i",
-   "role": "main",
-   "band": "A1",
-   "rows": 7540,
-   "cols": 27,
-   "nnz": 95325,
-   "binaries": 24,
-   "integers": 3,
-   "continuous": 0,
-   "miplib_status": "easy",
-   "objective": "20",
-   "in_benchmark_set": false,
    "where": "dev"
   },
   {
@@ -156,6 +156,21 @@
    "where": "dev"
   },
   {
+   "name": "brazil3",
+   "role": "main",
+   "band": "A2",
+   "rows": 14646,
+   "cols": 23968,
+   "nnz": 133184,
+   "binaries": 23874,
+   "integers": 94,
+   "continuous": 0,
+   "miplib_status": "easy",
+   "objective": "24",
+   "in_benchmark_set": true,
+   "where": "dev"
+  },
+  {
    "name": "piperout-d27",
    "role": "main",
    "band": "A3",
@@ -171,21 +186,6 @@
    "where": "dev"
   },
   {
-   "name": "gfd-schedulen55f2d50m30k3i",
-   "role": "main",
-   "band": "A3",
-   "rows": 129102,
-   "cols": 90158,
-   "nnz": 260992,
-   "binaries": 40622,
-   "integers": 42209,
-   "continuous": 7327,
-   "miplib_status": "easy",
-   "objective": "6",
-   "in_benchmark_set": false,
-   "where": "dev"
-  },
-  {
    "name": "uccase9",
    "role": "main",
    "band": "A3",
@@ -197,6 +197,21 @@
    "continuous": 25178,
    "miplib_status": "easy",
    "objective": "10993.131409",
+   "in_benchmark_set": true,
+   "where": "dev"
+  },
+  {
+   "name": "sorrell3",
+   "role": "main",
+   "band": "A3",
+   "rows": 169162,
+   "cols": 1024,
+   "nnz": 338324,
+   "binaries": 1024,
+   "integers": 0,
+   "continuous": 0,
+   "miplib_status": "easy",
+   "objective": "-16",
    "in_benchmark_set": true,
    "where": "dev"
   },
@@ -653,6 +668,54 @@
    "where": "dev-large"
   }
  ],
+ "indicator": [
+  {
+   "name": "supportcase21i",
+   "role": "indicator",
+   "band": "A1",
+   "rows": 7540,
+   "cols": 27,
+   "nnz": 95325,
+   "binaries": 24,
+   "integers": 3,
+   "continuous": 0,
+   "miplib_status": "easy",
+   "objective": "20",
+   "in_benchmark_set": false,
+   "where": "dev"
+  },
+  {
+   "name": "gfd-schedulen55f2d50m30k3i",
+   "role": "indicator",
+   "band": "A3",
+   "rows": 129102,
+   "cols": 90158,
+   "nnz": 260992,
+   "binaries": 40622,
+   "integers": 42209,
+   "continuous": 7327,
+   "miplib_status": "easy",
+   "objective": "6",
+   "in_benchmark_set": false,
+   "where": "dev"
+  },
+  {
+   "name": "elitserienhandball3i",
+   "role": "indicator",
+   "band": "A1",
+   "rows": 35804,
+   "cols": 32807,
+   "nnz": 99434,
+   "binaries": 16966,
+   "integers": 6973,
+   "continuous": 8868,
+   "miplib_status": "easy",
+   "objective": "4",
+   "in_benchmark_set": false,
+   "where": "dev"
+  }
+ ],
+ "indicator_note": "These instances have an INDICATORS section, which HiGHS cannot read, so they have no HiGHS baseline. They left the main and held-out lists on 2026-11-26 and are kept for tests inside cuOpt.",
  "heldout": [
   {
    "name": "neos-1171737",
@@ -685,6 +748,21 @@
    "where": "dev"
   },
   {
+   "name": "blp-ir98",
+   "role": "heldout",
+   "band": "A1",
+   "rows": 486,
+   "cols": 6097,
+   "nnz": 79152,
+   "binaries": 6031,
+   "integers": 0,
+   "continuous": 66,
+   "miplib_status": "easy",
+   "objective": "2342.315488",
+   "in_benchmark_set": false,
+   "where": "dev"
+  },
+  {
    "name": "net12",
    "role": "heldout",
    "band": "A1",
@@ -712,21 +790,6 @@
    "miplib_status": "easy",
    "objective": "71320",
    "in_benchmark_set": true,
-   "where": "dev"
-  },
-  {
-   "name": "elitserienhandball3i",
-   "role": "heldout",
-   "band": "A1",
-   "rows": 35804,
-   "cols": 32807,
-   "nnz": 99434,
-   "binaries": 16966,
-   "integers": 6973,
-   "continuous": 8868,
-   "miplib_status": "easy",
-   "objective": "4",
-   "in_benchmark_set": false,
    "where": "dev"
   },
   {

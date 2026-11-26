@@ -1,0 +1,5 @@
+name,band,where,status,rows,cols,nnz,rows_after,cols_after,nnz_after,rows_removed_pct,cols_removed_pct,nnz_removed_pct,presolve_seconds,presolve_core_seconds,read_seconds,reached_time_limit,peak_rss_mb
+bnatt500,below,dev,Reduced,7029,4500,27203,4933,2459,20690,29.8193,45.3556,23.9422,0.126466,0.124133,0.0256123,0,33.8555
+fhnw-binpack4-4,below,dev,Reduced,620,520,2332,465,420,1608,25,19.2308,31.0463,0.00790499,0.00720317,0.00484626,0,15.7969
+neos-2075418-temuka,B3,dev,Not reduced,349602,122304,7610261,349602,122304,7610261,0,0,0,15.9134,15.6671,3.67966,0,1112.01
+neos-3230511-yuna,D,dev-large,Unbounded or infeasible,19335696,99472,58613680,,,,,,,32.3239,,101.493,0,12177

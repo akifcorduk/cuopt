@@ -1,0 +1,13 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/istanbul-no-cutoff.mps",
+  "/home/scratch.acoerduek_sw/cuopt_dev/.wt/gpu-presolve/gpu_presolve/results/stage0/stock/istanbul-no-cutoff.json",
+  "--time-limit",
+  "1800.0"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 0.4685025110084098
+}

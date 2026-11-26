@@ -1,0 +1,13 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_diag/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/supportcase40.mps",
+  "/home/scratch.acoerduek_sw/cuopt_dev/.wt/gpu-presolve/gpu_presolve/results/stage0/diag/supportcase40.json",
+  "--time-limit",
+  "1800.0"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 0.2188105350069236
+}

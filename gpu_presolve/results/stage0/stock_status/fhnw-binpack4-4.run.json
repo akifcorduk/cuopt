@@ -1,0 +1,13 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/fhnw-binpack4-4.mps",
+  "gpu_presolve/results/stage0/stock_status/fhnw-binpack4-4.json",
+  "--time-limit",
+  "1800.0"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 0.03402076900238171
+}

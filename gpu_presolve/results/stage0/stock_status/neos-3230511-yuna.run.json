@@ -1,0 +1,13 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_stock/baseline_tool",
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/miplib_extra/neos-3230511-yuna.mps.gz",
+  "gpu_presolve/results/stage0/stock_status/neos-3230511-yuna.json",
+  "--time-limit",
+  "1800.0"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 137.60127154400107
+}
