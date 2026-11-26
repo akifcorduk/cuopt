@@ -86,19 +86,19 @@ sweeps_large() {
     echo "pinned GPU ${CUDA_VISIBLE_DEVICES:-} is not visible here: $(nvidia-smi -L | head -2)"
     return 1
   fi
-  mkdir -p "$OUT/sweeps" "$DEPS/results/stage0/sweeps_txt"
+  mkdir -p "$OUT/sweeps_large" "$DEPS/results/stage0/sweeps_txt"
   status=0
   for dump in $(stat -c '%s %n' "$DUMPS"/*.csr | sort -n | cut -d' ' -f2-); do
     name=$(basename "$dump" .csr)
-    if [ -f "$OUT/sweeps/$name.json" ]; then
+    if [ -f "$OUT/sweeps/$name.json" ] || [ -f "$OUT/sweeps_large/$name.json" ]; then
       echo "$name: sweep result present"
       continue
     fi
-    "$DEPS/build/microbench/sweeps" "$dump" "$OUT/sweeps/$name.json.part" \
+    "$DEPS/build/microbench/sweeps" "$dump" "$OUT/sweeps_large/$name.json.part" \
       > "$DEPS/results/stage0/sweeps_txt/$name.txt" 2>&1
     code=$?
-    if [ -f "$OUT/sweeps/$name.json.part" ]; then
-      mv "$OUT/sweeps/$name.json.part" "$OUT/sweeps/$name.json"
+    if [ -f "$OUT/sweeps_large/$name.json.part" ]; then
+      mv "$OUT/sweeps_large/$name.json.part" "$OUT/sweeps_large/$name.json"
     fi
     echo "$name: sweeps exit $code $(date +%T)"
     [ "$code" -eq 0 ] || status=1
