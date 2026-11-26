@@ -3,6 +3,9 @@
 Date: 2026-11-26. Machine: one NVIDIA H200 NVL and 18 cores of a shared Xeon 6960P node. HiGHS
 1.16.0 at commit 283bfc859, built with 64-bit integers, one thread.
 
+Section 11 (added 2026-11-27) holds the Stage 1 reference made after the decisions on this report;
+it replaces the Stage 1 reference figures of sections 1, 2, 3, 7 and 10 as gate targets.
+
 Stage 0 measures; no presolve code exists yet. This report covers the 31 testbed instances
 between 50,000 and 1e7 nonzeros. Section 9 lists what Stage 0 has not delivered, including the
 nine instances above 1e7 nonzeros, whose runs are in progress.
@@ -523,3 +526,54 @@ use 0.05 s and the Stage 1 rule set.
 | B3 | neos-5114902-kasavu | 4,240,376 | 4,219,628 | 10.08 | 4,226,012 | 4.76 | 12.12 | 5.73 |
 | B3 | supportcase19 | 4,287,094 | 4,287,093 | 7.48 | 4,287,091 | 2.89 | 8.99 | 3.49 |
 | B3 | neos-5052403-cygnet | 4,898,304 | 2,448,853 | 5.22 | 2,449,152 | 4.25 | 6.28 | 5.12 |
+
+## 11. Addendum: the Stage 1 reference after the decisions (2026-11-27)
+
+Decision 1 was to bring the reference closer to our Stage 1. The diagnostic patch got four more
+switches (simple probing on equations, everything dual fixing does beyond fixing by locks,
+implied equations, implied-integer conversion), a counter per rule for column fixings and
+counters for probing and pairwise dominated columns. With no switch set the presolved model is
+byte-identical to stock HiGHS on 32 instances. The runs below are in `results/stage1/refs`; the
+targets per instance are `results/stage1/targets_stage1.csv` (`analysis/stage1_targets.py`).
+
+| HiGHS variant (31 instances) | Remaining nonzeros against full, geometric mean | Median | More than 1% larger | Removal reached (rows / columns / nonzeros) | Summed time |
+|---|---|---|---|---|---|
+| Stage 1 reference of the plan (section 3's reference plus the four switches) | 1.297 | 1.056 | 20 | 44.9% / 78.2% / 82.8% | 28.8 s |
+| The same with HiGHS's dual fixing off (no fixing by locks) | 1.427 | 1.110 | 20 | 43.3% / 77.0% / 79.4% | 28.3 s |
+| The same with row redundancy on explicit-bound sums | 1.298 | 1.056 | 20 | 44.8% / 78.2% / 82.8% | 28.2 s |
+| Stage 2 reference (the first row with enumeration, probing and the clique rules on) | 1.104 | 1.009 | 15 | 85.6% / 81.4% / 93.5% | 196.3 s |
+
+Time of the Stage 1 reference per band, shifted mean (median): A1 0.053 s (0.041), A2 0.077 s
+(0.071), A3 0.21 s (0.21), B1 0.60 s (0.61), B2 1.28 s (1.30), B3 3.24 s (3.18). These are
+single runs with other jobs on the node.
+
+What the runs show:
+
+- **The time target of Stage 1 is much tighter than section 2 said.** The summed time falls from
+  160 s to 29 s, almost all of it on rd-rplusc-21: 0.61 s instead of 126 s, with the same 54,170
+  rows left and the same 71,301 duplicate rows removed. The row loop of parallel-row detection
+  takes 0.10 s instead of 96 s. So HiGHS's slow row removal on that instance belongs to the rule
+  families the new switches turn off, not to parallel-row detection; which of the four it is has
+  not been isolated. The first row of the table in section 2 ("removing many rows is slow where
+  columns are very long") should be read with this.
+- **The reference no longer contains what our Stage 1 does not have.** Against section 3's
+  reference the largest changes are brazil3 (3,275 to 9,315 rows), neos-4306827-ravan (99,998
+  to 185,534), radiationm18-12-05 (5,255 to 7,243) and var-smallemery-m6j6 (445,729 to 518,475
+  nonzeros). Rules that still have no switch: the binary row test, implied bounds written to
+  integer column bounds, integer row scaling, coefficient strengthening, gcd substitution.
+- **Testing redundancy on explicit-bound sums costs little.** Only unitcal_7 (1.1% more
+  nonzeros) and supportcase7 (0.4%) change. The plan's choice for Stage 1 stands.
+- **Fixing by locks is a Stage 1 rule that matters.** Without it wachplan keeps 71,532 nonzeros
+  instead of 12,698, var-smallemery-m6j6 846,407 instead of 518,475, radiationm18-12-05 30,421
+  instead of 20,736, supportcase40 31,480 instead of 24,592.
+- **Most column fixings are Stage 1.** Of the 869,994 column fixings of full HiGHS, 512,275
+  (59%) come from forcing rows, 47,456 from singleton rows, 23,192 are empty columns. Stage 3
+  rules: dual-fixing bound strengthening 191,950, weakly dominated columns 48,260, the
+  single-equation extension of dual fixing 11,626, pairwise dominated columns 7,652, parallel
+  columns 2,585. Probing fixes 9,260.
+- **Pairwise dominated columns.** neos-4647030-tutaki makes 661,764 pair tests in 22.9 s (35 µs
+  per test, long columns) and supportcase6 makes 89.6 million, of which the signature rejects
+  86.7 million, in 9.6 s. Neither fixes a column.
+- **Probing, per probe** (instance means on the six instances with the most probes): 34 to 1,614
+  bound changes, 147 to 1,634 rows touched, 1,731 to 515,910 entries in those rows; the largest
+  single probes touch 14,357 to 559,296 entries.

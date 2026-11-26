@@ -1,0 +1,17 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_diag2/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/uccase9.mps",
+  "gpu_presolve/results/stage1/refs/stage1c/uccase9.json",
+  "--time-limit",
+  "1800.0",
+  "--presolve-rule-off",
+  "9175456"
+ ],
+ "env": {
+  "HIGHS_DIAG_OFF": "probing,enumeration,clique_substitutions,clique_merging,implied_integers,aggregator,sparsify,fourier_motzkin,strengthen_inequalities,dominated_columns,parallel_columns,simple_probing,dual_fixing_substitution,implied_equations,implied_integer_conversion"
+ },
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 0.6194247560051735
+}

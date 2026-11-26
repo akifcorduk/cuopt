@@ -1,0 +1,222 @@
+{
+  "instance": "splice1k1",
+  "mps_file": "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/splice1k1.mps",
+  "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "highsint_bytes": 8,
+    "library": "/home/scratch.acoerduek_sw/gpu_presolve_deps/highs_diag2_install/lib/libhighs.so.1.16.0"
+  },
+  "read_seconds": 0.84557502900000003,
+  "read_status": "ok",
+  "objective_sense": "min",
+  "original": {
+    "rows": 6505,
+    "cols": 3253,
+    "nnz": 1761016,
+    "col_types": {
+      "binary": 3252,
+      "general_integer": 1,
+      "implied_integer": 0,
+      "continuous": 0,
+      "semi": 0
+    },
+    "row_sides": {
+      "equation": 1,
+      "ranged": 0,
+      "one_sided": 6504,
+      "free": 0
+    },
+    "row_length": {
+      "min": 189,
+      "p10": 189,
+      "p50": 189,
+      "p90": 189,
+      "p99": 1266,
+      "max": 3004,
+      "mean": 270.71729438893158
+    },
+    "col_length": {
+      "min": 1,
+      "p10": 3,
+      "p50": 379,
+      "p90": 379,
+      "p99": 4750,
+      "max": 6010,
+      "mean": 541.35136796802954
+    },
+    "long_cols": {
+      "threshold": 1000,
+      "count": 248
+    },
+    "long_rows": {
+      "threshold": 1000,
+      "count": 497
+    },
+    "row_classes": {
+      "empty": 0,
+      "singleton": 0,
+      "doubleton_equation": 0,
+      "set_packing": 0,
+      "set_partitioning": 0,
+      "set_covering": 60,
+      "cardinality": 0,
+      "binary_knapsack_non_unit": 6444,
+      "variable_bound": 0,
+      "other_two_entry": 0,
+      "all_integer": 1,
+      "mixed": 0,
+      "all_continuous": 0
+    },
+    "two_binary_rows": 0,
+    "coefficient": {
+      "min_abs": 1,
+      "max_abs": 1655
+    },
+    "row_dynamism": {
+      "rows": 6505,
+      "p50": 37,
+      "p99": 1256,
+      "max": 1655
+    },
+    "row_dynamism_highs_scaled": {
+      "rows": 6505,
+      "p50": 37,
+      "p99": 1256,
+      "max": 1655
+    },
+    "bounds": {
+      "lower_infinite": 0,
+      "upper_infinite": 0,
+      "free_cols": 0,
+      "huge_threshold": 100000000,
+      "lower_huge": 0,
+      "upper_huge": 0,
+      "cols_with_huge_bound": 0,
+      "rows_with_huge_bound_col": 0
+    },
+    "rows_by_infinite_activity_terms": {
+      "min_activity": {
+        "none": 6505,
+        "one": 0,
+        "two_or_more": 0
+      },
+      "max_activity": {
+        "none": 6505,
+        "one": 0,
+        "two_or_more": 0
+      }
+    }
+  },
+  "stats_seconds": 0.042334289999999997,
+  "presolve": {
+    "threads": 1,
+    "time_limit": 1800,
+    "presolve_rule_off": 9175456,
+    "log_file": "gpu_presolve/results/stage1/refs/stage1c/splice1k1.json.log",
+    "seconds": 0.705161182,
+    "setup_seconds": 0.0043418390000000001,
+    "core_seconds": 0.695481236,
+    "handover_seconds": 0.0053381069999999999,
+    "reached_time_limit": false,
+    "status": "Not reduced",
+    "highs_return": "ok",
+    "has_model": true,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+  },
+  "presolved": {
+    "rows": 6505,
+    "cols": 3253,
+    "nnz": 1761016,
+    "col_types": {
+      "binary": 3252,
+      "general_integer": 1,
+      "implied_integer": 0,
+      "continuous": 0,
+      "semi": 0
+    },
+    "row_sides": {
+      "equation": 1,
+      "ranged": 0,
+      "one_sided": 6504,
+      "free": 0
+    },
+    "row_length": {
+      "min": 189,
+      "p10": 189,
+      "p50": 189,
+      "p90": 189,
+      "p99": 1266,
+      "max": 3004,
+      "mean": 270.71729438893158
+    },
+    "col_length": {
+      "min": 1,
+      "p10": 3,
+      "p50": 379,
+      "p90": 379,
+      "p99": 4750,
+      "max": 6010,
+      "mean": 541.35136796802954
+    },
+    "long_cols": {
+      "threshold": 1000,
+      "count": 248
+    },
+    "long_rows": {
+      "threshold": 1000,
+      "count": 497
+    },
+    "row_classes": {
+      "empty": 0,
+      "singleton": 0,
+      "doubleton_equation": 0,
+      "set_packing": 0,
+      "set_partitioning": 0,
+      "set_covering": 60,
+      "cardinality": 0,
+      "binary_knapsack_non_unit": 6444,
+      "variable_bound": 0,
+      "other_two_entry": 0,
+      "all_integer": 1,
+      "mixed": 0,
+      "all_continuous": 0
+    },
+    "two_binary_rows": 0,
+    "coefficient": {
+      "min_abs": 1,
+      "max_abs": 1655
+    },
+    "row_dynamism": {
+      "rows": 6505,
+      "p50": 37,
+      "p99": 1256,
+      "max": 1655
+    },
+    "bounds": {
+      "lower_infinite": 0,
+      "upper_infinite": 0,
+      "free_cols": 0,
+      "huge_threshold": 100000000,
+      "lower_huge": 0,
+      "upper_huge": 0,
+      "cols_with_huge_bound": 0,
+      "rows_with_huge_bound_col": 0
+    },
+    "rows_by_infinite_activity_terms": {
+      "min_activity": {
+        "none": 6505,
+        "one": 0,
+        "two_or_more": 0
+      },
+      "max_activity": {
+        "none": 6505,
+        "one": 0,
+        "two_or_more": 0
+      }
+    }
+  },
+  "peak_rss_mb": 160.296875
+}

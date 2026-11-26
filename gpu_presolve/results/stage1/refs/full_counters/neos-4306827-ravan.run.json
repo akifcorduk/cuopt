@@ -1,0 +1,13 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_diag2/baseline_tool",
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/miplib_extra/neos-4306827-ravan.mps.gz",
+  "gpu_presolve/results/stage1/refs/full_counters/neos-4306827-ravan.json",
+  "--time-limit",
+  "1800.0"
+ ],
+ "env": {},
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 18.065431830007583
+}

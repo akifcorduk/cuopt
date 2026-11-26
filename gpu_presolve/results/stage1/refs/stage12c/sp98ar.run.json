@@ -1,0 +1,18 @@
+{
+ "command": [
+  "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_diag2/baseline_tool",
+  "/home/scratch.acoerduek_sw/cuopt_dev/datasets/mip/miplib2017/sp98ar.mps",
+  "gpu_presolve/results/stage1/refs/stage12c/sp98ar.json",
+  "--time-limit",
+  "1800.0",
+  "--presolve-rule-off",
+  "9175456"
+ ],
+ "env": {
+  "HIGHS_DIAG_OFF": "implied_integers,aggregator,sparsify,fourier_motzkin,strengthen_inequalities,dominated_columns,parallel_columns,simple_probing,dual_fixing_substitution,implied_equations,implied_integer_conversion",
+  "HIGHS_DIAG_PROBE_ROWS": "0"
+ },
+ "returncode": 0,
+ "killed": false,
+ "wall_seconds": 0.8196276759845205
+}
