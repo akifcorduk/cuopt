@@ -39,7 +39,7 @@ index 9635137..c51ac30 100644
      if (!foundCover(globaldom, v1.complement(), v2.complement())) return false;
      if (globaldom.infeasible()) return true;
 diff --git a/highs/mip/HighsDomain.cpp b/highs/mip/HighsDomain.cpp
-index 1390eb2..bf76909 100644
+index 1390eb2..dfa58ba 100644
 --- a/highs/mip/HighsDomain.cpp
 +++ b/highs/mip/HighsDomain.cpp
 @@ -16,6 +16,7 @@
@@ -58,7 +58,18 @@ index 1390eb2..bf76909 100644
  
    assert(!infeasible_);
  
-@@ -1948,6 +1950,7 @@ void HighsDomain::updateActivityUbChange(HighsInt col, double oldbound,
+@@ -1891,6 +1893,10 @@ void HighsDomain::updateActivityLbChange(HighsInt col, double oldbound,
+     }
+   }
+ 
++  if (highsDiagTouch().mark_rows)
++    highsDiagTouch().mark(mip->a_matrix_.index_.data() + start, end - start,
++                          mipsolver->mipdata_->ARstart_.data());
++
+   if (infeasible_) {
+     assert(infeasible_reason.type == Reason::kModelRowLower ||
+            infeasible_reason.type == Reason::kModelRowUpper);
+@@ -1948,6 +1954,7 @@ void HighsDomain::updateActivityUbChange(HighsInt col, double oldbound,
    auto mip = mipsolver->model_;
    HighsInt start = mip->a_matrix_.start_[col];
    HighsInt end = mip->a_matrix_.start_[col + 1];
@@ -66,7 +77,26 @@ index 1390eb2..bf76909 100644
  
    assert(!infeasible_);
  
-@@ -2659,6 +2662,7 @@ bool HighsDomain::propagate() {
+@@ -2064,6 +2071,10 @@ void HighsDomain::updateActivityUbChange(HighsInt col, double oldbound,
+     }
+   }
+ 
++  if (highsDiagTouch().mark_rows)
++    highsDiagTouch().mark(mip->a_matrix_.index_.data() + start, end - start,
++                          mipsolver->mipdata_->ARstart_.data());
++
+   if (infeasible_) {
+     assert(infeasible_reason.type == Reason::kModelRowLower ||
+            infeasible_reason.type == Reason::kModelRowUpper);
+@@ -2335,6 +2346,7 @@ void HighsDomain::changeBound(HighsDomainChange boundchg, Reason reason) {
+ 
+   bool binary = isBinary(boundchg.column);
+ 
++  ++highsDiagWork().bound_changes;
+   double oldbound = doChangeBound(boundchg);
+ 
+   prevboundval_.emplace_back(oldbound, prevPos);
+@@ -2659,6 +2671,7 @@ bool HighsDomain::propagate() {
  
      if (!propagateinds_.empty()) {
        propagateinds.swap(propagateinds_);
@@ -74,7 +104,7 @@ index 1390eb2..bf76909 100644
  
        HighsInt numproprows = static_cast<HighsInt>(propagateinds.size());
        for (HighsInt i = 0; i != numproprows; ++i) {
-@@ -2679,8 +2683,11 @@ bool HighsDomain::propagate() {
+@@ -2679,8 +2692,11 @@ bool HighsDomain::propagate() {
            const HighsInt* Rindex = mipsolver->mipdata_->ARindex_.data() + start;
            const double* Rvalue = mipsolver->mipdata_->ARvalue_.data() + start;
            bool recomputeCapThreshold = false;
@@ -86,7 +116,7 @@ index 1390eb2..bf76909 100644
              // computeMinActivity(start, end, mipsolver->ARstart_.data(),
              // mipsolver->ARvalue_.data(), activitymininf_[i],
              //           activitymin_[i]);
-@@ -2693,6 +2700,7 @@ bool HighsDomain::propagate() {
+@@ -2693,6 +2709,7 @@ bool HighsDomain::propagate() {
            }
  
            if (!isRowLowerRedundant(i)) {
@@ -94,7 +124,7 @@ index 1390eb2..bf76909 100644
              // computeMaxActivity(start, end, mipsolver->ARstart_.data(),
              // mipsolver->ARvalue_.data(), activitymaxinf_[i],
              //           activitymax_[i]);
-@@ -2764,6 +2772,9 @@ bool HighsDomain::propagate() {
+@@ -2764,6 +2781,9 @@ bool HighsDomain::propagate() {
              const double* Rvalue;
              cutpoolprop.cutpool->getCut(i, Rlen, Rindex, Rvalue);
              cutpoolprop.activitycuts_[i].renormalize();
@@ -105,7 +135,7 @@ index 1390eb2..bf76909 100644
              propRowNumChangedBounds_[k].first = propagateRowUpper(
                  Rindex, Rvalue, Rlen, cutpoolprop.cutpool->getRhs()[i],
 diff --git a/highs/mip/HighsImplications.cpp b/highs/mip/HighsImplications.cpp
-index 20c3a00..24c2726 100644
+index 20c3a00..276cdd8 100644
 --- a/highs/mip/HighsImplications.cpp
 +++ b/highs/mip/HighsImplications.cpp
 @@ -11,6 +11,7 @@
@@ -116,7 +146,23 @@ index 20c3a00..24c2726 100644
  
  bool HighsImplications::computeImplications(HighsInt col, bool val) {
    HighsDomain& globaldomain = mipsolver.mipdata_->getDomain();
-@@ -456,7 +457,8 @@ bool HighsImplications::runProbing(HighsInt col, HighsInt& numReductions) {
+@@ -34,6 +35,7 @@ bool HighsImplications::computeImplications(HighsInt col, bool val) {
+ 
+   HighsInt stackimplicstart = domchgstack.size() + 1;
+   HighsInt numImplications = -stackimplicstart;
++  highsDiagTouch().beginDirection();
+   if (val)
+     globaldomain.changeBound(HighsBoundType::kLower, col, 1);
+   else
+@@ -57,6 +59,7 @@ bool HighsImplications::computeImplications(HighsInt col, bool val) {
+   }
+ 
+   auto doBacktrack = [&](size_t changedend) {
++    highsDiagTouch().endDirection();
+     globaldomain.backtrack();
+     globaldomain.clearChangedCols(changedend);
+   };
+@@ -456,7 +459,8 @@ bool HighsImplications::runProbing(HighsInt col, HighsInt& numReductions) {
          if (colsubstituted[implcol] || globaldomain.isFixed(implcol)) continue;
  
          if (lbDown == ubDown && lbUp == ubUp &&
@@ -127,7 +173,7 @@ index 20c3a00..24c2726 100644
            substitution.substcol = implcol;
            substitution.staycol = col;
 diff --git a/highs/presolve/HPresolve.cpp b/highs/presolve/HPresolve.cpp
-index 401382e..727cb79 100644
+index 401382e..95f0186 100644
 --- a/highs/presolve/HPresolve.cpp
 +++ b/highs/presolve/HPresolve.cpp
 @@ -102,7 +102,7 @@ void HPresolve::setInput(HighsMipSolver& mipsolver,
@@ -163,7 +209,35 @@ index 401382e..727cb79 100644
    for (HighsInt row = 0; row != model->num_row_; ++row) {
      if (!isDualImpliedFree(row)) continue;
      for (const HighsSliceNonzero& nonzero : getRowVector(row)) {
-@@ -525,6 +528,19 @@ void HPresolve::chooseRules() {
+@@ -335,6 +338,9 @@ bool HPresolve::isRedundant(HighsInt row, double sumLower,
+ }
+ 
+ bool HPresolve::isRedundant(HighsInt row) const {
++  if (mipsolver != nullptr && highsDiagSwitches().redundancy_explicit)
++    return isRedundant(row, impliedRowBounds.getSumLowerOrig(row),
++                       impliedRowBounds.getSumUpperOrig(row));
+   return isRedundant(row, impliedRowBounds.getSumLower(row),
+                      impliedRowBounds.getSumUpper(row));
+ }
+@@ -352,6 +358,8 @@ bool HPresolve::isImpliedEquationAtLower(HighsInt row) const {
+   // if the implied lower bound on a row dual is strictly positive then the row
+   // is an implied equation (using its lower bound) due to complementary
+   // slackness
++  if (mipsolver != nullptr && highsDiagOff(kDiagOffImpliedEquations))
++    return false;
+   return model->row_lower_[row] != -kHighsInf &&
+          implRowDualLower[row] > options->dual_feasibility_tolerance;
+ }
+@@ -360,6 +368,8 @@ bool HPresolve::isImpliedEquationAtUpper(HighsInt row) const {
+   // if the implied upper bound on a row dual is strictly negative then the row
+   // is an implied equation (using its upper bound) due to complementary
+   // slackness
++  if (mipsolver != nullptr && highsDiagOff(kDiagOffImpliedEquations))
++    return false;
+   return model->row_upper_[row] != kHighsInf &&
+          implRowDualUpper[row] < -options->dual_feasibility_tolerance;
+ }
+@@ -525,6 +535,19 @@ void HPresolve::chooseRules() {
        ruleOffForPostsolve("dual or basis", kPresolveRuleDominatedCol);
      }
    }
@@ -183,7 +257,93 @@ index 401382e..727cb79 100644
    // If dominated column rule is off, weakly dominated column rule
    // isn't currently considered, because checks for weakly dominated
    // columns are currently only in HPresolve::detectDominatedCol, but
-@@ -1772,6 +1788,7 @@ void HPresolve::changeImplRowDualLower(HighsInt row, double newLower,
+@@ -793,7 +816,8 @@ HPresolve::Result HPresolve::updateColImpliedBounds(HighsInt row, HighsInt col,
+       if (useImplBound && impliedBound < implColUpper[col] - threshold)
+         changeImplColUpper(col, impliedBound, row);
+       if (updateColBound)
+-        HPRESOLVE_CHECKED_CALL(changeColUpper(col, impliedBound));
++        HPRESOLVE_CHECKED_CALL(
++            changeColUpper(col, impliedBound, kDiagBoundImplied));
+     } else {
+       // lower bound
+       // when solving a MIP, keep (1) tighter bounds on integer variables or (2)
+@@ -809,7 +833,8 @@ HPresolve::Result HPresolve::updateColImpliedBounds(HighsInt row, HighsInt col,
+       if (useImplBound && impliedBound > implColLower[col] + threshold)
+         changeImplColLower(col, impliedBound, row);
+       if (updateColBound)
+-        HPRESOLVE_CHECKED_CALL(changeColLower(col, impliedBound));
++        HPRESOLVE_CHECKED_CALL(
++            changeColLower(col, impliedBound, kDiagBoundImplied));
+     }
+     return Result::kOk;
+   };
+@@ -1096,6 +1121,7 @@ void HPresolve::shrinkProblem(HighsPostsolveStack& postsolve_stack) {
+   }
+   if (model->fme_obj_col_ >= 0)
+     model->fme_obj_col_ = newColIndex[model->fme_obj_col_];
++  diagShrinkCols(newColIndex);
+   colDeleted.assign(model->num_col_, false);
+   model->col_cost_.resize(model->num_col_);
+   model->col_lower_.resize(model->num_col_);
+@@ -1465,7 +1491,8 @@ void HPresolve::markColDeleted(HighsInt col) {
+   }
+ }
+ 
+-HPresolve::Result HPresolve::changeColUpper(HighsInt col, double newUpper) {
++HPresolve::Result HPresolve::changeColUpper(HighsInt col, double newUpper,
++                                            DiagBoundCause cause) {
+   if (model->integrality_[col] != HighsVarType::kContinuous) {
+     newUpper = std::floor(newUpper + primal_feastol);
+     if (newUpper == model->col_upper_[col]) return Result::kOk;
+@@ -1473,6 +1500,7 @@ HPresolve::Result HPresolve::changeColUpper(HighsInt col, double newUpper) {
+ 
+   double oldUpper = model->col_upper_[col];
+   model->col_upper_[col] = newUpper;
++  if (newUpper != oldUpper) diagBoundChanged(col, cause);
+ 
+   // a tighter upper bound may no longer be strictly implied; then the <= side
+   // of the dual constraint is lost
+@@ -1493,7 +1521,8 @@ HPresolve::Result HPresolve::changeColUpper(HighsInt col, double newUpper) {
+   return Result::kOk;
+ }
+ 
+-HPresolve::Result HPresolve::changeColLower(HighsInt col, double newLower) {
++HPresolve::Result HPresolve::changeColLower(HighsInt col, double newLower,
++                                            DiagBoundCause cause) {
+   if (model->integrality_[col] != HighsVarType::kContinuous) {
+     newLower = std::ceil(newLower - primal_feastol);
+     if (newLower == model->col_lower_[col]) return Result::kOk;
+@@ -1501,6 +1530,7 @@ HPresolve::Result HPresolve::changeColLower(HighsInt col, double newLower) {
+ 
+   double oldLower = model->col_lower_[col];
+   model->col_lower_[col] = newLower;
++  if (newLower != oldLower) diagBoundChanged(col, cause);
+ 
+   // a tighter lower bound may no longer be strictly implied; then the >= side
+   // of the dual constraint is lost
+@@ -1522,15 +1552,16 @@ HPresolve::Result HPresolve::changeColLower(HighsInt col, double newLower) {
+ }
+ 
+ HPresolve::Result HPresolve::changeColBounds(HighsInt col, double newLower,
+-                                             double newUpper) {
++                                             double newUpper,
++                                             DiagBoundCause cause) {
+   if (newLower > model->col_upper_[col]) {
+     // change upper bound first
+-    HPRESOLVE_CHECKED_CALL(changeColUpper(col, newUpper));
+-    HPRESOLVE_CHECKED_CALL(changeColLower(col, newLower));
++    HPRESOLVE_CHECKED_CALL(changeColUpper(col, newUpper, cause));
++    HPRESOLVE_CHECKED_CALL(changeColLower(col, newLower, cause));
+   } else {
+     // change lower bound first
+-    HPRESOLVE_CHECKED_CALL(changeColLower(col, newLower));
+-    HPRESOLVE_CHECKED_CALL(changeColUpper(col, newUpper));
++    HPRESOLVE_CHECKED_CALL(changeColLower(col, newLower, cause));
++    HPRESOLVE_CHECKED_CALL(changeColUpper(col, newUpper, cause));
+   }
+   return Result::kOk;
+ }
+@@ -1772,6 +1803,7 @@ void HPresolve::changeImplRowDualLower(HighsInt row, double newLower,
  }
  
  HPresolve::Result HPresolve::scaleMIP(HighsPostsolveStack& postsolve_stack) {
@@ -191,7 +351,35 @@ index 401382e..727cb79 100644
    for (HighsInt i = 0; i < model->num_row_; ++i) {
      if (rowDeleted[i] || rowsize[i] < 1 ||
          rowsizeInteger[i] + rowsizeImplInt[i] == rowsize[i])
-@@ -2304,6 +2321,7 @@ HPresolve::Result HPresolve::doubletonEq(HighsPostsolveStack& postsolve_stack,
+@@ -2072,8 +2104,9 @@ HPresolve::Result HPresolve::transformColumn(
+   // being already updated to the newly scaled column by the caller, if
+   // necessary.
+   if (model->integrality_[col] != HighsVarType::kContinuous)
+-    HPRESOLVE_CHECKED_CALL(
+-        changeColBounds(col, model->col_lower_[col], model->col_upper_[col]));
++    HPRESOLVE_CHECKED_CALL(changeColBounds(
++        col, model->col_lower_[col], model->col_upper_[col],
++        kDiagBoundTransform));
+ 
+   markChangedCol(col);
+   return Result::kOk;
+@@ -2290,11 +2323,13 @@ HPresolve::Result HPresolve::doubletonEq(HighsPostsolveStack& postsolve_stack,
+   // possibly tighten bounds of the column that stays
+   bool lowerTightened = stayImplLower > oldStayLower + primal_feastol;
+   if (lowerTightened)
+-    HPRESOLVE_CHECKED_CALL(changeColLower(staycol, stayImplLower));
++    HPRESOLVE_CHECKED_CALL(
++        changeColLower(staycol, stayImplLower, kDiagBoundDoubleton));
+ 
+   bool upperTightened = stayImplUpper < oldStayUpper - primal_feastol;
+   if (upperTightened)
+-    HPRESOLVE_CHECKED_CALL(changeColUpper(staycol, stayImplUpper));
++    HPRESOLVE_CHECKED_CALL(
++        changeColUpper(staycol, stayImplUpper, kDiagBoundDoubleton));
+ 
+   postsolve_stack.doubletonEquation(
+       row, substcol, staycol, substcoef, staycoef, rhs, substLower, substUpper,
+@@ -2304,6 +2339,7 @@ HPresolve::Result HPresolve::doubletonEq(HighsPostsolveStack& postsolve_stack,
    // finally modify matrix
    HPRESOLVE_CHECKED_CALL(substitute(substcol, staycol, rhs / substcoef,
                                      -staycoef / substcoef, row));
@@ -199,7 +387,60 @@ index 401382e..727cb79 100644
  
    analysis_.logging_on_ = logging_on;
    if (logging_on) analysis_.stopPresolveRuleLog(kPresolveRuleDoubletonEquation);
-@@ -2773,6 +2791,7 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+@@ -2366,14 +2402,16 @@ HPresolve::Result HPresolve::singletonRow(HighsPostsolveStack& postsolve_stack,
+   postsolve_stack.singletonRow(row, col, val, lowerTightened, upperTightened);
+ 
+   // just update bounds (and row activities)
+-  if (lowerTightened) HPRESOLVE_CHECKED_CALL(changeColLower(col, lb));
++  if (lowerTightened)
++    HPRESOLVE_CHECKED_CALL(changeColLower(col, lb, kDiagBoundSingletonRow));
+   // update bounds, or remove as fixed column directly
+   if (ub == lb) {
++    diagCountFixing(kDiagFixSingletonRow, col);
+     postsolve_stack.removedFixedCol(col, lb, model->col_cost_[col],
+                                     getColumnVector(col));
+     HPRESOLVE_CHECKED_CALL(removeFixedCol(col));
+   } else if (upperTightened)
+-    HPRESOLVE_CHECKED_CALL(changeColUpper(col, ub));
++    HPRESOLVE_CHECKED_CALL(changeColUpper(col, ub, kDiagBoundSingletonRow));
+ 
+   if (!colDeleted[col] && colsize[col] == 0) {
+     Result result = emptyCol(postsolve_stack, col);
+@@ -2598,11 +2636,11 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+ 
+         // tighten bound
+         if (direction * val > 0)
+-          HPRESOLVE_CHECKED_CALL(
+-              changeColLower(col, model->col_lower_[col] + 1.0));
++          HPRESOLVE_CHECKED_CALL(changeColLower(
++              col, model->col_lower_[col] + 1.0, kDiagBoundBinaryRowTest));
+         else
+-          HPRESOLVE_CHECKED_CALL(
+-              changeColUpper(col, model->col_upper_[col] - 1.0));
++          HPRESOLVE_CHECKED_CALL(changeColUpper(
++              col, model->col_upper_[col] - 1.0, kDiagBoundBinaryRowTest));
+         return Result::kOk;
+       };
+ 
+@@ -2695,7 +2733,8 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+       // on Computing 32(2):473-506.
+       if (impliedRowLower != -kHighsInf && impliedRowUpper != kHighsInf &&
+           std::abs(impliedRowLower + impliedRowUpper - 2 * rowUpper) <=
+-              options->small_matrix_value) {
++              options->small_matrix_value &&
++          !highsDiagOff(kDiagOffSimpleProbing)) {
+         // simple probing on equation case
+         HighsInt binCol = -1;
+         double binCoef = std::abs(impliedRowUpper - rowUpper);
+@@ -2761,6 +2800,7 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+             assert(col_upper != kHighsInf);
+ 
+             if (model->col_lower_[col] == model->col_upper_[col]) {
++              diagCountFixing(kDiagFixSimpleProbing, col);
+               postsolve_stack.removedFixedCol(col, model->col_lower_[col], 0.0,
+                                               HighsEmptySlice());
+               HPRESOLVE_CHECKED_CALL(removeFixedCol(col));
+@@ -2773,6 +2813,7 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
                double bound = direction >= 0 ? upper : lower;
                double scale = direction * (lower - upper);
                double offset = bound - model->col_lower_[binCol] * scale;
@@ -207,7 +448,102 @@ index 401382e..727cb79 100644
                postsolve_stack.doubletonEquation(
                    -1, col, binCol, 1.0, -scale, offset, lower, upper, 0.0,
                    false, false, HighsPostsolveStack::RowType::kEq,
-@@ -3863,6 +3882,7 @@ HPresolve::Result HPresolve::checkOriginalModelBounds() {
+@@ -2839,7 +2880,8 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+               rowCoefsInt, options->small_matrix_value,
+               options->small_matrix_value);
+ 
+-          if (intScale != 0 && intScale <= 1e3) {
++          if (intScale != 0 && intScale <= 1e3 &&
++              !highsDiagOff(kDiagOffImpliedIntegerConversion)) {
+             double scale = 1.0 / std::abs(continuousCoef * intScale);
+             if (scale != 1.0) {
+               // printf(
+@@ -2945,8 +2987,10 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+                   assert(fixVal > model->col_lower_[x1] - primal_feastol);
+                   assert(fixVal < model->col_upper_[x1] + primal_feastol);
+                   // change bounds
+-                  HPRESOLVE_CHECKED_CALL(changeColBounds(x1, fixVal, fixVal));
++                  HPRESOLVE_CHECKED_CALL(changeColBounds(
++                      x1, fixVal, fixVal, kDiagBoundEquationGcd));
+                   // remove column
++                  diagCountFixing(kDiagFixEquationGcd, x1);
+                   postsolve_stack.removedFixedCol(
+                       x1, fixVal, model->col_cost_[x1], getColumnVector(x1));
+                   HPRESOLVE_CHECKED_CALL(removeFixedCol(x1));
+@@ -3422,9 +3466,11 @@ HPresolve::Result HPresolve::rowPresolve(HighsPostsolveStack& postsolve_stack,
+         // bound or comes from this row, which means it is not used in the
+         // rows implied bounds. Therefore we can fix the variable at its
+         // upper bound.
+-        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, nonzero.index()));
++        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, nonzero.index(),
++                                             kDiagFixForcingRow));
+       } else {
+-        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, nonzero.index()));
++        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, nonzero.index(),
++                                             kDiagFixForcingRow));
+       }
+     }
+     // now the row might be empty, but not necessarily because the implied
+@@ -3484,15 +3530,18 @@ HPresolve::Result HPresolve::emptyCol(HighsPostsolveStack& postsolve_stack,
+   }
+ 
+   if (model->col_cost_[col] > 0) {
+-    HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++    HPRESOLVE_CHECKED_CALL(
++        fixColToLower(postsolve_stack, col, kDiagFixEmptyCol));
+   } else if (model->col_cost_[col] < 0 ||
+              std::abs(model->col_upper_[col]) <
+                  std::abs(model->col_lower_[col])) {
+-    HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++    HPRESOLVE_CHECKED_CALL(
++        fixColToUpper(postsolve_stack, col, kDiagFixEmptyCol));
+   } else if (model->col_lower_[col] != -kHighsInf) {
+-    HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++    HPRESOLVE_CHECKED_CALL(
++        fixColToLower(postsolve_stack, col, kDiagFixEmptyCol));
+   } else {
+-    HPRESOLVE_CHECKED_CALL(fixColToZero(postsolve_stack, col));
++    HPRESOLVE_CHECKED_CALL(fixColToZero(postsolve_stack, col, kDiagFixEmptyCol));
+   }
+ 
+   analysis_.logging_on_ = logging_on;
+@@ -3512,6 +3561,7 @@ HPresolve::Result HPresolve::colPresolve(HighsPostsolveStack& postsolve_stack,
+     // remove fixed column
+     PresolveTimerScope timer(analysis_, kPresolveClockInitialColIsFixed,
+                              timing);
++    diagCountFixing(kDiagFixBoundsEqual + diagBoundCause(col), col);
+     postsolve_stack.removedFixedCol(col, model->col_lower_[col],
+                                     model->col_cost_[col],
+                                     getColumnVector(col));
+@@ -3664,9 +3714,11 @@ HPresolve::Result HPresolve::detectDominatedCol(
+     if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleDominatedCol);
+     // fix variable
+     if (direction > 0)
+-      HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++      HPRESOLVE_CHECKED_CALL(
++          fixColToLower(postsolve_stack, col, kDiagFixDominatedCol));
+     else
+-      HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++      HPRESOLVE_CHECKED_CALL(
++          fixColToUpper(postsolve_stack, col, kDiagFixDominatedCol));
+     analysis_.logging_on_ = logging_on;
+     if (logging_on) analysis_.stopPresolveRuleLog(kPresolveRuleDominatedCol);
+     // handle row singletons (if requested)
+@@ -3688,9 +3740,11 @@ HPresolve::Result HPresolve::detectDominatedCol(
+         analysis_.startPresolveRuleLog(kPresolveRuleWeaklyDominatedCol);
+       // fix variable
+       if (direction > 0)
+-        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(
++            fixColToLower(postsolve_stack, col, kDiagFixWeaklyDominatedCol));
+       else
+-        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(
++            fixColToUpper(postsolve_stack, col, kDiagFixWeaklyDominatedCol));
+       analysis_.logging_on_ = logging_on;
+       if (logging_on)
+         analysis_.stopPresolveRuleLog(kPresolveRuleWeaklyDominatedCol);
+@@ -3863,6 +3917,7 @@ HPresolve::Result HPresolve::checkOriginalModelBounds() {
  
  HPresolve::Result HPresolve::initialRowAndColPresolve(
      HighsPostsolveStack& postsolve_stack) {
@@ -215,7 +551,7 @@ index 401382e..727cb79 100644
    // Lambda for a full scan over the rows
    auto presolveRows = [&]() {
      PresolveTimerScope timer(analysis_, kPresolveClockInitialRow);
-@@ -3894,6 +3914,7 @@ HPresolve::Result HPresolve::initialRowAndColPresolve(
+@@ -3894,6 +3949,7 @@ HPresolve::Result HPresolve::initialRowAndColPresolve(
  
  HPresolve::Result HPresolve::fastPresolveLoop(
      HighsPostsolveStack& postsolve_stack) {
@@ -223,7 +559,7 @@ index 401382e..727cb79 100644
    do {
      storeCurrentProblemSize();
  
-@@ -4140,6 +4161,7 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+@@ -4140,6 +4196,7 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
            numParallelRowColCalls < 5) {
          if (shrinkProblemEnabled && (numDeletedCols >= model->num_col_ / 2 ||
                                       numDeletedRows >= model->num_row_ / 2)) {
@@ -231,7 +567,7 @@ index 401382e..727cb79 100644
            analysis_.presolveTimerStart(kPresolveClockShrinkProblem);
            shrinkProblem(postsolve_stack);
            analysis_.presolveTimerStop(kPresolveClockShrinkProblem);
-@@ -4162,7 +4184,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+@@ -4162,7 +4219,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
        HPRESOLVE_TIMED_CHECKED_CALL(kPresolveClockFastLoop,
                                     fastPresolveLoop(postsolve_stack));
  
@@ -241,7 +577,7 @@ index 401382e..727cb79 100644
          HighsInt num_strengthened = -1;
          HPRESOLVE_CHECKED_CALL(
              strengthenInequalities(postsolve_stack, num_strengthened));
-@@ -4179,7 +4202,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+@@ -4179,7 +4237,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
        if (mipsolver != nullptr && numCliquesBeforeProbing == -1) {
          numCliquesBeforeProbing = mipsolver->mipdata_->cliquetable.numCliques();
          storeCurrentProblemSize();
@@ -251,7 +587,7 @@ index 401382e..727cb79 100644
          if (problemSizeReduction() > 0.0)
            HPRESOLVE_CHECKED_CALL(fastPresolveLoop(postsolve_stack));
          if (problemSizeReduction() > 0.05) continue;
-@@ -4193,12 +4217,17 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+@@ -4193,12 +4252,17 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
        }
  
        if (tryProbing && this->allow_rule_[kPresolveRuleProbing]) {
@@ -274,7 +610,7 @@ index 401382e..727cb79 100644
          if (problemSizeReduction() > 0.05 || tryProbing) continue;
          HPRESOLVE_CHECKED_CALL(fastPresolveLoop(postsolve_stack));
        }
-@@ -4206,6 +4235,7 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+@@ -4206,6 +4270,7 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
        if (!dependentEquationsCalled) {
          if (shrinkProblemEnabled && (numDeletedCols >= model->num_col_ / 2 ||
                                       numDeletedRows >= model->num_row_ / 2)) {
@@ -282,7 +618,7 @@ index 401382e..727cb79 100644
            analysis_.presolveTimerStart(kPresolveClockShrinkProblem);
            shrinkProblem(postsolve_stack);
            analysis_.presolveTimerStop(kPresolveClockShrinkProblem);
-@@ -4236,7 +4266,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
+@@ -4236,7 +4301,8 @@ HPresolve::Result HPresolve::presolve(HighsPostsolveStack& postsolve_stack) {
            !domcolAfterProbingCalled) {
          domcolAfterProbingCalled = true;
          storeCurrentProblemSize();
@@ -292,7 +628,7 @@ index 401382e..727cb79 100644
          if (problemSizeReduction() > 0.0)
            HPRESOLVE_CHECKED_CALL(fastPresolveLoop(postsolve_stack));
          if (problemSizeReduction() > 0.05) continue;
-@@ -4558,6 +4589,23 @@ void HPresolve::moveCutsToPool(HighsPostsolveStack& postsolve_stack) {
+@@ -4558,6 +4624,23 @@ void HPresolve::moveCutsToPool(HighsPostsolveStack& postsolve_stack) {
  }
  
  HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
@@ -316,7 +652,7 @@ index 401382e..727cb79 100644
    presolve_status_ = HighsPresolveStatus::kNotSet;
    shrinkProblemEnabled = true;
    postsolve_stack.debug_prev_numreductions = 0;
-@@ -4593,6 +4641,7 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
+@@ -4593,6 +4676,7 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
                   ? Result::kOutOfMemory
                   : Result::kException;
    }
@@ -324,7 +660,7 @@ index 401382e..727cb79 100644
    // Stop any presolve rule logging that is currently running, check
    // the presolve rule logging for errors, and analyse it
    analysis_.stopPresolveRuleLog();
-@@ -4624,7 +4673,10 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
+@@ -4624,7 +4708,10 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
    // limit, in which case any reductions performed are retained, so
    // complete presolve as if it had run to completion
    reportReductions();
@@ -336,7 +672,7 @@ index 401382e..727cb79 100644
  
    if (mipsolver != nullptr) {
      mipsolver->mipdata_->cliquetable.setMaxEntries(numNonzeros());
-@@ -4638,9 +4690,11 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
+@@ -4638,9 +4725,11 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
  
    // Possibly populate the model matrix from the presolve matrix data
    // structure
@@ -349,7 +685,73 @@ index 401382e..727cb79 100644
  
    reportProfiling();
  
-@@ -5043,4 +5097,311 @@ HighsInt HPresolve::debugGetCheckRow() const {
+@@ -4764,7 +4853,7 @@ HPresolve::Result HPresolve::substitute(HighsInt substcol, HighsInt staycol,
+ }
+ 
+ HPresolve::Result HPresolve::fixColToLower(HighsPostsolveStack& postsolve_stack,
+-                                           HighsInt col) {
++                                           HighsInt col, DiagFixing rule) {
+   double fixval = model->col_lower_[col];
+   if (fixval == -kHighsInf) return Result::kDualInfeasible;
+ 
+@@ -4772,6 +4861,7 @@ HPresolve::Result HPresolve::fixColToLower(HighsPostsolveStack& postsolve_stack,
+ 
+   const bool logging_on = analysis_.logging_on_;
+   if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleFixedCol);
++  diagCountFixing(rule, col);
+   postsolve_stack.fixedColAtLower(col, fixval, model->col_cost_[col],
+                                   getColumnVector(col));
+   Result result = removeFixedCol(col, fixval);
+@@ -4781,7 +4871,7 @@ HPresolve::Result HPresolve::fixColToLower(HighsPostsolveStack& postsolve_stack,
+ }
+ 
+ HPresolve::Result HPresolve::fixColToUpper(HighsPostsolveStack& postsolve_stack,
+-                                           HighsInt col) {
++                                           HighsInt col, DiagFixing rule) {
+   double fixval = model->col_upper_[col];
+   if (fixval == kHighsInf) return Result::kDualInfeasible;
+ 
+@@ -4789,6 +4879,7 @@ HPresolve::Result HPresolve::fixColToUpper(HighsPostsolveStack& postsolve_stack,
+ 
+   const bool logging_on = analysis_.logging_on_;
+   if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleFixedCol);
++  diagCountFixing(rule, col);
+   postsolve_stack.fixedColAtUpper(col, fixval, model->col_cost_[col],
+                                   getColumnVector(col));
+   Result result = removeFixedCol(col, fixval);
+@@ -4798,9 +4889,10 @@ HPresolve::Result HPresolve::fixColToUpper(HighsPostsolveStack& postsolve_stack,
+ }
+ 
+ HPresolve::Result HPresolve::fixColToZero(HighsPostsolveStack& postsolve_stack,
+-                                          HighsInt col) {
++                                          HighsInt col, DiagFixing rule) {
+   const bool logging_on = analysis_.logging_on_;
+   if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleFixedCol);
++  diagCountFixing(rule, col);
+   postsolve_stack.fixedColAtZero(col, model->col_cost_[col],
+                                  getColumnVector(col));
+   Result result = removeFixedCol(col, 0.0);
+@@ -4961,7 +5053,8 @@ HPresolve::Result HPresolve::updateCliqueTableFixedCol(const HighsInt col,
+         fixing.val > model->col_upper_[fixing.col] + primal_feastol) {
+       return Result::kPrimalInfeasible;
+     }
+-    HPRESOLVE_CHECKED_CALL(changeColBounds(fixing.col, fixing.val, fixing.val));
++    HPRESOLVE_CHECKED_CALL(changeColBounds(fixing.col, fixing.val, fixing.val,
++                                           kDiagBoundCliqueTable));
+   }
+   return Result::kOk;
+ }
+@@ -4995,7 +5088,8 @@ HPresolve::Result HPresolve::updateCliqueTableSubstituteCol(
+         val > model->col_upper_[col] + primal_feastol) {
+       return Result::kPrimalInfeasible;
+     }
+-    HPRESOLVE_CHECKED_CALL(changeColBounds(col, val, val));
++    HPRESOLVE_CHECKED_CALL(
++        changeColBounds(col, val, val, kDiagBoundCliqueTable));
+   }
+   return Result::kOk;
+ }
+@@ -5043,4 +5137,438 @@ HighsInt HPresolve::debugGetCheckRow() const {
    return check_row;
  }
  
@@ -371,6 +773,77 @@ index 401382e..727cb79 100644
 +      "shrink",
 +      "final_scaling"};
 +  return names[stage];
++}
++
++const char* HPresolve::diagBoundCauseName(HighsInt cause) {
++  static const char* const names[kDiagBoundCount] = {
++      "input",
++      "other",
++      "implied_bound",
++      "binary_row_test",
++      "doubleton",
++      "singleton_row",
++      "dual_fixing",
++      "dominated_columns_pairwise",
++      "implied_integer",
++      "transform",
++      "parallel_columns",
++      "equation_gcd",
++      "probing_prepare",
++      "probing",
++      "clique_table"};
++  return names[cause];
++}
++
++std::string HPresolve::diagFixingName(HighsInt rule) {
++  static const char* const names[kDiagFixBoundsEqual] = {
++      "other",
++      "empty_col",
++      "forcing_row",
++      "dominated_col",
++      "weakly_dominated_col",
++      "dual_fixing_lock",
++      "dual_fixing_single_equation",
++      "dual_fixing_bound",
++      "singleton_row_bounds_equal",
++      "simple_probing",
++      "equation_gcd",
++      "col_stuffing",
++      "parallel_columns",
++      "dominated_columns_pairwise",
++      "clique_row_normalisation",
++      "enumeration",
++      "probing"};
++  if (rule < kDiagFixBoundsEqual) return names[rule];
++  return std::string("bounds_equal_") +
++         diagBoundCauseName(rule - kDiagFixBoundsEqual);
++}
++
++void HPresolve::diagCountFixing(HighsInt rule, HighsInt col) {
++  ++diag_.fixing_count[rule];
++  diag_.fixing_nnz[rule] += colsize[col];
++}
++
++void HPresolve::diagBoundChanged(HighsInt col, DiagBoundCause cause) {
++  if (diag_.bound_cause.size() < static_cast<size_t>(model->num_col_))
++    diag_.bound_cause.resize(model->num_col_, kDiagBoundInput);
++  diag_.bound_cause[col] = cause;
++  ++diag_.bound_change_count[cause];
++}
++
++HighsInt HPresolve::diagBoundCause(HighsInt col) const {
++  return static_cast<size_t>(col) < diag_.bound_cause.size()
++             ? diag_.bound_cause[col]
++             : kDiagBoundInput;
++}
++
++// called by shrinkProblem when model->num_col_ is the new number of columns
++void HPresolve::diagShrinkCols(const std::vector<HighsInt>& newColIndex) {
++  std::vector<uint8_t>& cause = diag_.bound_cause;
++  cause.resize(newColIndex.size(), kDiagBoundInput);
++  for (size_t i = 0; i != newColIndex.size(); ++i)
++    if (newColIndex[i] != -1) cause[newColIndex[i]] = cause[i];
++  cause.resize(model->num_col_);
 +}
 +
 +void HPresolve::diagSize(int64_t& rows, int64_t& cols, int64_t& nnz) const {
@@ -419,9 +892,10 @@ index 401382e..727cb79 100644
 +  const HighsDiagSwitches& switches = highsDiagSwitches();
 +  highsLogUser(log_options, HighsLogType::kInfo,
 +               "DIAG switches off=%s probing_contingent=%" PRId64
-+               " probing_nostop=%d\n",
++               " probing_nostop=%d redundancy_explicit=%d probe_rows=%d\n",
 +               switches.off_list.c_str(), switches.probing_contingent,
-+               switches.probing_nostop);
++               switches.probing_nostop, switches.redundancy_explicit,
++               switches.probe_rows);
 +
 +  int64_t rowsNow;
 +  int64_t colsNow;
@@ -508,7 +982,13 @@ index 401382e..727cb79 100644
 +      " lifted_nonzeros=%" PRId64 " loop_seconds=%.6f prop_sweeps=%" PRId64
 +      " prop_rows=%" PRId64 " prop_entries=%" PRId64
 +      " activity_entries=%" PRId64 " max_probe_work=%" PRId64
-+      " max_probe_sweeps=%" PRId64 "\n",
++      " max_probe_sweeps=%" PRId64 " bound_changes=%" PRId64
++      " rows_touched=%" PRId64 " rows_touched_entries=%" PRId64
++      " max_rows_touched=%" PRId64 " max_rows_touched_entries=%" PRId64
++      " probe_directions=%" PRId64 " dir_rows_touched=%" PRId64
++      " dir_rows_touched_entries=%" PRId64 " max_dir_rows_touched=%" PRId64
++      " max_dir_rows_touched_entries=%" PRId64 " probe_reductions=%" PRId64
++      "\n",
 +      diag_.probing_binaries, diag_.probing_probed, diag_.probing_rounds,
 +      diag_.probing_stop, diag_.probing_fixed, diag_.probing_substitutions,
 +      diag_.probing_cliques_before, diag_.probing_cliques_after,
@@ -518,7 +998,13 @@ index 401382e..727cb79 100644
 +      diag_.probing_lifted_nonzeros, diag_.probing_loop_seconds,
 +      diag_.probing_work.prop_sweeps, diag_.probing_work.prop_rows,
 +      diag_.probing_work.prop_entries, diag_.probing_work.activity_entries,
-+      diag_.probing_max_probe_work, diag_.probing_max_probe_sweeps);
++      diag_.probing_max_probe_work, diag_.probing_max_probe_sweeps,
++      diag_.probing_bound_changes, diag_.probing_rows_touched,
++      diag_.probing_rows_touched_entries, diag_.probing_max_rows_touched,
++      diag_.probing_max_rows_touched_entries, diag_.probing_directions,
++      diag_.probing_dir_rows_touched, diag_.probing_dir_rows_touched_entries,
++      diag_.probing_max_dir_rows_touched,
++      diag_.probing_max_dir_rows_touched_entries, diag_.probing_reductions);
 +
 +  highsLogUser(log_options, HighsLogType::kInfo,
 +               "DIAG cliquemerge calls=%" PRId64
@@ -602,6 +1088,49 @@ index 401382e..727cb79 100644
 +               diag_.parallel_hash_seconds, diag_.parallel_col_seconds,
 +               diag_.parallel_row_seconds);
 +
++  int64_t fixingCount = 0;
++  int64_t fixingNnz = 0;
++  for (HighsInt rule = 0; rule != kDiagFixCount; ++rule) {
++    if (diag_.fixing_count[rule] == 0) continue;
++    fixingCount += diag_.fixing_count[rule];
++    fixingNnz += diag_.fixing_nnz[rule];
++    highsLogUser(log_options, HighsLogType::kInfo,
++                 "DIAG fixing name=%s count=%" PRId64 " nnz=%" PRId64 "\n",
++                 diagFixingName(rule).c_str(), diag_.fixing_count[rule],
++                 diag_.fixing_nnz[rule]);
++  }
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG fixing name=total count=%" PRId64 " nnz=%" PRId64
++               " fixed_col=%" PRId64 "\n",
++               fixingCount, fixingNnz,
++               allReductions[HighsPostsolveStack::kDiagReductionFixedCol]);
++
++  int64_t boundChanges = 0;
++  for (HighsInt cause = 0; cause != kDiagBoundCount; ++cause) {
++    if (diag_.bound_change_count[cause] == 0) continue;
++    boundChanges += diag_.bound_change_count[cause];
++    highsLogUser(log_options, HighsLogType::kInfo,
++                 "DIAG bound_change name=%s count=%" PRId64 "\n",
++                 diagBoundCauseName(cause), diag_.bound_change_count[cause]);
++  }
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG bound_change name=total count=%" PRId64 "\n",
++               boundChanges);
++
++  highsLogUser(log_options, HighsLogType::kInfo,
++               "DIAG dominated_columns pair_tests=%" PRId64
++               " signature_rejects=%" PRId64 " fixed=%" PRId64
++               " bounds=%" PRId64 " seconds=%.6f calls=%" PRId64
++               " type_rejects=%" PRId64 " cost_rejects=%" PRId64
++               " column_scans=%" PRId64 " scan_entries=%" PRId64
++               " dominations=%" PRId64 "\n",
++               diag_.domcol_pair_tests, diag_.domcol_signature_rejects,
++               diag_.domcol_fixed, diag_.domcol_bounds,
++               diag_.stage[kDiagDominatedColumns].seconds, diag_.domcol_calls,
++               diag_.domcol_type_rejects, diag_.domcol_cost_rejects,
++               diag_.domcol_column_scans, diag_.domcol_scan_entries,
++               diag_.domcol_dominations);
++
 +  const int64_t integerColsNow =
 +      std::count(model->integrality_.begin(), model->integrality_.end(),
 +                 HighsVarType::kInteger);
@@ -662,7 +1191,7 @@ index 401382e..727cb79 100644
 +
  }  // namespace presolve
 diff --git a/highs/presolve/HPresolve.h b/highs/presolve/HPresolve.h
-index e06e1d7..ffddc57 100644
+index e06e1d7..e18350a 100644
 --- a/highs/presolve/HPresolve.h
 +++ b/highs/presolve/HPresolve.h
 @@ -27,6 +27,7 @@
@@ -673,7 +1202,7 @@ index e06e1d7..ffddc57 100644
  #include "util/HighsHash.h"
  #include "util/HighsHashTree.h"
  #include "util/HighsLinearSumBounds.h"
-@@ -178,6 +179,164 @@ class HPresolve {
+@@ -178,6 +179,260 @@ class HPresolve {
    HighsPresolveStatus presolve_status_;
    HPresolveAnalysis analysis_;
  
@@ -694,6 +1223,51 @@ index e06e1d7..ffddc57 100644
 +    kDiagShrink,
 +    kDiagFinalScaling,
 +    kDiagStageCount
++  };
++
++  // the rule that last changed a bound of a column
++  enum DiagBoundCause {
++    kDiagBoundInput = 0,
++    kDiagBoundOther,
++    kDiagBoundImplied,
++    kDiagBoundBinaryRowTest,
++    kDiagBoundDoubleton,
++    kDiagBoundSingletonRow,
++    kDiagBoundDualFixing,
++    kDiagBoundDominatedColumns,
++    kDiagBoundImpliedInteger,
++    kDiagBoundTransform,
++    kDiagBoundParallelColumns,
++    kDiagBoundEquationGcd,
++    kDiagBoundProbingPrepare,
++    kDiagBoundProbing,
++    kDiagBoundCliqueTable,
++    kDiagBoundCount
++  };
++
++  // the rule that fixed a column; a column that column presolve removes
++  // because its bounds are equal is counted under kDiagFixBoundsEqual plus the
++  // DiagBoundCause of its last bound change
++  enum DiagFixing {
++    kDiagFixOther = 0,
++    kDiagFixEmptyCol,
++    kDiagFixForcingRow,
++    kDiagFixDominatedCol,
++    kDiagFixWeaklyDominatedCol,
++    kDiagFixDualFixingLock,
++    kDiagFixDualFixingSingleEquation,
++    kDiagFixDualFixingBound,
++    kDiagFixSingletonRow,
++    kDiagFixSimpleProbing,
++    kDiagFixEquationGcd,
++    kDiagFixColStuffing,
++    kDiagFixParallelColumns,
++    kDiagFixDominatedColumns,
++    kDiagFixCliqueRowNormalisation,
++    kDiagFixEnumeration,
++    kDiagFixProbing,
++    kDiagFixBoundsEqual,
++    kDiagFixCount = kDiagFixBoundsEqual + kDiagBoundCount
 +  };
 +
 +  struct DiagStageData {
@@ -740,6 +1314,17 @@ index e06e1d7..ffddc57 100644
 +    double probing_loop_seconds = 0;
 +    HighsDiagWork probing_work;
 +    const char* probing_stop = "not_run";
++    int64_t probing_reductions = 0;
++    int64_t probing_bound_changes = 0;
++    int64_t probing_rows_touched = 0;
++    int64_t probing_rows_touched_entries = 0;
++    int64_t probing_max_rows_touched = 0;
++    int64_t probing_max_rows_touched_entries = 0;
++    int64_t probing_directions = 0;
++    int64_t probing_dir_rows_touched = 0;
++    int64_t probing_dir_rows_touched_entries = 0;
++    int64_t probing_max_dir_rows_touched = 0;
++    int64_t probing_max_dir_rows_touched_entries = 0;
 +
 +    int64_t cliquemerge_calls = 0;
 +    double cliquemerge_seconds = 0;
@@ -779,6 +1364,23 @@ index e06e1d7..ffddc57 100644
 +    int64_t parallel_cols_merged = 0;
 +    int64_t parallel_duplicate_rows = 0;
 +    int64_t parallel_row_additions = 0;
++
++    int64_t fixing_count[kDiagFixCount] = {};
++    int64_t fixing_nnz[kDiagFixCount] = {};
++    // DiagBoundCause per column
++    std::vector<uint8_t> bound_cause;
++    int64_t bound_change_count[kDiagBoundCount] = {};
++
++    int64_t domcol_calls = 0;
++    int64_t domcol_pair_tests = 0;
++    int64_t domcol_type_rejects = 0;
++    int64_t domcol_signature_rejects = 0;
++    int64_t domcol_cost_rejects = 0;
++    int64_t domcol_column_scans = 0;
++    int64_t domcol_scan_entries = 0;
++    int64_t domcol_dominations = 0;
++    int64_t domcol_fixed = 0;
++    int64_t domcol_bounds = 0;
 +  };
 +
 +  Diag diag_;
@@ -819,6 +1421,17 @@ index e06e1d7..ffddc57 100644
 +    int64_t lifted_nonzeros = 0;
 +    int64_t max_probe_work = 0;
 +    int64_t max_probe_sweeps = 0;
++    int64_t reductions = 0;
++    int64_t bound_changes = 0;
++    int64_t rows_touched = 0;
++    int64_t rows_touched_entries = 0;
++    int64_t max_rows_touched = 0;
++    int64_t max_rows_touched_entries = 0;
++    int64_t directions = 0;
++    int64_t dir_rows_touched = 0;
++    int64_t dir_rows_touched_entries = 0;
++    int64_t max_dir_rows_touched = 0;
++    int64_t max_dir_rows_touched_entries = 0;
 +    explicit DiagProbingRound(HPresolve& presolve);
 +    void beginLoop();
 +    void endProbe(const HighsDiagWork& before);
@@ -827,6 +1440,18 @@ index e06e1d7..ffddc57 100644
 +  };
 +
 +  static const char* diagStageName(HighsInt stage);
++
++  static const char* diagBoundCauseName(HighsInt cause);
++
++  static std::string diagFixingName(HighsInt rule);
++
++  void diagCountFixing(HighsInt rule, HighsInt col);
++
++  void diagBoundChanged(HighsInt col, DiagBoundCause cause);
++
++  HighsInt diagBoundCause(HighsInt col) const;
++
++  void diagShrinkCols(const std::vector<HighsInt>& newColIndex);
 +
 +  void diagSize(int64_t& rows, int64_t& cols, int64_t& nnz) const;
 +
@@ -837,6 +1462,42 @@ index e06e1d7..ffddc57 100644
 +
    // private functions for different shared functionality and matrix
    // modification
+ 
+@@ -343,11 +598,14 @@ class HPresolve {
+ 
+   void markColDeleted(HighsInt col);
+ 
+-  Result fixColToLower(HighsPostsolveStack& postsolve_stack, HighsInt col);
++  Result fixColToLower(HighsPostsolveStack& postsolve_stack, HighsInt col,
++                       DiagFixing rule = kDiagFixOther);
+ 
+-  Result fixColToUpper(HighsPostsolveStack& postsolve_stack, HighsInt col);
++  Result fixColToUpper(HighsPostsolveStack& postsolve_stack, HighsInt col,
++                       DiagFixing rule = kDiagFixOther);
+ 
+-  Result fixColToZero(HighsPostsolveStack& postsolve_stack, HighsInt col);
++  Result fixColToZero(HighsPostsolveStack& postsolve_stack, HighsInt col,
++                      DiagFixing rule = kDiagFixOther);
+ 
+   Result transformColumn(HighsPostsolveStack& postsolve_stack, HighsInt col,
+                          double scale, double constant);
+@@ -358,11 +616,14 @@ class HPresolve {
+ 
+   void substitute(HighsInt row, HighsInt col, double rhs);
+ 
+-  Result changeColUpper(HighsInt col, double newUpper);
++  Result changeColUpper(HighsInt col, double newUpper,
++                        DiagBoundCause cause = kDiagBoundOther);
+ 
+-  Result changeColLower(HighsInt col, double newLower);
++  Result changeColLower(HighsInt col, double newLower,
++                        DiagBoundCause cause = kDiagBoundOther);
+ 
+-  Result changeColBounds(HighsInt col, double newLower, double newUpper);
++  Result changeColBounds(HighsInt col, double newLower, double newUpper,
++                         DiagBoundCause cause = kDiagBoundOther);
+ 
+   Result checkColBounds(HighsInt col, bool* isFixed = nullptr);
  
 diff --git a/highs/presolve/HPresolveAggregator.cpp b/highs/presolve/HPresolveAggregator.cpp
 index 0a033a9..5b6518d 100644
@@ -924,20 +1585,143 @@ index 0a033a9..5b6518d 100644
      substitutionOpportunities[i].first = -1;
      HPRESOLVE_CHECKED_CALL(removeRowSingletons(postsolve_stack));
      HPRESOLVE_CHECKED_CALL(checkLimits(postsolve_stack));
+diff --git a/highs/presolve/HPresolveColStuffing.cpp b/highs/presolve/HPresolveColStuffing.cpp
+index 03caf3f..eca63ca 100644
+--- a/highs/presolve/HPresolveColStuffing.cpp
++++ b/highs/presolve/HPresolveColStuffing.cpp
+@@ -67,9 +67,11 @@ HPresolve::Result HPresolve::singletonColStuffing(
+   // lambda for fixing a variable
+   auto fixCol = [&](HighsInt col, HighsInt direction) {
+     if (direction < 0)
+-      HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++      HPRESOLVE_CHECKED_CALL(
++          fixColToLower(postsolve_stack, col, kDiagFixColStuffing));
+     else
+-      HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++      HPRESOLVE_CHECKED_CALL(
++          fixColToUpper(postsolve_stack, col, kDiagFixColStuffing));
+     return Result::kOk;
+   };
+ 
 diff --git a/highs/presolve/HPresolveDominatedCols.cpp b/highs/presolve/HPresolveDominatedCols.cpp
-index 968f7e6..87af592 100644
+index 968f7e6..a6d969c 100644
 --- a/highs/presolve/HPresolveDominatedCols.cpp
 +++ b/highs/presolve/HPresolveDominatedCols.cpp
-@@ -13,6 +13,7 @@ namespace presolve {
+@@ -13,6 +13,8 @@ namespace presolve {
  
  HPresolve::Result HPresolve::dominatedColumns(
      HighsPostsolveStack& postsolve_stack) {
 +  DiagStageScope diagScope(*this, kDiagDominatedColumns);
++  ++diag_.domcol_calls;
    // See section 6.4 "Dominated columns", Achterberg et al., Presolve Reductions
    // in Mixed Integer Programming, INFORMS Journal on Computing 32(2):473-506.
    // See also Gamrath, G., Koch, T., Martin, A. et al., Progress in presolving
+@@ -69,11 +71,14 @@ HPresolve::Result HPresolve::dominatedColumns(
+                              HighsInt k) {
+     // increment counter
+     numDomChecks++;
++    ++diag_.domcol_pair_tests;
+ 
+     // rule out domination from integers to continuous variables
+     if (model->integrality_[j] == HighsVarType::kInteger &&
+-        model->integrality_[k] == HighsVarType::kContinuous)
++        model->integrality_[k] == HighsVarType::kContinuous) {
++      ++diag_.domcol_type_rejects;
+       return false;
++    }
+ 
+     // check the signatures
+     uint32_t sjMinus = signatures[j].first;
+@@ -86,20 +91,30 @@ HPresolve::Result HPresolve::dominatedColumns(
+ 
+     // the set of rows with a negative coefficient must be a superset of the
+     // dominated columns set of rows with a negative coefficient
+-    if ((~sjMinus & skMinus) != 0) return false;
++    if ((~sjMinus & skMinus) != 0) {
++      ++diag_.domcol_signature_rejects;
++      return false;
++    }
+ 
+     // the set of rows with a positive coefficient must be a subset of the
+     // dominated columns set of rows with a positive coefficient
+-    if ((sjPlus & ~skPlus) != 0) return false;
++    if ((sjPlus & ~skPlus) != 0) {
++      ++diag_.domcol_signature_rejects;
++      return false;
++    }
+ 
+     // the dominating columns cost must be smaller or equal to the dominated
+     // columns cost
+     if (scalj * model->col_cost_[j] >
+-        scalk * model->col_cost_[k] + options->small_matrix_value)
++        scalk * model->col_cost_[k] + options->small_matrix_value) {
++      ++diag_.domcol_cost_rejects;
+       return false;
++    }
+ 
+     // finally check the column vectors
++    ++diag_.domcol_column_scans;
+     for (const HighsSliceNonzero& nonz : getColumnVector(j)) {
++      ++diag_.domcol_scan_entries;
+       HighsInt row = nonz.index();
+       HighsInt akPos = findNonzero(row, k);
+       if (!checkDominationNonZero(row, scalj * nonz.value(),
+@@ -109,6 +124,7 @@ HPresolve::Result HPresolve::dominatedColumns(
+ 
+     // check row only occurring in the column vector of k
+     for (const HighsSliceNonzero& nonz : getColumnVector(k)) {
++      ++diag_.domcol_scan_entries;
+       HighsInt row = nonz.index();
+       HighsInt ajPos = findNonzero(row, j);
+       // only rows in which aj does not occur are left to check
+@@ -116,6 +132,7 @@ HPresolve::Result HPresolve::dominatedColumns(
+       if (!checkDominationNonZero(row, 0.0, scalk * nonz.value())) return false;
+     }
+ 
++    ++diag_.domcol_dominations;
+     return true;
+   };
+ 
+@@ -183,10 +200,13 @@ HPresolve::Result HPresolve::dominatedColumns(
+     // lambda for fixing variables
+     auto fixCol = [&](HighsInt col, HighsInt direction) {
+       numFixedCols++;
++      ++diag_.domcol_fixed;
+       if (direction > 0) {
+-        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(
++            fixColToUpper(postsolve_stack, col, kDiagFixDominatedColumns));
+       } else {
+-        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(
++            fixColToLower(postsolve_stack, col, kDiagFixDominatedColumns));
+       }
+       // remove row singletons and doubleton equations
+       HPRESOLVE_CHECKED_CALL(removeRowSingletons(postsolve_stack));
+@@ -263,7 +283,9 @@ HPresolve::Result HPresolve::dominatedColumns(
+           return fixCol(col, HighsInt{1});
+         } else if (model->integrality_[col] != HighsVarType::kContinuous) {
+           numModifiedBndsPredBndAnalysis++;
+-          HPRESOLVE_CHECKED_CALL(changeColLower(col, lowerBound));
++          ++diag_.domcol_bounds;
++          HPRESOLVE_CHECKED_CALL(
++              changeColLower(col, lowerBound, kDiagBoundDominatedColumns));
+         }
+       }
+       if (upperBound > -kHighsInf &&
+@@ -273,7 +295,9 @@ HPresolve::Result HPresolve::dominatedColumns(
+           return fixCol(col, HighsInt{-1});
+         } else if (model->integrality_[col] != HighsVarType::kContinuous) {
+           numModifiedBndsPredBndAnalysis++;
+-          HPRESOLVE_CHECKED_CALL(changeColUpper(col, upperBound));
++          ++diag_.domcol_bounds;
++          HPRESOLVE_CHECKED_CALL(
++              changeColUpper(col, upperBound, kDiagBoundDominatedColumns));
+         }
+       }
+       return Result::kOk;
 diff --git a/highs/presolve/HPresolveDualFixing.cpp b/highs/presolve/HPresolveDualFixing.cpp
-index 334dc54..4362503 100644
+index 334dc54..3015dcb 100644
 --- a/highs/presolve/HPresolveDualFixing.cpp
 +++ b/highs/presolve/HPresolveDualFixing.cpp
 @@ -94,6 +94,7 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
@@ -948,6 +1732,69 @@ index 334dc54..4362503 100644
          postsolve_stack.doubletonEquation(
              -1, col, rowNz.index(), 1.0, -scale, offset, model->col_lower_[col],
              model->col_upper_[col], 0.0, false, false,
+@@ -147,9 +148,11 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
+     for (const auto& rowNz : equationRowVector) {
+       if (direction * rowNz.mark >= 0) continue;
+       if (direction * rowNz.val > 0)
+-        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, rowNz.col));
++        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, rowNz.col,
++                                             kDiagFixDualFixingSingleEquation));
+       else
+-        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, rowNz.col));
++        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, rowNz.col,
++                                             kDiagFixDualFixingSingleEquation));
+     }
+     return Result::kOk;
+   };
+@@ -289,14 +292,17 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
+     if (numDownLocks == 0) {
+       if (model->col_cost_[col] > options->dual_feasibility_tolerance ||
+           model->col_lower_[col] > -kHighsInf)
+-        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(
++            fixColToLower(postsolve_stack, col, kDiagFixDualFixingLock));
+     } else {
+       assert(numUpLocks == 0);
+       if (model->col_cost_[col] < -options->dual_feasibility_tolerance ||
+           model->col_upper_[col] < kHighsInf)
+-        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(
++            fixColToUpper(postsolve_stack, col, kDiagFixDualFixingLock));
+     }
+-  } else {
++  } else if (mipsolver == nullptr ||
++             !highsDiagOff(kDiagOffDualFixingSubstitution)) {
+     bool hasSingleDownLock = numDownLocks == 1 && downLockRow != -1;
+     bool hasSingleUpLock = numUpLocks == 1 && upLockRow != -1;
+     if (hasSingleDownLock || hasSingleUpLock) {
+@@ -338,9 +344,11 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
+       // update upper bound
+       if (newBound < model->col_upper_[col] - primal_feastol) {
+         if (newBound == model->col_lower_[col])
+-          HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++          HPRESOLVE_CHECKED_CALL(
++              fixColToLower(postsolve_stack, col, kDiagFixDualFixingBound));
+         else if (model->integrality_[col] != HighsVarType::kContinuous)
+-          HPRESOLVE_CHECKED_CALL(changeColUpper(col, newBound));
++          HPRESOLVE_CHECKED_CALL(
++              changeColUpper(col, newBound, kDiagBoundDualFixing));
+       }
+     } else if (hasTighterBound(col, HighsInt{-1}, model->col_lower_[col],
+                                newBound)) {
+@@ -349,9 +357,11 @@ HPresolve::Result HPresolve::dualFixing(HighsPostsolveStack& postsolve_stack,
+       if (newBound > model->col_lower_[col] + primal_feastol) {
+         // update lower bound
+         if (newBound == model->col_upper_[col])
+-          HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++          HPRESOLVE_CHECKED_CALL(
++              fixColToUpper(postsolve_stack, col, kDiagFixDualFixingBound));
+         else if (model->integrality_[col] != HighsVarType::kContinuous)
+-          HPRESOLVE_CHECKED_CALL(changeColLower(col, newBound));
++          HPRESOLVE_CHECKED_CALL(
++              changeColLower(col, newBound, kDiagBoundDualFixing));
+       }
+     }
+   }
 diff --git a/highs/presolve/HPresolveEnumeration.cpp b/highs/presolve/HPresolveEnumeration.cpp
 index ba75ef1..aa4b314 100644
 --- a/highs/presolve/HPresolveEnumeration.cpp
@@ -973,10 +1820,24 @@ index 1b74984..295c776 100644
    if (logging_on) analysis_.startPresolveRuleLog(kPresolveRuleFourierMotzkin);
  
 diff --git a/highs/presolve/HPresolveImpliedInts.cpp b/highs/presolve/HPresolveImpliedInts.cpp
-index 905940d..91cf9d4 100644
+index 905940d..f82017f 100644
 --- a/highs/presolve/HPresolveImpliedInts.cpp
 +++ b/highs/presolve/HPresolveImpliedInts.cpp
-@@ -184,6 +184,7 @@ HPresolve::StatusResult HPresolve::convertImpliedInteger(HighsInt col,
+@@ -146,6 +146,7 @@ HPresolve::StatusResult HPresolve::convertImpliedInteger(HighsInt col,
+                                                          bool skipInputChecks) {
+   // return if column was deleted
+   if (colDeleted[col]) return StatusResult(false);
++  if (highsDiagOff(kDiagOffImpliedIntegerConversion)) return StatusResult(false);
+ 
+   // return if column is not continuous or cannot be converted to an implied
+   // integer
+@@ -180,10 +181,12 @@ HPresolve::StatusResult HPresolve::convertImpliedInteger(HighsInt col,
+   if (implColUpper[col] < newUpper - primal_feastol)
+     newUpper = implColUpper[col];
+   // round and update bounds
+-  return StatusResult(changeColBounds(col, newLower, newUpper));
++  return StatusResult(
++      changeColBounds(col, newLower, newUpper, kDiagBoundImpliedInteger));
  }
  
  HPresolve::Result HPresolve::detectImpliedIntegers() {
@@ -985,7 +1846,7 @@ index 905940d..91cf9d4 100644
      HPRESOLVE_CHECKED_CALL(static_cast<Result>(convertImpliedInteger(col)));
    return Result::kOk;
 diff --git a/highs/presolve/HPresolveParallelRowsAndCols.cpp b/highs/presolve/HPresolveParallelRowsAndCols.cpp
-index 281dbbc..67a7458 100644
+index 281dbbc..87f51f7 100644
 --- a/highs/presolve/HPresolveParallelRowsAndCols.cpp
 +++ b/highs/presolve/HPresolveParallelRowsAndCols.cpp
 @@ -15,6 +15,12 @@ namespace presolve {
@@ -1013,7 +1874,45 @@ index 281dbbc..67a7458 100644
      if (colDeleted[i]) continue;
      if (colsize[i] == 0) {
        HPRESOLVE_CHECKED_CALL(colPresolve(postsolve_stack, i));
-@@ -438,6 +447,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -346,19 +355,23 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+       switch (reductionCase) {
+         case kDominanceDuplicateColToLower:
+           delCol = duplicateCol;
+-          HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, duplicateCol));
++          HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, duplicateCol,
++                                               kDiagFixParallelColumns));
+           break;
+         case kDominanceDuplicateColToUpper:
+           delCol = duplicateCol;
+-          HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, duplicateCol));
++          HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, duplicateCol,
++                                               kDiagFixParallelColumns));
+           break;
+         case kDominanceColToLower:
+           delCol = col;
+-          HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++          HPRESOLVE_CHECKED_CALL(
++              fixColToLower(postsolve_stack, col, kDiagFixParallelColumns));
+           break;
+         case kDominanceColToUpper:
+           delCol = col;
+-          HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++          HPRESOLVE_CHECKED_CALL(
++              fixColToUpper(postsolve_stack, col, kDiagFixParallelColumns));
+           break;
+         case kMergeParallelCols:
+           const bool ok_merge = postsolve_stack.duplicateColumn(
+@@ -414,7 +427,8 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+           }
+ 
+           // change bounds
+-          HPRESOLVE_CHECKED_CALL(changeColBounds(col, mergeLower, mergeUpper));
++          HPRESOLVE_CHECKED_CALL(changeColBounds(col, mergeLower, mergeUpper,
++                                                 kDiagBoundParallelColumns));
+ 
+           // mark duplicate column as deleted
+           markColDeleted(duplicateCol);
+@@ -438,6 +452,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
            // set cost to zero
            model->col_cost_[duplicateCol] = 0;
            delCol = duplicateCol;
@@ -1021,7 +1920,7 @@ index 281dbbc..67a7458 100644
  
            // remove implied bounds, since they might in general not be valid
            // anymore
-@@ -458,6 +468,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -458,6 +473,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
      }
  
      if (delCol != -1) {
@@ -1029,7 +1928,7 @@ index 281dbbc..67a7458 100644
        if (delCol != i) buckets.erase(last);
  
        // we could have new row singletons since a column was removed. Remove
-@@ -470,6 +481,10 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -470,6 +486,10 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
    }
  
    buckets.clear();
@@ -1040,7 +1939,7 @@ index 281dbbc..67a7458 100644
  
    // Iterate non-cut rows before cut rows so that when a cut is
    // parallel to a non-cut, the non-cut is already in the bucket as
-@@ -484,7 +499,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -484,7 +504,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
      return a < b;
    });
  
@@ -1049,7 +1948,7 @@ index 281dbbc..67a7458 100644
      HighsInt i = rowOrder[rowIndex];
      if (rowDeleted[i]) continue;
      if (rowsize[i] <= 1 || (rowsize[i] == 2 && isEquation(i)) ||
-@@ -641,6 +656,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -641,6 +661,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
          postsolve_stack.duplicateRow(parallelRowCand, rowUpperTightened,
                                       rowLowerTightened, i, rowScale);
          delRow = i;
@@ -1057,7 +1956,7 @@ index 281dbbc..67a7458 100644
          markRowDeleted(i);
          for (HighsInt rowiter : rowpositions) unlink(rowiter);
          break;
-@@ -657,6 +673,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -657,6 +678,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
          HPRESOLVE_CHECKED_CALL(equalityRowAddition(
              postsolve_stack, i, parallelRowCand, -rowScale, getStoredRow()));
          delRow = parallelRowCand;
@@ -1065,7 +1964,7 @@ index 281dbbc..67a7458 100644
          // the candidate row has changed, remove it from the buckets
          last = buckets.erase(last);
          // equalityRowAddition calls rowPresolve, which can delete or change
-@@ -677,6 +694,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -677,6 +699,7 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
              getRowVector(parallelRowCand)));
          // row i has changed or has been deleted, stop scanning
          delRow = i;
@@ -1073,7 +1972,7 @@ index 281dbbc..67a7458 100644
          break;
        } else {
          assert(numSingleton == 1);
-@@ -713,6 +731,8 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
+@@ -713,6 +736,8 @@ HPresolve::Result HPresolve::detectParallelRowsAndCols(
  
      if (delRow != -1) HPRESOLVE_CHECKED_CALL(checkLimits(postsolve_stack));
    }
@@ -1083,10 +1982,10 @@ index 281dbbc..67a7458 100644
    analysis_.logging_on_ = logging_on;
    if (logging_on)
 diff --git a/highs/presolve/HPresolveProbing.cpp b/highs/presolve/HPresolveProbing.cpp
-index 807478a..22d5983 100644
+index 807478a..b4d789f 100644
 --- a/highs/presolve/HPresolveProbing.cpp
 +++ b/highs/presolve/HPresolveProbing.cpp
-@@ -25,9 +25,110 @@ std::pair<int64_t, HighsInt> HPresolve::computeProbingScore(
+@@ -25,9 +25,149 @@ std::pair<int64_t, HighsInt> HPresolve::computeProbingScore(
        std::min(HighsInt{100}, implicsUp + implicsDown));
  }
  
@@ -1102,6 +2001,7 @@ index 807478a..22d5983 100644
 +  cliques_before = mipdata.cliquetable.numCliques();
 +  implications_before = mipdata.implications.getNumImplications();
 +  in_loop = true;
++  highsDiagTouch().beginRound(presolve.model->num_row_);
 +  loop_work = highsDiagWork();
 +  loop_start = highsDiagSeconds();
 +}
@@ -1113,6 +2013,7 @@ index 807478a..22d5983 100644
 +                          work.activity_entries - before.activity_entries);
 +  max_probe_sweeps =
 +      std::max(max_probe_sweeps, work.prop_sweeps - before.prop_sweeps);
++  highsDiagTouch().endProbe();
 +}
 +
 +void HPresolve::DiagProbingRound::endLoop() {
@@ -1124,6 +2025,18 @@ index 807478a..22d5983 100644
 +  loop_work.prop_entries = work.prop_entries - loop_work.prop_entries;
 +  loop_work.activity_entries =
 +      work.activity_entries - loop_work.activity_entries;
++  const HighsDiagTouch& touch = highsDiagTouch();
++  bound_changes = touch.bound_changes;
++  rows_touched = touch.rows;
++  rows_touched_entries = touch.entries;
++  max_rows_touched = touch.max_rows;
++  max_rows_touched_entries = touch.max_entries;
++  directions = touch.directions;
++  dir_rows_touched = touch.dir_rows;
++  dir_rows_touched_entries = touch.dir_entries;
++  max_dir_rows_touched = touch.max_dir_rows;
++  max_dir_rows_touched_entries = touch.max_dir_entries;
++  highsDiagTouch().endRound();
 +  const HighsMipSolverData& mipdata = *presolve.mipsolver->mipdata_;
 +  cliques_after = mipdata.cliquetable.numCliques();
 +  implications = mipdata.implications.getNumImplications();
@@ -1163,6 +2076,22 @@ index 807478a..22d5983 100644
 +  diag.probing_work.prop_rows += loop_work.prop_rows;
 +  diag.probing_work.prop_entries += loop_work.prop_entries;
 +  diag.probing_work.activity_entries += loop_work.activity_entries;
++  diag.probing_reductions += reductions;
++  diag.probing_bound_changes += bound_changes;
++  diag.probing_rows_touched += rows_touched;
++  diag.probing_rows_touched_entries += rows_touched_entries;
++  diag.probing_max_rows_touched =
++      std::max(diag.probing_max_rows_touched, max_rows_touched);
++  diag.probing_max_rows_touched_entries = std::max(
++      diag.probing_max_rows_touched_entries, max_rows_touched_entries);
++  diag.probing_directions += directions;
++  diag.probing_dir_rows_touched += dir_rows_touched;
++  diag.probing_dir_rows_touched_entries += dir_rows_touched_entries;
++  diag.probing_max_dir_rows_touched =
++      std::max(diag.probing_max_dir_rows_touched, max_dir_rows_touched);
++  diag.probing_max_dir_rows_touched_entries =
++      std::max(diag.probing_max_dir_rows_touched_entries,
++               max_dir_rows_touched_entries);
 +  if (presolve.mipsolver->submip) return;
 +  highsLogUser(
 +      presolve.options->log_options, HighsLogType::kInfo,
@@ -1177,7 +2106,13 @@ index 807478a..22d5983 100644
 +      " finalise_seconds=%.6f prop_sweeps=%" PRId64 " prop_rows=%" PRId64
 +      " prop_entries=%" PRId64 " activity_entries=%" PRId64
 +      " probing_work=%" PRId64 " max_probe_work=%" PRId64
-+      " max_probe_sweeps=%" PRId64 "\n",
++      " max_probe_sweeps=%" PRId64 " bound_changes=%" PRId64
++      " rows_touched=%" PRId64 " rows_touched_entries=%" PRId64
++      " max_rows_touched=%" PRId64 " max_rows_touched_entries=%" PRId64
++      " probe_directions=%" PRId64 " dir_rows_touched=%" PRId64
++      " dir_rows_touched_entries=%" PRId64 " max_dir_rows_touched=%" PRId64
++      " max_dir_rows_touched_entries=%" PRId64 " probe_reductions=%" PRId64
++      "\n",
 +      diag.probing_rounds, binaries, attempted, probed, stop, fixed,
 +      bounds_tightened, substitutions, cliques_entry, cliques_before,
 +      cliques_after, implications_before, implications, lifted_nonzeros,
@@ -1185,7 +2120,10 @@ index 807478a..22d5983 100644
 +      looped ? end - loop_end : 0.0, loop_work.prop_sweeps,
 +      loop_work.prop_rows, loop_work.prop_entries, loop_work.activity_entries,
 +      loop_work.prop_entries + loop_work.activity_entries, max_probe_work,
-+      max_probe_sweeps);
++      max_probe_sweeps, bound_changes, rows_touched, rows_touched_entries,
++      max_rows_touched, max_rows_touched_entries, directions,
++      dir_rows_touched, dir_rows_touched_entries, max_dir_rows_touched,
++      max_dir_rows_touched_entries, reductions);
 +}
 +
  HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
@@ -1197,7 +2135,7 @@ index 807478a..22d5983 100644
  
    HighsInt oldNumProbed = numProbed;
  
-@@ -44,7 +145,7 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+@@ -44,7 +184,7 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
    // other binaries
    std::vector<std::tuple<int64_t, HighsInt, HighsInt, HighsInt>> binaries;
  
@@ -1206,7 +2144,7 @@ index 807478a..22d5983 100644
      binaries.reserve(model->num_col_);
      HighsRandom random(options->random_seed);
      for (HighsInt i = 0; i != model->num_col_; ++i) {
-@@ -55,6 +156,9 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+@@ -55,6 +195,9 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
        }
      }
    }
@@ -1216,7 +2154,7 @@ index 807478a..22d5983 100644
    if (!binaries.empty()) {
      // sort variables with many implications on other binaries first
      pdqsort(binaries.begin(), binaries.end());
-@@ -166,6 +270,8 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+@@ -166,6 +309,8 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
        domain.getDualFixProbingPropagation().recomputeLocks();
      }
  
@@ -1225,7 +2163,7 @@ index 807478a..22d5983 100644
      for (const auto& binvar : binaries) {
        // Count the binaries considered
        iBin++;
-@@ -180,6 +286,7 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+@@ -180,6 +325,7 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
        // Check for timeout
        tt = this->timer->read();
        if (tt > options->time_limit) {
@@ -1233,7 +2171,7 @@ index 807478a..22d5983 100644
          highsLogUser(
              options->log_options, HighsLogType::kInfo,
              "Time limit reached in probing: "
-@@ -207,16 +314,30 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+@@ -207,16 +353,30 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
              numDel >
              std::min(HighsInt{1000}, (model->num_row_ + model->num_col_) / 20);
        }
@@ -1271,7 +2209,7 @@ index 807478a..22d5983 100644
  
        // if (numProbed % 10 == 0)
        //   printf(
-@@ -225,15 +346,26 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+@@ -225,16 +385,29 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
        //       "splayContingent=%ld\n",
        //       numProbed, numDel, cliquetable.numCliques() - numCliquesStart,
        //       cliquetable.numNeighbourhoodQueries, splayContingent);
@@ -1291,6 +2229,7 @@ index 807478a..22d5983 100644
  
 +      ++diagRound.attempted;
 +      const HighsDiagWork diagProbeWork = highsDiagWork();
++      highsDiagTouch().beginProbe();
        HighsInt numBoundChgs = 0;
        HighsInt numNewCliques = -cliquetable.numCliques();
        domain.setDualFixProbingActive(dualFixProbingEnabled);
@@ -1298,9 +2237,11 @@ index 807478a..22d5983 100644
        domain.setDualFixProbingActive(false);
 +      diagRound.endProbe(diagProbeWork);
        if (!probing_result) continue;
++      diagRound.reductions += numBoundChgs;
        probingContingent += numBoundChgs;
        numNewCliques += cliquetable.numCliques();
-@@ -267,8 +399,12 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+       numNewCliques = std::max(numNewCliques, HighsInt{0});
+@@ -267,8 +440,12 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
        if (numLiftOpps >= maxNumLiftOpps)
          implications.storeLiftingOpportunity = nullptr;
  
@@ -1314,7 +2255,7 @@ index 807478a..22d5983 100644
  
      // finalise probing
      HighsInt numVarsFixed = 0;
-@@ -280,6 +416,10 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
+@@ -280,6 +457,10 @@ HPresolve::Result HPresolve::runProbing(HighsPostsolveStack& postsolve_stack) {
                                             numVarsSubstituted, liftedNonzeros));
  
      probingNumDelCol += numVarsSubstituted;
@@ -1326,10 +2267,40 @@ index 807478a..22d5983 100644
      highsLogDev(options->log_options, HighsLogType::kInfo,
                  "%" HIGHSINT_FORMAT " probing evaluations: %" HIGHSINT_FORMAT
 diff --git a/highs/presolve/HPresolveProbingUtil.cpp b/highs/presolve/HPresolveProbingUtil.cpp
-index f8914ab..0002c89 100644
+index f8914ab..7d54f3d 100644
 --- a/highs/presolve/HPresolveProbingUtil.cpp
 +++ b/highs/presolve/HPresolveProbingUtil.cpp
-@@ -256,24 +256,49 @@ HPresolve::Result HPresolve::finaliseProbing(
+@@ -131,9 +131,11 @@ HPresolve::Result HPresolve::normaliseCliqueRows(
+       if (nzs[perm[j]].value <= rhs + primal_feastol) break;
+       HighsInt col = nzs[perm[j]].index;
+       if (nzs[perm[j]].complementation == -1)
+-        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(fixColToUpper(postsolve_stack, col,
++                                             kDiagFixCliqueRowNormalisation));
+       else
+-        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col));
++        HPRESOLVE_CHECKED_CALL(fixColToLower(postsolve_stack, col,
++                                             kDiagFixCliqueRowNormalisation));
+       ++start;
+     }
+ 
+@@ -203,11 +205,13 @@ HPresolve::Result HPresolve::prepareProbing(
+   for (HighsInt i = 0; i != model->num_col_; ++i) {
+     if (std::abs(implColLower[i]) <= hugeBound &&
+         implColLower[i] > model->col_lower_[i])
+-      HPRESOLVE_CHECKED_CALL(changeColLower(i, implColLower[i]));
++      HPRESOLVE_CHECKED_CALL(
++          changeColLower(i, implColLower[i], kDiagBoundProbingPrepare));
+ 
+     if (std::abs(implColUpper[i]) <= hugeBound &&
+         implColUpper[i] < model->col_upper_[i])
+-      HPRESOLVE_CHECKED_CALL(changeColUpper(i, implColUpper[i]));
++      HPRESOLVE_CHECKED_CALL(
++          changeColUpper(i, implColUpper[i], kDiagBoundProbingPrepare));
+   }
+ 
+   // prepare for domain propagation
+@@ -256,24 +260,49 @@ HPresolve::Result HPresolve::finaliseProbing(
    cliquetable.cleanupFixed(domain);
  
    if (!firstCall) cliquetable.extractCliques(*mipsolver, false);
@@ -1382,7 +2353,7 @@ index f8914ab..0002c89 100644
      double val = 1.0;
      if (cliqueextension.second.val == 0) {
        addToRowLower(cliqueextension.first, HighsCDouble{-1});
-@@ -284,6 +309,30 @@ HPresolve::Result HPresolve::finaliseProbing(
+@@ -284,17 +313,46 @@ HPresolve::Result HPresolve::finaliseProbing(
    }
    extensionvars.clear();
  
@@ -1413,7 +2384,25 @@ index f8914ab..0002c89 100644
    // now remove fixed columns and tighten domains
    for (HighsInt i = 0; i != model->num_col_; ++i) {
      if (colDeleted[i]) continue;
-@@ -313,13 +362,21 @@ HPresolve::Result HPresolve::finaliseProbing(
+     bool newLowerBnd = model->col_lower_[i] < domain.col_lower_[i];
+     bool newUpperBnd = model->col_upper_[i] > domain.col_upper_[i];
+     if (newLowerBnd)
+-      HPRESOLVE_CHECKED_CALL(changeColLower(i, domain.col_lower_[i]));
++      HPRESOLVE_CHECKED_CALL(
++          changeColLower(i, domain.col_lower_[i], kDiagBoundProbing));
+     if (newUpperBnd)
+-      HPRESOLVE_CHECKED_CALL(changeColUpper(i, domain.col_upper_[i]));
++      HPRESOLVE_CHECKED_CALL(
++          changeColUpper(i, domain.col_upper_[i], kDiagBoundProbing));
+     if (domain.isFixed(i)) {
+       numVarsFixed++;
++      diagCountFixing(diag_.active_stage == kDiagProbing ? kDiagFixProbing
++                                                         : kDiagFixEnumeration,
++                      i);
+       postsolve_stack.removedFixedCol(i, model->col_lower_[i], 0.0,
+                                       HighsEmptySlice());
+       HPRESOLVE_CHECKED_CALL(removeFixedCol(i));
+@@ -313,13 +371,21 @@ HPresolve::Result HPresolve::finaliseProbing(
        applyConflictGraphSubstitutions(postsolve_stack, numVarsSubstituted));
  
    // aggregate variable bounds now that the clique table is populated
@@ -1435,7 +2424,7 @@ index f8914ab..0002c89 100644
    HighsCliqueTable& cliquetable = mipsolver->mipdata_->cliquetable;
    HighsImplications& implications = mipsolver->mipdata_->implications;
    for (const auto& substitution : implications.substitutions) {
-@@ -327,6 +384,7 @@ HPresolve::Result HPresolve::applyConflictGraphSubstitutions(
+@@ -327,6 +393,7 @@ HPresolve::Result HPresolve::applyConflictGraphSubstitutions(
        continue;
  
      ++numDelCol;
@@ -1443,7 +2432,7 @@ index f8914ab..0002c89 100644
  
      postsolve_stack.doubletonEquation(
          -1, substitution.substcol, substitution.staycol, 1.0,
-@@ -349,6 +407,7 @@ HPresolve::Result HPresolve::applyConflictGraphSubstitutions(
+@@ -349,6 +416,7 @@ HPresolve::Result HPresolve::applyConflictGraphSubstitutions(
      double offset;
  
      ++numDelCol;
@@ -1493,15 +2482,18 @@ index d190f4b..bb5d76d 100644
      highsLogDev(options->log_options, HighsLogType::kInfo,
                  "Implied variable bound aggregation: %" HIGHSINT_FORMAT
 diff --git a/highs/presolve/HighsPostsolveStack.h b/highs/presolve/HighsPostsolveStack.h
-index 6f8e5a5..f7c34f9 100644
+index 6f8e5a5..17b9b12 100644
 --- a/highs/presolve/HighsPostsolveStack.h
 +++ b/highs/presolve/HighsPostsolveStack.h
-@@ -1326,6 +1326,16 @@ class HighsPostsolveStack {
+@@ -1326,6 +1326,19 @@ class HighsPostsolveStack {
    }
  
    size_t numReductions() const { return reductions.size(); }
 +
-+  enum { kDiagReductionTypeCount = 17 };
++  enum {
++    kDiagReductionTypeCount = 17,
++    kDiagReductionFixedCol = (int)ReductionType::kFixedCol
++  };
 +  static_assert((int)ReductionType::kFourierMotzkinObjCol + 1 ==
 +                    kDiagReductionTypeCount,
 +                "reduction type count");
@@ -1515,10 +2507,10 @@ index 6f8e5a5..f7c34f9 100644
  }  // namespace presolve
 diff --git a/highs/util/HighsDiag.h b/highs/util/HighsDiag.h
 new file mode 100644
-index 0000000..d89bc20
+index 0000000..58d504e
 --- /dev/null
 +++ b/highs/util/HighsDiag.h
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,252 @@
 +/* clang-format off */
 +/*
 + * SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -1529,11 +2521,15 @@ index 0000000..d89bc20
 +#ifndef HIGHS_UTIL_DIAG_H_
 +#define HIGHS_UTIL_DIAG_H_
 +
++#include <algorithm>
 +#include <chrono>
 +#include <cstdint>
 +#include <cstdio>
 +#include <cstdlib>
 +#include <string>
++#include <vector>
++
++#include "util/HighsInt.h"
 +
 +enum HighsDiagOff {
 +  kDiagOffStrengthenInequalities = 0,
@@ -1548,6 +2544,10 @@ index 0000000..d89bc20
 +  kDiagOffCliqueSubstitutions,
 +  kDiagOffImpliedIntegers,
 +  kDiagOffCliqueMerging,
++  kDiagOffSimpleProbing,
++  kDiagOffDualFixingSubstitution,
++  kDiagOffImpliedEquations,
++  kDiagOffImpliedIntegerConversion,
 +  kDiagOffCount
 +};
 +
@@ -1556,6 +2556,8 @@ index 0000000..d89bc20
 +  std::string off_list;
 +  int64_t probing_contingent;
 +  bool probing_nostop;
++  bool redundancy_explicit;
++  bool probe_rows;
 +};
 +
 +inline HighsDiagSwitches highsDiagReadSwitches() {
@@ -1563,7 +2565,9 @@ index 0000000..d89bc20
 +      "strengthen_inequalities", "dominated_columns", "parallel_columns",
 +      "parallel_rows",           "sparsify",          "aggregator",
 +      "fourier_motzkin",         "enumeration",       "probing",
-+      "clique_substitutions",    "implied_integers",  "clique_merging"};
++      "clique_substitutions",    "implied_integers",  "clique_merging",
++      "simple_probing",          "dual_fixing_substitution",
++      "implied_equations",       "implied_integer_conversion"};
 +  HighsDiagSwitches switches;
 +  for (int k = 0; k < kDiagOffCount; ++k) switches.off[k] = false;
 +  const char* off = std::getenv("HIGHS_DIAG_OFF");
@@ -1602,6 +2606,11 @@ index 0000000..d89bc20
 +  }
 +  const char* nostop = std::getenv("HIGHS_DIAG_PROBING_NOSTOP");
 +  switches.probing_nostop = nostop && std::string(nostop) == "1";
++  const char* explicitSums = std::getenv("HIGHS_DIAG_REDUNDANCY_EXPLICIT");
++  switches.redundancy_explicit =
++      explicitSums && std::string(explicitSums) == "1";
++  const char* probeRows = std::getenv("HIGHS_DIAG_PROBE_ROWS");
++  switches.probe_rows = !(probeRows && std::string(probeRows) == "0");
 +  return switches;
 +}
 +
@@ -1614,17 +2623,137 @@ index 0000000..d89bc20
 +  return highsDiagSwitches().off[stage];
 +}
 +
-+// Matrix entries visited by HighsDomain on the calling thread
++// Matrix entries visited and bounds changed by HighsDomain on the calling
++// thread
 +struct HighsDiagWork {
 +  int64_t prop_sweeps = 0;
 +  int64_t prop_rows = 0;
 +  int64_t prop_entries = 0;
 +  int64_t activity_entries = 0;
++  int64_t bound_changes = 0;
 +};
 +
 +inline HighsDiagWork& highsDiagWork() {
 +  static thread_local HighsDiagWork work;
 +  return work;
++}
++
++// Rows whose activity HighsDomain updates while presolve probing probes a
++// binary. A probe is one call of HighsImplications::runProbing from the
++// presolve probing loop; a direction is one of its two computeImplications
++// calls, from the fixing of the binary to the start of the backtrack. The
++// backtrack updates only rows the direction has already updated.
++struct HighsDiagTouch {
++  bool in_probe = false;
++  bool in_direction = false;
++  // in a direction and HIGHS_DIAG_PROBE_ROWS is not 0: HighsDomain marks rows
++  bool mark_rows = false;
++  std::vector<int64_t> probe_stamp;
++  std::vector<int64_t> direction_stamp;
++  int64_t probe_id = 0;
++  int64_t direction_id = 0;
++  int64_t probe_rows = 0;
++  int64_t probe_entries = 0;
++  int64_t direction_rows = 0;
++  int64_t direction_entries = 0;
++  int64_t direction_bound_changes = 0;
++
++  // sums and maxima since beginRound
++  int64_t bound_changes = 0;
++  int64_t rows = 0;
++  int64_t entries = 0;
++  int64_t max_rows = 0;
++  int64_t max_entries = 0;
++  int64_t directions = 0;
++  int64_t dir_rows = 0;
++  int64_t dir_entries = 0;
++  int64_t max_dir_rows = 0;
++  int64_t max_dir_entries = 0;
++
++  void beginRound(size_t numRow) {
++    endRound();
++    if (probe_stamp.size() < numRow) {
++      probe_stamp.resize(numRow, 0);
++      direction_stamp.resize(numRow, 0);
++    }
++    bound_changes = 0;
++    rows = 0;
++    entries = 0;
++    max_rows = 0;
++    max_entries = 0;
++    directions = 0;
++    dir_rows = 0;
++    dir_entries = 0;
++    max_dir_rows = 0;
++    max_dir_entries = 0;
++  }
++
++  // also reached when a probing round is left by an exception
++  void endRound() {
++    in_probe = false;
++    in_direction = false;
++    mark_rows = false;
++  }
++
++  void beginProbe() {
++    in_probe = true;
++    ++probe_id;
++    probe_rows = 0;
++    probe_entries = 0;
++  }
++
++  void endProbe() {
++    in_probe = false;
++    in_direction = false;
++    mark_rows = false;
++    rows += probe_rows;
++    entries += probe_entries;
++    max_rows = std::max(max_rows, probe_rows);
++    max_entries = std::max(max_entries, probe_entries);
++  }
++
++  void beginDirection() {
++    if (!in_probe) return;
++    in_direction = true;
++    mark_rows = highsDiagSwitches().probe_rows;
++    ++direction_id;
++    direction_rows = 0;
++    direction_entries = 0;
++    direction_bound_changes = highsDiagWork().bound_changes;
++  }
++
++  void endDirection() {
++    if (!in_direction) return;
++    in_direction = false;
++    mark_rows = false;
++    ++directions;
++    bound_changes += highsDiagWork().bound_changes - direction_bound_changes;
++    dir_rows += direction_rows;
++    dir_entries += direction_entries;
++    max_dir_rows = std::max(max_dir_rows, direction_rows);
++    max_dir_entries = std::max(max_dir_entries, direction_entries);
++  }
++
++  void mark(const HighsInt* rowIndex, HighsInt count,
++            const HighsInt* rowStart) {
++    for (HighsInt k = 0; k != count; ++k) {
++      const HighsInt row = rowIndex[k];
++      if (direction_stamp[row] == direction_id) continue;
++      direction_stamp[row] = direction_id;
++      const int64_t length = rowStart[row + 1] - rowStart[row];
++      ++direction_rows;
++      direction_entries += length;
++      if (probe_stamp[row] == probe_id) continue;
++      probe_stamp[row] = probe_id;
++      ++probe_rows;
++      probe_entries += length;
++    }
++  }
++};
++
++inline HighsDiagTouch& highsDiagTouch() {
++  static thread_local HighsDiagTouch touch;
++  return touch;
 +}
 +
 +inline double highsDiagSeconds() {
