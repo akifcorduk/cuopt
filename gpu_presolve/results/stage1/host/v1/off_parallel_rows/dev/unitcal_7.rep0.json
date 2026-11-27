@@ -1,0 +1,18 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/unitcal_7.csr",
+  "status": "reduced",
+  "original": {"rows": 48939, "cols": 25755, "nnz": 127595},
+  "reduced": {"rows": 43544, "cols": 24029, "nnz": 115330},
+  "seconds": 0.023867,
+  "hash": "24a912692b5c89e1",
+  "rounds": 5,
+  "rebuilds": 1,
+  "rules": {
+    "row_rules": {"calls": 336, "work": 517784, "findings": 8160, "seconds": 0.001630, "rows_removed": 5395, "cols_removed": 1042, "nnz_removed": 8184},
+    "propagation": {"calls": 336, "work": 696702, "findings": 55623, "seconds": 0.003907, "rows_removed": 0, "cols_removed": 341, "nnz_removed": 3395},
+    "tightening": {"calls": 336, "work": 836767, "findings": 6, "seconds": 0.000838, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "doubleton": {"calls": 4, "work": 374944, "findings": 0, "seconds": 0.000389, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "parallel_rows": {"calls": 0, "work": 0, "findings": 0, "seconds": 0.000000, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "dual_fixing": {"calls": 336, "work": 224158, "findings": 343, "seconds": 0.000159, "rows_removed": 0, "cols_removed": 343, "nnz_removed": 686}
+  }
+}
