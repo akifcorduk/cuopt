@@ -2551,3 +2551,7 @@ No new user message.
   build.
 - Running: workflow `wf_88a2e01d-e49` (assumptions register), workflow `wf_baf55528-756`
   (milestone M1).
+- Later, same entry: `cuopt_runs/build_against_engine.sh s1c_m0` ended with no failed step.
+  cuOpt with the groundwork engine builds (7 minutes), the adapter's 27 tests pass, the device
+  code builds against the changed headers and its state build test passes. Script committed
+  and pushed (`1112631b6`). M0 has no open build item left.
