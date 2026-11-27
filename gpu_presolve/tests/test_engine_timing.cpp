@@ -128,3 +128,42 @@ GPRS_TEST(engine_phase_hashes_do_not_change_the_result)
   }
   GPRS_CHECK(reduced > 100);
 }
+
+// The last phase hash is over the rebuilt state in every build. No family runs here, so the
+// only change is the start step, which leaves the entries of the columns it fixes in their
+// rows: a presolve that rebuilds after its first phase and one that rebuilds only at the end
+// reach the same state there, and differ in the state before it.
+GPRS_TEST(engine_last_phase_hash_is_over_the_rebuilt_state)
+{
+  oracle::generator_options_t shape;
+  shape.max_rows      = 10;
+  shape.max_enum_cols = 8;
+  shape.p_fixed_col   = 0.4;
+  shape.p_crossing    = 0.;
+  options_t early;
+  early.enabled.fill(false);
+  early.phase_hashes           = true;
+  early.rebuild_dead_fraction  = 0.;
+  early.rebuild_fixed_fraction = 0.;
+  options_t late               = early;
+  late.rebuild_dead_fraction   = 2.;
+  late.rebuild_fixed_fraction  = 2.;
+  int32_t carried              = 0;
+  for (uint64_t seed = 7200000; seed < 7200300; ++seed) {
+    model_t m  = oracle::generate(seed, shape).model;
+    result_t a = presolve(m, early);
+    result_t b = presolve(m, late);
+    GPRS_CHECK_EQ(a.status, b.status);
+    if (a.status == status_t::infeasible) { continue; }
+    // After the start step, the three phases of the one round and the end.
+    GPRS_REQUIRE(a.phase_hash.size() == 5 && b.phase_hash.size() == 5);
+    GPRS_CHECK_EQ(a.phase_hash[4], b.phase_hash[4]);
+    GPRS_CHECK_EQ(a.hash, b.hash);
+    GPRS_CHECK_EQ(b.rebuilds, 1);
+    if (a.rebuilds == 2) {
+      GPRS_CHECK(a.phase_hash[3] != b.phase_hash[3]);
+      ++carried;
+    }
+  }
+  GPRS_CHECK(carried > 100);
+}
