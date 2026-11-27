@@ -376,8 +376,10 @@ constexpr double max_dynamism = 1e6;
 // entries of the target leave, the entry of the equation's singleton column enters with
 // -factor times its coefficient, and the finite sides of the target move by factor times the
 // right-hand side of the equation less its fixed terms. The fixed terms of the target stay in
-// its entries and are not read.
-// False, with nothing changed, when a value involved is too large to hold the tolerance.
+// its entries; they are read only for the limit on their size when the step leads back into
+// the equation (|factor| < 1 and a singleton column of the equation).
+// False, with nothing changed, when a value involved is too large to hold the tolerance or the
+// step would multiply the error of a row that the presolve has changed.
 bool subtract(state_t& st,
               postsolve_t& ps,
               const tolerances_t& tol,
@@ -389,15 +391,30 @@ bool subtract(state_t& st,
   gprs_assert(may_subtract(st, equation, target));
   const line_store_t& csr = st.csr;
   double factor           = target.first / equation.first;
-  double rhs              = dd_residual(st.row_upper[equation.row], equation.fixed_terms);
+  if (!std::isfinite(factor) || factor == 0.) { return false; }
+  // A row that the presolve has changed holds the rounding of those changes: a side scaled
+  // next to a fixed term of 1e7 is off by 1e-9, which its own entries never show. The
+  // subtraction takes the error of the equation into the target times |factor|, and what the
+  // target then says of the equation's singleton column (a bound, a fixed value, an alias)
+  // goes back into the equation divided by it. Both ways the error must not grow: the row whose
+  // error is multiplied has to be as the model gave it.
+  double scale       = std::fabs(factor);
+  bool into_equation = equation.singles == 1 && scale < 1.;
+  if ((scale > 1. && st.row_version[equation.row] != 0) ||
+      (into_equation && st.row_version[target.row] != 0)) {
+    return false;
+  }
+  // The constants of the target are then read in the units of the equation as well.
+  double shrink = into_equation ? scale : 1.;
+  double rhs    = dd_residual(st.row_upper[equation.row], equation.fixed_terms);
   double lower = st.row_lower[target.row], upper = st.row_upper[target.row];
   // The shift is rounded at the size of the right-hand side, of the fixed terms it is freed
   // from, of the product and of the side that takes it.
-  if (!std::isfinite(factor) || factor == 0. ||
-      !holds_tolerance(std::fabs(st.row_upper[equation.row]), tol) ||
+  if (!holds_tolerance(std::fabs(st.row_upper[equation.row]), tol) ||
       !keeps_sides(equation.fixed_terms, tol) || !holds_tolerance(std::fabs(factor * rhs), tol) ||
-      (lower > -inf && !holds_tolerance(std::fabs(lower), tol)) ||
-      (upper < inf && !holds_tolerance(std::fabs(upper), tol))) {
+      (lower > -inf && !holds_tolerance(std::fabs(lower) / shrink, tol)) ||
+      (upper < inf && !holds_tolerance(std::fabs(upper) / shrink, tol)) ||
+      (into_equation && !holds_tolerance(std::fabs(dd_value(target.fixed_terms)) / scale, tol))) {
     return false;
   }
   double value = equation.singles == 1 ? -factor * equation.single_value : 0.;

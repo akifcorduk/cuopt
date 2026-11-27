@@ -141,6 +141,16 @@ bool is_integer(double v) { return v == std::floor(v); }
 
 bool on_half_grid(double v) { return 2. * v == std::floor(2. * v); }
 
+// A coefficient that was read as an integer or scaled by a power of two has few significant
+// bits; one that a division or a product has left has all of them.
+bool few_bits(double v)
+{
+  constexpr int32_t bits = 30;
+  int exponent           = 0;
+  double scaled          = std::ldexp(std::frexp(v, &exponent), bits);
+  return scaled == std::floor(scaled);
+}
+
 // First and last integer of [lower, upper]; a bound off the half grid gets the tolerance.
 double first_integer(double lower)
 {
@@ -721,9 +731,12 @@ solution_t solve(const model_t& model, const std::vector<uint8_t>& line_col, int
         row_line_value[i] = model.value[e];
       }
       // An end of an integer line column is rounded inwards, so its coefficient counts as well.
-      if ((!line_col[j] || model.col_type[j] == 1) && !is_integer(model.value[e])) {
-        row_exact[i] = 0;
-      }
+      // An end of a continuous one is a side divided by its coefficient: with a coefficient
+      // that a division left (5 / 3 as a double), it lies one rounding step off the end that an
+      // integer row gives the same column.
+      bool exact = !line_col[j] || model.col_type[j] == 1 ? is_integer(model.value[e])
+                                                          : few_bits(model.value[e]);
+      if (!exact) { row_exact[i] = 0; }
     }
   }
 

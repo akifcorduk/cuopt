@@ -1153,6 +1153,11 @@ struct reference_t {
     std::vector<int32_t> size(st.csc.size.begin(), st.csc.size.end());
     dense_t lower = st.row_lower, upper = st.row_upper;
     std::vector<uint8_t> removed(st.nrows, 0);
+    // A row that an entry or a side has changed in since the model was read.
+    std::vector<uint8_t> touched(st.nrows, 0);
+    for (int32_t row = 0; row < st.nrows; ++row) {
+      touched[row] = st.row_version[row] != 0;
+    }
     // Rows that an event of this call puts on the two lists.
     std::set<int32_t> pushed, events;
     if (near) {
@@ -1218,6 +1223,7 @@ struct reference_t {
           double low   = (lower[gone] - gone_view.fixed) / ratio + kept_view.fixed;
           double high  = (upper[gone] - gone_view.fixed) / ratio + kept_view.fixed;
           if (ratio < 0) { std::swap(low, high); }
+          if (low > lower[kept] || high < upper[kept]) { touched[kept] = 1; }
           lower[kept] = std::fmax(lower[kept], low);
           upper[kept] = std::fmin(upper[kept], high);
           if (lower[kept] > upper[kept]) { call.infeasible = true; }
@@ -1248,11 +1254,19 @@ struct reference_t {
         const view_t& ev      = mine_is_equation ? mine : theirs;
         const view_t& tv      = mine_is_equation ? theirs : mine;
         double factor         = tv.core.begin()->second / ev.core.begin()->second;
-        double rhs            = upper[equation] - ev.fixed;
-        if (!std::isfinite(factor) || factor == 0. || !holds(std::fabs(upper[equation])) ||
-            !holds(std::fabs(ev.fixed)) || !holds(std::fabs(factor * rhs)) ||
-            (lower[target] > -inf && !holds(std::fabs(lower[target]))) ||
-            (upper[target] < inf && !holds(std::fabs(upper[target])))) {
+        if (!std::isfinite(factor) || factor == 0.) { return false; }
+        double scale       = std::fabs(factor);
+        bool into_equation = ev.singles == 1 && scale < 1.;
+        if ((scale > 1. && touched[equation]) || (into_equation && touched[target])) {
+          return false;
+        }
+        double shrink = into_equation ? scale : 1.;
+        double rhs    = upper[equation] - ev.fixed;
+        if (!holds(std::fabs(upper[equation])) || !holds(std::fabs(ev.fixed)) ||
+            !holds(std::fabs(factor * rhs)) ||
+            (lower[target] > -inf && !holds(std::fabs(lower[target]) / shrink)) ||
+            (upper[target] < inf && !holds(std::fabs(upper[target]) / shrink)) ||
+            (into_equation && !holds(std::fabs(tv.fixed) / scale))) {
           return false;
         }
         double value = -factor * ev.single_value;
@@ -1265,6 +1279,7 @@ struct reference_t {
         }
         if (largest / smallest > std::fmax(tv.largest / tv.smallest, 1e6)) { return false; }
         call.reductions.push_back({true, target, equation});
+        touched[target] = 1;
         lower[target] -= factor * rhs;
         upper[target] -= factor * rhs;
         unkey(target);
@@ -2101,6 +2116,82 @@ GPRS_TEST(near_coefficient_guards)
     GPRS_CHECK_EQ(f.run().findings, 1);
     GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, -1e7}, {3, 1.}}));
     GPRS_CHECK_EQ(f.st.row_upper[1], 3. - 1e7);
+  }
+}
+
+// A row that the presolve has changed holds the rounding of those changes. The subtraction
+// multiplies the error of the equation by |f| on its way into the target and, through the
+// singleton column of the equation, divides that of the target by |f| on its way back into the
+// equation: the row whose error would grow must be as the model gave it.
+GPRS_TEST(near_rows_that_the_presolve_changed)
+{
+  // What an edit does to the version of a row, with the row as it was.
+  auto change = [](fixture_t& f, int32_t row) { f.st.scale_row(row, 1., false); };
+  struct cores_t {
+    double equation, target;
+  };
+  for (cores_t c : {cores_t{1., 4.}, cores_t{4., 1.}, cores_t{1., -1.}, cores_t{-2., 2.}}) {
+    double factor = c.target / c.equation;
+    // The equation with a singleton column s and without one.
+    for (double single : {1., 0.}) {
+      for (int32_t changed = 0; changed < 4; ++changed) {
+        // Row 0: e (x0 + x1) + s = 2 e. Row 1: t (x0 + x1) + y <= 9, which is
+        // y - f s <= 9 - 2 t.
+        model_t m = make_model({{c.equation, c.equation, single, 0.}, {c.target, c.target, 0., 1.}},
+                               {2. * c.equation, -inf},
+                               {2. * c.equation, 9.},
+                               dense_t(4, 0.),
+                               dense_t(4, 3.));
+        fixture_t f(m);
+        if (changed & 1) { change(f, 0); }
+        if (changed & 2) { change(f, 1); }
+        bool taken = !(std::fabs(factor) > 1. && (changed & 1)) &&
+                     !(std::fabs(factor) < 1. && single != 0. && (changed & 2));
+        GPRS_CHECK_EQ(f.run().findings, taken ? 1 : 0);
+        if (taken) {
+          entries_t left = {{3, 1.}};
+          if (single != 0.) { left[2] = -factor; }
+          GPRS_CHECK(row_entries(f.st, 1) == left);
+          GPRS_CHECK_EQ(f.st.row_upper[1], 9. - 2. * c.target);
+          check_addition(f.ps, 0, 1, 0, factor);
+          GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+        } else {
+          GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{0, c.target}, {1, c.target}, {3, 1.}}));
+          GPRS_CHECK_EQ(f.st.row_upper[1], 9.);
+          GPRS_CHECK(f.ps.order.empty());
+        }
+      }
+    }
+  }
+  // With |f| < 1 and a singleton column of the equation, the sides and the fixed terms of the
+  // target are read in the units of the equation: the limit of 1e8 is on their size divided by
+  // |f|. Without that column the limit is on their size, as with |f| >= 1.
+  for (double single : {1., 0.}) {
+    for (double value : {5e4, 2e5}) {
+      bool taken = value == 5e4 || single == 0.;
+      {
+        // Row 0: 1024 (x0 + x1) + s = 1024. Row 1: x0 + x1 + y <= value.
+        model_t m = make_model({{1024., 1024., single, 0.}, {1., 1., 0., 1.}},
+                               {1024., -inf},
+                               {1024., value},
+                               dense_t(4, 0.),
+                               dense_t(4, 3.));
+        fixture_t f(m);
+        GPRS_CHECK_EQ(f.run().findings, taken ? 1 : 0);
+        if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], value - 1.); }
+      }
+      {
+        // Row 1: x0 + x1 + y + w <= 5 with w fixed at value.
+        model_t m = make_model({{1024., 1024., single, 0., 0.}, {1., 1., 0., 1., 1.}},
+                               {1024., -inf},
+                               {1024., 5.},
+                               {0., 0., 0., 0., value},
+                               {3., 3., 3., 3., value});
+        fixture_t f(m);
+        GPRS_CHECK_EQ(f.run().findings, taken ? 1 : 0);
+        if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], 4.); }
+      }
+    }
   }
 }
 

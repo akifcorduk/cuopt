@@ -36,7 +36,10 @@
 // for each side on its own (a huge side does not loosen the other one). The coefficient of an
 // integer line column counts as an enumerated one here: the end that its row gives the column is
 // rounded inwards, and a coefficient one rounding step away from an integer (coefficient
-// strengthening with the error bound of an activity) would move that end by one.
+// strengthening with the error bound of an activity) would move that end by one. The coefficient
+// of a continuous line column counts when it has more than 30 significant bits: it is then what
+// a division or a product left (an equation subtracted with a factor of 1 / 24), and the end
+// that the row gives the column is one rounding step off the end of an integer row.
 // An end of the interval of a line column is exact when it is a bound that is a multiple of 1/2
 // or comes from a row of the first kind; any other end gets solve_tolerance * max(1, |end|). A
 // scaled case (factors that are powers of two) gets the tolerance in its scaled rows and is

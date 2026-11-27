@@ -496,6 +496,23 @@ GPRS_TEST(oracle_solve_integer_line_column_with_a_coefficient_that_is_not_an_int
   GPRS_CHECK_EQ(solve_model(m, 3).objective, 2.);
 }
 
+GPRS_TEST(oracle_solve_continuous_line_column_with_a_coefficient_that_a_division_left)
+{
+  // 216 x0 + 168 x1 + 40 y = 120 and -a y <= -5 with a = 40 / 24, one rounding step below 5 / 3:
+  // what is left of 9 x0 + 7 x1 <= 0 when the equation is subtracted from it with the factor
+  // 1 / 24. The equation gives y = 3 for x = 0 and the other row y >= 5 / a, just above 3: that
+  // row has the tolerance although its sides are integers.
+  double a = 40. * (1. / 24.);
+  GPRS_CHECK(5. / a > 3.);
+  model_t m    = make_model({{0., 2., -8., 1}, {0., 1., 6., 1}, {-inf, 5., -1., 0}},
+                            {{-inf, {{2, -a}}, -5.}, {120., {{0, 216.}, {1, 168.}, {2, 40.}}, 120.}},
+                         0.);
+  solution_t s = solve_model(m, 3, 10);
+  GPRS_CHECK(s.outcome == outcome_t::optimal);
+  GPRS_CHECK_EQ(s.objective, -3.);
+  GPRS_CHECK(s.feasible == points_t({{0., 0., 3.}}));
+}
+
 GPRS_TEST(oracle_solve_tolerance_of_a_side_does_not_grow_with_the_other_side)
 {
   // 0.25 <= 0.25 x with a huge finite upper side, as a fixed column at a huge bound leaves it

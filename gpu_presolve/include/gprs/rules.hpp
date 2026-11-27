@@ -247,10 +247,19 @@ struct doubleton_t {
 // The pair is left alone, and counts as not parallel towards the limit, when neither row
 // qualifies; when |v| * tol.side_error > tol.feasibility for v the right-hand side of the
 // equation, its fixed terms, the shift, or a finite side of the target (the fixed terms of the
-// target stay in its entries and are not read); when f or the new coefficient is zero or not
-// finite; or when max |a| / min |a| over the free entries of the target would end above 1e6 and
-// above its value before. That last test and the step read the target once more and spend its
-// used slots.
+// target stay in its entries and are read only in the case below); when f or the new
+// coefficient is zero or not finite; or when max |a| / min |a| over the free entries of the
+// target would end above 1e6 and above its value before. That last test and the step read the
+// target once more and spend its used slots.
+// It is left alone as well when the step would multiply an error that a row holds. A row that
+// the presolve has changed (row_version != 0) holds the rounding of those changes, which keeps
+// the tolerance in the units of that row only: a side that was scaled next to a fixed term of
+// 1e7 is off by 1e-9. The step takes the error of the equation into the target times |f|. When
+// the equation has a singleton column, what the target then says of that column (a bound, a
+// fixed value, an alias) goes back into the equation divided by |f|. So with |f| > 1 the
+// equation must be as the model gave it. With |f| < 1 and a singleton column of the equation
+// the target must be, and the limit above is on |side| / |f| for its finite sides and holds
+// for its fixed terms divided by |f| too. With |f| = 1 either row may have been changed.
 // A reduction can change the core of a row that stays: of the kept row or the equation, where a
 // column that only the two rows held becomes a singleton column, and of the equation, whose
 // singleton column gets a second entry. Such a row and the target have no key until the next
