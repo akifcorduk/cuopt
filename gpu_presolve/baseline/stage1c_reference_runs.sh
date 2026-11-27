@@ -28,6 +28,13 @@
 #   cheap_dev, cheap_large
 #                 all cheap rules on (HiGHS's expensive stages off) on the testbed: the reference
 #                 of the Stage 1c gate there. For the 240 it is results/bench240/highs_cheap_all.
+#   tb_<step>_dev, tb_<step>_large
+#                 the ladder on the testbed, where two instances above 1e7 nonzeros
+#                 (neos-4332810-sesia, dlr2) carry the distance to all cheap rules: m1_a to m3_a
+#                 as above, m4_a (the dual-fixing extensions as well; the switch set of
+#                 off_leftout.csv), m4_b (the same with the dominated-column tests; the switch
+#                 set of off_leftout_minor.csv) and off5 (all cheap rules without the dominated,
+#                 weakly dominated and forcing column).
 
 set -u -o pipefail
 
@@ -120,6 +127,21 @@ bench m2_b "$M2_OFF" "$LADDER_B"
 bench m3_b "$M3_OFF" "$LADDER_B"
 step cheap_large "$OUT_TESTBED" --set large --jobs 1 --time-limit 3600 \
   --env "HIGHS_DIAG_OFF=$HEAVY"
+
+testbed() {
+  local step_name=$1 off=$2 rules=$3
+  step "tb_${step_name}_dev" "$OUT_TESTBED" --set dev --jobs 4 --time-limit 1800 \
+    --env "HIGHS_DIAG_OFF=$off" --presolve-rule-off "$rules"
+  step "tb_${step_name}_large" "$OUT_TESTBED" --set large --jobs 3 --time-limit 3600 \
+    --env "HIGHS_DIAG_OFF=$off" --presolve-rule-off "$rules"
+}
+
+testbed m1_a "$M1_OFF" "$LADDER_A"
+testbed m2_a "$M2_OFF" "$LADDER_A"
+testbed m3_a "$M3_OFF" "$LADDER_A"
+testbed m4_a "$HEAVY,$MINOR" "$LADDER_A"
+testbed m4_b "$HEAVY,$MINOR" "$LADDER_B"
+testbed off5 "$HEAVY" 32
 
 echo "$FAILED" > "$STATE/ENDED"
 say "end; failed steps:${FAILED:- none}"
