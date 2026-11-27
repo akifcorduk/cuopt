@@ -169,7 +169,7 @@ def summarize(args, entries, out):
                 }
             )
             # Reports of engines before the start step had its own entry do not have these.
-            for key in ("start", "fixed_point", "explicit"):
+            for key in ("start", "fixed_point", "explicit", "parallel_rows"):
                 if key in best:
                     row[key] = best[key]
             if not row["same_hash"]:

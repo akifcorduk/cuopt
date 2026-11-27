@@ -182,11 +182,13 @@ constexpr uint8_t activity =
 // (the upper side for the minimum activity, the lower side for the maximum activity): the
 // bounds that the row implies are those of its last visit.
 constexpr uint8_t activity_unread = (1 << row_list::row_rules) | (1 << row_list::tightening);
-// A side of the row changed.
-constexpr uint8_t side = activity | (1 << row_list::doubleton);
+// A side of the row changed. The parallel rows read the sides as well: whether a row is an
+// equation, and their size, decide whether it is subtracted from a row that is parallel to it
+// up to singleton columns (rules.hpp, (e)).
+constexpr uint8_t side = activity | (1 << row_list::doubleton) | (1 << row_list::parallel_rows);
 // An entry of the row was changed, moved or deleted, the row was scaled, or one of its columns
 // was fixed.
-constexpr uint8_t entries = side | (1 << row_list::parallel_rows);
+constexpr uint8_t entries = side;
 constexpr uint8_t sparse  = 1 << row_list::compaction;
 // A singleton column is a live column with one live entry. The row of that entry gets this event
 // when the column becomes one (delete_row, delete_entry or move_entry took its other entries)

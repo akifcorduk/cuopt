@@ -6,9 +6,11 @@
 /* clang-format on */
 
 // gprs_presolve <model.csr> [--json <file>] [--primal-only] [--time-limit <seconds>]
-//               [--off <rule>]...
+//               [--off <rule>]... [--exact-parallel-rows]
 // Reads a GPRSCSR1 dump, runs the presolve, prints sizes before and after, seconds and the
 // determinism hash of the reduced model, and writes the same as JSON.
+// --exact-parallel-rows: only rows whose free entries are proportional are merged
+// (options_t::near_parallel_rows off).
 // Exit code 0 when the presolve ran, 1 when the dump cannot be read, 2 on a usage error.
 
 #include <gprs/io.hpp>
@@ -75,6 +77,10 @@ void write_report(FILE* out,
                result.fixed_point ? "true" : "false",
                result.explicit_rounds,
                result.seconds_explicit);
+  std::fprintf(out,
+               "  \"parallel_rows\": {\"merges\": %zu, \"subtractions\": %zu},\n",
+               result.postsolve.parallel_rows.size(),
+               result.postsolve.row_additions.size());
   std::fprintf(out, "  \"start\": ");
   write_stats(out, result.start);
   std::fprintf(out, ",\n  \"rules\": {\n");
@@ -90,7 +96,7 @@ int usage()
 {
   std::fprintf(stderr,
                "usage: gprs_presolve <model.csr> [--json <file>] [--primal-only] "
-               "[--time-limit <seconds>] [--off <rule>]...\n");
+               "[--time-limit <seconds>] [--off <rule>]... [--exact-parallel-rows]\n");
   return 2;
 }
 
@@ -106,6 +112,8 @@ int main(int argc, char** argv)
       json_path = argv[++i];
     } else if (arg == "--primal-only") {
       options.primal_only = true;
+    } else if (arg == "--exact-parallel-rows") {
+      options.near_parallel_rows = false;
     } else if (arg == "--time-limit" && i + 1 < argc) {
       options.time_limit = std::atof(argv[++i]);
     } else if (arg == "--off" && i + 1 < argc) {

@@ -47,9 +47,11 @@ struct rule_result_t {
   int64_t records = 0;
   // The call stopped on its budget and returned the unprocessed part of its list to the state.
   bool stopped = false;
-  // The call left undone a reduction that no list holds: bound propagation, when a bound of a
-  // continuous column has had its steps (see (b)). The state is then no fixed point of the
-  // rules, although every list can be empty.
+  // The call left undone a reduction that no list holds, or cannot tell: bound propagation,
+  // when a bound of a continuous column has had its steps (see (b)); the parallel rows, when
+  // they leave a pair alone only because the presolve has changed one of its rows, or end the
+  // comparisons of a row on opt.parallel_bucket_limit with rows of its bucket left (see (e)).
+  // The state is then no fixed point of the rules, although every list can be empty.
   bool limited = false;
 };
 
@@ -214,13 +216,21 @@ struct doubleton_t {
 // work_t keeps, for every live row with at least two core entries, a hash of its core that does
 // not depend on the storage order (coefficients divided by the one of the smallest column index
 // and rounded, so that parallel rows get one hash except at a rounding boundary). The rows of
-// row_list::parallel_rows whose free entries changed get a new hash, and so do the rows of
+// row_list::parallel_rows are those with a change of their free entries or of a side
+// (row_event::side: the sides decide what is done with a pair, below). Those whose row_version
+// or number of free entries changed get a new hash, and so do the rows of
 // row_list::singletons, whose core changed with their free entries as they were. A bucket is the
 // set of those rows with equal hash and equal core length, in index order. Each listed row, in
 // index order, is compared exactly with its neighbours in its bucket, listed or not: at most
 // opt.parallel_bucket_limit above it, then as many below it. The work is thus bounded by the
 // entries of the listed rows times twice that limit, and a row that changed is still found
 // parallel to a row that did not.
+// A row whose comparisons end on that limit while its bucket has a further live row in that
+// direction has not been compared with it, and no list will bring the two together when the
+// rows between them leave the bucket (deleted, merged, subtracted from, or with other
+// entries): only a presolve of the reduced model compares them. The call reports limited
+// (rule_result_t::limited). While no call has, every two rows of a bucket have been compared
+// since the last change of either.
 // Two parallel rows without a singleton column: the one with the smaller index is kept: the
 // other row's sides, less its fixed terms, divided by the ratio, plus the fixed terms of the
 // kept row, are intersected with the kept row's sides (set_row_lower / set_row_upper;
@@ -257,6 +267,7 @@ struct doubleton_t {
 // by |a|: it grows by g_T = max(1, 1 / |a|), and by 1 without such a column.
 // The pair is left alone, and counts as not parallel towards the limit, when neither row
 // qualifies; when f or the new coefficient is zero or not finite; when |f| is not as above; when
+// g_E or g_T is above 1000; when
 // |v| * tol.side_error > tol.feasibility for v the shift, g_E times the right-hand side of the
 // equation, g_E times its fixed terms, g_T times a finite side of the target or, with g_T > 1,
 // g_T times the fixed terms of the target (with g_T = 1 these stay in its entries and are not
@@ -266,6 +277,14 @@ struct doubleton_t {
 // 1e-9), and no limit on a size bounds it; or when max |a| / min |a| over the free entries of
 // the target would end above 1e6 and above its value before. That last test and the step read
 // the target once more and spend its used slots.
+// Every test but the one on row_version reads the two rows as they are, so the pair is tested
+// again when it can end otherwise: a change of an entry, of a side or of the core lists the
+// row, and with g_E and g_T at most 1000 the terms of fixed columns that leave a row without
+// listing it (state_t::absorb_fixed_terms: sides and terms up to 1e5) are below every limit
+// on a size, in the row and in the side. The test on row_version reads what the presolve has
+// done: a pair that fails it alone would be subtracted by a presolve of the reduced model,
+// which finds the row as a model gave it. The call then reports limited
+// (rule_result_t::limited), and the presolve does not end at a fixed point.
 // A reduction can change the core of a row that stays: of the kept row or the equation, where a
 // column that only the two rows held becomes a singleton column, and of the equation, whose
 // singleton column gets a second entry. Such a row and the target have no key until the next

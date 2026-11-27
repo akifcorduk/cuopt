@@ -81,7 +81,8 @@ namespace {
 
 // Sides and sums of fixed terms up to this size are out of reach of every limit that a family
 // puts on the size of a side: tol.feasibility / tol.side_error, 1e8 by default, for a row that
-// row tightening has scaled by up to 1000.
+// row tightening has scaled by up to 1000 and for a constant whose error a subtraction of
+// parallel rows multiplies by up to 1000.
 constexpr double plain_size = 1e5;
 
 // The finite sides of a row lose the sum of the terms of its fixed columns, `fixed_terms`, whose

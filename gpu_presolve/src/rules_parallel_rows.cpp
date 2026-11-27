@@ -374,27 +374,44 @@ inline bool may_subtract(const state_t& st, const near_row_t& equation, const ne
 // above what it was.
 constexpr double max_dynamism = 1e6;
 
+// An addition is left out when it would multiply the error of a row by more than this. With
+// it, sides and fixed terms up to 1e5 are out of reach of the limits on their size below
+// (tol.feasibility / tol.side_error, 1e8 by default), so that the terms of fixed columns that
+// leave a row plainly (state_t::absorb_fixed_terms) change nothing for a pair.
+constexpr double max_growth = 1e3;
+
+// What became of a pair of which one row may be subtracted from the other.
+enum class subtraction_t : uint8_t {
+  made,
+  // Nothing changed, and nothing would with the same rows in another presolve.
+  left,
+  // Nothing changed, for the one reason that the presolve has changed a row whose error the
+  // step would multiply: a presolve that is given these rows as its model makes the step.
+  left_to_a_changed_row
+};
+
 // target -= factor * equation with factor * core of equation = core of target: the core
 // entries of the target leave, the entry of the equation's singleton column enters with
 // -factor times its coefficient, and the finite sides of the target move by factor times the
 // right-hand side of the equation less its fixed terms. The fixed terms of the target stay in
 // its entries; they are read only for the limit on their size when the step multiplies the
 // error of the target.
-// False, with nothing changed, when a value involved is too large to hold the tolerance where
-// the step takes it, or the step would multiply the error of a row that the presolve has
-// changed.
-bool subtract(state_t& st,
-              postsolve_t& ps,
-              const tolerances_t& tol,
-              work_budget_t& budget,
-              const near_row_t& equation,
-              const near_row_t& target,
-              std::vector<int64_t>& slots)
+// Nothing is changed when a value involved is too large to hold the tolerance where the step
+// takes it, or the step would multiply the error of a row by more than max_growth or that of a
+// row that the presolve has changed.
+subtraction_t subtract(state_t& st,
+                       postsolve_t& ps,
+                       const tolerances_t& tol,
+                       work_budget_t& budget,
+                       const near_row_t& equation,
+                       const near_row_t& target,
+                       std::vector<int64_t>& slots)
 {
+  constexpr subtraction_t left = subtraction_t::left;
   gprs_assert(may_subtract(st, equation, target));
   const line_store_t& csr = st.csr;
   double factor           = target.first / equation.first;
-  if (!std::isfinite(factor) || factor == 0.) { return false; }
+  if (!std::isfinite(factor) || factor == 0.) { return left; }
   // From here on the target row of the model is the new target plus factor times the
   // equation: whatever is done to the equation later, within its tolerance (a side rounded, a
   // subtraction, a merge), reaches that row times |factor|. And once the singleton column of
@@ -402,7 +419,7 @@ bool subtract(state_t& st,
   // divided by the factor: whatever is done to the target reaches it divided by |factor|.
   // Neither may grow.
   double scale = std::fabs(factor);
-  if (scale > 1. || (equation.singles == 1 && scale != 1.)) { return false; }
+  if (scale > 1. || (equation.singles == 1 && scale != 1.)) { return left; }
   // The constants of a row are stored with an error: that of a double for a row as the model
   // gave it, and the rounding of every change for a row that the presolve has changed (a side
   // scaled next to a fixed term of 1e7 is off by 1e-9, which holds the tolerance in that row
@@ -412,11 +429,7 @@ bool subtract(state_t& st,
   double grow_equation = std::fmax(1., scale / target.single_min);
   double grow_target   = 1.;
   if (equation.singles == 1) { grow_target = std::fmax(1., 1. / std::fabs(equation.single_value)); }
-  // An error of unknown size must not grow: the row has to be as the model gave it.
-  if ((grow_equation > 1. && st.row_version[equation.row] != 0) ||
-      (grow_target > 1. && st.row_version[target.row] != 0)) {
-    return false;
-  }
+  if (!(grow_equation <= max_growth && grow_target <= max_growth)) { return left; }
   double rhs   = dd_residual(st.row_upper[equation.row], equation.fixed_terms);
   double lower = st.row_lower[target.row], upper = st.row_upper[target.row];
   // The error of a double must hold the tolerance where it arrives. The shift is rounded at the
@@ -429,10 +442,17 @@ bool subtract(state_t& st,
       (upper < inf && !holds_tolerance(std::fabs(upper) * grow_target, tol)) ||
       (grow_target > 1. &&
        !holds_tolerance(std::fabs(dd_value(target.fixed_terms)) * grow_target, tol))) {
-    return false;
+    return left;
   }
   double value = equation.singles == 1 ? -factor * equation.single_value : 0.;
-  if (equation.singles == 1 && (!std::isfinite(value) || value == 0.)) { return false; }
+  if (equation.singles == 1 && (!std::isfinite(value) || value == 0.)) { return left; }
+  // An error of unknown size must not grow: the row has to be as the model gave it. The one
+  // test that reads what the presolve has done and not the rows as they are; it comes after
+  // those that the same two rows fail as the model of another presolve.
+  if ((grow_equation > 1. && st.row_version[equation.row] != 0) ||
+      (grow_target > 1. && st.row_version[target.row] != 0)) {
+    return subtraction_t::left_to_a_changed_row;
+  }
 
   budget.spend(csr.used[target.row]);
   slots.clear();
@@ -456,7 +476,7 @@ bool subtract(state_t& st,
   }
   // The target keeps an entry: the rows do not both lack a singleton column.
   gprs_assert(new_max > 0.);
-  if (new_max / new_min > std::fmax(old_max / old_min, max_dynamism)) { return false; }
+  if (new_max / new_min > std::fmax(old_max / old_min, max_dynamism)) { return left; }
 
   size_t k = 0;
   if (equation.singles == 1) {
@@ -470,7 +490,7 @@ bool subtract(state_t& st,
     st.shift_row_sides(target.row, factor, rhs);
   }
   ps.push_row_addition(target.row, equation.row, factor);
-  return true;
+  return subtraction_t::made;
 }
 
 // What the family keeps of one row, in one place: arrays indexed by row that each start on a
@@ -794,7 +814,11 @@ rule_result_t parallel_rows_t::run(state_t& st,
                                            (s.self.singles == other.singles && row < other.row));
       const near_row_t& equation = mine_is_equation ? s.self : other;
       const near_row_t& target   = mine_is_equation ? other : s.self;
-      if (!subtract(st, ps, tol, budget, equation, target, w.slots)) { return false; }
+      subtraction_t step         = subtract(st, ps, tol, budget, equation, target, w.slots);
+      if (step != subtraction_t::made) {
+        result.limited = result.limited || step == subtraction_t::left_to_a_changed_row;
+        return false;
+      }
       w.drop(target.row);
       // The singleton column of the equation has a second entry, and a column that only the
       // two rows held is a singleton column of the equation now.
@@ -805,8 +829,9 @@ rule_result_t parallel_rows_t::run(state_t& st,
 
     // Rows above first: they are merged into this row, whose sides then go to a row below.
     int32_t unlike = 0;
-    for (int32_t other = w.above[row];
-         other != no_row && !done && unlike < opt.parallel_bucket_limit;) {
+    int32_t other  = w.above[row];
+    while (other != no_row && !done &&
+           (unlike < opt.parallel_bucket_limit || !st.row_alive[other])) {
       int32_t next = w.above[other];
       if (!st.row_alive[other]) {
         w.drop(other);
@@ -826,15 +851,23 @@ rule_result_t parallel_rows_t::run(state_t& st,
       ++result.findings;
       budget.found();
     }
+    // The scan ended on the limit with a row of the bucket left: the listed row was not
+    // compared with it, and will be only by a presolve that finds fewer rows between the two.
+    if (result.outcome == ok && !done && other != no_row) { result.limited = true; }
 
     // at is the listed row or, below it, the last row found unlike.
-    unlike = 0;
-    for (int32_t at = row; result.outcome == ok && !done && unlike < opt.parallel_bucket_limit;) {
-      int32_t other = w.below[at];
+    unlike     = 0;
+    int32_t at = row;
+    while (result.outcome == ok && !done) {
+      other = w.below[at];
       if (other == no_row) { break; }
       if (!st.row_alive[other]) {
         w.drop(other);
         continue;
+      }
+      if (unlike == opt.parallel_bucket_limit) {
+        result.limited = true;
+        break;
       }
       gprs_assert(!core_changed(other) && w.key_is_current(st, other));
       budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);

@@ -160,8 +160,10 @@ struct result_t {
   int32_t rebuilds        = 0;
   // The presolve ended because nothing was left to do: the last round changed nothing, no call
   // of it stopped on its budget, no list of the cascade is left, no family reported limited
-  // (rule_result_t::limited), no row holds a term of a fixed column that a family could read,
-  // and no limit (max_rounds, max_cascade_passes, time_limit) cut it short.
+  // (rule_result_t::limited: a bound of a continuous column that has had its steps, a
+  // subtraction of parallel rows left to a row that the presolve has changed, rows of a bucket
+  // of parallel rows that were not compared), no row holds a term of a fixed column that a
+  // family could read, and no limit (max_rounds, max_cascade_passes, time_limit) cut it short.
   // presolve(reduced, options) then returns unchanged; see presolve().
   bool fixed_point = false;
   // From the input model to the finished reduced model.
@@ -233,13 +235,20 @@ struct result_t {
 // unchanged, and the reduced model has, for the families that are switched on, no empty row,
 // no singleton row, no row that is redundant or forcing on its own bounds (forcing as in
 // rules.hpp, (a), which leaves a row with a continuous column off its bound), no coefficient that
-// row tightening would change and no bound that propagation would tighten. What it rests on:
-// every row was visited by every family after its last change; no row holds the term of a fixed
-// column, and a row that lost one other than plainly was visited again; an activity whose error
-// bound could decide a test was summed from scratch before the test (refresh_activity). What
-// it does not cover: a stored activity differs from the sum that the second presolve starts
-// with by its rounding, so a test that the last bits of an activity decide can go the other
-// way there.
+// row tightening would change, no bound that propagation would tighten, and no two rows that
+// the parallel rows would merge or subtract among those they compared after the last change of
+// either. What it rests on: every row was visited by every family after its last change, a
+// change of a side included, which the parallel rows read as well (row_event::side); no row
+// holds the term of a fixed column, and a row that lost one other than plainly was visited
+// again; no family left a reduction to the history of a row, which a second presolve does not
+// have, and every two rows of a bucket of parallel rows were compared (the parallel rows
+// report limited otherwise: a subtraction left to a row that the presolve has changed, and
+// comparisons of a row that ended on opt.parallel_bucket_limit with rows of its bucket left,
+// which a second presolve reaches once the rows between have gone; rules.hpp, (e)); an
+// activity whose error bound could decide a test was summed from scratch before the test
+// (refresh_activity). What it does not cover: a stored activity differs from the sum that the
+// second presolve starts with by its rounding, so a test that the last bits of an activity
+// decide can go the other way there.
 // Added with the implementation:
 // - A family is called when it is switched on and its list is not empty; dual fixing never in
 //   primal-only mode. A call that stops on its budget ends the cascade after the pass it is in,
