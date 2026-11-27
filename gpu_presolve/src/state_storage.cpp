@@ -79,6 +79,94 @@ void state_t::compact_sparse_lines()
 
 namespace {
 
+// Sides and sums of fixed terms up to this size are out of reach of every limit that a family
+// puts on the size of a side: tol.feasibility / tol.side_error, 1e8 by default, for a row that
+// row tightening has scaled by up to 1000.
+constexpr double plain_size = 1e5;
+
+// The finite sides of a row lose the sum of the terms of its fixed columns, `fixed_terms`, whose
+// absolute values sum to `fixed_size`: one compensated sum in storage order, and the same
+// arithmetic wherever a model is read from the state (dd_residual).
+// Returns whether a family can treat the row otherwise now. It cannot when the move is plain:
+// the sum is one double, every new side is the exact difference, no side, no sum and no term
+// that the activities of the row have held since they were summed is above plain_size, and no
+// new side lies within the feasibility tolerance of an integer without being one. Then a side
+// of the free part, an activity and a candidate are the same numbers before and after, the
+// error bounds of the activities are far below what a test compares them with, whatever the
+// number of terms, and row tightening, which rounds the sides of an integer row only when they
+// are off by more than the tolerance while the row holds such a term, has nothing to round.
+// Called before the activities of the row are recomputed.
+bool move_fixed_terms(state_t& st, int32_t row, dd_t fixed_terms, double fixed_size)
+{
+  bool plain = fixed_terms.lo == 0. && fixed_size <= plain_size &&
+               st.min_act.max_term[row] <= plain_size && st.max_act.max_term[row] <= plain_size;
+  bool ordered = st.row_lower[row] <= st.row_upper[row];
+  for (double* side : {&st.row_lower[row], &st.row_upper[row]}) {
+    if (std::isinf(*side)) { continue; }
+    double error;
+    two_sum(*side, -fixed_terms.hi, error);
+    double moved = dd_residual(*side, fixed_terms);
+    gprs_assert(std::isfinite(moved));
+    double nearest = std::round(moved);
+    plain          = plain && error == 0. && std::fabs(*side) <= plain_size &&
+            std::fabs(moved) <= plain_size &&
+            (moved == nearest || std::fabs(moved - nearest) > st.tol.feasibility);
+    *side = moved;
+  }
+  gprs_assert(!ordered || st.row_lower[row] <= st.row_upper[row]);
+  return !plain;
+}
+
+// The terms of the fixed columns of a row leave it for its sides, and the row is compacted.
+void absorb_row(state_t& st, int32_t row)
+{
+  line_store_t& csr = st.csr;
+  line_store_t& csc = st.csc;
+  dd_t fixed_terms;
+  double fixed_size = 0.;
+  for (int64_t e = csr.begin(row); e < csr.end(row); ++e) {
+    if (!csr.live(e)) { continue; }
+    int32_t col = csr.index[e];
+    if (st.col_status[col] != col_status_t::fixed) { continue; }
+    dd_add_product(fixed_terms, csr.value[e], st.col_lower[col]);
+    fixed_size += std::fabs(csr.value[e] * st.col_lower[col]);
+    csc.index[csr.twin[e]] = dead_index;
+    csr.index[e]           = dead_index;
+    --csc.size[col];
+    --csr.size[row];
+    --st.live_nnz;
+    --st.fixed_nnz;
+  }
+  bool listed = move_fixed_terms(st, row, fixed_terms, fixed_size);
+  st.slot_visits += 3 * (int64_t)csr.used[row];
+  compact_line(csr, csc, row);
+  st.recompute_row_activity(row);
+  if (listed) { st.row_frontier.push(row_event::entries, row); }
+}
+
+}  // namespace
+
+void state_t::absorb_fixed_terms()
+{
+  for (int32_t col = 0; col < ncols; ++col) {
+    if (col_status[col] != col_status_t::fixed) { continue; }
+    // absorb_row tombstones every entry of a fixed column in the row: the one it is called
+    // for, and those of the fixed columns that this loop has yet to reach.
+    if (csc.size[col] > 0) {
+      slot_visits += csc.used[col];
+      for (int64_t p = csc.begin(col); p < csc.end(col); ++p) {
+        if (csc.live(p)) { absorb_row(*this, csc.index[p]); }
+      }
+    }
+    gprs_assert(csc.size[col] == 0);
+    down_locks[col] = 0;
+    up_locks[col]   = 0;
+  }
+  gprs_assert(fixed_nnz == 0);
+}
+
+namespace {
+
 // The entry at slot `from` of a store goes to the free slot `to` of the same store.
 inline void move_slot(line_store_t& store, line_store_t& other, int64_t from, int64_t to)
 {
@@ -140,12 +228,14 @@ void state_t::rebuild()
       continue;
     }
     dd_t fixed_terms;
-    bool has_fixed = false;
+    double fixed_size = 0.;
+    bool has_fixed    = false;
     for (int64_t e = begin; e < end; ++e) {
       if (!csr.live(e)) { continue; }
       int32_t col = csr.index[e];
       if (col_status[col] == col_status_t::fixed) {
         dd_add_product(fixed_terms, csr.value[e], col_lower[col]);
+        fixed_size += std::fabs(csr.value[e] * col_lower[col]);
         has_fixed = true;
         continue;
       }
@@ -154,17 +244,8 @@ void state_t::rebuild()
     }
     set_line(csr, i, start, w);
     gprs_assert(csr.size[i] == row_free_size[i]);
-    if (has_fixed) {
-      bool ordered = row_lower[i] <= row_upper[i];
-      if (row_lower[i] > -inf) {
-        row_lower[i] = dd_residual(row_lower[i], fixed_terms);
-        gprs_assert(std::isfinite(row_lower[i]));
-      }
-      if (row_upper[i] < inf) {
-        row_upper[i] = dd_residual(row_upper[i], fixed_terms);
-        gprs_assert(std::isfinite(row_upper[i]));
-      }
-      gprs_assert(!ordered || row_lower[i] <= row_upper[i]);
+    if (has_fixed && move_fixed_terms(*this, i, fixed_terms, fixed_size)) {
+      row_frontier.push(row_event::entries, i);
     }
     recompute_row_activity(i);
   }

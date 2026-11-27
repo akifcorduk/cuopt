@@ -7,12 +7,13 @@
 
 // Generated models through presolve() and oracle::check_presolve: every rule family together,
 // each alone, each switched off, primal-only mode, the engine's thresholds at their extremes,
-// and a second presolve of the reduced model. A failure prints the case as a test that can be
-// pasted into this file.
+// and a second presolve of the reduced model, which is checked like the first and has nothing
+// left to change. A failure prints the case as a test that can be pasted into this file.
 
 #include "harness.hpp"
 #include "oracle.hpp"
 
+#include <cmath>
 #include <cstdio>
 
 using namespace gprs;
@@ -215,6 +216,62 @@ bool has_model(status_t status)
 {
   return status == status_t::reduced || status == status_t::unchanged ||
          status == status_t::reduced_to_empty || status == status_t::limit;
+}
+
+// A row that the row rules would remove, found in the model alone: a row without entries, with
+// one entry, redundant or forcing on the bounds of its columns. The sums are long doubles, and
+// a row counts only where the answer is clear: no term above 1e6, redundant by half the
+// feasibility tolerance, forcing with a gap a hundredth of the tolerance of the row rules where
+// that tolerance is at least 1e-12. Empty when there is none.
+std::string removable_row(const model_t& m)
+{
+  const double feas = tolerances_t().feasibility;
+  for (int32_t i = 0; i < m.nrows; ++i) {
+    int64_t begin = m.row_start[i], end = m.row_start[i + 1];
+    std::string row = "row " + std::to_string(i) + " of the reduced model ";
+    if (end == begin) { return row + "has no entry"; }
+    if (end == begin + 1) { return row + "has one entry"; }
+    long double low = 0., high = 0.;
+    int32_t low_infinite = 0, high_infinite = 0;
+    double smallest = inf, largest = 0., largest_term = 0.;
+    for (int64_t e = begin; e < end; ++e) {
+      double a      = m.value[e];
+      int32_t j     = m.col_index[e];
+      double at_min = a > 0 ? m.col_lower[j] : m.col_upper[j];
+      double at_max = a > 0 ? m.col_upper[j] : m.col_lower[j];
+      smallest      = std::fmin(smallest, std::fabs(a));
+      largest       = std::fmax(largest, std::fabs(a));
+      if (std::isinf(at_min)) {
+        ++low_infinite;
+      } else {
+        low += (long double)a * at_min;
+        largest_term = std::fmax(largest_term, std::fabs(a * at_min));
+      }
+      if (std::isinf(at_max)) {
+        ++high_infinite;
+      } else {
+        high += (long double)a * at_max;
+        largest_term = std::fmax(largest_term, std::fabs(a * at_max));
+      }
+    }
+    double lower = m.row_lower[i], upper = m.row_upper[i];
+    if (largest_term > 1e6 || std::fabs(lower) > 1e6 || std::fabs(upper) > 1e6) {
+      if (!std::isinf(lower) || !std::isinf(upper) || largest_term > 1e6) { continue; }
+    }
+    bool upper_redundant = upper == inf || (high_infinite == 0 && high <= upper + 0.5 * feas);
+    bool lower_redundant = lower == -inf || (low_infinite == 0 && low >= lower - 0.5 * feas);
+    if (upper_redundant && lower_redundant) { return row + "is redundant on its bounds"; }
+    double tolerance = feas * smallest / std::fmax(1., largest);
+    if (tolerance < 1e-12) { continue; }
+    if (upper < inf && low_infinite == 0 && std::fabs((double)(low - upper)) <= 0.01 * tolerance) {
+      return row + "is forcing at its upper side";
+    }
+    if (lower > -inf && high_infinite == 0 &&
+        std::fabs((double)(high - lower)) <= 0.01 * tolerance) {
+      return row + "is forcing at its lower side";
+    }
+  }
+  return {};
 }
 
 }  // namespace
@@ -444,4 +501,65 @@ GPRS_TEST(e2e_second_presolve_of_the_reduced_model)
       }
     }
   }
+}
+
+// The reduced model is a fixed point of the rules: with result_t::fixed_point set it has no row
+// that the row rules would remove, and a second presolve with the same options returns it
+// unchanged, in every array. The test above only checks that a second presolve is correct.
+GPRS_TEST(e2e_reduced_model_is_a_fixed_point)
+{
+  const char* check_fixed =
+    "  result_t first = presolve(c.model, options);\n"
+    "  result_t second = presolve(first.reduced, options);\n"
+    "  oracle::verdict_t verdict;\n"
+    "  verdict.ok = !first.fixed_point || second.status == status_t::unchanged;\n"
+    "  verdict.message = \"the second presolve changes the reduced model\";\n";
+  int64_t with_model = 0, fixed = 0, reduced = 0;
+  for (int32_t mode = 0; mode < 4; ++mode) {
+    options_t options;
+    options.primal_only = mode == 1;
+    if (mode >= 2) {
+      // No rebuild between the phases, and one after every phase.
+      options.rebuild_dead_fraction  = mode == 2 ? 2. : 0.;
+      options.rebuild_fixed_fraction = mode == 2 ? 2. : 0.;
+    }
+    int32_t failures = 0;
+    for (const profile_t& profile : profiles()) {
+      for (uint64_t seed = 5200000; seed < 5200300 && failures < max_reports; ++seed) {
+        case_t c       = oracle::generate(seed, profile.options);
+        result_t first = presolve(c.model, options);
+        if (!has_model(first.status)) { continue; }
+        ++with_model;
+        if (!first.fixed_point) { continue; }
+        ++fixed;
+        reduced += first.status == status_t::reduced;
+        std::string problem = removable_row(first.reduced);
+        if (problem.empty()) {
+          result_t second = presolve(first.reduced, options);
+          if (second.status != status_t::unchanged || !same_model(second.reduced, first.reduced)) {
+            problem = std::string("the second presolve returns ") + status_name(second.status);
+            for (int32_t r = 0; r < rule::count; ++r) {
+              if (second.stats[r].findings == 0) { continue; }
+              problem +=
+                std::string(", ") + family_name[r] + " " + std::to_string(second.stats[r].findings);
+            }
+          }
+        }
+        if (problem.empty()) { continue; }
+        ++failures;
+        report(
+          std::string("fixed point, profile ") + profile.name + ", seed " + std::to_string(seed),
+          std::string("fixed_point_") + profile.name + "_" + std::to_string(seed),
+          problem,
+          oracle::to_code(c),
+          options,
+          check_fixed);
+      }
+    }
+  }
+  // The property is not an empty one: with the default limits nearly every presolve of these
+  // models ends at a fixed point, and many of them return a reduced model that is not empty.
+  GPRS_CHECK(with_model > 4000);
+  GPRS_CHECK(fixed * 100 >= with_model * 99);
+  GPRS_CHECK(reduced > 1000);
 }

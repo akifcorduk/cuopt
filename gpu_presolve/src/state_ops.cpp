@@ -185,10 +185,14 @@ void set_col_bound(state_t& st, int32_t col, double old_bound, double new_bound,
     int32_t row = csc.index[p];
     double a    = csc.value[p];
     // The lower bound is in the minimum activity for a > 0 and in the maximum for a < 0.
-    activity_t& act = (a > 0) == is_lower ? st.min_act : st.max_act;
+    bool in_min     = (a > 0) == is_lower;
+    activity_t& act = in_min ? st.min_act : st.max_act;
     remove_term(act, row, csc.twin[p], a, old_bound, st.tol);
     add_term(act, row, csc.twin[p], a, new_bound, st.tol);
-    st.row_frontier.push(row_event::activity, row);
+    // Bound propagation reads the minimum activity with the upper side of the row and the
+    // maximum activity with the lower side.
+    bool propagates = in_min ? st.row_upper[row] < inf : st.row_lower[row] > -inf;
+    st.row_frontier.push(propagates ? row_event::activity : row_event::activity_unread, row);
     refresh_stale_activity(st, row);
   }
   st.slot_visits += csc.used[col];

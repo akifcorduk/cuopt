@@ -172,9 +172,13 @@ constexpr int32_t count       = 2;
 
 // Which lists an event feeds.
 namespace row_event {
-// A bound of a column of the row changed.
+// A bound of a column of the row changed, and with it one activity of the row.
 constexpr uint8_t activity =
   (1 << row_list::row_rules) | (1 << row_list::propagation) | (1 << row_list::tightening);
+// The same when the side of the row that bound propagation reads that activity with is infinite
+// (the upper side for the minimum activity, the lower side for the maximum activity): the
+// bounds that the row implies are those of its last visit.
+constexpr uint8_t activity_unread = (1 << row_list::row_rules) | (1 << row_list::tightening);
 // A side of the row changed.
 constexpr uint8_t side = activity | (1 << row_list::doubleton);
 // An entry of the row was changed, moved or deleted, the row was scaled, or one of its columns
@@ -299,7 +303,8 @@ struct state_t {
   // (min_activity_bound / max_activity_bound), and that side is updated as two terms, never as
   // a * (new - old): the old term leaves (dd_sub_product, or inf_count and inf_slot when it
   // is_infinite_term) and the new one enters (dd_add_product, or inf_count and inf_slot).
-  // row_event::activity for each of those rows. O(csc.used[col]).
+  // row_event::activity for each of those rows, row_event::activity_unread where it applies.
+  // O(csc.used[col]).
   // A lower bound of +inf and an upper bound of -inf are not accepted (the same for the sides of
   // a row below): the caller reports infeasibility instead.
   void set_col_lower(int32_t col, double lower);
@@ -339,6 +344,26 @@ struct state_t {
   // Subtracts a * b from the finite sides of a live row, both at once, as a substitution or a
   // removed constant term requires (row_event::side). O(1).
   void shift_row_sides(int32_t row, double a, double b);
+
+  // The terms of the fixed columns leave their rows for the sides, as in rebuild() but without
+  // a pass over the stores: every live entry of a fixed column is tombstoned in both stores; the
+  // finite sides of each of those rows lose the sum of the row's terms (one compensated sum in
+  // storage order, the arithmetic of rebuild()), the row is compacted and its activities are
+  // recomputed. Afterwards fixed_nnz is 0 and a fixed column has no entry and no lock; it stays
+  // fixed until a rebuild removes it. Versions and implied bounds are kept: the constraint is
+  // the same. The slots of the compacted rows change.
+  // A family can treat a row with such a term otherwise than the same row without it: a side
+  // stored with the term in it has another size and another rounding, a term above the
+  // infinite-term limit makes an activity infinite, and row tightening rounds the sides of an
+  // integer row only by more than the tolerance while the row holds a term. Such a row gets
+  // row_event::entries, here and in rebuild(). A row whose terms leave it plainly does not: the
+  // sum of its terms is one double, every new side is the exact difference and neither above
+  // 1e5 nor within the feasibility tolerance of an integer without being one, and its
+  // activities have held no term above 1e5 since they were summed (max_term), so that their
+  // error bounds decide nothing with or without the terms. The engine calls this before its
+  // last rounds: only then do the rules see the rows that the reduced model will have.
+  // O(columns + used slots of the rows that hold such a term).
+  void absorb_fixed_terms();
 
   // Multiplies the entries and the finite sides of a live row by factor > 0 and recomputes its
   // activities (row_event::entries). With integral set, each product a * factor is replaced by
@@ -401,7 +426,9 @@ struct state_t {
   // Leaves used == size == capacity for every line and row_free_size == csr.size. A row that
   // loses a slot gets its activities recomputed; for the other rows inf_slot follows the shift
   // of the row. The live entries of a line keep their order. All slots change; lists, versions
-  // and implied bounds are kept. O(slots + rows + columns).
+  // and implied bounds are kept, and a row that loses the term of a fixed column gets
+  // row_event::entries unless the term leaves it plainly, as in absorb_fixed_terms and for its
+  // reason. O(slots + rows + columns).
   // The two compaction lists are emptied: the rebuild has served them.
   // A build with assertions ends the rebuild with check_consistency.
   void rebuild();

@@ -177,6 +177,7 @@ rule_outcome_t visit_row(context_t& c, int32_t row)
   state_t& st = c.st;
   c.budget.spend(line_visit_work);
   if (st.row_free_size[row] == 0) { return empty_row(c, row); }
+  if (refresh_activity(st, row)) { c.budget.spend(st.csr.used[row]); }
 
   double lower    = st.row_lower[row];
   double upper    = st.row_upper[row];
@@ -242,6 +243,19 @@ rule_result_t row_rules_t::run(state_t& st,
       result.outcome = visit_row(c, rows[k]);
       if (result.outcome != rule_outcome_t::ok) { return result; }
     }
+  }
+  return result;
+}
+
+rule_result_t row_rules_t::remove_empty_rows(state_t& st, postsolve_t& ps, const options_t& opt)
+{
+  rule_result_t result;
+  work_budget_t budget;
+  context_t c{st, budget, ps, opt.tol, *work, result};
+  for (int32_t row = 0; row < st.nrows; ++row) {
+    if (!st.row_alive[row] || st.row_free_size[row] != 0) { continue; }
+    result.outcome = empty_row(c, row);
+    if (result.outcome != rule_outcome_t::ok) { return result; }
   }
   return result;
 }

@@ -38,12 +38,19 @@ enum class rule_outcome_t : uint8_t { ok, infeasible, unbounded_or_infeasible };
 
 struct rule_result_t {
   rule_outcome_t outcome = rule_outcome_t::ok;
-  // Reductions applied: rows deleted, columns fixed or substituted, bounds, sides or coefficients
-  // changed, implied bounds recorded. Removed rows, columns and nonzeros are read from the
-  // counters of the state.
+  // Changes of the model: rows deleted, columns fixed or substituted, bounds, sides or
+  // coefficients changed. Removed rows, columns and nonzeros are read from the counters of the
+  // state.
   int64_t findings = 0;
+  // Implied bounds recorded (state_t::record_implied_lower / record_implied_upper). A record
+  // changes no row, column or explicit bound and is not a finding.
+  int64_t records = 0;
   // The call stopped on its budget and returned the unprocessed part of its list to the state.
   bool stopped = false;
+  // The call left undone a reduction that no list holds: bound propagation, when a bound of a
+  // continuous column has had its steps (see (b)). The state is then no fixed point of the
+  // rules, although every list can be empty.
+  bool limited = false;
 };
 
 // Contract of every family below:
@@ -54,14 +61,16 @@ struct rule_result_t {
 //   (line_store_t); the terms of its fixed columns are constants of the row that both
 //   activities contain. A column of the state is live with lower < upper, or fixed, or removed.
 // - Its work is proportional to the entries of the rows and columns it visits; it spends that
-//   work on the budget and calls budget.found() at every finding. It tests budget.stop() between
-//   two rows or columns of its list, never inside the reduction of one (doubleton_t: between two
-//   edges of the batch it collects), and pushes the unvisited part of its list back when it
-//   stops.
+//   work on the budget and calls budget.found() at every finding and at every record. It tests
+//   budget.stop() between two rows or columns of its list, never inside the reduction of one
+//   (doubleton_t: between two edges of the batch it collects), and pushes the unvisited part of
+//   its list back when it stops.
 // - A test on an activity allows for the error bound of that activity
 //   (state_t::min_activity_error / max_activity_error): a reduction is applied only if its
 //   condition holds for every value within the bound. The state does not keep the bound below a
-//   fixed share of the tolerance (state_t::recompute_row_activity).
+//   fixed share of the tolerance (state_t::recompute_row_activity); a family that tests an
+//   activity brings the bound down first where it can decide the test (refresh_activity), so
+//   that the test does not depend on what the sum held earlier.
 // - With outcome ok the state is consistent and every reduction has its postsolve record. With
 //   another outcome the state is not used again.
 // - The result depends on the state, the options and the budget only: never on the iteration
@@ -81,11 +90,18 @@ struct rule_result_t {
 // coefficient, become explicit bounds of the column (tighten_lower / tighten_upper) and the row
 // is deleted. Forcing row: an activity meets its side within feasibility / dynamism of the row;
 // every free column is fixed at the bound that gives that activity and the row is deleted.
+// Every test reads the activities over the explicit bounds. A recorded implied bound enters no
+// test: it becomes an explicit bound first (bound_propagation_t::make_explicit).
 struct row_rules_t {
   struct work_t;
   row_rules_t();
   ~row_rules_t();
   rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
+  // The empty-row test of run() on every live row without a free entry, whatever the list holds
+  // and without a budget: the row is deleted, or the result is infeasible. For a presolve that a
+  // limit stopped before the list was served; a reduced model then still has no row without
+  // entries. O(rows + entries of the rows without a free entry).
+  rule_result_t remove_empty_rows(state_t& st, postsolve_t& ps, const options_t& opt);
   std::unique_ptr<work_t> work;
 };
 
@@ -93,20 +109,46 @@ struct row_rules_t {
 // lower side with the maximum activity: no infinite term, every free column gets a candidate;
 // exactly one, only the column at inf_slot, if it is live, in O(1); two or more, none. The
 // candidate is dd_residual(side, activity without the column's own term) / a. No candidate when
-// the error bound of the activity exceeds tol.activity_error_share * tol.feasibility * |a|, or
-// when |side| * tol.side_error > tol.feasibility. Integer column: the explicit bound is
-// tightened (tighten_lower / tighten_upper, which round). Continuous column: recorded as
-// implied bound when it improves the record by more than
-// tol.implied_bound_step * tol.feasibility, whatever the explicit bound is; the explicit bound
-// is not touched.
+// the error bound of the activity exceeds tol.activity_error_share * tol.feasibility * |a|
+// (with the activity summed from scratch first if it was not fresh), or when
+// |side| * tol.side_error > tol.feasibility. Integer column: the explicit bound is tightened
+// (tighten_lower / tighten_upper, which round).
+// Continuous column, with step = tol.implied_bound_step * max(tol.feasibility,
+// tol.side_error * |candidate|), the second term being what a bound of that size loses when it
+// is stored:
+// - The candidate is recorded as implied bound (a record, not a finding) when it improves the
+//   valid record by more than the step, whatever the explicit bound is.
+// - A candidate that improves the explicit bound by more than the step is pending. Before
+//   make_explicit the explicit bound is not touched and the column is marked. After it the
+//   explicit bound is tightened to the candidate (tighten_lower / tighten_upper; a finding), as
+//   for an integer column, but at most max_explicit_steps times per bound (a constant in the
+//   source file): a candidate for a bound that has had them is dropped and the call reports
+//   limited. The candidate is moved outward by its own rounding error where that error is above
+//   tol.activity_error_share * tol.feasibility, and taken as it is below.
+// An explicit bound is the candidate of a row that is live when the bound is written, over
+// explicit bounds that are at least as tight as those the candidate was computed on: in run()
+// the candidate of the row it visits, in make_explicit a record whose source row is alive and
+// unchanged since (state_t::implied_lower_valid / implied_upper_valid; explicit bounds only
+// tighten). It therefore holds for every point that satisfies that row and the explicit bounds,
+// and from then on it is a bound of the model like any other, whatever happens to the row. A
+// record whose source row was deleted or changed is never used; if another row still implies
+// the bound, that row gives the candidate.
 struct bound_propagation_t {
   struct work_t;
   bound_propagation_t();
   ~bound_propagation_t();
   rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
-  // Makes the valid recorded bounds of continuous columns explicit where they are tighter. Called
-  // once, at the end of the presolve (before probing from Stage 2 on). O(columns + entries of
-  // the changed columns).
+  // From this call on run() tightens the explicit bounds of continuous columns. For every column
+  // with a pending bound: a valid record that improves the explicit bound by more than the step
+  // becomes that bound, moved outward as in run() (a finding; infeasible when the bounds cross
+  // by more than the tolerance). The live rows of the column go on row_list::propagation, so
+  // that the next run() derives what is pending from the state as it is, unless the record was
+  // taken and no visit of the column ever found its record void: every candidate that was not
+  // recorded is then within the step of the record, no row has more to give for the column, and
+  // the rows that the new bound reaches are listed by state_t::set_col_lower / set_col_upper.
+  // The marks are cleared. Called once, when the phases that need the implied bounds apart from
+  // the explicit ones have nothing left to do: in Stage 1 after the rounds, before probing from
+  // Stage 2 on. O(columns + entries of the marked columns).
   rule_result_t make_explicit(state_t& st, postsolve_t& ps, const options_t& opt);
   std::unique_ptr<work_t> work;
 };
@@ -213,5 +255,19 @@ bound_change_t tighten_upper(state_t& st, postsolve_t& ps, int32_t col, double u
 // Fixes a live column at a finite value inside its bounds, integral for an integer column, and
 // records it (state_t::fix_col, postsolve_t::push_fixed_col). O(csc.used[col]).
 void fix_column(state_t& st, postsolve_t& ps, int32_t col, double value);
+
+// An activity of the row is fresh when it has had no update since it was summed from scratch:
+// its error bound is then the smallest it can have, and the one that a presolve of the same
+// rows starts with. The error bound of an activity that is not fresh still counts every term
+// the sum ever held, a huge one that has left it included.
+bool activity_fresh(const state_t& st, const activity_t& act, int32_t row);
+
+// Sums the activities of a live row from scratch (state_t::recompute_row_activity) when one of
+// them is not fresh and its error bound is above tol.zero * tol.feasibility, below which it
+// decides no test against the feasibility tolerance. Returns whether it did. The row rules and
+// row tightening call it before they test the activities of a row; bound propagation, whose
+// guard scales with the coefficient, sums again when the guard drops a candidate and the
+// activity is not fresh. O(1) unless it sums.
+bool refresh_activity(state_t& st, int32_t row);
 
 }  // namespace gprs

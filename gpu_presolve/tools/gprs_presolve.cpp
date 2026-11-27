@@ -21,6 +21,22 @@
 
 namespace {
 
+void write_stats(FILE* out, const gprs::rule_stats_t& s)
+{
+  std::fprintf(out,
+               "{\"calls\": %lld, \"work\": %lld, \"findings\": %lld, \"records\": %lld, "
+               "\"seconds\": %.6f, \"rows_removed\": %lld, \"cols_removed\": %lld, "
+               "\"nnz_removed\": %lld}",
+               (long long)s.calls,
+               (long long)s.work,
+               (long long)s.findings,
+               (long long)s.records,
+               s.seconds,
+               (long long)s.rows_removed,
+               (long long)s.cols_removed,
+               (long long)s.nnz_removed);
+}
+
 void write_report(FILE* out,
                   const std::string& path,
                   const gprs::model_t& model,
@@ -54,22 +70,18 @@ void write_report(FILE* out,
                result.seconds_hash);
   std::fprintf(out, "  \"hash\": \"%016llx\",\n", (unsigned long long)result.hash);
   std::fprintf(out, "  \"rounds\": %d,\n  \"rebuilds\": %d,\n", result.rounds, result.rebuilds);
-  std::fprintf(out, "  \"rules\": {\n");
+  std::fprintf(out,
+               "  \"fixed_point\": %s,\n  \"explicit\": {\"rounds\": %d, \"seconds\": %.6f},\n",
+               result.fixed_point ? "true" : "false",
+               result.explicit_rounds,
+               result.seconds_explicit);
+  std::fprintf(out, "  \"start\": ");
+  write_stats(out, result.start);
+  std::fprintf(out, ",\n  \"rules\": {\n");
   for (int32_t r = 0; r < gprs::rule::count; ++r) {
-    const gprs::rule_stats_t& s = result.stats[r];
-    std::fprintf(out,
-                 "    \"%s\": {\"calls\": %lld, \"work\": %lld, \"findings\": %lld, "
-                 "\"seconds\": %.6f, \"rows_removed\": %lld, \"cols_removed\": %lld, "
-                 "\"nnz_removed\": %lld}%s\n",
-                 gprs::rule_name(r),
-                 (long long)s.calls,
-                 (long long)s.work,
-                 (long long)s.findings,
-                 s.seconds,
-                 (long long)s.rows_removed,
-                 (long long)s.cols_removed,
-                 (long long)s.nnz_removed,
-                 r + 1 < gprs::rule::count ? "," : "");
+    std::fprintf(out, "    \"%s\": ", gprs::rule_name(r));
+    write_stats(out, result.stats[r]);
+    std::fprintf(out, "%s\n", r + 1 < gprs::rule::count ? "," : "");
   }
   std::fprintf(out, "  }\n}\n");
 }

@@ -477,3 +477,60 @@ GPRS_TEST(rows_property_cascade)
   GPRS_CHECK(emptied > 100);
   GPRS_CHECK(passes > 1200);
 }
+
+// Every live row without a free entry is deleted, whatever the list holds and without a
+// budget; a row whose fixed terms violate a side gives infeasible.
+GPRS_TEST(rows_remove_empty_rows)
+{
+  std::vector<col_t> cols = {{0., 5., true}, {0., 5., false}, {0., 5., true}};
+  std::vector<row_t> rows = {{{{0, 1.}, {1, 1.}}, -inf, 7.},
+                             {{{1, 2.}, {2, 1.}}, 1., inf},
+                             {{}, -1., 1.},
+                             {{{0, 1.}}, 2., 3.}};
+  {
+    fixture_t f(cols, rows);
+    fix_column(f.st, f.ps, 0, 3.);
+    fix_column(f.st, f.ps, 1, 2.);
+    f.only(row_list::row_rules, {});
+    f.budget.limit = 0;
+    row_rules_t rule;
+    state_t before       = f.st;
+    rule_result_t result = rule.remove_empty_rows(f.st, f.ps, f.opt);
+    GPRS_CHECK_EQ(result.outcome, ok);
+    // Rows 0, 2 and 3; row 1 has the free column x2.
+    GPRS_CHECK_EQ(result.findings, 3);
+    GPRS_CHECK(!result.stopped);
+    GPRS_CHECK(f.st.row_alive == std::vector<uint8_t>({0, 1, 0, 0}));
+    GPRS_CHECK_EQ(f.st.bound_changes, before.bound_changes);
+    check_same_set(before, f.st, result.outcome);
+    // A second call finds none.
+    GPRS_CHECK_EQ(rule.remove_empty_rows(f.st, f.ps, f.opt).findings, 0);
+  }
+  {
+    // x0 = 4 violates the upper side of row 3.
+    fixture_t f(cols, rows);
+    fix_column(f.st, f.ps, 0, 4.);
+    row_rules_t rule;
+    GPRS_CHECK_EQ(rule.remove_empty_rows(f.st, f.ps, f.opt).outcome, infeasible);
+  }
+}
+
+// 1e7 x0 + x1 + x2 <= 0 with all lower bounds 0 is forcing within 1e-6 * 1 / 1e7. x2 had the
+// lower bound -1e19, a term that the minimum activity no longer holds but whose size was still
+// in its error bound, 6e-13: the row was not taken as forcing here and was by a presolve that
+// starts from these bounds.
+GPRS_TEST(rows_forcing_row_after_a_huge_term_left)
+{
+  std::vector<col_t> cols = {{0., 1., true}, {0., 1., true}, {-1e19, 5., false}};
+  fixture_t f(cols, {{{{0, 1e7}, {1, 1.}, {2, 1.}}, -inf, 0.}});
+  f.st.set_col_lower(2, 0.);
+  GPRS_CHECK(f.st.min_activity_error(0) > 1e-13);
+  GPRS_CHECK(!activity_fresh(f.st, f.st.min_act, 0));
+  state_t before       = f.st;
+  rule_result_t result = run_rows(f);
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK_EQ(result.findings, 4);
+  GPRS_CHECK(!f.st.row_alive[0]);
+  GPRS_CHECK_EQ(f.st.live_cols, 0);
+  check_same_set(before, f.st, result.outcome);
+}

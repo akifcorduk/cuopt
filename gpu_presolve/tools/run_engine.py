@@ -168,6 +168,10 @@ def summarize(args, entries, out):
                     "rules": best["rules"],
                 }
             )
+            # Reports of engines before the start step had its own entry do not have these.
+            for key in ("start", "fixed_point", "explicit"):
+                if key in best:
+                    row[key] = best[key]
             if not row["same_hash"]:
                 failures += 1
         instances.append(row)

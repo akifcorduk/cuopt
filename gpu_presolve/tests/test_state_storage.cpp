@@ -8,6 +8,7 @@
 #include "harness.hpp"
 #include "test_state_support.hpp"
 
+#include <algorithm>
 #include <gprs/state.hpp>
 
 #include <cmath>
@@ -246,11 +247,14 @@ GPRS_TEST(state_storage_rebuild)
   check_side(st.min_act, 4, {1., 0., 0, 0, 1., 2});
   check_side(st.max_act, 4, {0., 0., 2, 7, 0., 0});
 
-  // Lists, versions and implied bounds are kept; the compaction lists are served.
+  // Lists, versions and implied bounds are kept; the compaction lists are served. The term of
+  // the fixed column leaves r0, r1 and r4 plainly (integers), so none of them is listed. r0 was
+  // on the lists of a changed activity that no side of it reads.
+  GPRS_CHECK(row_lists[row_list::row_rules] == list_t({0}));
+  GPRS_CHECK(row_lists[row_list::propagation].empty());
   for (int32_t l = 0; l < row_list::compaction; ++l) {
     GPRS_CHECK(st.row_frontier.list[l] == row_lists[l]);
   }
-  GPRS_CHECK(st.row_frontier.list[row_list::propagation] == list_t({0}));
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == col_lists[col_list::dual_fixing]);
   GPRS_CHECK(st.row_frontier.empty(row_list::compaction));
   GPRS_CHECK(st.col_frontier.empty(col_list::compaction));
@@ -497,5 +501,64 @@ GPRS_TEST(state_storage_consistency_detects)
                  std::string("expected an error naming \"") + corruption.keyword + "\", got \"" +
                    error + "\"");
     }
+  }
+}
+
+// A row is listed when the terms of its fixed columns leave it, in rebuild() and in
+// absorb_fixed_terms(), unless they leave it plainly: the sum of the terms is one double, each
+// new side is the exact difference, not above 1e5 and not within the feasibility tolerance of
+// an integer without being one.
+GPRS_TEST(state_storage_fixed_terms_leave_plainly)
+{
+  // Column 0 is fixed at 1 and column 1 at 0.1; column 2 stays.
+  //   r0:      x0 + x2 <= 5         side 4: plain
+  //   r1:    3 x1 + x2 <= 5         3 * 0.1 is not a double
+  //   r2:      x1 + x2 <= 5         5 - 0.1 is not a double
+  //   r3:      x0 + x2 <= 5 + 2^-22 side 4 + 2^-22: within the tolerance of 4 and not 4
+  //   r4:      x0 + x2 <= 5.5       side 4.5: plain
+  //   r5:      x0 + x2 <= 200000    above 1e5
+  //   r6:  1e6 x0 + x2 <= 5         the term is above 1e5
+  //   r7:           x2 <= 5         no term
+  //   r8: 1e21 x0 + x2 <= 5         the term counts as infinite in the activities
+  //   r9:      x0 + 1e6 x2 <= 5     the activities hold a term above 1e5
+  model_t m;
+  m.nrows     = 10;
+  m.ncols     = 3;
+  m.row_start = {0, 2, 4, 6, 8, 10, 12, 14, 15, 17, 19};
+  m.col_index = {0, 2, 1, 2, 1, 2, 0, 2, 0, 2, 0, 2, 0, 2, 2, 0, 2, 0, 2};
+  m.value     = {1., 1., 3., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1e6, 1., 1., 1e21, 1., 1., 1e6};
+  m.row_lower.assign(10, -inf);
+  m.row_upper = {5., 5., 5., 5. + 0x1p-22, 5.5, 200000., 5., 5., 5., 5.};
+  m.col_lower = {0., 0., 0.};
+  m.col_upper = {2., 2., 9.};
+  m.cost.assign(3, 0.);
+  m.col_type.assign(3, 0);
+  GPRS_REQUIRE(well_formed(m));
+  const list_t listed = {1, 2, 3, 5, 6, 8, 9};
+  for (bool rebuild : {true, false}) {
+    state_t st(m, tolerances_t());
+    st.fix_col(0, 1.);
+    st.fix_col(1, 0.1);
+    clear_rule_lists(st);
+    if (rebuild) {
+      st.rebuild();
+    } else {
+      st.absorb_fixed_terms();
+    }
+    check_consistent(st);
+    GPRS_CHECK_EQ(st.fixed_nnz, 0);
+    for (int32_t l = 0; l < row_list::compaction; ++l) {
+      list_t rows = st.row_frontier.list[l];
+      std::sort(rows.begin(), rows.end());
+      GPRS_CHECK(rows == listed);
+    }
+    GPRS_CHECK_EQ(st.row_upper[0], 4.);
+    GPRS_CHECK_EQ(st.row_upper[3], 4. + 0x1p-22);
+    GPRS_CHECK_EQ(st.row_upper[4], 4.5);
+    GPRS_CHECK_EQ(st.row_upper[7], 5.);
+    GPRS_CHECK_EQ(st.row_upper[8], 5. - 1e21);
+    // The term of r8 was infinite in both activities and is in neither now.
+    GPRS_CHECK_EQ(st.min_act.inf_count[8], 0);
+    GPRS_CHECK_EQ(st.max_act.inf_count[8], 0);
   }
 }

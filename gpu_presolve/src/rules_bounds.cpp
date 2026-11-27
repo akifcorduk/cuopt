@@ -57,4 +57,20 @@ void fix_column(state_t& st, postsolve_t& ps, int32_t col, double value)
   ps.push_fixed_col(col, value);
 }
 
+bool activity_fresh(const state_t& st, const activity_t& act, int32_t row)
+{
+  // A summation counts one update per finite term.
+  return act.updates[row] + act.inf_count[row] == (uint32_t)st.csr.size[row];
+}
+
+bool refresh_activity(state_t& st, int32_t row)
+{
+  gprs_assert(st.row_alive[row]);
+  double limit = st.tol.zero * st.tol.feasibility;
+  bool stale   = (st.min_activity_error(row) > limit && !activity_fresh(st, st.min_act, row)) ||
+               (st.max_activity_error(row) > limit && !activity_fresh(st, st.max_act, row));
+  if (stale) { st.recompute_row_activity(row); }
+  return stale;
+}
+
 }  // namespace gprs

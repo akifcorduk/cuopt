@@ -262,6 +262,7 @@ void strengthen_row(context_t& c, int32_t row)
   state_t& st     = c.st;
   bool upper_side = st.row_upper[row] < inf;
   if (upper_side == (st.row_lower[row] > -inf)) { return; }
+  if (refresh_activity(st, row)) { c.budget.spend(st.csr.used[row]); }
   const activity_t& act = upper_side ? st.max_act : st.min_act;
   if (act.inf_count[row] != 0) { return; }
   double side  = upper_side ? st.row_upper[row] : st.row_lower[row];
