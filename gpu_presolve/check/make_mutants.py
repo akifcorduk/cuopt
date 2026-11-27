@@ -45,6 +45,9 @@ int32_t down_count = 0, up_count = 0;
     bool to_lower = cost >= 0 && down_count == 0;
     bool to_upper = cost <= 0 && up_count == 0;"""
 FORCING_TEST = "  if (!(std::fabs(gap) + error <= %s)) { return false; }"
+SUBTRACT_SHIFT = "st.shift_row_sides(target.row, factor, rhs);"
+EXPLICIT_BOUND = "    bound        = is_upper ? bound + slack : bound - slack;"
+EXPLICIT_SLACK = "    double slack = candidate_slack(k);\n" + EXPLICIT_BOUND
 
 # name: (file, text, replacement), or a list of them
 MUTANTS = {
@@ -318,6 +321,94 @@ MUTANTS = {
         "        value = to_lower ? upper : lower;\n"
         "        if (!std::isfinite(value)) { continue; }\n"
         "      }\n    }\n    budget.spend(st.csc.used[col]);",
+    ),
+    # The mutants of the two rules of the merge 0ee2ce720 (a_*). First the
+    # subtraction of an equation from a row that is parallel to it up to
+    # singleton columns: row <- row - factor * equation. The first five
+    # leave a row that is off by a multiple of the right-hand side or of
+    # an entry: each relaxes the row where the error moves a side outward
+    # (for the structure check) and restricts it where it moves one inward
+    # (for the oracle and the crush check), by the signs of the instance.
+    # The sides of the row move with the wrong sign: off by twice the
+    # factor times the right-hand side.
+    "a_sub_sign": (
+        "rules_parallel_rows.cpp",
+        SUBTRACT_SHIFT,
+        "st.shift_row_sides(target.row, -factor, rhs);",
+    ),
+    # The sides of the row are not moved: off by the factor times the
+    # right-hand side.
+    "a_sub_side": (
+        "rules_parallel_rows.cpp",
+        "  if (factor * rhs != 0. && (lower > -inf || upper < inf)) {\n"
+        "    " + SUBTRACT_SHIFT + "\n  }\n",
+        "",
+    ),
+    # A wrong factor, 1.5 times the ratio of the first shared entries, in
+    # the sides, in the entry that enters the row and in the record: the
+    # sides are off by half the factor times the right-hand side, and the
+    # entry of the equation's singleton column is half too large. The
+    # limit on the factor reads the right one, so that the subtractions
+    # are those of the engine. Where the right-hand side is zero and the
+    # equation has no singleton column, only the factor of the record is
+    # wrong, which no check reads.
+    "a_sub_factor": [
+        (
+            "rules_parallel_rows.cpp",
+            "  double factor           = target.first / equation.first;",
+            "  double factor           = 1.5 * target.first / equation.first;",
+        ),
+        (
+            "rules_parallel_rows.cpp",
+            "  double scale = std::fabs(factor);",
+            "  double scale = std::fabs(factor) / 1.5;",
+        ),
+    ],
+    # The entry of the equation's singleton column enters the row with the
+    # wrong sign: off by twice that entry.
+    "a_sub_single": (
+        "rules_parallel_rows.cpp",
+        "equation.singles == 1 ? -factor * equation.single_value : 0.;",
+        "equation.singles == 1 ? factor * equation.single_value : 0.;",
+    ),
+    # A row with a finite upper side is taken as an equation at that side.
+    # Relaxes the side of the target that needs the lower side of that row
+    # (the row holds below its upper side only) and restricts the other.
+    "a_sub_inequality": (
+        "rules_parallel_rows.cpp",
+        "  return is_equation(st, equation.row) &&",
+        "  return (is_equation(st, equation.row) ||\n"
+        "          st.row_upper[equation.row] < inf) &&",
+    ),
+    # The subtraction leaves no record. Neither relaxes nor restricts: the
+    # reduced model is the right one and the primal postsolve ignores the
+    # record. Only the structure check sees it, which cannot prove the row
+    # from its own reduced row.
+    "a_sub_record": (
+        "rules_parallel_rows.cpp",
+        "  ps.push_row_addition(target.row, equation.row, factor);\n",
+        "  (void)ps;\n",
+    ),
+    # Then the rounds on explicit bounds. Both restrict: a bound of the
+    # reduced model that is tighter than the rows allow cuts feasible
+    # points off and relaxes nothing, so the structure check passes.
+    # A candidate bound of a continuous column is taken a little too tight.
+    "a_exp_tight": (
+        "rules_propagation.cpp",
+        EXPLICIT_SLACK,
+        "    double slack = candidate_slack(k);\n"
+        "    if (c.work.explicit_bounds) {\n"
+        "      slack -= 1e-4 * (1. + std::fabs(bound));\n"
+        "    }\n" + EXPLICIT_BOUND,
+    ),
+    # A candidate of a continuous column is taken on the wrong side, the
+    # upper bound that a row gives as a lower bound, one row in three.
+    "a_exp_side": (
+        "rules_propagation.cpp",
+        "  bool is_upper = (st.csr.value[e] > 0) == upper_side;",
+        "  bool is_upper = ((st.csr.value[e] > 0) == upper_side) !=\n"
+        "                  (c.work.explicit_bounds && !st.is_integer(col) &&\n"
+        "                   row % 3 == 0);",
     ),
 }
 
