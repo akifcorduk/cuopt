@@ -2,13 +2,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2022-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Builds HiGHS 283bfc859 with highs_diag.patch. Run on the node, inside the dev container:
+# Builds HiGHS 283bfc859 with highs_diag.patch, and the baseline tool against that build. Run on
+# the node, inside the dev container:
 #   bash gpu_presolve/baseline/build_highs_diag.sh
 # JOBS sets the number of build jobs (default 8).
 # NAME names the build (default diag): source copy highs_<NAME>_src, build tree
-# build/highs_<NAME>, install highs_<NAME>_install. A second name builds the patch next to an
-# install that is in use:
-#   NAME=diag2 bash gpu_presolve/baseline/build_highs_diag.sh
+# build/highs_<NAME>, install highs_<NAME>_install, tool build tree build/baseline_<NAME>. Nothing
+# outside these four is written, so a new name builds the patch next to a build that is in use:
+#   NAME=diag3 bash gpu_presolve/baseline/build_highs_diag.sh
 
 set -euo pipefail
 
@@ -23,10 +24,12 @@ if [ "$NAME" = stock ]; then
   echo "NAME=stock would overwrite the unpatched install highs_stock_install" >&2
   exit 2
 fi
-PATCH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/highs_diag.patch
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PATCH=$HERE/highs_diag.patch
 SRC=$DEPS/highs_${NAME}_src
 BUILD=$DEPS/build/highs_$NAME
 INSTALL=$DEPS/highs_${NAME}_install
+TOOL_BUILD=$DEPS/build/baseline_$NAME
 STAMP=$SRC/.git/highs_diag_patch.sha256
 
 if [ ! -d "$SRC/.git" ]; then
@@ -58,3 +61,8 @@ cmake --install "$BUILD" > /dev/null
 
 echo "installed: $INSTALL/bin/highs"
 "$INSTALL/bin/highs" --version
+
+# The tool is compiled against the installed headers and has to follow every rebuild of them.
+cmake -S "$HERE" -B "$TOOL_BUILD" -G Ninja -DHIGHS_ROOT="$INSTALL"
+cmake --build "$TOOL_BUILD" -j "${JOBS:-8}"
+echo "tool: $TOOL_BUILD/baseline_tool"
