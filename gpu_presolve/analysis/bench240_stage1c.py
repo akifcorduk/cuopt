@@ -25,10 +25,12 @@ An option given several times names several summaries that are read as one
 side. A relative path is taken from the current directory, or else from
 gpu_presolve/.
 
-Presolve only, no scaling. An instance counts when both sides have a result:
-one whose side hit the time limit, was not run, or ended without a model
-(infeasible, unbounded) is listed and left out. A size of zero counts as one
-in a ratio. Printed:
+Presolve only, no scaling. An instance counts when both sides have a result
+on the same input model: one whose side hit the time limit, was not run, or
+ended without a model (infeasible, unbounded), or whose input sizes differ
+between the sides, is listed and left out. A size of zero counts as one in a
+ratio. Every part names the number of instances it covers; the instances of
+an engine summary with a failure are named under its line. Printed:
 1. The measures remaining nonzeros, rows and columns, each as the geometric
    mean of reference / engine (below 1 the engine leaves more): without ex9,
    ex10 and enlight_hard, which a full presolve reduces to almost nothing;
@@ -42,12 +44,13 @@ in a ratio. Printed:
 2. Per measure the instances below 0.95 and those where the engine leaves
    less, with both sizes.
 3. Every instance where the engine leaves more nonzeros, rows or columns than
-   the engine before Stage 1c.
+   the engine before Stage 1c, and the instances that only one of the two
+   results has.
 4. The findings of the engine per rule family and sub-rule next to the HiGHS
-   counters of the matching rule (the table RULES), the work per family in
-   passes of the input model (nonzeros + 8 * (rows + columns)), the rounds,
-   and the fixed-point flags: how many are set, which were set before and
-   are not now.
+   counters of the matching rule (the table RULES; a sum over fewer instances
+   than the table covers says so), the work per family in passes of the input
+   model (nonzeros + 8 * (rows + columns)), the rounds, and the fixed-point
+   flags: how many are set, which were set before and are not now.
 """
 
 import argparse
@@ -76,6 +79,9 @@ LEFT_OUT = ("ex9", "ex10", "enlight_hard")
 BELOW = 0.95
 MODEL_STATUSES = ("reduced", "unchanged", "reduced_to_empty")
 ONE_SIDED = ("not in the engine result", "not in the reference")
+OTHER_MODEL = "input model of another size on the two sides"
+NOT_BEFORE = "not in the result before"
+LISTED = 8
 # options_t::max_rounds and line_visit_work of the engine.
 MAX_ROUNDS = 20
 LINE_VISIT_WORK = 8
@@ -156,7 +162,14 @@ RULES = (
         "simple_probing",
         "",
         ("rules.simple_probing.findings",),
-        ("substitutions.simple_probing", "fixing.simple_probing"),
+        ("substitutions.simple_probing",),
+    ),
+    # Columns of a probing row that were fixed before and leave with it.
+    (
+        "simple_probing",
+        "fixed columns of the row",
+        (),
+        ("fixing.simple_probing",),
     ),
     (
         "singleton_cols",
@@ -249,13 +262,67 @@ RULES = (
         ("fixing.dual_fixing_single_equation",),
     ),
     ("not built", "column stuffing", (), ("fixing.col_stuffing",)),
+    # HiGHS counts no conversion: the columns that are implied integer in
+    # the presolved model, and the bounds that the conversions moved.
     (
         "not built",
-        "implied-integer conversion",
+        "implied-integer columns left",
+        (),
+        ("total.implied_integer_cols",),
+    ),
+    (
+        "not built",
+        "implied-integer conversion, bounds",
         (),
         ("bound_change.implied_integer",),
     ),
 )
+
+# The names of the DIAG fixing lines and the causes of the DIAG bound_change
+# lines (baseline/HIGHS_DIAG.md). HiGHS prints such a line only for a name
+# that fired, so a name that a summary lacks counts as zero, and a misspelt
+# one in RULES would too.
+DIAG_CAUSES = (
+    "implied_bound",
+    "binary_row_test",
+    "doubleton",
+    "singleton_row",
+    "dual_fixing",
+    "dominated_columns_pairwise",
+    "implied_integer",
+    "transform",
+    "parallel_columns",
+    "probing_prepare",
+    "probing",
+    "clique_table",
+    "equation_gcd",
+    "other",
+)
+DIAG_NAMES = {
+    "fixing": (
+        "empty_col",
+        "forcing_row",
+        "dominated_col",
+        "weakly_dominated_col",
+        "dual_fixing_lock",
+        "dual_fixing_single_equation",
+        "dual_fixing_bound",
+        "singleton_row_bounds_equal",
+        "simple_probing",
+        "equation_gcd",
+        "col_stuffing",
+        "parallel_columns",
+        "dominated_columns_pairwise",
+        "clique_row_normalisation",
+        "enumeration",
+        "probing",
+        "other",
+        "bounds_equal_input",
+        "total",
+    )
+    + tuple("bounds_equal_" + cause for cause in DIAG_CAUSES),
+    "bound_change": DIAG_CAUSES + ("total",),
+}
 
 
 def parse_args():
@@ -270,6 +337,15 @@ def parse_args():
     parser.add_argument("--without", action="append", default=[])
     parser.add_argument("--csv")
     return parser.parse_args()
+
+
+def check_rules():
+    """Stop when RULES has a fixing or bound_change name HiGHS does not print."""
+    for line in RULES:
+        for path in line[3]:
+            kind, key = path.split(".")
+            if kind in DIAG_NAMES and key not in DIAG_NAMES[kind]:
+                sys.exit("RULES: %s is no name of DIAG %s" % (path, kind))
 
 
 def locate(text):
@@ -307,6 +383,14 @@ def add_report_fields(directory, row, reps):
             return
 
 
+def failure(row):
+    """Return what run_engine.py counts as a failure of an instance, or ''."""
+    reasons = list(row.get("errors", []))
+    if row.get("same_hash") is False:
+        reasons.append("the hash differs between repetitions")
+    return "; ".join(reasons)
+
+
 def engine_rows(directories):
     """Return the instances of engine summaries by name, a line per summary."""
     rows = {}
@@ -317,10 +401,12 @@ def engine_rows(directories):
             sys.exit("no engine summary %s" % path)
         with open(path) as f:
             summary = json.load(f)
+        if "reps" not in summary:
+            sys.exit("%s is no summary of tools/run_engine.py" % path)
         for row in summary["instances"]:
             if row["name"] in rows:
                 sys.exit("%s is in two engine summaries" % row["name"])
-            add_report_fields(directory, row, summary.get("reps", 0))
+            add_report_fields(directory, row, summary["reps"])
             rows[row["name"]] = row
         identity = summary.get("identity") or {}
         source = "source commit %s" % str(identity.get("source_commit"))[:12]
@@ -337,6 +423,13 @@ def engine_rows(directories):
                 summary.get("start_time"),
             )
         )
+        failed = [
+            "%s (%s)" % (row["name"], failure(row))
+            for row in summary["instances"]
+            if failure(row)
+        ]
+        if failed:
+            sources.append("  with a failure: " + ", ".join(failed))
     return rows, sources
 
 
@@ -387,16 +480,16 @@ def reference_rows(paths):
     return rows, sources
 
 
-def engine_sizes(row):
-    """Return what the engine leaves in each measure, or why it has none."""
+def engine_sizes(row, side="engine"):
+    """Return what an engine leaves in each measure, or why it has none."""
     if row is None:
         return None, ONE_SIDED[0]
     if "reduced" not in row:
-        return None, "engine: no result"
+        return None, "%s: no result" % side
     if row["status"] == "limit":
-        return None, "engine: time limit"
+        return None, "%s: time limit" % side
     if row["status"] not in MODEL_STATUSES:
-        return None, "engine: no reduced model (%s)" % row["status"]
+        return None, "%s: no reduced model (%s)" % (side, row["status"])
     return [row["reduced"][key] for key, _ in MEASURES], ""
 
 
@@ -423,6 +516,9 @@ def compare(engine, reference):
             reason = "; ".join(w for w in (why_ours, why_theirs) if w)
             left.setdefault(reason, []).append(name)
             continue
+        if any(engine[name][k] != reference[name][k] for k, _ in MEASURES):
+            left.setdefault(OTHER_MODEL, []).append(name)
+            continue
         records.append(
             {
                 "name": name,
@@ -437,18 +533,24 @@ def compare(engine, reference):
     return records, left
 
 
+def first_names(names):
+    """Return the first names of a list, with a mark when more follow."""
+    names = sorted(names)
+    return ", ".join(names[:LISTED]) + (", ..." if names[LISTED:] else "")
+
+
 def print_left_out(left):
     """Print the instances without a result on both sides, by reason."""
     for reason in sorted(left):
         names = sorted(left[reason])
-        listed = names[:8] if reason in ONE_SIDED else names
         print(
-            "left out, %s (%d): %s%s"
+            "left out, %s (%d): %s"
             % (
                 reason,
                 len(names),
-                ", ".join(listed),
-                ", ..." if len(listed) < len(names) else "",
+                first_names(names)
+                if reason in ONE_SIDED
+                else ", ".join(names),
             )
         )
 
@@ -637,13 +739,16 @@ def print_before(engine, before):
     """Print every instance where the engine leaves more than before."""
     common = []
     lost = []
+    new = []
     for name in sorted(set(engine) & set(before)):
         now, why = engine_sizes(engine[name])
-        then, _ = engine_sizes(before[name])
+        then, why_then = engine_sizes(before[name], "before")
         if now is not None and then is not None:
             common.append((name, then, now))
         elif then is not None:
             lost.append("%s (%s)" % (name, why))
+        elif now is not None:
+            new.append("%s (%s)" % (name, why_then))
     more = [c for c in common if any(n > t for n, t in zip(c[2], c[1]))]
     print(
         "\nAgainst the engine before Stage 1c, %d instances with a result "
@@ -675,8 +780,21 @@ def print_before(engine, before):
                 ),
             )
         )
-    if lost:
-        print("  a result before and none now: %s" % ", ".join(lost))
+    for title, names in (
+        ("a result before and none now", lost),
+        ("a result now and none before", new),
+    ):
+        if names:
+            print("  %s (%d): %s" % (title, len(names), ", ".join(names)))
+    for reason, names in (
+        (ONE_SIDED[0], set(before) - set(engine)),
+        (NOT_BEFORE, set(engine) - set(before)),
+    ):
+        if names:
+            print(
+                "  not compared, %s (%d): %s"
+                % (reason, len(names), first_names(names))
+            )
 
 
 def highs_counter(diag, path):
@@ -710,7 +828,10 @@ def count_cell(values):
     known = [v for v in values if v is not None]
     if not known:
         return "-"
-    return "%d (%d)" % (sum(known), sum(1 for v in known if v > 0))
+    above = sum(1 for v in known if v > 0)
+    if len(known) < len(values):
+        return "%d (%d of %d)" % (sum(known), above, len(known))
+    return "%d (%d)" % (sum(known), above)
 
 
 def print_rules(records):
@@ -718,8 +839,9 @@ def print_rules(records):
     print(
         "\nFindings of the engine and HiGHS's counters of the matching rule, "
         "summed over %d instances.\nEach side counts what its own rule calls "
-        "a finding. In brackets: instances with a count above zero. A dash: "
-        "the result has no such field." % len(records)
+        "a finding. In brackets: instances with a count above zero, 'of n' "
+        "when only n instances have the field. A dash: none has it."
+        % len(records)
     )
     form = "%-15s %-37s %18s %18s  %s"
     print(form % ("family", "sub-rule", "engine", "HiGHS", "HiGHS counters"))
@@ -876,6 +998,10 @@ def print_rounds_and_flags(rows, before):
         ]
     for title, names in lists:
         print("  %s: %s" % (title, ", ".join(sorted(names)) or "none"))
+    if len(flags) < len(rows):
+        print(
+            "  no flag in the result: %d instances" % (len(rows) - len(flags))
+        )
 
 
 def write_csv(path, engine, reference, before, records, left):
@@ -949,6 +1075,7 @@ def write_csv(path, engine, reference, before, records, left):
 def main():
     """Print the comparison of one engine result with one reference."""
     args = parse_args()
+    check_rules()
     defaults = BEFORE_TESTBED if args.testbed else BEFORE_BENCH
     engine_dirs = [locate(p) for p in args.engine or defaults]
     before_dirs = [locate(p) for p in args.before or defaults]
@@ -968,9 +1095,9 @@ def main():
         print("\n".join("before     " + s for s in sources))
 
     records, left = compare(engine, reference)
+    print_left_out(left)
     if not records:
         sys.exit("no instance has a result on both sides")
-    print_left_out(left)
     columns = [label for _, label in MEASURES]
     if add_objective(records, before):
         columns.append("nnz + objective")
