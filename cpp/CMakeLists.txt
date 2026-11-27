@@ -595,6 +595,10 @@ set(CUOPT_ROUTING_SRC_FILES)
 set(CUOPT_MATHOPT_SRC_FILES)
 set(CUOPT_CLIENT_SRC_FILES)
 set(MPS_FAST_SRC_FILES)
+# The gprs MIP presolve: a standalone project at the repository root whose host engine is
+# compiled into cuopt_mathopt (see src/presolve/CMakeLists.txt).
+get_filename_component(GPRS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../gpu_presolve" ABSOLUTE)
+set(GPRS_SRC_FILES)
 add_subdirectory(src)
 
 if (HOST_LINEINFO)
@@ -626,6 +630,20 @@ if (DEFINE_ASSERT)
             SOURCE ${CUOPT_ROUTING_SRC_FILES} ${CUOPT_MATHOPT_SRC_FILES} ${CUOPT_CLIENT_SRC_FILES}
             DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             APPEND PROPERTY COMPILE_OPTIONS "-UNDEBUG")
+endif ()
+
+# The compensated sums of gprs rely on products and sums that are not fused, in the engine and in
+# every file that includes its headers. Appended here because the HOST_LINEINFO block above
+# replaces COMPILE_OPTIONS.
+set_property(
+        SOURCE ${GPRS_SRC_FILES}
+        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        APPEND PROPERTY COMPILE_OPTIONS "-ffp-contract=off")
+if (DEFINE_ASSERT)
+    set_property(
+            SOURCE ${GPRS_SRC_FILES}
+            DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            APPEND PROPERTY COMPILE_DEFINITIONS "GPRS_ASSERT=1")
 endif ()
 
 if (NOT SKIP_GRPC_BUILD)
@@ -1027,6 +1045,7 @@ target_include_directories(cuopt_mathopt_objs PRIVATE
         "${papilo_SOURCE_DIR}/src"
         "${papilo_BINARY_DIR}"
 )
+target_include_directories(cuopt_mathopt_objs PRIVATE "${GPRS_SOURCE_DIR}/include")
 target_include_directories(cuopt_mathopt_objs SYSTEM PRIVATE
         "${pslp_SOURCE_DIR}/include"
         "${dejavu_SOURCE_DIR}"

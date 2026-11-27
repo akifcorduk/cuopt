@@ -1085,6 +1085,113 @@ third_party_presolve_t<i_t, f_t>::apply_presolve_from_mps_data(
   i_t max_rounds,
   i_t max_badgesize)
 {
+  gprs_presolve_.reset();
+  gprs_only_ = false;
+  if (gprs_mode_ == gprs_presolve_mode_t::OFF || category != problem_category_t::MIP ||
+      presolver != cuopt::mathematical_optimization::presolver_t::Papilo) {
+    return apply_third_party_presolve(mps,
+                                      category,
+                                      presolver,
+                                      dual_postsolve,
+                                      absolute_tolerance,
+                                      relative_tolerance,
+                                      time_limit,
+                                      num_cpu_threads,
+                                      max_rounds,
+                                      max_badgesize);
+  }
+
+  auto gprs = std::make_unique<gprs_presolve_t<i_t, f_t>>();
+  io::mps_data_model_t<i_t, f_t> gprs_reduced;
+  const auto gprs_status = gprs->apply(mps, !dual_reductions_, time_limit, gprs_reduced);
+  if (gprs_status == gprs_presolve_status_t::INFEASIBLE) {
+    return third_party_presolve_host_result_t<i_t, f_t>{
+      third_party_presolve_status_t::INFEASIBLE, io::mps_data_model_t<i_t, f_t>{}, {}, {}, {}};
+  }
+  if (gprs_status == gprs_presolve_status_t::UNBOUNDED_OR_INFEASIBLE) {
+    return third_party_presolve_host_result_t<i_t, f_t>{
+      third_party_presolve_status_t::UNBNDORINFEAS, io::mps_data_model_t<i_t, f_t>{}, {}, {}, {}};
+  }
+
+  const double third_party_time_limit = time_limit - gprs->get_presolve_time();
+  const bool gprs_kept_problem        = gprs_status == gprs_presolve_status_t::NOT_RUN ||
+                                 (gprs_status == gprs_presolve_status_t::UNCHANGED &&
+                                  gprs_mode_ == gprs_presolve_mode_t::BEFORE_THIRD_PARTY);
+  if (gprs_kept_problem) {
+    return apply_third_party_presolve(mps,
+                                      category,
+                                      presolver,
+                                      dual_postsolve,
+                                      absolute_tolerance,
+                                      relative_tolerance,
+                                      third_party_time_limit,
+                                      num_cpu_threads,
+                                      max_rounds,
+                                      max_badgesize);
+  }
+
+  third_party_presolve_host_result_t<i_t, f_t> result{};
+  if (gprs_mode_ == gprs_presolve_mode_t::INSTEAD_OF_THIRD_PARTY ||
+      gprs_status == gprs_presolve_status_t::REDUCED_TO_EMPTY) {
+    presolver_ = presolver;
+    maximize_  = mps.get_sense();
+    papilo_post_solve_storage_.reset();
+    gprs_only_               = true;
+    reduced_to_original_map_ = gprs->get_reduced_to_original_map();
+    original_to_reduced_map_ = gprs->get_original_to_reduced_map();
+    result.status            = third_party_presolve_status_t::REDUCED;
+    if (gprs_status == gprs_presolve_status_t::REDUCED_TO_EMPTY) {
+      result.status = third_party_presolve_status_t::OPTIMAL;
+    }
+    if (gprs_status == gprs_presolve_status_t::UNCHANGED) {
+      result.status = third_party_presolve_status_t::UNCHANGED;
+      gprs_reduced  = mps;
+    }
+    result.reduced_problem = std::move(gprs_reduced);
+  } else {
+    result = apply_third_party_presolve(gprs_reduced,
+                                        category,
+                                        presolver,
+                                        dual_postsolve,
+                                        absolute_tolerance,
+                                        relative_tolerance,
+                                        third_party_time_limit,
+                                        num_cpu_threads,
+                                        max_rounds,
+                                        max_badgesize);
+    if (result.status == third_party_presolve_status_t::INFEASIBLE ||
+        result.status == third_party_presolve_status_t::UNBOUNDED ||
+        result.status == third_party_presolve_status_t::UNBNDORINFEAS) {
+      return result;
+    }
+    if (result.status == third_party_presolve_status_t::UNCHANGED) {
+      result.status = third_party_presolve_status_t::REDUCED;
+    }
+    gprs->compose_maps(reduced_to_original_map_, original_to_reduced_map_);
+  }
+  result.reduced_to_original_map     = reduced_to_original_map_;
+  result.original_to_reduced_map     = original_to_reduced_map_;
+  original_objective_coefficients_   = mps.get_objective_coefficients();
+  original_objective_offset_         = mps.get_objective_offset();
+  original_objective_scaling_factor_ = mps.get_objective_scaling_factor();
+  gprs_presolve_                     = std::move(gprs);
+  return result;
+}
+
+template <typename i_t, typename f_t>
+third_party_presolve_host_result_t<i_t, f_t>
+third_party_presolve_t<i_t, f_t>::apply_third_party_presolve(
+  io::mps_data_model_t<i_t, f_t> const& mps,
+  problem_category_t category,
+  cuopt::mathematical_optimization::presolver_t presolver,
+  bool dual_postsolve,
+  f_t absolute_tolerance,
+  f_t relative_tolerance,
+  double time_limit,
+  i_t num_cpu_threads,
+  i_t max_rounds,
+  i_t max_badgesize)
+{
   presolver_           = presolver;
   maximize_            = mps.get_sense();
   pslp_postsolve_skip_ = false;
@@ -1393,7 +1500,8 @@ void third_party_presolve_t<i_t, f_t>::undo(std::vector<f_t>& primal_solution,
     return;
   } else {  // Papilo branch
     if (status_to_skip) { return; }
-    undo_papilo(primal_solution, dual_solution, reduced_costs, dual_postsolve);
+    if (!gprs_only_) { undo_papilo(primal_solution, dual_solution, reduced_costs, dual_postsolve); }
+    if (gprs_presolve_) { gprs_presolve_->postsolve(primal_solution); }
   }
 }
 
@@ -1408,6 +1516,11 @@ void third_party_presolve_t<i_t, f_t>::uncrush_primal_solution(
                   "are not supported for LPs");
     return;
   }
+  if (gprs_only_) {
+    full_primal = reduced_primal;
+    gprs_presolve_->postsolve(full_primal);
+    return;
+  }
 
   papilo::Solution<f_t> reduced_sol(reduced_primal);
   papilo::Solution<f_t> full_sol;
@@ -1419,6 +1532,7 @@ void third_party_presolve_t<i_t, f_t>::uncrush_primal_solution(
   auto status = post_solver.undo(reduced_sol, full_sol, *papilo_post_solve_storage_, is_optimal);
   if (check_postsolve) check_postsolve_status(status);
   full_primal = std::move(full_sol.primal);
+  if (gprs_presolve_) { gprs_presolve_->postsolve(full_primal); }
 }
 
 template <typename i_t, typename f_t>
@@ -1428,6 +1542,10 @@ bool third_party_presolve_t<i_t, f_t>::is_original_primal_solution_feasible(
   f_t relative_tolerance,
   f_t integrality_tolerance) const
 {
+  if (gprs_presolve_) {
+    return gprs_presolve_->is_original_primal_solution_feasible(
+      original_primal, absolute_tolerance, relative_tolerance, integrality_tolerance);
+  }
   cuopt_assert(papilo_post_solve_storage_ != nullptr, "No postsolve storage available");
   const auto& problem = papilo_post_solve_storage_->getOriginalProblem();
   if (original_primal.size() != static_cast<size_t>(problem.getNCols())) { return false; }
@@ -1479,19 +1597,26 @@ void third_party_presolve_t<i_t, f_t>::crush_primal_solution(
   cuopt_expects(presolver_ == cuopt::mathematical_optimization::presolver_t::Papilo,
                 error_type_t::RuntimeError,
                 "Primal crushing is only supported for PaPILO presolve");
-  cuopt_assert(papilo_post_solve_storage_ != nullptr, "No postsolve storage available");
-  std::vector<f_t> unused_y, unused_z;
-  std::vector<f_t> empty_vals;
-  std::vector<i_t> empty_indices, empty_offsets;
-  crush_primal_dual_solution(original_primal,
-                             {},
-                             reduced_primal,
-                             unused_y,
-                             {},
-                             unused_z,
-                             empty_vals,
-                             empty_indices,
-                             empty_offsets);
+  cuopt_assert(gprs_only_ || papilo_post_solve_storage_ != nullptr,
+               "No postsolve storage available");
+  std::vector<f_t> gprs_primal;
+  if (gprs_presolve_) { gprs_presolve_->crush(original_primal, gprs_primal); }
+  if (gprs_only_) {
+    reduced_primal = std::move(gprs_primal);
+  } else {
+    std::vector<f_t> unused_y, unused_z;
+    std::vector<f_t> empty_vals;
+    std::vector<i_t> empty_indices, empty_offsets;
+    crush_primal_dual_solution(gprs_presolve_ ? gprs_primal : original_primal,
+                               {},
+                               reduced_primal,
+                               unused_y,
+                               {},
+                               unused_z,
+                               empty_vals,
+                               empty_indices,
+                               empty_offsets);
+  }
 
   // Dual bound strengthening (e.g. DualFix kVarBoundChange which aren't emitted in primal mode)
   // can tighten a bound past a value
