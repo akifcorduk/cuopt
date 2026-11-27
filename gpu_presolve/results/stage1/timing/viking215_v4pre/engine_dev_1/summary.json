@@ -1,0 +1,3377 @@
+{
+ "identity": {
+  "commit": null,
+  "source_commit": null,
+  "source_dirty": null,
+  "source_checksum": "34c503e3f6b1a374f7ac0f2f6e87d898d42059e4ac04ef948afe0d5d41569fe8",
+  "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/v4/release/gprs_presolve",
+  "tool_checksum": "fc88f8e92133d9d7548c2c4f3450fd58173f47ffc11e7f3fd4b4bc24b9191a80"
+ },
+ "host": "fad86b7cd20d",
+ "start_time": "2026-11-27T12:54:09+0000",
+ "load_average": [
+  26.37060546875,
+  28.427734375,
+  29.3271484375
+ ],
+ "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/v4/release/gprs_presolve",
+ "tool_args": [],
+ "reps": 1,
+ "end_time": "2026-11-27T12:54:15+0000",
+ "end_load_average": [
+  26.98193359375,
+  28.5205078125,
+  29.3525390625
+ ],
+ "failures": 0,
+ "instances": [
+  {
+   "name": "istanbul-no-cutoff",
+   "band": "A1",
+   "rows": 20346,
+   "cols": 5282,
+   "nnz": 71477,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.03558063507080078
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 19303,
+    "cols": 5012,
+    "nnz": 64803
+   },
+   "seconds": 0.009637,
+   "all_seconds": [
+    0.009637
+   ],
+   "hash": "4cf775025bfae4ec",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 6,
+     "work": 223502,
+     "findings": 1002,
+     "records": 0,
+     "seconds": 0.000466,
+     "rows_removed": 814,
+     "cols_removed": 166,
+     "nnz_removed": 5540
+    },
+    "propagation": {
+     "calls": 7,
+     "work": 278034,
+     "findings": 1,
+     "records": 24262,
+     "seconds": 0.00129,
+     "rows_removed": 0,
+     "cols_removed": 1,
+     "nnz_removed": 583
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 354703,
+     "findings": 2216,
+     "records": 0,
+     "seconds": 0.000545,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 163875,
+     "findings": 98,
+     "records": 0,
+     "seconds": 0.000795,
+     "rows_removed": 98,
+     "cols_removed": 98,
+     "nnz_removed": 246
+    },
+    "parallel_rows": {
+     "calls": 3,
+     "work": 541677,
+     "findings": 131,
+     "records": 0,
+     "seconds": 0.001712,
+     "rows_removed": 131,
+     "cols_removed": 0,
+     "nnz_removed": 300
+    },
+    "dual_fixing": {
+     "calls": 3,
+     "work": 44845,
+     "findings": 5,
+     "records": 0,
+     "seconds": 1.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 5,
+     "nnz_removed": 5
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.003153,
+    "start": 3.9e-05,
+    "storage": 0.000184,
+    "finish": 0.000586,
+    "hash": 0.00077
+   }
+  },
+  {
+   "name": "ns1208400",
+   "band": "A1",
+   "rows": 4289,
+   "cols": 2883,
+   "nnz": 81746,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.0362086296081543
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1981,
+    "cols": 2597,
+    "nnz": 73621
+   },
+   "seconds": 0.007973,
+   "all_seconds": [
+    0.007973
+   ],
+   "hash": "2ea5cc8a35548bf8",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 54575,
+     "findings": 2595,
+     "records": 0,
+     "seconds": 0.000149,
+     "rows_removed": 2308,
+     "cols_removed": 286,
+     "nnz_removed": 8125
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 192396,
+     "findings": 5,
+     "records": 6,
+     "seconds": 0.001262,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 649646,
+     "findings": 528,
+     "records": 0,
+     "seconds": 0.001746,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 23456,
+     "findings": 0,
+     "records": 0,
+     "seconds": 2e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 436915,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000886,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 23064,
+     "findings": 0,
+     "records": 0,
+     "seconds": 9e-06,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.002323,
+    "start": 1e-05,
+    "storage": 0.000369,
+    "finish": 0.000426,
+    "hash": 0.000607
+   }
+  },
+  {
+   "name": "wachplan",
+   "band": "A1",
+   "rows": 1553,
+   "cols": 3361,
+   "nnz": 89361,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.03628420829772949
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 696,
+    "cols": 2302,
+    "nnz": 12698
+   },
+   "seconds": 0.006678,
+   "all_seconds": [
+    0.006678
+   ],
+   "hash": "5fc679545518b94e",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 44958,
+     "findings": 1168,
+     "records": 0,
+     "seconds": 0.000601,
+     "rows_removed": 811,
+     "cols_removed": 357,
+     "nnz_removed": 75656
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 106913,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.000716,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 347177,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000915,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 11024,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.3e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 288442,
+     "findings": 46,
+     "records": 0,
+     "seconds": 0.000634,
+     "rows_removed": 46,
+     "cols_removed": 0,
+     "nnz_removed": 305
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 42446,
+     "findings": 702,
+     "records": 0,
+     "seconds": 6.9e-05,
+     "rows_removed": 0,
+     "cols_removed": 702,
+     "nnz_removed": 702
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.003084,
+    "start": 1e-05,
+    "storage": 0.000365,
+    "finish": 0.000132,
+    "hash": 0.000136
+   }
+  },
+  {
+   "name": "trento1",
+   "band": "A1",
+   "rows": 1265,
+   "cols": 7687,
+   "nnz": 93571,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.036744117736816406
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1264,
+    "cols": 7678,
+    "nnz": 93396
+   },
+   "seconds": 0.007338,
+   "all_seconds": [
+    0.007338
+   ],
+   "hash": "d0c4d7ac0058771f",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 4,
+     "work": 20128,
+     "findings": 1,
+     "records": 0,
+     "seconds": 3.4e-05,
+     "rows_removed": 1,
+     "cols_removed": 0,
+     "nnz_removed": 166
+    },
+    "propagation": {
+     "calls": 4,
+     "work": 175500,
+     "findings": 1248,
+     "records": 2511,
+     "seconds": 0.001316,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 222295,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000198,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 10120,
+     "findings": 0,
+     "records": 0,
+     "seconds": 2.4e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 308125,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000643,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 61505,
+     "findings": 9,
+     "records": 0,
+     "seconds": 2e-05,
+     "rows_removed": 0,
+     "cols_removed": 9,
+     "nnz_removed": 9
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.003519,
+    "start": 1.8e-05,
+    "storage": 4.9e-05,
+    "finish": 0.000665,
+    "hash": 0.000821
+   }
+  },
+  {
+   "name": "radiationm18-12-05",
+   "band": "A1",
+   "rows": 40935,
+   "cols": 40623,
+   "nnz": 96149,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.06862640380859375
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 7243,
+    "cols": 6868,
+    "nnz": 20736
+   },
+   "seconds": 0.02773,
+   "all_seconds": [
+    0.02773
+   ],
+   "hash": "c99ca5c75906b960",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 3,
+   "rules": {
+    "row_rules": {
+     "calls": 6,
+     "work": 598049,
+     "findings": 10458,
+     "records": 0,
+     "seconds": 0.001564,
+     "rows_removed": 7822,
+     "cols_removed": 1455,
+     "nnz_removed": 10417
+    },
+    "propagation": {
+     "calls": 5,
+     "work": 832149,
+     "findings": 14428,
+     "records": 40099,
+     "seconds": 0.003721,
+     "rows_removed": 0,
+     "cols_removed": 2816,
+     "nnz_removed": 7190
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 910117,
+     "findings": 12031,
+     "records": 0,
+     "seconds": 0.002033,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 512317,
+     "findings": 25870,
+     "records": 0,
+     "seconds": 0.007389,
+     "rows_removed": 25870,
+     "cols_removed": 25870,
+     "nnz_removed": 51740
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1032450,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003699,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 5,
+     "work": 414920,
+     "findings": 3614,
+     "records": 0,
+     "seconds": 0.000354,
+     "rows_removed": 0,
+     "cols_removed": 3614,
+     "nnz_removed": 6066
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.006408,
+    "start": 0.000141,
+    "storage": 0.001799,
+    "finish": 0.00028,
+    "hash": 0.000335
+   }
+  },
+  {
+   "name": "ns1830653",
+   "band": "A2",
+   "rows": 2932,
+   "cols": 1629,
+   "nnz": 100933,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.021316051483154297
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1570,
+    "cols": 702,
+    "nnz": 34215
+   },
+   "seconds": 0.006491,
+   "all_seconds": [
+    0.006491
+   ],
+   "hash": "7f001a9db5b769fb",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 101589,
+     "findings": 2085,
+     "records": 0,
+     "seconds": 0.000723,
+     "rows_removed": 1190,
+     "cols_removed": 895,
+     "nnz_removed": 63054
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 103629,
+     "findings": 0,
+     "records": 166,
+     "seconds": 0.000548,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 191841,
+     "findings": 56,
+     "records": 0,
+     "seconds": 0.0004,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 12560,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.4e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 145664,
+     "findings": 172,
+     "records": 0,
+     "seconds": 0.000425,
+     "rows_removed": 172,
+     "cols_removed": 0,
+     "nnz_removed": 3664
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 10720,
+     "findings": 32,
+     "records": 0,
+     "seconds": 1.4e-05,
+     "rows_removed": 0,
+     "cols_removed": 32,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.002995,
+    "start": 7e-06,
+    "storage": 0.000861,
+    "finish": 0.000221,
+    "hash": 0.00028
+   }
+  },
+  {
+   "name": "supportcase40",
+   "band": "A2",
+   "rows": 38192,
+   "cols": 16440,
+   "nnz": 104420,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.03653836250305176
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 8570,
+    "cols": 5168,
+    "nnz": 24592
+   },
+   "seconds": 0.010668,
+   "all_seconds": [
+    0.010668
+   ],
+   "hash": "da04049cf4d06ddc",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 462792,
+     "findings": 37722,
+     "records": 0,
+     "seconds": 0.001631,
+     "rows_removed": 29522,
+     "cols_removed": 8200,
+     "nnz_removed": 62196
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 131288,
+     "findings": 0,
+     "records": 12064,
+     "seconds": 0.000465,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 3,
+     "work": 184908,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000241,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 68560,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000191,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 218996,
+     "findings": 100,
+     "records": 0,
+     "seconds": 0.001055,
+     "rows_removed": 100,
+     "cols_removed": 0,
+     "nnz_removed": 700
+    },
+    "dual_fixing": {
+     "calls": 3,
+     "work": 104016,
+     "findings": 2952,
+     "records": 0,
+     "seconds": 0.000119,
+     "rows_removed": 0,
+     "cols_removed": 2952,
+     "nnz_removed": 4592
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.005313,
+    "start": 0.000105,
+    "storage": 0.000822,
+    "finish": 0.000369,
+    "hash": 0.000353
+   }
+  },
+  {
+   "name": "rmatr200-p5",
+   "band": "A2",
+   "rows": 37617,
+   "cols": 37816,
+   "nnz": 113048,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.03634285926818848
+    }
+   ],
+   "status": "unchanged",
+   "reduced": {
+    "rows": 37617,
+    "cols": 37816,
+    "nnz": 113048
+   },
+   "seconds": 0.015405,
+   "all_seconds": [
+    0.015405
+   ],
+   "hash": "c659db42871b8c16",
+   "same_hash": true,
+   "rounds": 1,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 300936,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00027,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 338952,
+     "findings": 0,
+     "records": 37616,
+     "seconds": 0.00065,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 414984,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000348,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 300936,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000214,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 941016,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.002411,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 302528,
+     "findings": 0,
+     "records": 0,
+     "seconds": 8.7e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.007453,
+    "start": 0.000134,
+    "storage": 1e-06,
+    "finish": 0.002016,
+    "hash": 0.001818
+   }
+  },
+  {
+   "name": "satellites2-60-fs",
+   "band": "A2",
+   "rows": 16516,
+   "cols": 35378,
+   "nnz": 125048,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.0359034538269043
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 15847,
+    "cols": 34706,
+    "nnz": 123135
+   },
+   "seconds": 0.017799,
+   "all_seconds": [
+    0.017799
+   ],
+   "hash": "7218b1f3f8b42fc8",
+   "same_hash": true,
+   "rounds": 6,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 7,
+     "work": 199784,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000277,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 6,
+     "work": 507372,
+     "findings": 2961,
+     "records": 3165,
+     "seconds": 0.002916,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 660261,
+     "findings": 82,
+     "records": 0,
+     "seconds": 0.001586,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 162024,
+     "findings": 640,
+     "records": 0,
+     "seconds": 0.001412,
+     "rows_removed": 640,
+     "cols_removed": 640,
+     "nnz_removed": 1280
+    },
+    "parallel_rows": {
+     "calls": 3,
+     "work": 728630,
+     "findings": 29,
+     "records": 0,
+     "seconds": 0.001934,
+     "rows_removed": 29,
+     "cols_removed": 0,
+     "nnz_removed": 600
+    },
+    "dual_fixing": {
+     "calls": 4,
+     "work": 285633,
+     "findings": 32,
+     "records": 0,
+     "seconds": 9.7e-05,
+     "rows_removed": 0,
+     "cols_removed": 32,
+     "nnz_removed": 33
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.006353,
+    "start": 0.000106,
+    "storage": 2.3e-05,
+    "finish": 0.001474,
+    "hash": 0.001603
+   }
+  },
+  {
+   "name": "unitcal_7",
+   "band": "A2",
+   "rows": 48939,
+   "cols": 25755,
+   "nnz": 127595,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.06876754760742188
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 39747,
+    "cols": 23966,
+    "nnz": 107633
+   },
+   "seconds": 0.02652,
+   "all_seconds": [
+    0.02652
+   ],
+   "hash": "dfd256356df84377",
+   "same_hash": true,
+   "rounds": 8,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 343,
+     "work": 944697,
+     "findings": 9108,
+     "records": 0,
+     "seconds": 0.002136,
+     "rows_removed": 6343,
+     "cols_removed": 1042,
+     "nnz_removed": 9865
+    },
+    "propagation": {
+     "calls": 343,
+     "work": 1167001,
+     "findings": 12406,
+     "records": 56922,
+     "seconds": 0.006224,
+     "rows_removed": 0,
+     "cols_removed": 393,
+     "nnz_removed": 3699
+    },
+    "tightening": {
+     "calls": 342,
+     "work": 1344998,
+     "findings": 4663,
+     "records": 0,
+     "seconds": 0.001803,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 6,
+     "work": 376792,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000256,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 6,
+     "work": 1236833,
+     "findings": 2849,
+     "records": 0,
+     "seconds": 0.005202,
+     "rows_removed": 2849,
+     "cols_removed": 0,
+     "nnz_removed": 5698
+    },
+    "dual_fixing": {
+     "calls": 343,
+     "work": 268364,
+     "findings": 354,
+     "records": 0,
+     "seconds": 0.000159,
+     "rows_removed": 0,
+     "cols_removed": 354,
+     "nnz_removed": 700
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.007411,
+    "start": 0.000123,
+    "storage": 0.000113,
+    "finish": 0.001365,
+    "hash": 0.001594
+   }
+  },
+  {
+   "name": "brazil3",
+   "band": "A2",
+   "rows": 14646,
+   "cols": 23968,
+   "nnz": 133184,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.03613615036010742
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 9315,
+    "cols": 17610,
+    "nnz": 75082
+   },
+   "seconds": 0.01687,
+   "all_seconds": [
+    0.01687
+   ],
+   "hash": "bc3e4f38ca88316c",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 218756,
+     "findings": 8417,
+     "records": 0,
+     "seconds": 0.000952,
+     "rows_removed": 4851,
+     "cols_removed": 3566,
+     "nnz_removed": 28546
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 425782,
+     "findings": 2600,
+     "records": 0,
+     "seconds": 0.002239,
+     "rows_removed": 0,
+     "cols_removed": 2600,
+     "nnz_removed": 13600
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 504207,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001205,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 83912,
+     "findings": 192,
+     "records": 0,
+     "seconds": 0.000618,
+     "rows_removed": 192,
+     "cols_removed": 192,
+     "nnz_removed": 384
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 597482,
+     "findings": 838,
+     "records": 0,
+     "seconds": 0.002896,
+     "rows_removed": 288,
+     "cols_removed": 0,
+     "nnz_removed": 15572
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 275248,
+     "findings": 0,
+     "records": 0,
+     "seconds": 9.1e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.005528,
+    "start": 7.8e-05,
+    "storage": 0.001944,
+    "finish": 0.000398,
+    "hash": 0.000917
+   }
+  },
+  {
+   "name": "piperout-d27",
+   "band": "A3",
+   "rows": 17470,
+   "cols": 13104,
+   "nnz": 224457,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.07043814659118652
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 14470,
+    "cols": 10970,
+    "nnz": 189572
+   },
+   "seconds": 0.022109,
+   "all_seconds": [
+    0.022109
+   ],
+   "hash": "971772b62d28491c",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 6,
+     "work": 183654,
+     "findings": 1310,
+     "records": 0,
+     "seconds": 0.000435,
+     "rows_removed": 1290,
+     "cols_removed": 19,
+     "nnz_removed": 901
+    },
+    "propagation": {
+     "calls": 6,
+     "work": 712707,
+     "findings": 1137,
+     "records": 50,
+     "seconds": 0.003893,
+     "rows_removed": 0,
+     "cols_removed": 1121,
+     "nnz_removed": 30411
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 845774,
+     "findings": 90,
+     "records": 0,
+     "seconds": 0.002315,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 4,
+     "work": 142914,
+     "findings": 975,
+     "records": 0,
+     "seconds": 0.002423,
+     "rows_removed": 975,
+     "cols_removed": 975,
+     "nnz_removed": 1954
+    },
+    "parallel_rows": {
+     "calls": 4,
+     "work": 905024,
+     "findings": 749,
+     "records": 0,
+     "seconds": 0.002392,
+     "rows_removed": 735,
+     "cols_removed": 0,
+     "nnz_removed": 1619
+    },
+    "dual_fixing": {
+     "calls": 4,
+     "work": 106928,
+     "findings": 0,
+     "records": 0,
+     "seconds": 4.6e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.007092,
+    "start": 4.8e-05,
+    "storage": 0.000329,
+    "finish": 0.001266,
+    "hash": 0.001728
+   }
+  },
+  {
+   "name": "uccase9",
+   "band": "A3",
+   "rows": 49565,
+   "cols": 33242,
+   "nnz": 332316,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:09+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.06876659393310547
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 33503,
+    "cols": 22942,
+    "nnz": 258531
+   },
+   "seconds": 0.048934,
+   "all_seconds": [
+    0.048934
+   ],
+   "hash": "7f8a054b2d17c8a8",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 4,
+     "work": 511528,
+     "findings": 8386,
+     "records": 0,
+     "seconds": 0.001036,
+     "rows_removed": 7432,
+     "cols_removed": 951,
+     "nnz_removed": 16058
+    },
+    "propagation": {
+     "calls": 4,
+     "work": 901155,
+     "findings": 168,
+     "records": 91302,
+     "seconds": 0.006667,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 3,
+     "work": 1437242,
+     "findings": 2349,
+     "records": 0,
+     "seconds": 0.002027,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 555096,
+     "findings": 8222,
+     "records": 0,
+     "seconds": 0.0091,
+     "rows_removed": 8222,
+     "cols_removed": 8222,
+     "nnz_removed": 16444
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 2047046,
+     "findings": 408,
+     "records": 0,
+     "seconds": 0.005812,
+     "rows_removed": 408,
+     "cols_removed": 0,
+     "nnz_removed": 12229
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 299634,
+     "findings": 650,
+     "records": 0,
+     "seconds": 0.000143,
+     "rows_removed": 0,
+     "cols_removed": 650,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.013832,
+    "start": 0.00023,
+    "storage": 0.005573,
+    "finish": 0.001882,
+    "hash": 0.002628
+   }
+  },
+  {
+   "name": "sorrell3",
+   "band": "A3",
+   "rows": 169162,
+   "cols": 1024,
+   "nnz": 338324,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.11809134483337402
+    }
+   ],
+   "status": "unchanged",
+   "reduced": {
+    "rows": 169162,
+    "cols": 1024,
+    "nnz": 338324
+   },
+   "seconds": 0.053351,
+   "all_seconds": [
+    0.053351
+   ],
+   "hash": "10f5a86c280ef8af",
+   "same_hash": true,
+   "rounds": 1,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 1353296,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001677,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 1691620,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003582,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 2706592,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.006146,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 1353296,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000677,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 3721564,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.01096,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 8192,
+     "findings": 0,
+     "records": 0,
+     "seconds": 3e-06,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.02046,
+    "start": 0.000173,
+    "storage": 1e-06,
+    "finish": 0.00527,
+    "hash": 0.004399
+   }
+  },
+  {
+   "name": "sp98ar",
+   "band": "A3",
+   "rows": 1435,
+   "cols": 15085,
+   "nnz": 426148,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.06986594200134277
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1402,
+    "cols": 15085,
+    "nnz": 419196
+   },
+   "seconds": 0.034173,
+   "all_seconds": [
+    0.034173
+   ],
+   "hash": "834b51079ab64f32",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 12248,
+     "findings": 5,
+     "records": 0,
+     "seconds": 1.9e-05,
+     "rows_removed": 5,
+     "cols_removed": 0,
+     "nnz_removed": 5
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 472243,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003434,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 1886198,
+     "findings": 95,
+     "records": 0,
+     "seconds": 0.005401,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 11216,
+     "findings": 0,
+     "records": 0,
+     "seconds": 4.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1308387,
+     "findings": 28,
+     "records": 0,
+     "seconds": 0.002569,
+     "rows_removed": 28,
+     "cols_removed": 0,
+     "nnz_removed": 6947
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 161440,
+     "findings": 0,
+     "records": 0,
+     "seconds": 5.5e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.016613,
+    "start": 3.5e-05,
+    "storage": 1e-06,
+    "finish": 0.00265,
+    "hash": 0.003344
+   }
+  },
+  {
+   "name": "supportcase42",
+   "band": "A3",
+   "rows": 18439,
+   "cols": 19466,
+   "nnz": 435653,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.06788897514343262
+    }
+   ],
+   "status": "unchanged",
+   "reduced": {
+    "rows": 18439,
+    "cols": 19466,
+    "nnz": 435653
+   },
+   "seconds": 0.025505,
+   "all_seconds": [
+    0.025505
+   ],
+   "hash": "41903acb3fa555a8",
+   "same_hash": true,
+   "rounds": 1,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 147512,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000133,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 147512,
+     "findings": 0,
+     "records": 0,
+     "seconds": 9.9e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 583165,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000489,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 147512,
+     "findings": 0,
+     "records": 0,
+     "seconds": 8.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 1581443,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003217,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 155728,
+     "findings": 0,
+     "records": 0,
+     "seconds": 4.6e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.014119,
+    "start": 6.4e-05,
+    "storage": 1e-06,
+    "finish": 0.003527,
+    "hash": 0.00372
+   }
+  },
+  {
+   "name": "triptim1",
+   "band": "B1",
+   "rows": 15706,
+   "cols": 30055,
+   "nnz": 515436,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.06816935539245605
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 15686,
+    "cols": 25676,
+    "nnz": 497959
+   },
+   "seconds": 0.043818,
+   "all_seconds": [
+    0.043818
+   ],
+   "hash": "012a4fb7ee5835b5",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 4,
+     "work": 183223,
+     "findings": 4367,
+     "records": 0,
+     "seconds": 0.000675,
+     "rows_removed": 7,
+     "cols_removed": 4360,
+     "nnz_removed": 17440
+    },
+    "propagation": {
+     "calls": 4,
+     "work": 844274,
+     "findings": 144,
+     "records": 11,
+     "seconds": 0.005433,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 2093242,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00506,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 125696,
+     "findings": 13,
+     "records": 0,
+     "seconds": 0.004408,
+     "rows_removed": 13,
+     "cols_removed": 13,
+     "nnz_removed": 26
+    },
+    "parallel_rows": {
+     "calls": 3,
+     "work": 1804921,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003578,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 205608,
+     "findings": 0,
+     "records": 0,
+     "seconds": 7.3e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.016445,
+    "start": 9e-05,
+    "storage": 0.000538,
+    "finish": 0.003154,
+    "hash": 0.004244
+   }
+  },
+  {
+   "name": "supportcase6",
+   "band": "B1",
+   "rows": 771,
+   "cols": 130052,
+   "nnz": 584976,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.11797761917114258
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 771,
+    "cols": 130052,
+    "nnz": 584976
+   },
+   "seconds": 0.05785,
+   "all_seconds": [
+    0.05785
+   ],
+   "hash": "b7fed7cc849ebce4",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 6176,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.6e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 1177561,
+     "findings": 1,
+     "records": 0,
+     "seconds": 0.009933,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 1761096,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.005203,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 6168,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000396,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 1767264,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003688,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 1040416,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000311,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.02539,
+    "start": 0.000285,
+    "storage": 1e-06,
+    "finish": 0.006352,
+    "hash": 0.006271
+   }
+  },
+  {
+   "name": "neos-4306827-ravan",
+   "band": "B1",
+   "rows": 261877,
+   "cols": 162291,
+   "nnz": 639474,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.16831636428833008
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 185534,
+    "cols": 119992,
+    "nnz": 467716
+   },
+   "seconds": 0.13866,
+   "all_seconds": [
+    0.13866
+   ],
+   "hash": "3af482cf4ccc4fbf",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 9,
+     "work": 2826326,
+     "findings": 73134,
+     "records": 0,
+     "seconds": 0.008179,
+     "rows_removed": 55170,
+     "cols_removed": 17964,
+     "nnz_removed": 127194
+    },
+    "propagation": {
+     "calls": 9,
+     "work": 2929675,
+     "findings": 3744,
+     "records": 10769,
+     "seconds": 0.008106,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 7,
+     "work": 4848793,
+     "findings": 3323,
+     "records": 0,
+     "seconds": 0.010907,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 4,
+     "work": 2243743,
+     "findings": 10901,
+     "records": 0,
+     "seconds": 0.015392,
+     "rows_removed": 10901,
+     "cols_removed": 10901,
+     "nnz_removed": 21812
+    },
+    "parallel_rows": {
+     "calls": 4,
+     "work": 6360409,
+     "findings": 10272,
+     "records": 0,
+     "seconds": 0.03113,
+     "rows_removed": 10272,
+     "cols_removed": 0,
+     "nnz_removed": 20724
+    },
+    "dual_fixing": {
+     "calls": 7,
+     "work": 1535388,
+     "findings": 13434,
+     "records": 0,
+     "seconds": 0.000866,
+     "rows_removed": 0,
+     "cols_removed": 13434,
+     "nnz_removed": 2028
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.038797,
+    "start": 0.000709,
+    "storage": 0.01177,
+    "finish": 0.005492,
+    "hash": 0.007303
+   }
+  },
+  {
+   "name": "var-smallemery-m6j6",
+   "band": "B1",
+   "rows": 13416,
+   "cols": 5608,
+   "nnz": 850621,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.11724591255187988
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 8619,
+    "cols": 3338,
+    "nnz": 518475
+   },
+   "seconds": 0.05954,
+   "all_seconds": [
+    0.05954
+   ],
+   "hash": "c65346ad8c791fce",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 11,
+     "work": 141584,
+     "findings": 2914,
+     "records": 0,
+     "seconds": 0.000337,
+     "rows_removed": 2914,
+     "cols_removed": 0,
+     "nnz_removed": 3848
+    },
+    "propagation": {
+     "calls": 10,
+     "work": 169810,
+     "findings": 1,
+     "records": 9,
+     "seconds": 0.000563,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 10,
+     "work": 8788318,
+     "findings": 10,
+     "records": 0,
+     "seconds": 0.008658,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 69032,
+     "findings": 0,
+     "records": 0,
+     "seconds": 7.7e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1838536,
+     "findings": 1883,
+     "records": 0,
+     "seconds": 0.004185,
+     "rows_removed": 1883,
+     "cols_removed": 0,
+     "nnz_removed": 3766
+    },
+    "dual_fixing": {
+     "calls": 10,
+     "work": 415908,
+     "findings": 2269,
+     "records": 0,
+     "seconds": 0.002144,
+     "rows_removed": 0,
+     "cols_removed": 2269,
+     "nnz_removed": 324532
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.026762,
+    "start": 3e-05,
+    "storage": 0.009681,
+    "finish": 0.00311,
+    "hash": 0.003984
+   }
+  },
+  {
+   "name": "rd-rplusc-21",
+   "band": "B1",
+   "rows": 125899,
+   "cols": 622,
+   "nnz": 852384,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.11840939521789551
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 54170,
+    "cols": 539,
+    "nnz": 352277
+   },
+   "seconds": 0.078376,
+   "all_seconds": [
+    0.078376
+   ],
+   "hash": "7153b47f69a26019",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 7,
+     "work": 2237700,
+     "findings": 367,
+     "records": 0,
+     "seconds": 0.002199,
+     "rows_removed": 361,
+     "cols_removed": 2,
+     "nnz_removed": 510
+    },
+    "propagation": {
+     "calls": 7,
+     "work": 2513593,
+     "findings": 56,
+     "records": 2364,
+     "seconds": 0.005399,
+     "rows_removed": 0,
+     "cols_removed": 5,
+     "nnz_removed": 18
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 5169721,
+     "findings": 199002,
+     "records": 0,
+     "seconds": 0.008256,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 973683,
+     "findings": 67,
+     "records": 0,
+     "seconds": 0.001441,
+     "rows_removed": 67,
+     "cols_removed": 67,
+     "nnz_removed": 136
+    },
+    "parallel_rows": {
+     "calls": 4,
+     "work": 6847724,
+     "findings": 71301,
+     "records": 0,
+     "seconds": 0.023281,
+     "rows_removed": 71301,
+     "cols_removed": 0,
+     "nnz_removed": 499023
+    },
+    "dual_fixing": {
+     "calls": 7,
+     "work": 9670,
+     "findings": 7,
+     "records": 0,
+     "seconds": 6e-06,
+     "rows_removed": 0,
+     "cols_removed": 7,
+     "nnz_removed": 22
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.026343,
+    "start": 0.000141,
+    "storage": 0.005359,
+    "finish": 0.002578,
+    "hash": 0.003217
+   }
+  },
+  {
+   "name": "bab6",
+   "band": "B2",
+   "rows": 29904,
+   "cols": 114240,
+   "nnz": 1283181,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:10+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.218916654586792
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 29442,
+    "cols": 113900,
+    "nnz": 1157469
+   },
+   "seconds": 0.150792,
+   "all_seconds": [
+    0.150792
+   ],
+   "hash": "3ac1d2249119c819",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 242144,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00036,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 2530261,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.01826,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 8437372,
+     "findings": 252,
+     "records": 0,
+     "seconds": 0.02899,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 242225,
+     "findings": 340,
+     "records": 0,
+     "seconds": 0.011683,
+     "rows_removed": 340,
+     "cols_removed": 340,
+     "nnz_removed": 680
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 4644991,
+     "findings": 122,
+     "records": 0,
+     "seconds": 0.013052,
+     "rows_removed": 122,
+     "cols_removed": 0,
+     "nnz_removed": 125032
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 1415392,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000493,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.05876,
+    "start": 0.000296,
+    "storage": 3e-06,
+    "finish": 0.0083,
+    "hash": 0.01059
+   }
+  },
+  {
+   "name": "splice1k1",
+   "band": "B2",
+   "rows": 6505,
+   "cols": 3253,
+   "nnz": 1761016,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:11+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.21832609176635742
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 6505,
+    "cols": 3253,
+    "nnz": 1761016
+   },
+   "seconds": 0.143745,
+   "all_seconds": [
+    0.143745
+   ],
+   "hash": "e0997ff2c3110b95",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 77584,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000108,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 2652309,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.019345,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 11142111,
+     "findings": 9195,
+     "records": 0,
+     "seconds": 0.027429,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 52040,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 5387128,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.010032,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 26024,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.1e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.062488,
+    "start": 1.7e-05,
+    "storage": 1e-06,
+    "finish": 0.01114,
+    "hash": 0.013154
+   }
+  },
+  {
+   "name": "savsched1",
+   "band": "B2",
+   "rows": 295989,
+   "cols": 328575,
+   "nnz": 1770507,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:11+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.26855897903442383
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 295987,
+    "cols": 328292,
+    "nnz": 1770503
+   },
+   "seconds": 0.21209,
+   "all_seconds": [
+    0.21209
+   ],
+   "hash": "7b83dcd54c6dd47c",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 2367968,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.002925,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 3387319,
+     "findings": 7,
+     "records": 75565,
+     "seconds": 0.011571,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 7471133,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.015717,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 2367920,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.00176,
+     "rows_removed": 2,
+     "cols_removed": 2,
+     "nnz_removed": 4
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 12554502,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.037357,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 2628616,
+     "findings": 281,
+     "records": 0,
+     "seconds": 0.000887,
+     "rows_removed": 0,
+     "cols_removed": 281,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.098224,
+    "start": 0.001105,
+    "storage": 2e-06,
+    "finish": 0.021274,
+    "hash": 0.021262
+   }
+  },
+  {
+   "name": "supportcase12",
+   "band": "B2",
+   "rows": 166781,
+   "cols": 799616,
+   "nnz": 2334437,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:11+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.3690035343170166
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 27466,
+    "cols": 171982,
+    "nnz": 371401
+   },
+   "seconds": 0.286623,
+   "all_seconds": [
+    0.286623
+   ],
+   "hash": "3a428e570615bd2c",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 5,
+     "work": 6510379,
+     "findings": 752522,
+     "records": 0,
+     "seconds": 0.077815,
+     "rows_removed": 137987,
+     "cols_removed": 614535,
+     "nnz_removed": 1954057
+    },
+    "propagation": {
+     "calls": 5,
+     "work": 2177158,
+     "findings": 141862,
+     "records": 657943,
+     "seconds": 0.031318,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 1779189,
+     "findings": 4,
+     "records": 0,
+     "seconds": 0.003262,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 238928,
+     "findings": 600,
+     "records": 0,
+     "seconds": 0.003286,
+     "rows_removed": 600,
+     "cols_removed": 600,
+     "nnz_removed": 1600
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1626823,
+     "findings": 728,
+     "records": 0,
+     "seconds": 0.007975,
+     "rows_removed": 728,
+     "cols_removed": 0,
+     "nnz_removed": 6579
+    },
+    "dual_fixing": {
+     "calls": 3,
+     "work": 1537280,
+     "findings": 12499,
+     "records": 0,
+     "seconds": 0.002387,
+     "rows_removed": 0,
+     "cols_removed": 12499,
+     "nnz_removed": 800
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.131178,
+    "start": 0.001967,
+    "storage": 0.01434,
+    "finish": 0.007486,
+    "hash": 0.005602
+   }
+  },
+  {
+   "name": "supportcase7",
+   "band": "B2",
+   "rows": 6532,
+   "cols": 138844,
+   "nnz": 2845545,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:12+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.26876068115234375
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 4958,
+    "cols": 21692,
+    "nnz": 484011
+   },
+   "seconds": 0.19725,
+   "all_seconds": [
+    0.19725
+   ],
+   "hash": "c543055331ad4c2f",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 7,
+     "work": 2925658,
+     "findings": 118569,
+     "records": 0,
+     "seconds": 0.022033,
+     "rows_removed": 1524,
+     "cols_removed": 117036,
+     "nnz_removed": 2334324
+    },
+    "propagation": {
+     "calls": 6,
+     "work": 1544513,
+     "findings": 21586,
+     "records": 92809,
+     "seconds": 0.013225,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 6,
+     "work": 2842872,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00298,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 40128,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00044,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1669105,
+     "findings": 50,
+     "records": 0,
+     "seconds": 0.003785,
+     "rows_removed": 50,
+     "cols_removed": 0,
+     "nnz_removed": 27189
+    },
+    "dual_fixing": {
+     "calls": 6,
+     "work": 278290,
+     "findings": 116,
+     "records": 0,
+     "seconds": 0.000343,
+     "rows_removed": 0,
+     "cols_removed": 116,
+     "nnz_removed": 21
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.122862,
+    "start": 0.000322,
+    "storage": 0.023766,
+    "finish": 0.003517,
+    "hash": 0.003963
+   }
+  },
+  {
+   "name": "neos-5116085-kenana",
+   "band": "B3",
+   "rows": 690242,
+   "cols": 509236,
+   "nnz": 3032792,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:12+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.5696794986724854
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 687582,
+    "cols": 509236,
+    "nnz": 3027472
+   },
+   "seconds": 0.45318,
+   "all_seconds": [
+    0.45318
+   ],
+   "hash": "e2c039cefb0ee9e5",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 11168752,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.014738,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 11797408,
+     "findings": 514332,
+     "records": 1316342,
+     "seconds": 0.12208,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 19551980,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.019311,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 5500656,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003421,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 20147568,
+     "findings": 2660,
+     "records": 0,
+     "seconds": 0.061444,
+     "rows_removed": 2660,
+     "cols_removed": 0,
+     "nnz_removed": 5320
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 4116448,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001269,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.152857,
+    "start": 0.002087,
+    "storage": 2e-06,
+    "finish": 0.038355,
+    "hash": 0.037608
+   }
+  },
+  {
+   "name": "neos-4647030-tutaki",
+   "band": "B3",
+   "rows": 8382,
+   "cols": 12600,
+   "nnz": 3953388,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:12+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.46866297721862793
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 6993,
+    "cols": 12600,
+    "nnz": 1989344
+   },
+   "seconds": 0.40043,
+   "all_seconds": [
+    0.40043
+   ],
+   "hash": "3660582911c524fc",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 100592,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00015,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 11922004,
+     "findings": 1472,
+     "records": 23608,
+     "seconds": 0.152217,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 3,
+     "work": 11933920,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.008841,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 55944,
+     "findings": 0,
+     "records": 0,
+     "seconds": 9.3e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 19864260,
+     "findings": 1389,
+     "records": 0,
+     "seconds": 0.057808,
+     "rows_removed": 1389,
+     "cols_removed": 0,
+     "nnz_removed": 1964044
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 123200,
+     "findings": 0,
+     "records": 0,
+     "seconds": 4.3e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.135446,
+    "start": 4e-05,
+    "storage": 0.018678,
+    "finish": 0.012109,
+    "hash": 0.014999
+   }
+  },
+  {
+   "name": "neos-5114902-kasavu",
+   "band": "B3",
+   "rows": 961170,
+   "cols": 710164,
+   "nnz": 4240376,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:13+0000",
+     "load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "end_load_average": [
+      26.37060546875,
+      28.427734375,
+      29.3271484375
+     ],
+     "wall_seconds": 0.770012617111206
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 957446,
+    "cols": 710164,
+    "nnz": 4232928
+   },
+   "seconds": 0.639511,
+   "all_seconds": [
+    0.639511
+   ],
+   "hash": "2afb1b2e3227fd4e",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 15556464,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.020529,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 16441824,
+     "findings": 718172,
+     "records": 1837130,
+     "seconds": 0.169939,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 27281772,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.026696,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 7659568,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.004963,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 28107296,
+     "findings": 3724,
+     "records": 0,
+     "seconds": 0.086816,
+     "rows_removed": 3724,
+     "cols_removed": 0,
+     "nnz_removed": 7448
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 5740896,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001739,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.217869,
+    "start": 0.002891,
+    "storage": 2e-06,
+    "finish": 0.055522,
+    "hash": 0.052538
+   }
+  },
+  {
+   "name": "supportcase19",
+   "band": "B3",
+   "rows": 10713,
+   "cols": 1429098,
+   "nnz": 4287094,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:14+0000",
+     "load_average": [
+      26.98193359375,
+      28.5205078125,
+      29.3525390625
+     ],
+     "end_load_average": [
+      26.98193359375,
+      28.5205078125,
+      29.3525390625
+     ],
+     "wall_seconds": 0.6200590133666992
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 10712,
+    "cols": 1429097,
+    "nnz": 4287091
+   },
+   "seconds": 0.491737,
+   "all_seconds": [
+    0.491737
+   ],
+   "hash": "a697a23230fd2f10",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 85724,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.000142,
+     "rows_removed": 1,
+     "cols_removed": 1,
+     "nnz_removed": 3
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 7230885,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.065814,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 14375972,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.039648,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 85696,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.004198,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 13032671,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.03088,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 11432776,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003206,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.240795,
+    "start": 0.003235,
+    "storage": 0.000616,
+    "finish": 0.050144,
+    "hash": 0.053046
+   }
+  },
+  {
+   "name": "neos-5052403-cygnet",
+   "band": "B3",
+   "rows": 38268,
+   "cols": 32868,
+   "nnz": 4898304,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "fad86b7cd20d",
+     "start_time": "2026-11-27T12:54:14+0000",
+     "load_average": [
+      26.98193359375,
+      28.5205078125,
+      29.3525390625
+     ],
+     "end_load_average": [
+      26.98193359375,
+      28.5205078125,
+      29.3525390625
+     ],
+     "wall_seconds": 0.6199390888214111
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 19134,
+    "cols": 27642,
+    "nnz": 2449152
+   },
+   "seconds": 0.504831,
+   "all_seconds": [
+    0.504831
+   ],
+   "hash": "4cb3fa574bab90a2",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 459216,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000672,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 10255824,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.074554,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 16781640,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.043277,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 153072,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000213,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 25409952,
+     "findings": 19134,
+     "records": 0,
+     "seconds": 0.080962,
+     "rows_removed": 19134,
+     "cols_removed": 0,
+     "nnz_removed": 2449152
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 484080,
+     "findings": 5226,
+     "records": 0,
+     "seconds": 0.000293,
+     "rows_removed": 0,
+     "cols_removed": 5226,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.237151,
+    "start": 0.000129,
+    "storage": 0.033868,
+    "finish": 0.014953,
+    "hash": 0.018755
+   }
+  }
+ ]
+}
