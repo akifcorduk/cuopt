@@ -2468,3 +2468,50 @@ No new user message.
 - The register is collected by a workflow (readers over the plan, the two rule designs, this
   history, the engine code, the adapter and the measurement scripts; then a merge, two critics
   and a final version).
+
+### Also in this interaction
+
+- The review of the groundwork (M0) came back: it can be merged as `affa1eb9d` (the
+  groundwork `31a123981` plus one review commit). The reviewer found no wrong result caused
+  by M0. With the four families off the engine equals the base on 16.8 million compared
+  results; with them on it differs only when no family that reads sides is enabled (one more
+  round, by design). Repaired with a failing test first: `candidate()` in `src/implied.hpp`
+  derived a bound from a side beyond the size guard (no rule calls it yet). Added: an event
+  test over the Stage 1 families, seven wrong engines (58 in all).
+- Left open by the review: (1) the pushes onto the new lists cost 2.4% to 2.9% on the 17
+  local dumps on the Mac, at the 3% line, with 1.5 points of code alignment on top in some
+  builds: to be decided by a timing on the node; (2) a second model of the base commit's
+  oracle failure (seed 5302642968, profile open_ends, `--singletons`; the same 1.1e-9; rate
+  about 1 in 67 million): a continuous column with a lower bound of -5e21 is fixed by dual
+  fixing at a bound that propagation moved outward by the error bound of an activity with a
+  term just under 1e20. Oracle tolerance or outward rounding: an entry for the register;
+  (3) the oracle compares objectives relative to the value, so costs scaled by 2^30 give
+  false alarms.
+- `affa1eb9d` pushed to the fork as work branch `stage1c-m0`.
+- New: `gpu_presolve/tools/stage1c_engine_runs.sh <tag> <commit> [<base tag>]` (a version is
+  built on the node from a worktree of the clone `$DEPS/src/v4` into `$DEPS/build/<tag>`;
+  assertion runs, release runs, runs with named rules off, the check without a solver, three
+  alternating timing passes against the base tag), `analysis/stage1c_identity.py` and
+  `analysis/stage1c_time.py`. First start failed in the source step (the clone follows one
+  branch; the script now fetches the commit itself).
+- Node chain started 21:32 CET: tag `s1c_base` (`f439c6d18`, release runs only; done 21:37,
+  no failed step) and tag `s1c_m0` (`affa1eb9d`, base `s1c_base`, the four families off in
+  the `_off` runs, no solver check).
+- Local dumps of the 240 benchmark instances made on the Mac
+  (`<scratchpad>/csr_dumps_bench`, 2.3 GB, from the local model files with the local HiGHS
+  tool). The groundwork engine on them gives the hash and the sizes of the stored node
+  results of the base engine on 240 of 240. So milestone agents can measure against the
+  HiGHS ladder locally.
+- Local branch `stage1c-m1-base` (`74350acb3`): the project branch plus the two M0 commits;
+  engine code equal to `affa1eb9d`.
+- Workflow `wf_88a2e01d-e49`: the assumptions register (eight readers, merge, three critics,
+  final). Workflow `wf_baf55528-756`: milestone M1 (singleton column rules and the forcing
+  column) on `stage1c-m1-base`: one implementer, then a validity reviewer and a
+  worth-and-cost reviewer in parallel, then one integrated commit. Its agents must give
+  every default and limit a switch and return it as an assumption.
+
+### Lesson
+
+- I started M1 before the node had confirmed M0, because both M0 agents had compared the
+  engines model by model and the local run on all 240 gave the stored hashes. What is still
+  open on the node (the time of the lists) can change one function of M1, not its rules.
