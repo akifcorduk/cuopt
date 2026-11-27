@@ -44,6 +44,14 @@ void write_report(FILE* out,
                result.reduced.ncols,
                (long long)result.reduced.nnz());
   std::fprintf(out, "  \"seconds\": %.6f,\n", result.seconds);
+  std::fprintf(out,
+               "  \"seconds_outside_rules\": {\"state\": %.6f, \"start\": %.6f, "
+               "\"storage\": %.6f, \"finish\": %.6f, \"hash\": %.6f},\n",
+               result.seconds_state,
+               result.seconds_start,
+               result.seconds_storage,
+               result.seconds_finish,
+               result.seconds_hash);
   std::fprintf(out, "  \"hash\": \"%016llx\",\n", (unsigned long long)result.hash);
   std::fprintf(out, "  \"rounds\": %d,\n  \"rebuilds\": %d,\n", result.rounds, result.rebuilds);
   std::fprintf(out, "  \"rules\": {\n");

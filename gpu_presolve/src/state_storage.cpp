@@ -6,8 +6,10 @@
 /* clang-format on */
 
 #include <gprs/assert.hpp>
+#include <gprs/presolve.hpp>
 #include <gprs/state.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -75,23 +77,71 @@ void state_t::compact_sparse_lines()
   }
 }
 
+namespace {
+
+// The entry at slot `from` of a store goes to the free slot `to` of the same store.
+inline void move_slot(line_store_t& store, line_store_t& other, int64_t from, int64_t to)
+{
+  int64_t twin     = store.twin[from];
+  store.index[to]  = store.index[from];
+  store.value[to]  = store.value[from];
+  store.twin[to]   = twin;
+  other.twin[twin] = to;
+}
+
+void truncate(line_store_t& store, int64_t slots)
+{
+  store.index.resize(slots);
+  store.value.resize(slots);
+  store.twin.resize(slots);
+}
+
+// True when the lines lie in the store in index order, so that the kept entries of a line can
+// move to the front of the store without running over an entry that is still to be read.
+// move_entry breaks it for the columns: it moves a full column to the end of the store.
+bool lines_in_order(const line_store_t& store, int32_t lines)
+{
+  int64_t end = 0;
+  for (int32_t l = 0; l < lines; ++l) {
+    if (store.start[l] < end) { return false; }
+    end = store.start[l] + store.capacity[l];
+  }
+  return true;
+}
+
+}  // namespace
+
+// Both stores are compacted in place where their lines are in index order, which the rows always
+// are: no new store is allocated, and a line in front of the first dropped slot is not touched.
 void state_t::rebuild()
 {
   int64_t kept = live_nnz - fixed_nnz;
   slot_visits += csr.slots() + csc.slots() + nrows + ncols;
-  line_store_t rows, cols;
-  resize_lines(rows, nrows, kept);
-  resize_lines(cols, ncols, kept);
-  std::vector<uint8_t> lost_slot(nrows, 0);
 
-  // The twin of a kept entry in the old CSC is overwritten by its slot in the new CSR, which is
-  // what the new CSC needs.
   int64_t w = 0;
   for (int32_t i = 0; i < nrows; ++i) {
+    int64_t begin = csr.begin(i);
+    int64_t end   = csr.end(i);
     int64_t start = w;
+    gprs_assert(begin >= w);
+    if (csr.used[i] == row_free_size[i]) {
+      // Every used slot holds an entry of a live column: the row moves as it is.
+      if (begin == w) {
+        w = end;
+      } else {
+        for (int64_t e = begin; e < end; ++e, ++w) {
+          move_slot(csr, csc, e, w);
+        }
+        int64_t shift = start - begin;
+        min_act.inf_slot[i] += min_act.inf_count[i] * shift;
+        max_act.inf_slot[i] += max_act.inf_count[i] * shift;
+      }
+      set_line(csr, i, start, w);
+      continue;
+    }
     dd_t fixed_terms;
     bool has_fixed = false;
-    for (int64_t e = csr.begin(i); e < csr.end(i); ++e) {
+    for (int64_t e = begin; e < end; ++e) {
       if (!csr.live(e)) { continue; }
       int32_t col = csr.index[e];
       if (col_status[col] == col_status_t::fixed) {
@@ -99,13 +149,11 @@ void state_t::rebuild()
         has_fixed = true;
         continue;
       }
-      rows.index[w]         = col;
-      rows.value[w]         = csr.value[e];
-      csc.twin[csr.twin[e]] = w;
+      if (w != e) { move_slot(csr, csc, e, w); }
       ++w;
     }
-    set_line(rows, i, start, w);
-    gprs_assert(rows.size[i] == row_free_size[i]);
+    set_line(csr, i, start, w);
+    gprs_assert(csr.size[i] == row_free_size[i]);
     if (has_fixed) {
       bool ordered = row_lower[i] <= row_upper[i];
       if (row_lower[i] > -inf) {
@@ -118,46 +166,51 @@ void state_t::rebuild()
       }
       gprs_assert(!ordered || row_lower[i] <= row_upper[i]);
     }
-    if (rows.size[i] != csr.used[i]) {
-      lost_slot[i] = 1;
-    } else {
-      int64_t shift = start - csr.begin(i);
-      min_act.inf_slot[i] += min_act.inf_count[i] * shift;
-      max_act.inf_slot[i] += max_act.inf_count[i] * shift;
-    }
+    recompute_row_activity(i);
   }
   gprs_assert(w == kept);
+  truncate(csr, kept);
 
-  int64_t q = 0;
+  // The twin of a kept entry in the columns is by now its slot in the compacted rows.
+  bool in_place = lines_in_order(csc, ncols);
+  line_store_t cols;
+  if (!in_place) { resize_lines(cols, ncols, kept); }
+  line_store_t& target = in_place ? csc : cols;
+  int64_t q            = 0;
   for (int32_t j = 0; j < ncols; ++j) {
+    int64_t begin = csc.begin(j);
+    int64_t end   = csc.end(j);
     int64_t start = q;
     if (col_status[j] == col_status_t::fixed) {
       col_status[j] = col_status_t::removed;
       down_locks[j] = 0;
       up_locks[j]   = 0;
+    } else if (in_place && csc.used[j] == csc.size[j] && begin == q) {
+      q = end;
     } else {
-      for (int64_t p = csc.begin(j); p < csc.end(j); ++p) {
+      for (int64_t p = begin; p < end; ++p) {
         if (!csc.live(p)) { continue; }
-        int64_t e     = csc.twin[p];
-        cols.index[q] = csc.index[p];
-        cols.value[q] = csc.value[p];
-        cols.twin[q]  = e;
-        rows.twin[e]  = q;
+        if (!in_place || q != p) {
+          int64_t e       = csc.twin[p];
+          target.index[q] = csc.index[p];
+          target.value[q] = csc.value[p];
+          target.twin[q]  = e;
+          csr.twin[e]     = q;
+        }
         ++q;
       }
     }
-    set_line(cols, j, start, q);
+    set_line(target, j, start, q);
   }
   gprs_assert(q == kept);
-
-  csr       = std::move(rows);
-  csc       = std::move(cols);
-  live_nnz  = kept;
-  fixed_nnz = 0;
-  for (int32_t i = 0; i < nrows; ++i) {
-    if (lost_slot[i]) { recompute_row_activity(i); }
+  if (in_place) {
+    truncate(csc, kept);
+  } else {
+    csc = std::move(cols);
   }
 
+  live_nnz  = kept;
+  fixed_nnz = 0;
   std::vector<int32_t> served;
   row_frontier.take(row_list::compaction, served);
   col_frontier.take(col_list::compaction, served);
@@ -209,6 +262,122 @@ model_t extract_model(const state_t& st,
   }
   gprs_assert((int32_t)row_origin.size() == model.nrows);
   gprs_assert((int32_t)col_origin.size() == model.ncols);
+  model.objective_offset = dd_value(st.objective_offset);
+  return model;
+}
+
+// One pass over the rows of the state: a row is copied in storage order, which is increasing
+// column order unless move_entry changed it, and sorted only when it is not.
+model_t reduced_model(const state_t& st,
+                      std::vector<int32_t>& row_origin,
+                      std::vector<int32_t>& col_origin)
+{
+  const line_store_t& csr = st.csr;
+  int64_t nnz             = st.free_nnz();
+  model_t model;
+  model.nrows = st.live_rows;
+  model.ncols = st.live_cols;
+
+  // Index in the model of a live column.
+  std::vector<int32_t> new_col(st.ncols);
+  col_origin.resize(model.ncols);
+  model.col_lower.resize(model.ncols);
+  model.col_upper.resize(model.ncols);
+  model.cost.resize(model.ncols);
+  model.col_type.resize(model.ncols);
+  int32_t cols = 0;
+  for (int32_t j = 0; j < st.ncols; ++j) {
+    if (!st.is_live(j)) { continue; }
+    new_col[j]            = cols;
+    col_origin[cols]      = j;
+    model.col_lower[cols] = st.col_lower[j];
+    model.col_upper[cols] = st.col_upper[j];
+    model.cost[cols]      = st.cost[j];
+    model.col_type[cols]  = (uint8_t)st.col_type[j];
+    ++cols;
+  }
+  gprs_assert(cols == model.ncols);
+
+  row_origin.resize(model.nrows);
+  model.row_start.resize(model.nrows + 1);
+  model.row_lower.resize(model.nrows);
+  model.row_upper.resize(model.nrows);
+  model.col_index.resize(nnz);
+  model.value.resize(nnz);
+  std::vector<std::pair<int32_t, double>> unsorted;
+  int64_t w    = 0;
+  int32_t rows = 0;
+  for (int32_t i = 0; i < st.nrows; ++i) {
+    if (!st.row_alive[i]) { continue; }
+    int64_t start = w;
+    double lower  = st.row_lower[i];
+    double upper  = st.row_upper[i];
+    int32_t last  = -1;
+    bool sorted   = true;
+    if (csr.used[i] == st.row_free_size[i]) {
+      // Every used slot holds an entry of a live column.
+      for (int64_t e = csr.begin(i); e < csr.end(i); ++e, ++w) {
+        gprs_assert(st.is_live(csr.index[e]));
+        int32_t col        = new_col[csr.index[e]];
+        sorted             = sorted & (col > last);
+        last               = col;
+        model.col_index[w] = col;
+        model.value[w]     = csr.value[e];
+      }
+    } else {
+      // As in rebuild(): the terms of the fixed columns, one compensated sum in storage order,
+      // leave the finite sides.
+      dd_t fixed_terms;
+      bool has_fixed = false;
+      for (int64_t e = csr.begin(i); e < csr.end(i); ++e) {
+        if (!csr.live(e)) { continue; }
+        int32_t j = csr.index[e];
+        if (st.col_status[j] == col_status_t::fixed) {
+          dd_add_product(fixed_terms, csr.value[e], st.col_lower[j]);
+          has_fixed = true;
+          continue;
+        }
+        gprs_assert(st.is_live(j));
+        int32_t col        = new_col[j];
+        sorted             = sorted & (col > last);
+        last               = col;
+        model.col_index[w] = col;
+        model.value[w]     = csr.value[e];
+        ++w;
+      }
+      if (has_fixed) {
+        if (lower > -inf) { lower = dd_residual(lower, fixed_terms); }
+        if (upper < inf) { upper = dd_residual(upper, fixed_terms); }
+        gprs_assert(std::isfinite(lower) || lower == -inf);
+        gprs_assert(std::isfinite(upper) || upper == inf);
+        gprs_assert(!(st.row_lower[i] <= st.row_upper[i]) || lower <= upper);
+      }
+    }
+    gprs_assert(w - start == st.row_free_size[i]);
+    if (!sorted) {
+      // A row holds a column at most once, so the order is unique.
+      unsorted.clear();
+      for (int64_t e = start; e < w; ++e) {
+        unsorted.emplace_back(model.col_index[e], model.value[e]);
+      }
+      std::sort(unsorted.begin(),
+                unsorted.end(),
+                [](const std::pair<int32_t, double>& a, const std::pair<int32_t, double>& b) {
+                  return a.first < b.first;
+                });
+      for (int64_t e = start; e < w; ++e) {
+        model.col_index[e] = unsorted[e - start].first;
+        model.value[e]     = unsorted[e - start].second;
+      }
+    }
+    row_origin[rows]      = i;
+    model.row_start[rows] = start;
+    model.row_lower[rows] = lower;
+    model.row_upper[rows] = upper;
+    ++rows;
+  }
+  gprs_assert(rows == model.nrows && w == nnz);
+  model.row_start[rows]  = w;
   model.objective_offset = dd_value(st.objective_offset);
   return model;
 }

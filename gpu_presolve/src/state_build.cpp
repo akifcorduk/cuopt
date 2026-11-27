@@ -54,6 +54,195 @@ void activity_t::resize(int32_t nrows)
   updates.resize(nrows);
 }
 
+namespace {
+
+// For the sums of one row: a call, with its results passed through memory, costs more than the
+// sums of a short row.
+#if defined(__GNUC__)
+#define GPRS_ALWAYS_INLINE inline __attribute__((always_inline))
+#else
+#define GPRS_ALWAYS_INLINE inline
+#endif
+
+// One term of one side, into `lane`; `first` when the lane holds no term yet.
+// There is no branch on the term: the sign of a coefficient decides which bound a side takes,
+// so whether a term is infinite can change from entry to entry and is not predictable. An
+// infinite term enters the lane as a * 0 instead and leaves it as it is, bit for bit: no part
+// of a lane is ever -0 (a sum is -0 only when both of its terms are, and a lane starts at
+// (+0, +0)), and x + (+-0) is x for every other x.
+// The first term of a lane is dd_add_product on (+0, +0) reduced to what the zeros leave of
+// it, hi = 0 + p and lo = 0 + error. The two sums stay: 0 + (-0) is +0.
+GPRS_ALWAYS_INLINE void add_term(side_sum_t& side,
+                                 dd_t& lane,
+                                 double a,
+                                 double bound,
+                                 int64_t slot,
+                                 const tolerances_t& tol,
+                                 bool first)
+{
+  bool infinite = is_infinite_term(a, bound, tol);
+  side.inf_count += infinite;
+  side.inf_slot += infinite ? slot : 0;
+  double finite_bound = infinite ? 0. : bound;
+  if (first) {
+    double error;
+    lane.hi = 0. + two_prod(a, finite_bound, error);
+    lane.lo = 0. + error;
+  } else {
+    dd_add_product(lane, a, finite_bound);
+  }
+  double magnitude = std::fabs(a * finite_bound);
+  side.max_term    = magnitude > side.max_term ? magnitude : side.max_term;
+  side.terms += !infinite;
+}
+
+GPRS_ALWAYS_INLINE void add_entry(const state_t& st,
+                                  int64_t slot,
+                                  side_sum_t& min_side,
+                                  dd_t& lane_min,
+                                  side_sum_t& max_side,
+                                  dd_t& lane_max,
+                                  bool first)
+{
+  int32_t j    = st.csr.index[slot];
+  double a     = st.csr.value[slot];
+  double lower = st.col_lower[j];
+  double upper = st.col_upper[j];
+  add_term(min_side, lane_min, a, min_activity_bound(a, lower, upper), slot, st.tol, first);
+  add_term(max_side, lane_max, a, max_activity_bound(a, lower, upper), slot, st.tol, first);
+}
+
+GPRS_ALWAYS_INLINE void merge_lanes(dd_t* lane_min, dd_t* lane_max, int32_t lanes, int32_t active)
+{
+  // Lanes from `active` on hold no term, and merging an empty lane changes no bit, so the tree
+  // of numerics.hpp is walked over the active lanes only.
+  for (int32_t off = lanes >> 1; off > 0; off >>= 1) {
+    for (int32_t l = 0; l < off && l + off < active; ++l) {
+      lane_min[l] = dd_add(lane_min[l], lane_min[l + off]);
+      lane_max[l] = dd_add(lane_max[l], lane_max[l + off]);
+    }
+  }
+}
+
+// fold_row_activity for a row of at most max_light_row entries without a tombstone. Entry k is
+// then at slot begin + k and a lane holds at most the entries l and l + lanes, so the lanes are
+// summed one after the other, each in registers: every lane gets its terms in storage order,
+// as in the walk over the row. The sums are locals for the same reason: the compiler cannot
+// tell that the results, the lanes and the arrays of the state are different memory.
+GPRS_ALWAYS_INLINE void fold_light_row(const state_t& st,
+                                       int64_t begin,
+                                       int32_t n,
+                                       dd_t* scratch,
+                                       side_sum_t& min_side,
+                                       side_sum_t& max_side)
+{
+  gprs_assert(n >= 0 && n <= max_light_row);
+  side_sum_t min_sum, max_sum;
+  int32_t lanes = activity_lanes(n);
+  if (lanes == 1) {
+    if (n > 0) { add_entry(st, begin, min_sum, min_sum.sum, max_sum, max_sum.sum, true); }
+    if (n > 1) { add_entry(st, begin + 1, min_sum, min_sum.sum, max_sum, max_sum.sum, false); }
+  } else if (lanes == 2) {
+    // Three or four entries: both lanes and their merge without the scratch lanes.
+    dd_t odd_min, odd_max;
+    add_entry(st, begin, min_sum, min_sum.sum, max_sum, max_sum.sum, true);
+    add_entry(st, begin + 1, min_sum, odd_min, max_sum, odd_max, true);
+    add_entry(st, begin + 2, min_sum, min_sum.sum, max_sum, max_sum.sum, false);
+    if (n == 4) { add_entry(st, begin + 3, min_sum, odd_min, max_sum, odd_max, false); }
+    min_sum.sum = dd_add(min_sum.sum, odd_min);
+    max_sum.sum = dd_add(max_sum.sum, odd_max);
+  } else {
+    // More than one lane: every lane has an entry.
+    dd_t* scratch_min = scratch;
+    dd_t* scratch_max = scratch + max_activity_lanes;
+    for (int32_t l = 0; l < lanes; ++l) {
+      dd_t lane_min, lane_max;
+      add_entry(st, begin + l, min_sum, lane_min, max_sum, lane_max, true);
+      if (l + lanes < n) {
+        add_entry(st, begin + l + lanes, min_sum, lane_min, max_sum, lane_max, false);
+      }
+      scratch_min[l] = lane_min;
+      scratch_max[l] = lane_max;
+    }
+    merge_lanes(scratch_min, scratch_max, lanes, lanes);
+    min_sum.sum = scratch_min[0];
+    max_sum.sum = scratch_max[0];
+  }
+  min_side = min_sum;
+  max_side = max_sum;
+}
+
+// fold_row_activity for every other row: the walk in storage order over the lanes of the state.
+void fold_heavy_row(state_t& st, int32_t row, side_sum_t& min_side, side_sum_t& max_side)
+{
+  const line_store_t& csr = st.csr;
+  int32_t n               = csr.size[row];
+  int32_t lanes           = activity_lanes(n);
+  int32_t active          = n < lanes ? n : lanes;
+  dd_t* lane_min          = st.lane_scratch.data();
+  dd_t* lane_max          = lane_min + max_activity_lanes;
+  side_sum_t min_sum, max_sum;
+
+  // The first `active` live entries open the lanes, one each.
+  int64_t e = csr.begin(row);
+  for (int32_t k = 0; k < active; ++e) {
+    if (!csr.live(e)) { continue; }
+    add_entry(st, e, min_sum, lane_min[k], max_sum, lane_max[k], true);
+    ++k;
+  }
+  int32_t k = active;
+  for (; e < csr.end(row); ++e) {
+    if (!csr.live(e)) { continue; }
+    int32_t lane = k & (lanes - 1);
+    ++k;
+    add_entry(st, e, min_sum, lane_min[lane], max_sum, lane_max[lane], false);
+  }
+  gprs_assert(k == n);
+
+  merge_lanes(lane_min, lane_max, lanes, active);
+  if (active > 0) {
+    min_sum.sum = lane_min[0];
+    max_sum.sum = lane_max[0];
+  }
+  min_side = min_sum;
+  max_side = max_sum;
+}
+
+inline bool light_row(const state_t& st, int32_t row)
+{
+  return st.csr.size[row] <= max_light_row && st.csr.used[row] == st.csr.size[row];
+}
+
+GPRS_ALWAYS_INLINE void store_side(activity_t& act, int32_t row, const side_sum_t& side)
+{
+  act.hi[row]        = side.sum.hi;
+  act.lo[row]        = side.sum.lo;
+  act.inf_count[row] = side.inf_count;
+  act.inf_slot[row]  = side.inf_slot;
+  act.max_term[row]  = side.max_term;
+  act.updates[row]   = side.terms;
+}
+
+// The sums of a light row never leave the registers: its two results are no arguments of a
+// call.
+GPRS_ALWAYS_INLINE void store_row_activity(state_t& st, int32_t row)
+{
+  if (light_row(st, row)) {
+    side_sum_t min_side, max_side;
+    fold_light_row(
+      st, st.csr.begin(row), st.csr.size[row], st.lane_scratch.data(), min_side, max_side);
+    store_side(st.min_act, row, min_side);
+    store_side(st.max_act, row, max_side);
+  } else {
+    side_sum_t min_side, max_side;
+    fold_heavy_row(st, row, min_side, max_side);
+    store_side(st.min_act, row, min_side);
+    store_side(st.max_act, row, max_side);
+  }
+}
+
+}  // namespace
+
 state_t::state_t(const model_t& model, const tolerances_t& tolerances)
   : nrows(model.nrows),
     ncols(model.ncols),
@@ -113,13 +302,10 @@ state_t::state_t(const model_t& model, const tolerances_t& tolerances)
       csc.value[p] = a;
       csc.twin[p]  = e;
       csr.twin[e]  = p;
-      if (a > 0) {
-        up_locks[j] += upper_finite;
-        down_locks[j] += lower_finite;
-      } else {
-        down_locks[j] += upper_finite;
-        up_locks[j] += lower_finite;
-      }
+      // No branch on the sign either.
+      bool positive = a > 0;
+      up_locks[j] += positive ? upper_finite : lower_finite;
+      down_locks[j] += positive ? lower_finite : upper_finite;
     }
   }
 
@@ -143,93 +329,22 @@ state_t::state_t(const model_t& model, const tolerances_t& tolerances)
   max_act.resize(nrows);
   lane_scratch.resize(2 * max_activity_lanes);
   for (int32_t i = 0; i < nrows; ++i) {
-    recompute_row_activity(i);
+    store_row_activity(*this, i);
   }
 
   row_frontier.init(row_list::count, nrows, row_event::entries);
   col_frontier.init(col_list::count, ncols, col_event::locks);
 }
 
-namespace {
-
-inline void add_term(
-  side_sum_t& side, dd_t& lane, double a, double bound, int64_t slot, const tolerances_t& tol)
-{
-  if (is_infinite_term(a, bound, tol)) {
-    ++side.inf_count;
-    side.inf_slot += slot;
-    return;
-  }
-  dd_add_product(lane, a, bound);
-  double magnitude = std::fabs(a * bound);
-  if (magnitude > side.max_term) { side.max_term = magnitude; }
-  ++side.terms;
-}
-
-}  // namespace
-
 void state_t::fold_row_activity(int32_t row, side_sum_t& min_side, side_sum_t& max_side)
 {
-  int32_t n      = csr.size[row];
-  int32_t lanes  = activity_lanes(n);
-  int32_t active = n < lanes ? n : lanes;
-  dd_t* lane_min = lane_scratch.data();
-  dd_t* lane_max = lane_min + max_activity_lanes;
-  for (int32_t l = 0; l < active; ++l) {
-    lane_min[l] = dd_t{};
-    lane_max[l] = dd_t{};
-  }
-  min_side = side_sum_t{};
-  max_side = side_sum_t{};
-
-  int32_t k = 0;
-  for (int64_t e = csr.begin(row); e < csr.end(row); ++e) {
-    if (!csr.live(e)) { continue; }
-    int32_t lane = k & (lanes - 1);
-    ++k;
-    int32_t j = csr.index[e];
-    double a  = csr.value[e];
-    add_term(
-      min_side, lane_min[lane], a, min_activity_bound(a, col_lower[j], col_upper[j]), e, tol);
-    add_term(
-      max_side, lane_max[lane], a, max_activity_bound(a, col_lower[j], col_upper[j]), e, tol);
-  }
-  gprs_assert(k == n);
-
-  // Lanes from `active` on hold no term, and merging an empty lane changes no bit, so the tree
-  // of numerics.hpp is walked over the active lanes only.
-  for (int32_t off = lanes >> 1; off > 0; off >>= 1) {
-    for (int32_t l = 0; l < off && l + off < active; ++l) {
-      lane_min[l] = dd_add(lane_min[l], lane_min[l + off]);
-      lane_max[l] = dd_add(lane_max[l], lane_max[l + off]);
-    }
-  }
-  if (active > 0) {
-    min_side.sum = lane_min[0];
-    max_side.sum = lane_max[0];
+  if (light_row(*this, row)) {
+    fold_light_row(*this, csr.begin(row), csr.size[row], lane_scratch.data(), min_side, max_side);
+  } else {
+    fold_heavy_row(*this, row, min_side, max_side);
   }
 }
 
-namespace {
-
-inline void store_side(activity_t& act, int32_t row, const side_sum_t& side)
-{
-  act.hi[row]        = side.sum.hi;
-  act.lo[row]        = side.sum.lo;
-  act.inf_count[row] = side.inf_count;
-  act.inf_slot[row]  = side.inf_slot;
-  act.max_term[row]  = side.max_term;
-  act.updates[row]   = side.terms;
-}
-
-}  // namespace
-
-void state_t::recompute_row_activity(int32_t row)
-{
-  side_sum_t min_side, max_side;
-  fold_row_activity(row, min_side, max_side);
-  store_side(min_act, row, min_side);
-  store_side(max_act, row, max_side);
-}
+void state_t::recompute_row_activity(int32_t row) { store_row_activity(*this, row); }
 
 }  // namespace gprs

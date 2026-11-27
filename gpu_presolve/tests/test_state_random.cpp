@@ -8,6 +8,7 @@
 #include "harness.hpp"
 #include "test_state_support.hpp"
 
+#include <gprs/presolve.hpp>
 #include <gprs/state.hpp>
 
 #include <array>
@@ -396,6 +397,11 @@ struct run_t {
   {
     std::vector<int32_t> row_origin, col_origin, ref_row_origin, ref_col_origin;
     model_t before = reference_model(st, ref_row_origin, ref_col_origin);
+    model_t direct = reduced_model(st, row_origin, col_origin);
+    if (!same_model(before, direct) || row_origin != ref_row_origin ||
+        col_origin != ref_col_origin) {
+      failure = "reduced_model is not the model of the state";
+    }
     st.rebuild();
     sh.rebuild();
     model_t after = extract_model(st, row_origin, col_origin);

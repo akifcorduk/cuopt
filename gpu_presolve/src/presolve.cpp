@@ -45,6 +45,12 @@ static_assert(rule::row_rules == row_list::row_rules &&
                 rule::parallel_rows == row_list::parallel_rows,
               "rule:: and row_list:: number the five row families alike");
 
+#if defined(GPRS_ASSERT) && GPRS_ASSERT
+constexpr bool assertions_on = true;
+#else
+constexpr bool assertions_on = false;
+#endif
+
 using engine_clock_t = std::chrono::steady_clock;
 
 inline double seconds_since(engine_clock_t::time_point start)
@@ -206,7 +212,9 @@ struct engine_t {
           !call(rule::tightening, tightening) || !call(rule::dual_fixing, dual_fixing)) {
         return false;
       }
+      engine_clock_t::time_point begin = engine_clock_t::now();
       st.compact_sparse_lines();
+      result.seconds_storage += seconds_since(begin);
       if (pass_stopped || !cascade_pending()) { break; }
     }
     return true;
@@ -223,6 +231,7 @@ struct engine_t {
 
   void end_phase()
   {
+    engine_clock_t::time_point begin = engine_clock_t::now();
     if (st.dead_fraction() > opt.rebuild_dead_fraction ||
         st.fixed_nnz > opt.rebuild_fixed_fraction * st.live_nnz) {
       st.rebuild();
@@ -231,6 +240,7 @@ struct engine_t {
       st.compact_sparse_lines();
     }
     record_phase();
+    result.seconds_storage += seconds_since(begin);
   }
 
   void rounds()
@@ -250,8 +260,11 @@ struct engine_t {
 
   status_t run(const model_t& model)
   {
-    if (!start_step(st, result.postsolve)) { return status_t::infeasible; }
-    record_phase();
+    engine_clock_t::time_point start_begin = engine_clock_t::now();
+    bool feasible                          = start_step(st, result.postsolve);
+    if (feasible) { record_phase(); }
+    result.seconds_start = seconds_since(start_begin);
+    if (!feasible) { return status_t::infeasible; }
     rounds();
     if (outcome != rule_outcome_t::ok) { return ended_status(outcome); }
 
@@ -262,11 +275,31 @@ struct engine_t {
       rule_result_t r                  = propagation.make_explicit(st, result.postsolve, opt);
       if (!book(rule::propagation, r, before, begin)) { return ended_status(outcome); }
     }
-    st.rebuild();
-    ++result.rebuilds;
-    result.reduced = extract_model(st, result.postsolve.row_origin, result.postsolve.col_origin);
-    record_phase();
 
+    engine_clock_t::time_point finish_begin = engine_clock_t::now();
+    result.reduced = reduced_model(st, result.postsolve.row_origin, result.postsolve.col_origin);
+    ++result.rebuilds;
+    // The state has no reader from here on but the last phase hash and the assertions.
+    if (opt.phase_hashes || assertions_on) {
+      st.rebuild();
+      gprs_assert(reduced_is_model_of_rebuilt_state());
+    }
+    record_phase();
+    status_t status       = final_status(model);
+    result.seconds_finish = seconds_since(finish_begin);
+    return status;
+  }
+
+  bool reduced_is_model_of_rebuilt_state() const
+  {
+    std::vector<int32_t> row_origin, col_origin;
+    model_t model = extract_model(st, row_origin, col_origin);
+    return model_hash(model) == model_hash(result.reduced) &&
+           row_origin == result.postsolve.row_origin && col_origin == result.postsolve.col_origin;
+  }
+
+  status_t final_status(const model_t& model) const
+  {
     if (out_of_time) { return status_t::limit; }
     if (same_model(result.reduced, model)) { return status_t::unchanged; }
     if (result.reduced.nrows == 0 && result.reduced.ncols == 0) {
@@ -284,10 +317,13 @@ result_t presolve(const model_t& model, const options_t& options)
   result_t result;
   result.postsolve.init(model);
   state_t st(model, options.tol);
+  result.seconds_state = seconds_since(start);
   engine_t engine(options, st, result, start);
-  result.status  = engine.run(model);
-  result.hash    = model_hash(result.reduced);
-  result.seconds = seconds_since(start);
+  result.status                         = engine.run(model);
+  engine_clock_t::time_point hash_begin = engine_clock_t::now();
+  result.hash                           = model_hash(result.reduced);
+  result.seconds_hash                   = seconds_since(hash_begin);
+  result.seconds                        = seconds_since(start);
   return result;
 }
 

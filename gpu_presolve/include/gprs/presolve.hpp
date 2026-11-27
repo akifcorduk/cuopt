@@ -151,6 +151,16 @@ struct result_t {
   // model_hash of the reduced model.
   uint64_t hash = 0;
   std::vector<uint64_t> phase_hash;
+  // The parts of `seconds` outside the calls of the families (rule_stats_t::seconds):
+  // the postsolve stack and the state from the model; the start step; compaction, rebuilds and
+  // phase hashes between passes and phases; the reduced model from the state and the status;
+  // model_hash of the reduced model, a chain of one word after the other that costs the same
+  // per word whatever the engine does.
+  double seconds_state   = 0.;
+  double seconds_start   = 0.;
+  double seconds_storage = 0.;
+  double seconds_finish  = 0.;
+  double seconds_hash    = 0.;
 };
 
 // Runs the Stage 1 host engine on a well_formed model.
@@ -190,7 +200,21 @@ struct result_t {
 //   was not called) and one after the extraction. A presolve that ends inside a round has the
 //   entries up to there and, with status limit, the last one.
 // - result_t::hash is model_hash(result_t::reduced) for every status.
+// - The end: the reduced model is read from the state as the rounds leave it (reduced_model),
+//   which is the model of the rebuilt state. The rebuild itself is carried out only where
+//   something reads the state afterwards: with phase_hashes, whose last entry is over the
+//   rebuilt state, and in a build with assertions, which compares reduced_model with
+//   extract_model of the rebuilt state. result_t::rebuilds counts it in every case.
 result_t presolve(const model_t& model, const options_t& options);
+
+// The model and the two origin maps that st.rebuild() followed by extract_model(st, ...) give,
+// bit for bit, read from the state as it is: the state is not changed and need not be rebuilt.
+// The terms of the fixed columns leave the finite sides of their rows as in rebuild(); the
+// entries of a row are in increasing column order. O(used slots of the live rows + rows +
+// columns), plus the sort of the rows that move_entry left out of order.
+model_t reduced_model(const state_t& st,
+                      std::vector<int32_t>& row_origin,
+                      std::vector<int32_t>& col_origin);
 
 // Hash over sizes and the bit patterns of every array of the model.
 // The three hashes chain 64-bit words (an integer as its value, a double as its bit pattern, an
