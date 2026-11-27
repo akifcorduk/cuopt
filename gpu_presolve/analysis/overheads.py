@@ -3,7 +3,7 @@
 """Track the time of the host engine that is not spent in reduction rules.
 
 Usage: overheads.py <tag> [timing name]
-       overheads.py --bench <tag> [cuOpt report directory]
+       overheads.py --bench <tag> [cuOpt report directory [timing name]]
 
 The engine reports its seconds as rule families plus the parts outside them:
 state (the state built from the model, and the postsolve stack), start,
@@ -278,15 +278,19 @@ def main():
     if args[0] == "--bench":
         tag = args[1]
         rows = engine_rows([BENCH / tag / "release_all"])
-        reference = stored_reference(
-            [BENCH / "highs_stage1c" / "summary.json"], "presolve_seconds"
-        )
-        line = report(
-            rows,
-            reference,
-            "bench240 " + tag,
-            "HiGHS with the Stage 1 rule set, 240 instances, a busy node",
-        )
+        if len(args) > 3:
+            reference = timed_reference(args[3])
+            source = (
+                "timing run "
+                + args[3]
+                + ", same machine, minimum of the passes"
+            )
+        else:
+            reference = stored_reference(
+                [BENCH / "highs_stage1c" / "summary.json"], "presolve_seconds"
+            )
+            source = "HiGHS with the Stage 1 rule set, one run, a busy node"
+        line = report(rows, reference, "bench240 " + tag, source)
         if len(args) > 2:
             cuopt_cost(args[2], rows)
     else:
