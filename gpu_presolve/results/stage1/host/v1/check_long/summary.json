@@ -1,0 +1,404 @@
+{
+ "instances": [
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/satellites2-60-fs.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.033064,
+   "original": {
+    "rows": 16516,
+    "cols": 35378,
+    "nnz": 125048
+   },
+   "reduced": {
+    "rows": 15847,
+    "cols": 34706,
+    "nnz": 123135
+   },
+   "known_objective": -19.0000000001,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -30,
+    "dual_bound": -30,
+    "seconds": 5.856
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -30,
+    "dual_bound": -30,
+    "seconds": 9.791
+   },
+   "mip_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -19.000000000011326,
+    "dual_bound": -19.000000000011326,
+    "seconds": 228.508
+   },
+   "postsolved_point": {
+    "row_violation": 7.14e-11,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": -19
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "pass",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "satellites2-60-fs"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/brazil3.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.026687,
+   "original": {
+    "rows": 14646,
+    "cols": 23968,
+    "nnz": 133184
+   },
+   "reduced": {
+    "rows": 9865,
+    "cols": 17610,
+    "nnz": 85482
+   },
+   "known_objective": 24,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 1.9999999999992908,
+    "dual_bound": 1.9999999999992908,
+    "seconds": 7.269
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 1.9999999999998217,
+    "dual_bound": 1.9999999999998217,
+    "seconds": 4.454
+   },
+   "mip_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 24.000000000000043,
+    "dual_bound": 24.000000000000043,
+    "seconds": 858.801
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 24
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "pass",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "brazil3"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/triptim1.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.078993,
+   "original": {
+    "rows": 15706,
+    "cols": 30055,
+    "nnz": 515436
+   },
+   "reduced": {
+    "rows": 15686,
+    "cols": 25676,
+    "nnz": 497959
+   },
+   "known_objective": 22.8680999999999,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 22.868087499999998,
+    "dual_bound": 22.868087499999998,
+    "seconds": 76.869
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 22.868087499999998,
+    "dual_bound": 22.868087499999998,
+    "seconds": 77.161
+   },
+   "mip_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 22.86809999999999,
+    "dual_bound": 22.86809999999999,
+    "seconds": 689.914
+   },
+   "postsolved_point": {
+    "row_violation": 8e-11,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 22.86809999999999
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "pass",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "triptim1"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/bab6.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.230494,
+   "original": {
+    "rows": 29904,
+    "cols": 114240,
+    "nnz": 1283181
+   },
+   "reduced": {
+    "rows": 29442,
+    "cols": 113900,
+    "nnz": 1157469
+   },
+   "known_objective": -284248.2307000001,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -321641.3587487217,
+    "dual_bound": -321641.3587487217,
+    "seconds": 16.834
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -299715.5239625,
+    "dual_bound": -299715.5239625,
+    "seconds": 20.443
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": -284248.2307000014,
+    "dual_bound": -284332.5997999998,
+    "seconds": 900.405
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": -284248.2307
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "bab6"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5116085-kenana.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 1.354133,
+   "original": {
+    "rows": 690242,
+    "cols": 509236,
+    "nnz": 3032792
+   },
+   "reduced": {
+    "rows": 687582,
+    "cols": 509236,
+    "nnz": 3027472
+   },
+   "known_objective": 602,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 452,
+    "dual_bound": 452,
+    "seconds": 16.649
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 452,
+    "dual_bound": 452,
+    "seconds": 11.162
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 572.2500000000006,
+    "seconds": 900.579
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-5116085-kenana"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5114902-kasavu.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 2.013435,
+   "original": {
+    "rows": 961170,
+    "cols": 710164,
+    "nnz": 4240376
+   },
+   "reduced": {
+    "rows": 957446,
+    "cols": 710164,
+    "nnz": 4232928
+   },
+   "known_objective": 655,
+   "lp_original": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 428.32056119478636,
+    "dual_bound": 428.32056119478636,
+    "seconds": 240.272
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 518,
+    "dual_bound": 518,
+    "seconds": 224.228
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 606,
+    "seconds": 1138.29
+   },
+   "checks": {
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-5114902-kasavu"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/supportcase19.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.90779,
+   "original": {
+    "rows": 10713,
+    "cols": 1429098,
+    "nnz": 4287094
+   },
+   "reduced": {
+    "rows": 10712,
+    "cols": 1429097,
+    "nnz": 4287091
+   },
+   "known_objective": 12677205.99992052,
+   "lp_original": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 5810808.34032812,
+    "dual_bound": 5810808.34032812,
+    "seconds": 240.397
+   },
+   "lp_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 5819542.018324807,
+    "dual_bound": 5819542.018324807,
+    "seconds": 240.359
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 8,
+    "seconds": 900.916
+   },
+   "checks": {
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_feasible": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "supportcase19"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5052403-cygnet.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.777839,
+   "original": {
+    "rows": 38268,
+    "cols": 32868,
+    "nnz": 4898304
+   },
+   "reduced": {
+    "rows": 19134,
+    "cols": 27642,
+    "nnz": 2449152
+   },
+   "known_objective": 182,
+   "lp_original": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 175.31288824751152,
+    "dual_bound": 175.31288824751152,
+    "seconds": 240.316
+   },
+   "lp_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 175.32015964891815,
+    "dual_bound": 175.32015964891815,
+    "seconds": 240.188
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 180,
+    "seconds": 900.272
+   },
+   "checks": {
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_feasible": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-5052403-cygnet"
+  }
+ ]
+}

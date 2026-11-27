@@ -1,0 +1,12 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5114902-kasavu.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 2.013435,
+  "original": {"rows": 961170, "cols": 710164, "nnz": 4240376},
+  "reduced": {"rows": 957446, "cols": 710164, "nnz": 4232928},
+  "known_objective": 655,
+  "lp_original": {"status": "Time limit reached", "has_solution": false, "objective": 428.32056119478636, "dual_bound": 428.32056119478636, "seconds": 240.272},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": 518, "dual_bound": 518, "seconds": 224.228},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": false, "objective": 0, "dual_bound": 606, "seconds": 1138.290},
+  "checks": {"relaxation_not_weaker": "skipped", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "skipped", "postsolved_point_objective": "skipped", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

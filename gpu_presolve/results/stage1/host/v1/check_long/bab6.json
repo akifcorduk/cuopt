@@ -1,0 +1,13 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/bab6.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.230494,
+  "original": {"rows": 29904, "cols": 114240, "nnz": 1283181},
+  "reduced": {"rows": 29442, "cols": 113900, "nnz": 1157469},
+  "known_objective": -284248.23070000007,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": -321641.35874872172, "dual_bound": -321641.35874872172, "seconds": 16.834},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": -299715.52396249998, "dual_bound": -299715.52396249998, "seconds": 20.443},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": true, "objective": -284248.23070000141, "dual_bound": -284332.59979999979, "seconds": 900.405},
+  "postsolved_point": {"row_violation": 0, "bound_violation": 0, "integrality_violation": 0, "objective": -284248.23070000001},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "pass", "postsolved_point_objective": "pass", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}
