@@ -216,7 +216,8 @@ INSTANTIATE_TEST_SUITE_P(gprs_presolve,
 // Not a test: prints what each presolve mode leaves of the instances listed in the file named by
 // GPRS_REDUCTIONS_LIST (one MPS path per line), without solving and without scaling, as the
 // solver would call the presolve. Modes: 0 the third-party presolve, 2 gprs alone, 3 gprs and
-// cuOpt's own reductions. GPRS_REDUCTIONS_THREADS is the thread count given to Papilo (4).
+// cuOpt's own reductions. GPRS_REDUCTIONS_THREADS is the thread count given to Papilo (4),
+// GPRS_REDUCTIONS_MODES the modes to run as digits (default "023").
 // Run with --gtest_also_run_disabled_tests --gtest_filter='*reductions_report*'.
 TEST(gprs_presolve_report, DISABLED_reductions_report)
 {
@@ -224,6 +225,8 @@ TEST(gprs_presolve_report, DISABLED_reductions_report)
   ASSERT_NE(list, nullptr);
   const char* threads_text = std::getenv("GPRS_REDUCTIONS_THREADS");
   const int threads        = threads_text ? std::atoi(threads_text) : 4;
+  const char* modes_text   = std::getenv("GPRS_REDUCTIONS_MODES");
+  const std::string modes  = modes_text ? modes_text : "023";
   const raft::handle_t handle{};
   std::ifstream in(list);
   ASSERT_TRUE(in.good());
@@ -238,7 +241,8 @@ TEST(gprs_presolve_report, DISABLED_reductions_report)
     const auto& hp      = settings.mip_hyper_params;
     const auto features = mip::papilo_presolve_features(op_problem);
     const auto budget   = mip::evaluate_presolve_budget(hp, features);
-    for (int mode : {0, 2, 3}) {
+    for (char digit : modes) {
+      const int mode = digit - '0';
       mip::third_party_presolve_t<int, double> presolver;
       presolver.set_indicator_strengthening(hp.presolve_indicator_strengthening);
       presolver.set_dual_reductions(true);
