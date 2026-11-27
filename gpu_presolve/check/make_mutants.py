@@ -51,6 +51,13 @@ SUBTRACT_SHIFT = "st.shift_row_sides(target.row, factor, rhs);"
 SUBTRACT_RECORD = "  ps.push_row_addition(target.row, equation.row, factor);\n"
 EXPLICIT_BOUND = "    bound        = is_upper ? bound + slack : bound - slack;"
 EXPLICIT_SLACK = "    double slack = candidate_slack(k);\n" + EXPLICIT_BOUND
+COST_CANCEL = (
+    "if (std::fabs(sum) <= tol.cancellation * (std::fabs(old) + "
+    "std::fabs(moved))) { sum = 0.; }"
+)
+DUAL_FIX = (
+    "    budget.spend(st.csc.used[col]);\n    fix_column(st, ps, col, value);"
+)
 
 # name: (file, text, replacement), or a list of them
 MUTANTS = {
@@ -457,8 +464,10 @@ MUTANTS = {
     # only through a reduction that reads the list: a second presolve of a
     # fixed point then still reduces. Until the families hold reductions,
     # the tests of the state are what fails (tests/test_state_ops.cpp,
-    # test_state_random.cpp, test_bounds_tighten.cpp), with gprs_tests built
-    # on the mutant sources.
+    # test_state_random.cpp, test_bounds_tighten.cpp), and the test that
+    # runs the Stage 1 families and reads the lists after each
+    # (tests/test_columns_events.cpp), with gprs_tests built on the mutant
+    # sources.
     # A bound change whose activity propagation does not read (the side
     # that reads it is infinite) does not list the row for the column rules.
     "ev_unread": (
@@ -478,6 +487,68 @@ MUTANTS = {
         "    if (is_live(csr.index[e])) { "
         "col_frontier.push(col_event::entries, csr.index[e]); }\n",
         "",
+    ),
+    # The mutants of a cost or an offset (obj_*): the objective part of the
+    # structure check must catch each, next to the optimum of the oracle.
+    # A fixing books cost * (old lower bound) where it fixes elsewhere.
+    "obj_fix_bound": (
+        "state_ops.cpp",
+        "  add_objective_offset(cost[col], value);",
+        "  add_objective_offset(cost[col], lower > -inf ? lower : value);",
+    ),
+    # A substitution moves the cost with the absolute value of the scale.
+    "obj_alias_abs": (
+        "rules_doubleton.cpp",
+        "    double moved = cost * map.scale;",
+        "    double moved = cost * std::fabs(map.scale);",
+    ),
+    # A moved cost of size up to 1 counts as a cancellation.
+    "obj_cancel_wide": (
+        "rules_doubleton.cpp",
+        COST_CANCEL,
+        "if (std::fabs(sum) <= 1.) { sum = 0.; }",
+    ),
+    # The offset of a substitution is booked with the moved cost.
+    "obj_offset_scale": (
+        "rules_doubleton.cpp",
+        "    st.add_objective_offset(cost, map.offset);",
+        "    st.add_objective_offset(moved, map.offset);",
+    ),
+    # The mutants of the forward map (cr_*): the optimum and every
+    # postsolved point are right, so the crush test of the oracle is the
+    # check that must catch each, on results with a dual finding.
+    # Dual fixing does not report its findings as dual: a crushed point
+    # must then cost the same and costs less.
+    "cr_uncounted": (
+        "rules_dual_fixing.cpp",
+        "    ++result.dual_findings;\n",
+        "",
+    ),
+    # An integer column with cost > 0 and no down lock is not fixed: it
+    # keeps its lower bound and the value above it and stays in the model.
+    # Every optimal point is kept, but no record moves a feasible point
+    # with a larger value into the new bounds.
+    "cr_clip": (
+        "rules_dual_fixing.cpp",
+        DUAL_FIX,
+        "    if (cost > 0 && st.is_integer(col) && lower > -inf && "
+        "upper - lower >= 2) {\n"
+        "      tighten_upper(st, ps, col, lower + 1);\n"
+        "      ++result.findings;\n"
+        "      ++result.dual_findings;\n"
+        "      continue;\n"
+        "    }\n" + DUAL_FIX,
+    ),
+    # crush exchanges the first two columns of the reduced point.
+    "cr_crush_swap": (
+        "postsolve.cpp",
+        "    x_reduced[k] = x_original[col_origin[k]];\n  }\n",
+        "    x_reduced[k] = x_original[col_origin[k]];\n  }\n"
+        "  if (x_reduced.size() >= 2) {\n"
+        "    double first = x_reduced[0];\n"
+        "    x_reduced[0] = x_reduced[1];\n"
+        "    x_reduced[1] = first;\n"
+        "  }\n",
     ),
 }
 

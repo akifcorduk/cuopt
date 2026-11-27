@@ -375,12 +375,13 @@ struct dual_fixing_t {
 // What every test of them reads, and nothing else: explicit bounds, sides, entries, lock counts,
 // costs, types and the stored activities of the state as it is. A bound counts as implied by a
 // row when the candidate of that row, recomputed at the test (src/implied.hpp), is within
-// implied_tolerance of it; a recorded implied bound is never read, since records depend on the
-// order of the visits. Each premise has an event that lists what reads it: cost, locks and
-// entries of a column its column lists (col_event::locks, col_event::entries); sides, entries
-// and both activities of a row, and with the activities the bounds of every column of the row,
-// its row lists (row_event::column_rules). A family that reads columns through a row list
-// expands the listed rows to their live columns.
+// implied_tolerance of it; a row has no candidate from a side that is infinite or beyond the
+// size that tol.side_error allows, as in bound propagation. A recorded implied bound is never
+// read, since records depend on the order of the visits. Each premise has an event that lists
+// what reads it: cost, locks and entries of a column its column lists (col_event::locks,
+// col_event::entries); sides, entries and both activities of a row, and with the activities the
+// bounds of every column of the row, its row lists (row_event::column_rules). A family that
+// reads columns through a row list expands the listed rows to their live columns.
 // A family takes its lists when it is called and, when it stops on its budget, returns the part
 // it has not served. A reduction that it leaves undone for a reason that is no function of the
 // state reports limited.
