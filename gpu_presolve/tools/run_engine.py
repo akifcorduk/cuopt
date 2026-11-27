@@ -213,6 +213,10 @@ def summarize(args, summary, entries, out):
             )
             if "seconds_outside_rules" in best:
                 row["seconds_outside_rules"] = best["seconds_outside_rules"]
+            # Reports of engines before the start step had its own entry do not have these.
+            for key in ("start", "fixed_point", "explicit", "parallel_rows"):
+                if key in best:
+                    row[key] = best[key]
             failed = failed or not row["same_hash"]
             statuses = sorted({r["status"] for r in reports})
             if entry.get("role") == "main" and any(

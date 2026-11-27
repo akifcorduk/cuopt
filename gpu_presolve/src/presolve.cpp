@@ -132,6 +132,13 @@ struct engine_t {
   bool out_of_time       = false;
   int64_t round_findings = 0;
   bool pass_stopped      = false;
+  bool round_stopped     = false;
+  // The last round changed nothing, none of its calls stopped on its budget and its cascade
+  // left no list.
+  bool settled         = false;
+  bool explicit_bounds = false;
+  // A call left a reduction undone that no list holds (rule_result_t::limited).
+  bool limited = false;
 
   engine_t(const options_t& options,
            state_t& state,
@@ -162,6 +169,7 @@ struct engine_t {
   {
     rule_stats_t& stats = result.stats[rule];
     stats.findings += r.findings;
+    stats.records += r.records;
     stats.seconds += seconds_since(begin);
     if (r.outcome != rule_outcome_t::ok) {
       outcome = r.outcome;
@@ -190,9 +198,14 @@ struct engine_t {
     result.stats[rule].work += budget.used;
     if (!book(rule, r, before, begin)) { return false; }
     round_findings += r.findings;
-    pass_stopped = pass_stopped || r.stopped;
+    pass_stopped  = pass_stopped || r.stopped;
+    round_stopped = round_stopped || r.stopped;
+    limited       = limited || r.limited;
     return true;
   }
+
+  // The family is switched on and its list holds a row or a column.
+  bool waiting(int32_t rule) const { return active(rule) && pending(rule); }
 
   bool cascade_pending() const
   {
@@ -232,8 +245,11 @@ struct engine_t {
   void end_phase()
   {
     engine_clock_t::time_point begin = engine_clock_t::now();
-    if (st.dead_fraction() > opt.rebuild_dead_fraction ||
-        st.fixed_nnz > opt.rebuild_fixed_fraction * st.live_nnz) {
+    // A rebuild moves the terms of the fixed columns into the sides, which the rules of the
+    // next phase read.
+    if ((st.dead_fraction() > opt.rebuild_dead_fraction ||
+         st.fixed_nnz > opt.rebuild_fixed_fraction * st.live_nnz) &&
+        st.fixed_terms_absorbable()) {
       st.rebuild();
       ++result.rebuilds;
     } else {
@@ -243,37 +259,113 @@ struct engine_t {
     result.seconds_storage += seconds_since(begin);
   }
 
+  // Rounds until one changes nothing or max_rounds, which counts the rounds of the whole
+  // presolve, is reached. Returns early, with outcome or out_of_time set, when the presolve ends
+  // inside a round.
   void rounds()
   {
-    for (int32_t round = 0; round < opt.max_rounds; ++round) {
+    settled = false;
+    while (result.rounds < opt.max_rounds) {
       ++result.rounds;
+      result.explicit_rounds += explicit_bounds;
       round_findings = 0;
+      round_stopped  = false;
       if (!cascade()) { return; }
+      bool served = !cascade_pending();
       end_phase();
       if (!call(rule::parallel_rows, parallel_rows)) { return; }
       end_phase();
       if (!call(rule::doubleton, doubleton)) { return; }
       end_phase();
-      if (round_findings == 0) { return; }
+      if (round_findings == 0) {
+        settled = served && !round_stopped;
+        // A row that closed a cycle of doubleton equations is back on its list: the next batch
+        // tries it as a tree edge, which this one did not.
+        if (!settled || !waiting(rule::doubleton)) { return; }
+        settled = false;
+      }
     }
+  }
+
+  // A row holds the term of a fixed column and a family that reads sides or activities is
+  // switched on: such a family can treat the row otherwise than a second presolve, which finds
+  // the term in the sides.
+  bool fixed_terms_matter() const
+  {
+    return st.fixed_nnz > 0 && (opt.enabled[rule::row_rules] || opt.enabled[rule::propagation] ||
+                                opt.enabled[rule::tightening] || opt.enabled[rule::parallel_rows]);
+  }
+
+  void absorb_fixed_terms()
+  {
+    engine_clock_t::time_point begin = engine_clock_t::now();
+    st.absorb_fixed_terms();
+    result.seconds_storage += seconds_since(begin);
+  }
+
+  bool run_start_step()
+  {
+    engine_clock_t::time_point begin = engine_clock_t::now();
+    sizes_t before                   = sizes();
+    int64_t changes                  = st.side_changes + st.bound_changes;
+    bool feasible                    = start_step(st, result.postsolve);
+    if (feasible) { record_phase(); }
+    result.seconds_start = seconds_since(begin);
+    rule_stats_t& stats  = result.start;
+    stats.calls          = 1;
+    stats.seconds        = result.seconds_start;
+    if (!feasible) { return false; }
+    stats.rows_removed = before.rows - st.live_rows;
+    stats.cols_removed = before.cols - st.live_cols;
+    stats.nnz_removed  = before.nnz - st.free_nnz();
+    stats.findings     = st.side_changes + st.bound_changes - changes + stats.cols_removed;
+    return true;
   }
 
   status_t run(const model_t& model)
   {
-    engine_clock_t::time_point start_begin = engine_clock_t::now();
-    bool feasible                          = start_step(st, result.postsolve);
-    if (feasible) { record_phase(); }
-    result.seconds_start = seconds_since(start_begin);
-    if (!feasible) { return status_t::infeasible; }
+    if (!run_start_step()) { return status_t::infeasible; }
     rounds();
     if (outcome != rule_outcome_t::ok) { return ended_status(outcome); }
 
-    // Without bound propagation no implied bound is recorded.
+    engine_clock_t::time_point explicit_begin = engine_clock_t::now();
+    // The rounds go on only for a new reason: a bound that became explicit, a row that
+    // make_explicit listed, the rows that lost the terms of fixed columns. Rounds that ended on
+    // a budget or on max_cascade_passes are not taken up again.
+    bool renewed = false;
+    // Without bound propagation no column is marked and no bound is pending.
     if (opt.enabled[rule::propagation]) {
-      sizes_t before                   = sizes();
-      engine_clock_t::time_point begin = engine_clock_t::now();
-      rule_result_t r                  = propagation.make_explicit(st, result.postsolve, opt);
-      if (!book(rule::propagation, r, before, begin)) { return ended_status(outcome); }
+      sizes_t before  = sizes();
+      size_t listed   = st.row_frontier.list[row_list::propagation].size();
+      rule_result_t r = propagation.make_explicit(st, result.postsolve, opt);
+      explicit_bounds = true;
+      if (!book(rule::propagation, r, before, explicit_begin)) { return ended_status(outcome); }
+      renewed = r.findings > 0 || st.row_frontier.list[row_list::propagation].size() > listed;
+    }
+    while (!out_of_time) {
+      if (renewed) {
+        rounds();
+        if (outcome != rule_outcome_t::ok) { return ended_status(outcome); }
+      }
+      if (!settled || out_of_time || !fixed_terms_matter() || !st.fixed_terms_absorbable()) {
+        break;
+      }
+      absorb_fixed_terms();
+      renewed = cascade_pending() || waiting(rule::parallel_rows);
+    }
+    result.seconds_explicit = seconds_since(explicit_begin);
+    result.fixed_point      = settled && !limited && !out_of_time && !fixed_terms_matter() &&
+                         !cascade_pending() && !waiting(rule::doubleton);
+
+    if (opt.enabled[rule::row_rules]) {
+      if (result.fixed_point) {
+        gprs_assert(no_empty_row());
+      } else {
+        sizes_t before                   = sizes();
+        engine_clock_t::time_point begin = engine_clock_t::now();
+        rule_result_t r                  = row_rules.remove_empty_rows(st, result.postsolve, opt);
+        if (!book(rule::row_rules, r, before, begin)) { return ended_status(outcome); }
+      }
     }
 
     engine_clock_t::time_point finish_begin = engine_clock_t::now();
@@ -288,6 +380,14 @@ struct engine_t {
     status_t status       = final_status(model);
     result.seconds_finish = seconds_since(finish_begin);
     return status;
+  }
+
+  bool no_empty_row() const
+  {
+    for (int32_t row = 0; row < st.nrows; ++row) {
+      if (st.row_alive[row] && st.row_free_size[row] == 0) { return false; }
+    }
+    return true;
   }
 
   bool reduced_is_model_of_rebuilt_state() const

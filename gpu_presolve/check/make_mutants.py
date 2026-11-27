@@ -304,11 +304,9 @@ MUTANTS = {
     # An implied upper bound made explicit a little too tight.
     "r_explicit": (
         "rules_propagation.cpp",
-        "bound_change_t change = "
-        "tighten_upper(st, ps, col, st.implied_upper[col]);",
+        "bound_change_t change = tighten_upper(st, ps, col, bound);",
         "bound_change_t change = tighten_upper(st, ps, col, "
-        "st.implied_upper[col] - "
-        "1e-4 * (1. + std::fabs(st.implied_upper[col])));",
+        "bound - 1e-4 * (1. + std::fabs(bound)));",
     ),
     # Dual fixing takes an equation as a <= row.
     "r_dual_eq": ("rules_dual_fixing.cpp", DUAL_FIXING, DUAL_FIXING_EQUATION),

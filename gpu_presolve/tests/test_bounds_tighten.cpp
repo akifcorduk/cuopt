@@ -81,6 +81,19 @@ void check_rule_lists(const state_t& st, uint8_t events, const list_t& rows)
   GPRS_CHECK(st.col_frontier.empty(col_list::dual_fixing));
 }
 
+// After a bound change: the rows of the column on the lists of a changed activity, and on the
+// propagation list those whose side reads that activity.
+void check_activity_lists(const state_t& st, const list_t& rows, const list_t& read)
+{
+  for (int32_t l = 0; l < row_list::compaction; ++l) {
+    bool listed = (row_event::activity >> l) & 1;
+    GPRS_CHECK(st.row_frontier.list[l] == (!listed                      ? list_t()
+                                           : l == row_list::propagation ? read
+                                                                        : rows));
+  }
+  GPRS_CHECK(st.col_frontier.empty(col_list::dual_fixing));
+}
+
 std::string records_error(const postsolve_t& ps, const records_t& expected)
 {
   if (ps.order.size() != expected.size() || ps.fixed_cols.size() != expected.size() ||
@@ -151,7 +164,8 @@ GPRS_TEST(bounds_tighter_continuous)
   GPRS_CHECK_EQ(f.st.min_activity(1), 0.5);
   GPRS_CHECK_EQ(f.st.bound_changes, 1);
   GPRS_CHECK_EQ(f.st.slot_visits - visits, 2);
-  check_rule_lists(f.st, row_event::activity, {0, 1});
+  // The lower bound is in the maximum activity of r0, which has no lower side to read it with.
+  check_activity_lists(f.st, {0, 1}, {1});
   check_records(f.ps, {});
   check_state(f);
 
@@ -165,7 +179,7 @@ GPRS_TEST(bounds_tighter_continuous)
   GPRS_CHECK_EQ(f.st.max_activity(1), 2.25);
   GPRS_CHECK_EQ(f.st.bound_changes, 2);
   GPRS_CHECK_EQ(f.st.slot_visits - visits, 4);
-  check_rule_lists(f.st, row_event::activity, {0, 1});
+  check_activity_lists(f.st, {0, 1}, {0, 1});
   check_records(f.ps, {});
   check_state(f);
 }
@@ -183,7 +197,8 @@ GPRS_TEST(bounds_infinite_to_finite)
   GPRS_CHECK_EQ(f.st.max_activity(0), 20.);
   GPRS_CHECK_EQ(f.st.max_act.inf_count[2], 0);
   GPRS_CHECK_EQ(f.st.max_activity(2), 14.);
-  check_rule_lists(f.st, row_event::activity, {0, 2});
+  // r0 has no lower side for its maximum activity.
+  check_activity_lists(f.st, {0, 2}, {2});
   check_state(f);
 
   // Integer and free: -2.5 becomes -2.
@@ -197,7 +212,7 @@ GPRS_TEST(bounds_infinite_to_finite)
   GPRS_CHECK_EQ(f.st.min_activity(1), -4.);
   GPRS_CHECK_EQ(f.st.min_act.inf_count[3], 0);
   GPRS_CHECK_EQ(f.st.min_activity(3), -10.);
-  check_rule_lists(f.st, row_event::activity, {1, 3});
+  check_activity_lists(f.st, {1, 3}, {1, 3});
   check_state(f);
 
   // A finite bound whose term is still above the infinite-term limit.
@@ -563,6 +578,7 @@ std::string random_step(fixture_t& f, rng_t& rng, int32_t col, records_t& record
   int64_t visits = st.slot_visits;
 
   expected_t e;
+  bool tightened_lower = operation < 2;
   if (operation == 4) {
     e.changed = true;
     e.fixed   = true;
@@ -608,12 +624,22 @@ std::string random_step(fixture_t& f, rng_t& rng, int32_t col, records_t& record
   if (error.empty()) { error = records_error(f.ps, records); }
   if (!error.empty()) { return error; }
 
-  // The rows of the column are on the lists of the event, and nothing else is on a list.
-  uint8_t event      = !e.changed ? 0 : e.fixed ? row_event::entries : row_event::activity;
+  // The rows of the column are on the lists of the event, and nothing else is on a list. A
+  // tightened bound changes one activity of a row, which is on the propagation list when its
+  // side that reads that activity is finite.
   int64_t row_visits = 0;
   for (int32_t i = 0; i < sh.nrows; ++i) {
-    bool has_col = sh.row[i].count(col) != 0;
-    if ((st.row_frontier.pending[i] & row_event::entries) != (has_col ? event : 0)) {
+    auto entry    = sh.row[i].find(col);
+    bool has_col  = entry != sh.row[i].end();
+    uint8_t event = 0;
+    if (has_col && e.changed && e.fixed) {
+      event = row_event::entries;
+    } else if (has_col && e.changed) {
+      bool in_min = (entry->second > 0) == tightened_lower;
+      bool read   = in_min ? sh.row_upper[i] < inf : sh.row_lower[i] > -inf;
+      event       = read ? row_event::activity : row_event::activity_unread;
+    }
+    if ((st.row_frontier.pending[i] & row_event::entries) != event) {
       return "row " + std::to_string(i) + ": lists " + std::to_string(st.row_frontier.pending[i]);
     }
     if (has_col) { row_visits += st.csr.used[i]; }
@@ -683,4 +709,49 @@ GPRS_TEST(bounds_random_against_reference)
   GPRS_CHECK(n.fixed > 200);
   GPRS_CHECK(n.infeasible > 500);
   GPRS_CHECK(n.fix_column > 200);
+}
+
+// An activity is fresh until a term of it changes; refresh_activity sums a row again only when
+// an activity is not fresh and its error bound could decide a test.
+GPRS_TEST(bounds_refresh_activity)
+{
+  model_t m      = hand_model();
+  m.col_upper[4] = 1e19;
+  fixture_t f(m);
+  for (int32_t i = 0; i < f.st.nrows; ++i) {
+    GPRS_CHECK(activity_fresh(f.st, f.st.min_act, i));
+    GPRS_CHECK(activity_fresh(f.st, f.st.max_act, i));
+    GPRS_CHECK(!refresh_activity(f.st, i));
+  }
+
+  // A small term changes: not fresh, and an error bound far below anything a test compares.
+  f.st.set_col_upper(1, 2.);
+  GPRS_CHECK(!activity_fresh(f.st, f.st.min_act, 0));
+  GPRS_CHECK(activity_fresh(f.st, f.st.max_act, 0));
+  GPRS_CHECK(f.st.min_activity_error(0) < 1e-25);
+  uint32_t updates = f.st.min_act.updates[0];
+  GPRS_CHECK(!refresh_activity(f.st, 0));
+  GPRS_CHECK_EQ(f.st.min_act.updates[0], updates);
+
+  // The term of 1e19 leaves the maximum activity of r2 and the minimum activity of r3. Its size
+  // stays in their error bounds until they are summed again.
+  f.st.set_col_upper(4, 8.);
+  GPRS_CHECK_EQ(f.st.max_act.max_term[2], 1e19);
+  GPRS_CHECK(f.st.max_activity_error(2) > 1e-13);
+  GPRS_CHECK(!activity_fresh(f.st, f.st.max_act, 2));
+  int64_t visits = f.st.slot_visits;
+  GPRS_CHECK(refresh_activity(f.st, 2));
+  GPRS_CHECK(activity_fresh(f.st, f.st.max_act, 2));
+  GPRS_CHECK_EQ(f.st.max_act.max_term[2], 8.);
+  GPRS_CHECK(f.st.max_activity_error(2) < 1e-25);
+  GPRS_CHECK(!refresh_activity(f.st, 2));
+  GPRS_CHECK(refresh_activity(f.st, 3));
+  GPRS_CHECK(f.st.slot_visits >= visits);
+  GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
+
+  // An infinite term is no update: x2 has no upper bound, and the maximum activity of r0 is
+  // fresh with two finite terms and one infinite.
+  GPRS_CHECK_EQ(f.st.max_act.inf_count[0], 1);
+  GPRS_CHECK_EQ(f.st.max_act.updates[0], 2u);
+  GPRS_CHECK(activity_fresh(f.st, f.st.max_act, 0));
 }

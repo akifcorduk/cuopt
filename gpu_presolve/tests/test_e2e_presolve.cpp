@@ -7,12 +7,13 @@
 
 // Generated models through presolve() and oracle::check_presolve: every rule family together,
 // each alone, each switched off, primal-only mode, the engine's thresholds at their extremes,
-// and a second presolve of the reduced model. A failure prints the case as a test that can be
-// pasted into this file.
+// and a second presolve of the reduced model, which is checked like the first and has nothing
+// left to change. A failure prints the case as a test that can be pasted into this file.
 
 #include "harness.hpp"
 #include "oracle.hpp"
 
+#include <cmath>
 #include <cstdio>
 
 using namespace gprs;
@@ -81,6 +82,48 @@ std::vector<profile_t> profiles()
   o.p_common_factor = 0.4;
   o.p_fixed_col     = 0.05;
   list.push_back({"binary", o});
+
+  // Rows parallel up to singleton columns, equations among them, and little that the cascade
+  // settles before the parallel rows see them: no side on an end of the activity range, no
+  // fixed column, hardly a short row. First many such rows with narrow integer singleton
+  // columns for the most part, then singleton columns that are line columns for the most part.
+  o                      = generator_options_t();
+  o.p_parallel_row       = 0.65;
+  o.p_equation           = 0.45;
+  o.p_singleton_col      = 0.8;
+  o.p_singleton_line     = 0.25;
+  o.max_singleton_cols   = 4;
+  o.max_rows             = 8;
+  o.max_enum_cols        = 3;
+  o.max_side             = 30;
+  o.density              = 0.8;
+  o.p_forcing_side       = 0.;
+  o.p_outside_side       = 0.;
+  o.p_fixed_col          = 0.;
+  o.p_doubleton_equation = 0.02;
+  o.p_singleton_row      = 0.;
+  o.p_empty_row          = 0.02;
+  list.push_back({"near_parallel", o});
+
+  o.p_parallel_row     = 0.5;
+  o.p_singleton_col    = 0.6;
+  o.p_singleton_line   = 0.9;
+  o.max_singleton_cols = 3;
+  o.max_rows           = 6;
+  o.max_enum_cols      = 4;
+  o.max_line_cols      = 1;
+  o.p_infinite_bound   = 0.3;
+  list.push_back({"near_parallel_lines", o});
+  return list;
+}
+
+// The two profiles with singleton columns.
+std::vector<profile_t> near_profiles()
+{
+  std::vector<profile_t> list;
+  for (const profile_t& profile : profiles()) {
+    if (profile.options.p_singleton_col > 0.) { list.push_back(profile); }
+  }
   return list;
 }
 
@@ -133,6 +176,7 @@ std::string options_code(const options_t& options)
     out +=
       "  options.parallel_bucket_limit = " + std::to_string(options.parallel_bucket_limit) + ";\n";
   }
+  if (!options.near_parallel_rows) { out += "  options.near_parallel_rows = false;\n"; }
   return out;
 }
 
@@ -217,6 +261,62 @@ bool has_model(status_t status)
          status == status_t::reduced_to_empty || status == status_t::limit;
 }
 
+// A row that the row rules would remove, found in the model alone: a row without entries, with
+// one entry, redundant or forcing on the bounds of its columns. The sums are long doubles, and
+// a row counts only where the answer is clear: no term above 1e6, redundant by half the
+// feasibility tolerance, forcing with a gap a hundredth of the tolerance of the row rules where
+// that tolerance is at least 1e-12. Empty when there is none.
+std::string removable_row(const model_t& m)
+{
+  const double feas = tolerances_t().feasibility;
+  for (int32_t i = 0; i < m.nrows; ++i) {
+    int64_t begin = m.row_start[i], end = m.row_start[i + 1];
+    std::string row = "row " + std::to_string(i) + " of the reduced model ";
+    if (end == begin) { return row + "has no entry"; }
+    if (end == begin + 1) { return row + "has one entry"; }
+    long double low = 0., high = 0.;
+    int32_t low_infinite = 0, high_infinite = 0;
+    double smallest = inf, largest = 0., largest_term = 0.;
+    for (int64_t e = begin; e < end; ++e) {
+      double a      = m.value[e];
+      int32_t j     = m.col_index[e];
+      double at_min = a > 0 ? m.col_lower[j] : m.col_upper[j];
+      double at_max = a > 0 ? m.col_upper[j] : m.col_lower[j];
+      smallest      = std::fmin(smallest, std::fabs(a));
+      largest       = std::fmax(largest, std::fabs(a));
+      if (std::isinf(at_min)) {
+        ++low_infinite;
+      } else {
+        low += (long double)a * at_min;
+        largest_term = std::fmax(largest_term, std::fabs(a * at_min));
+      }
+      if (std::isinf(at_max)) {
+        ++high_infinite;
+      } else {
+        high += (long double)a * at_max;
+        largest_term = std::fmax(largest_term, std::fabs(a * at_max));
+      }
+    }
+    double lower = m.row_lower[i], upper = m.row_upper[i];
+    if (largest_term > 1e6 || std::fabs(lower) > 1e6 || std::fabs(upper) > 1e6) {
+      if (!std::isinf(lower) || !std::isinf(upper) || largest_term > 1e6) { continue; }
+    }
+    bool upper_redundant = upper == inf || (high_infinite == 0 && high <= upper + 0.5 * feas);
+    bool lower_redundant = lower == -inf || (low_infinite == 0 && low >= lower - 0.5 * feas);
+    if (upper_redundant && lower_redundant) { return row + "is redundant on its bounds"; }
+    double tolerance = feas * smallest / std::fmax(1., largest);
+    if (tolerance < 1e-12) { continue; }
+    if (upper < inf && low_infinite == 0 && std::fabs((double)(low - upper)) <= 0.01 * tolerance) {
+      return row + "is forcing at its upper side";
+    }
+    if (lower > -inf && high_infinite == 0 &&
+        std::fabs((double)(high - lower)) <= 0.01 * tolerance) {
+      return row + "is forcing at its lower side";
+    }
+  }
+  return {};
+}
+
 }  // namespace
 
 GPRS_TEST(e2e_all_rules) { run_suite("all_rules", options_t(), 400); }
@@ -299,6 +399,99 @@ GPRS_TEST(e2e_thresholds_parallel_bucket_of_one)
   options_t options;
   options.parallel_bucket_limit = 1;
   run_suite("parallel_bucket_of_one", options, 80);
+}
+
+// Parallel rows as they were before rows parallel up to singleton columns.
+GPRS_TEST(e2e_near_parallel_rows_off)
+{
+  options_t options;
+  options.near_parallel_rows = false;
+  run_suite("near_parallel_rows_off", options, 120);
+}
+
+// The suites reach the subtraction of an equation from a row that is parallel to it up to
+// singleton columns on the two profiles made for it, with every rule and more often with the
+// parallel rows alone or without the bound propagation, and the oracle decides the reduced
+// models: also those in which the row is left with two line columns, which it takes back into
+// its class.
+GPRS_TEST(e2e_near_parallel_rows_are_reached)
+{
+  options_t without_propagation = without(rule::propagation);
+  options_t off;
+  off.near_parallel_rows = false;
+  int64_t with_all = 0, with_few = 0, models_with = 0, two_line_columns = 0, switched_off = 0;
+  int32_t failures = 0;
+  for (const profile_t& profile : near_profiles()) {
+    for (uint64_t seed = 6000000; seed < 6000500 && failures < max_reports; ++seed) {
+      case_t c = oracle::generate(seed, profile.options);
+      for (const options_t& options :
+           {options_t(), only(rule::parallel_rows), without_propagation}) {
+        result_t r  = presolve(c.model, options);
+        verdict_t v = oracle::check_result(c, options, r);
+        if (!v.ok) {
+          ++failures;
+          report(std::string("reached, profile ") + profile.name + ", seed " + std::to_string(seed),
+                 std::string("reached_") + profile.name + "_" + std::to_string(seed),
+                 v.message,
+                 oracle::to_code(c),
+                 options,
+                 check_once);
+          continue;
+        }
+        size_t n = r.postsolve.row_additions.size();
+        (options.enabled[rule::row_rules] && options.enabled[rule::propagation] ? with_all
+                                                                                : with_few) += n;
+        models_with += n > 0;
+        std::vector<uint8_t> line;
+        two_line_columns +=
+          has_model(r.status) && n > 0 &&
+          !oracle::classify_widest(r.reduced, oracle::check_max_assignments, line);
+      }
+      switched_off += presolve(c.model, off).postsolve.row_additions.size();
+    }
+  }
+  GPRS_CHECK(with_all > 40);
+  GPRS_CHECK(with_few > 400);
+  GPRS_CHECK(models_with > 300);
+  GPRS_CHECK(two_line_columns > 8);
+  GPRS_CHECK_EQ(switched_off, 0);
+}
+
+// Rows x0 + x1 + x2 = 1 and x0 + x1 + x2 + s0 + s1 + s2 = 4: the first is subtracted from the
+// second once, after which neither row has a core. Subtracting the equation with the singleton
+// columns from the other one instead puts those columns into both rows, the next round takes
+// them out again, and the rounds end only at their limit.
+GPRS_TEST(e2e_case_near_parallel_rows_end)
+{
+  for (uint8_t type : {0, 1}) {
+    model_t base;
+    base.nrows            = 2;
+    base.ncols            = 6;
+    base.row_start        = {0, 3, 9};
+    base.col_index        = {0, 1, 2, 0, 1, 2, 3, 4, 5};
+    base.value            = {1., 1., 1., 1., 1., 1., 1., 1., 1.};
+    base.row_lower        = {1., 4.};
+    base.row_upper        = {1., 4.};
+    base.col_lower        = {0., 0., 0., 0., 0., 0.};
+    base.col_upper        = {1., 1., 1., 5., 5., 5.};
+    base.cost             = {1., 2., 3., -1., 2., 0.};
+    base.col_type         = {1, 1, 1, type, type, type};
+    base.objective_offset = 0.;
+    options_t options;
+    options.max_rounds = 200;
+    result_t result    = presolve(base, options);
+    GPRS_CHECK(result.status == status_t::reduced);
+    GPRS_CHECK(result.rounds <= 4);
+    GPRS_CHECK_EQ(result.postsolve.row_additions.size(), 1u);
+    GPRS_CHECK_EQ(result.reduced.nnz(), 6);
+    // Three continuous columns in one row are outside the oracle class; integer ones are
+    // enumerated.
+    if (type == 1) {
+      oracle::verdict_t verdict =
+        oracle::check_result(oracle::make_case(base, {}, {}), options, result);
+      if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+    }
+  }
 }
 
 // The same model gives the same result twice.
@@ -410,6 +603,153 @@ GPRS_TEST(e2e_case_all_rules_open_ends_60152816)
   if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
 }
 
+// Cases that a longer run with rows parallel up to singleton columns next to large fixed
+// columns found (seeds from 7200000000 on, models with rows and columns added to the generated
+// ones).
+
+// Row 0, 3 x0 + 3 x1 + z = 30000009 with z fixed at 3e7, is divided by 3 in the row tightening:
+// the coefficient of z is 1 / 3 as a double, and x0 + x1 = 3 holds with an error of 5.6e-10,
+// far below the tolerance. Row 1 has the same core 3072 times larger and the continuous
+// singleton column y. Subtracting row 0 from it with the factor 3072 left 1024 y = 2048 - 1.7e-6
+// and the postsolved point violated row 1 by 1.7e-6.
+GPRS_TEST(e2e_case_near_parallel_rows_scaled_equation)
+{
+  model_t base;
+  base.nrows            = 2;
+  base.ncols            = 4;
+  base.row_start        = {0, 3, 6};
+  base.col_index        = {0, 1, 3, 0, 1, 2};
+  base.value            = {3., 3., 1., 3072., 3072., 1024.};
+  base.row_lower        = {30000009., 11264.};
+  base.row_upper        = {30000009., 11264.};
+  base.col_lower        = {0., 0., 0., 30000000.};
+  base.col_upper        = {2., 2., 10., 30000000.};
+  base.cost             = {0., 0., 1., 0.};
+  base.col_type         = {1, 1, 0, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {}, {});
+  options_t options;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// The other way round: row 1 is the row that the tightening has scaled next to x3, fixed at
+// 9e7, and row 0 has the same core 3072 times larger and the continuous singleton column x4.
+// Row 0 was subtracted from row 1 with the factor -1 / 3072, the bound that row 1 then gave x4
+// went into row 0 times 2048, and the presolve returned infeasible.
+GPRS_TEST(e2e_case_near_parallel_rows_scaled_target)
+{
+  model_t base;
+  base.nrows            = 3;
+  base.ncols            = 5;
+  base.row_start        = {0, 3, 7, 9};
+  base.col_index        = {0, 1, 4, 0, 1, 2, 3, 0, 1};
+  base.value            = {3., 3., -2., -6., -6., -1., -1., 6., 6.};
+  base.row_lower        = {-20., -89999988., -12.};
+  base.row_upper        = {-20., inf, -12.};
+  base.col_lower        = {-3., 0., -2., 90000000., -1.};
+  base.col_upper        = {-2., 1., 0., 90000000., 9.};
+  base.cost             = {1., 1., 3., -1., 3.};
+  base.col_type         = {1, 1, 1, 1, 0};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {1024., 1., 0.25}, {1., 1., 1., 1., 1.});
+  options_t options;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// The factor is 1, and the target has the continuous singleton column y with the coefficient
+// 2^-21. Row 0 is again the row that the tightening has scaled, off by 5.6e-10: the bound that
+// the target gave y after the subtraction was off by 2^21 times that, and the optimal point of
+// the model, crushed, violated it by 1.2e-3.
+GPRS_TEST(e2e_case_near_parallel_rows_small_singleton_coefficient)
+{
+  model_t base;
+  base.nrows            = 2;
+  base.ncols            = 4;
+  base.row_start        = {0, 3, 6};
+  base.col_index        = {0, 1, 3, 0, 1, 2};
+  base.value            = {3., 3., 1., 1., 1., 1.};
+  base.row_lower        = {30000009., -inf};
+  base.row_upper        = {30000009., 4.};
+  base.col_lower        = {0., 0., 0., 30000000.};
+  base.col_upper        = {2., 2., 3., 30000000.};
+  base.cost             = {0., 0., -1., 0.};
+  base.col_type         = {1, 1, 0, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {}, {1., 1., 0x1p-21, 1.});
+  options_t options;
+  options.primal_only       = true;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// No row is changed by the presolve here (the tightening is off). Row 0 is 26.4 times
+// x0 + x1 - w = -99997 with w fixed at 1e5: as doubles, its right-hand side less its fixed term
+// is 79.2 up to the rounding of 2.6e6, 4e-11. Row 1 has the same core 3072000 / 26.4 times
+// larger: after the subtraction it was off by 5e-6, and so was the postsolved point.
+GPRS_TEST(e2e_case_near_parallel_rows_large_factor)
+{
+  model_t base;
+  base.nrows            = 2;
+  base.ncols            = 4;
+  base.row_start        = {0, 3, 6};
+  base.col_index        = {0, 1, 3, 0, 1, 2};
+  base.value            = {1., 1., -1., 3000., 3000., 1.};
+  base.row_lower        = {-99997., 9002.};
+  base.row_upper        = {-99997., 9002.};
+  base.col_lower        = {0., 0., 0., 100000.};
+  base.col_upper        = {2., 2., 10., 100000.};
+  base.cost             = {0., 0., 1., 0.};
+  base.col_type         = {1, 1, 0, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {1., 1024.}, {});
+  // Row 0 times a factor that is no power of two.
+  constexpr double factor = 26.4;
+  for (int64_t e = c.model.row_start[0]; e < c.model.row_start[1]; ++e) {
+    c.model.value[e] *= factor;
+  }
+  c.model.row_lower[0] *= factor;
+  c.model.row_upper[0] *= factor;
+  c.row_scale[0] *= factor;
+  options_t options;
+  options.enabled[rule::tightening] = false;
+  oracle::verdict_t verdict         = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// Row 1, x0 + x1 + x2 + y = 4, is as the model gave it, and row 2 has its core 4096 times
+// larger: subtracted with the factor 4096, row 1 is from then on what row 2 says of the core,
+// times 4096. y is its singleton column now, and row 0, which the tightening has scaled (off by
+// 5.6e-10), was subtracted from it with the factor 1: y = 1 - 5.6e-10, right for row 1 and
+// 2.3e-6 off for row 2. A subtraction with a factor above 1 makes the equation carry a row
+// that is stricter than itself.
+GPRS_TEST(e2e_case_near_parallel_rows_equation_changed_later)
+{
+  model_t base;
+  base.nrows            = 3;
+  base.ncols            = 6;
+  base.row_start        = {0, 4, 8, 13};
+  base.col_index        = {0, 1, 2, 5, 0, 1, 2, 3, 0, 1, 2, 3, 4};
+  base.value            = {3., 3., 3., 1., 1., 1., 1., 1., 4., 4., 4., 4., 1.};
+  base.row_lower        = {30000009., 4., 18.};
+  base.row_upper        = {30000009., 4., 18.};
+  base.col_lower        = {0., 0., 0., 0., 0., 30000000.};
+  base.col_upper        = {3., 3., 3., 10., 3., 30000000.};
+  base.cost             = {0., 0., 0., 1., 0., 0.};
+  base.col_type         = {1, 1, 1, 0, 1, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {1., 1., 1024.}, {});
+  options_t options;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
 // Multi-round sequence: the reduced model is a model like any other. Its data need not be
 // integers, so the oracle compares with its tolerance here.
 GPRS_TEST(e2e_second_presolve_of_the_reduced_model)
@@ -444,4 +784,65 @@ GPRS_TEST(e2e_second_presolve_of_the_reduced_model)
       }
     }
   }
+}
+
+// The reduced model is a fixed point of the rules: with result_t::fixed_point set it has no row
+// that the row rules would remove, and a second presolve with the same options returns it
+// unchanged, in every array. The test above only checks that a second presolve is correct.
+GPRS_TEST(e2e_reduced_model_is_a_fixed_point)
+{
+  const char* check_fixed =
+    "  result_t first = presolve(c.model, options);\n"
+    "  result_t second = presolve(first.reduced, options);\n"
+    "  oracle::verdict_t verdict;\n"
+    "  verdict.ok = !first.fixed_point || second.status == status_t::unchanged;\n"
+    "  verdict.message = \"the second presolve changes the reduced model\";\n";
+  int64_t with_model = 0, fixed = 0, reduced = 0;
+  for (int32_t mode = 0; mode < 4; ++mode) {
+    options_t options;
+    options.primal_only = mode == 1;
+    if (mode >= 2) {
+      // No rebuild between the phases, and one after every phase.
+      options.rebuild_dead_fraction  = mode == 2 ? 2. : 0.;
+      options.rebuild_fixed_fraction = mode == 2 ? 2. : 0.;
+    }
+    int32_t failures = 0;
+    for (const profile_t& profile : profiles()) {
+      for (uint64_t seed = 5200000; seed < 5200300 && failures < max_reports; ++seed) {
+        case_t c       = oracle::generate(seed, profile.options);
+        result_t first = presolve(c.model, options);
+        if (!has_model(first.status)) { continue; }
+        ++with_model;
+        if (!first.fixed_point) { continue; }
+        ++fixed;
+        reduced += first.status == status_t::reduced;
+        std::string problem = removable_row(first.reduced);
+        if (problem.empty()) {
+          result_t second = presolve(first.reduced, options);
+          if (second.status != status_t::unchanged || !same_model(second.reduced, first.reduced)) {
+            problem = std::string("the second presolve returns ") + status_name(second.status);
+            for (int32_t r = 0; r < rule::count; ++r) {
+              if (second.stats[r].findings == 0) { continue; }
+              problem +=
+                std::string(", ") + family_name[r] + " " + std::to_string(second.stats[r].findings);
+            }
+          }
+        }
+        if (problem.empty()) { continue; }
+        ++failures;
+        report(
+          std::string("fixed point, profile ") + profile.name + ", seed " + std::to_string(seed),
+          std::string("fixed_point_") + profile.name + "_" + std::to_string(seed),
+          problem,
+          oracle::to_code(c),
+          options,
+          check_fixed);
+      }
+    }
+  }
+  // The property is not an empty one: with the default limits nearly every presolve of these
+  // models ends at a fixed point, and many of them return a reduced model that is not empty.
+  GPRS_CHECK(with_model > 4000);
+  GPRS_CHECK(fixed * 100 >= with_model * 99);
+  GPRS_CHECK(reduced > 1000);
 }

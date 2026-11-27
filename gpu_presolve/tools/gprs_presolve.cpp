@@ -6,9 +6,11 @@
 /* clang-format on */
 
 // gprs_presolve <model.csr> [--json <file>] [--primal-only] [--time-limit <seconds>]
-//               [--off <rule>]...
+//               [--off <rule>]... [--exact-parallel-rows]
 // Reads a GPRSCSR1 dump, runs the presolve, prints sizes before and after, seconds and the
 // determinism hash of the reduced model, and writes the same as JSON.
+// --exact-parallel-rows: only rows whose free entries are proportional are merged
+// (options_t::near_parallel_rows off).
 // Exit code 0 when the presolve ran, 1 when the dump cannot be read, 2 on a usage error.
 
 #include <gprs/io.hpp>
@@ -20,6 +22,22 @@
 #include <string>
 
 namespace {
+
+void write_stats(FILE* out, const gprs::rule_stats_t& s)
+{
+  std::fprintf(out,
+               "{\"calls\": %lld, \"work\": %lld, \"findings\": %lld, \"records\": %lld, "
+               "\"seconds\": %.6f, \"rows_removed\": %lld, \"cols_removed\": %lld, "
+               "\"nnz_removed\": %lld}",
+               (long long)s.calls,
+               (long long)s.work,
+               (long long)s.findings,
+               (long long)s.records,
+               s.seconds,
+               (long long)s.rows_removed,
+               (long long)s.cols_removed,
+               (long long)s.nnz_removed);
+}
 
 void write_report(FILE* out,
                   const std::string& path,
@@ -54,22 +72,22 @@ void write_report(FILE* out,
                result.seconds_hash);
   std::fprintf(out, "  \"hash\": \"%016llx\",\n", (unsigned long long)result.hash);
   std::fprintf(out, "  \"rounds\": %d,\n  \"rebuilds\": %d,\n", result.rounds, result.rebuilds);
-  std::fprintf(out, "  \"rules\": {\n");
+  std::fprintf(out,
+               "  \"fixed_point\": %s,\n  \"explicit\": {\"rounds\": %d, \"seconds\": %.6f},\n",
+               result.fixed_point ? "true" : "false",
+               result.explicit_rounds,
+               result.seconds_explicit);
+  std::fprintf(out,
+               "  \"parallel_rows\": {\"merges\": %zu, \"subtractions\": %zu},\n",
+               result.postsolve.parallel_rows.size(),
+               result.postsolve.row_additions.size());
+  std::fprintf(out, "  \"start\": ");
+  write_stats(out, result.start);
+  std::fprintf(out, ",\n  \"rules\": {\n");
   for (int32_t r = 0; r < gprs::rule::count; ++r) {
-    const gprs::rule_stats_t& s = result.stats[r];
-    std::fprintf(out,
-                 "    \"%s\": {\"calls\": %lld, \"work\": %lld, \"findings\": %lld, "
-                 "\"seconds\": %.6f, \"rows_removed\": %lld, \"cols_removed\": %lld, "
-                 "\"nnz_removed\": %lld}%s\n",
-                 gprs::rule_name(r),
-                 (long long)s.calls,
-                 (long long)s.work,
-                 (long long)s.findings,
-                 s.seconds,
-                 (long long)s.rows_removed,
-                 (long long)s.cols_removed,
-                 (long long)s.nnz_removed,
-                 r + 1 < gprs::rule::count ? "," : "");
+    std::fprintf(out, "    \"%s\": ", gprs::rule_name(r));
+    write_stats(out, result.stats[r]);
+    std::fprintf(out, "%s\n", r + 1 < gprs::rule::count ? "," : "");
   }
   std::fprintf(out, "  }\n}\n");
 }
@@ -78,7 +96,7 @@ int usage()
 {
   std::fprintf(stderr,
                "usage: gprs_presolve <model.csr> [--json <file>] [--primal-only] "
-               "[--time-limit <seconds>] [--off <rule>]...\n");
+               "[--time-limit <seconds>] [--off <rule>]... [--exact-parallel-rows]\n");
   return 2;
 }
 
@@ -94,6 +112,8 @@ int main(int argc, char** argv)
       json_path = argv[++i];
     } else if (arg == "--primal-only") {
       options.primal_only = true;
+    } else if (arg == "--exact-parallel-rows") {
+      options.near_parallel_rows = false;
     } else if (arg == "--time-limit" && i + 1 < argc) {
       options.time_limit = std::atof(argv[++i]);
     } else if (arg == "--off" && i + 1 < argc) {

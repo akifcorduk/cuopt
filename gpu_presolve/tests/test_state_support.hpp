@@ -208,7 +208,8 @@ struct shadow_t {
   }
 
   // Fixed columns leave: their terms go into the sides.
-  void rebuild()
+  // The terms of the fixed columns leave the rows for the sides; the columns stay fixed.
+  void absorb_fixed_terms()
   {
     for (int32_t i = 0; i < nrows; ++i) {
       for (auto it = row[i].begin(); it != row[i].end();) {
@@ -224,6 +225,11 @@ struct shadow_t {
         it = row[i].erase(it);
       }
     }
+  }
+
+  void rebuild()
+  {
+    absorb_fixed_terms();
     for (int32_t j = 0; j < ncols; ++j) {
       if (status[j] == col_status_t::fixed) { status[j] = col_status_t::removed; }
     }
@@ -508,6 +514,7 @@ inline void clear_rule_lists(state_t& st)
   for (int32_t l = 0; l < row_list::compaction; ++l) {
     st.row_frontier.take(l, taken);
   }
+  st.row_frontier.take(row_list::singletons, taken);
   st.col_frontier.take(col_list::dual_fixing, taken);
 }
 

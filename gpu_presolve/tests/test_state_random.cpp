@@ -40,7 +40,8 @@ constexpr int32_t move_entry      = 14;
 constexpr int32_t compact         = 15;
 constexpr int32_t rebuild         = 16;
 constexpr int32_t find_entry      = 17;
-constexpr int32_t count           = 18;
+constexpr int32_t absorb          = 18;
+constexpr int32_t count           = 19;
 }  // namespace op
 
 const char* const op_name[op::count] = {"set_col_lower",
@@ -60,11 +61,12 @@ const char* const op_name[op::count] = {"set_col_lower",
                                         "move_entry",
                                         "compact",
                                         "rebuild",
-                                        "find_entry"};
+                                        "find_entry",
+                                        "absorb_fixed_terms"};
 
 // Upper end of each operation's share of 1000 draws.
 const int32_t op_share[op::count] = {
-  150, 300, 325, 335, 365, 385, 425, 432, 472, 512, 552, 592, 722, 762, 882, 912, 922, 1000};
+  150, 300, 325, 335, 365, 385, 425, 432, 472, 512, 552, 592, 722, 762, 882, 912, 922, 990, 1000};
 
 struct entry_t {
   int32_t row  = -1;
@@ -142,6 +144,77 @@ struct run_t {
     }
   }
 
+  // A bound of the column changes one activity of each of its rows; the row is on the
+  // propagation list when the side that reads that activity is finite.
+  void expect_rows_of_bound(int32_t col, bool is_lower)
+  {
+    for (int32_t i = 0; i < sh.nrows; ++i) {
+      auto entry = sh.row[i].find(col);
+      if (entry == sh.row[i].end()) { continue; }
+      bool in_min = (entry->second > 0) == is_lower;
+      bool read   = in_min ? sh.row_upper[i] < inf : sh.row_lower[i] > -inf;
+      row_events[i] |= read ? row_event::activity : row_event::activity_unread;
+    }
+  }
+
+  // The rows that lose the terms of fixed columns and not plainly (state_t::absorb_fixed_terms),
+  // from the stores as they are: the sum of the terms in storage order.
+  void expect_rows_of_fixed_cols()
+  {
+    const double plain_size = 1e5;
+    for (int32_t i = 0; i < st.nrows; ++i) {
+      if (!st.row_alive[i]) { continue; }
+      dd_t terms;
+      double size = 0.;
+      bool any    = false;
+      for (int64_t e = st.csr.begin(i); e < st.csr.end(i); ++e) {
+        if (!st.csr.live(e) || st.col_status[st.csr.index[e]] != col_status_t::fixed) { continue; }
+        double value = st.col_lower[st.csr.index[e]];
+        dd_add_product(terms, st.csr.value[e], value);
+        size += std::fabs(st.csr.value[e] * value);
+        any = true;
+      }
+      if (!any) { continue; }
+      bool plain = terms.lo == 0. && size <= plain_size && st.min_act.max_term[i] <= plain_size &&
+                   st.max_act.max_term[i] <= plain_size;
+      for (double side : {st.row_lower[i], st.row_upper[i]}) {
+        if (std::isinf(side)) { continue; }
+        double error;
+        double moved = two_sum(side, -terms.hi, error);
+        double whole = std::round(moved);
+        plain        = plain && error == 0. && std::fabs(side) <= plain_size &&
+                std::fabs(moved) <= plain_size &&
+                (moved == whole || std::fabs(moved - whole) > st.tol.feasibility);
+      }
+      if (!plain) { row_events[i] = row_event::entries; }
+    }
+  }
+
+  // The live rows that hold the column.
+  std::vector<int32_t> rows_of_col(int32_t col) const
+  {
+    std::vector<int32_t> rows;
+    for (int32_t i = 0; i < sh.nrows; ++i) {
+      if (sh.row_alive[i] && sh.row[i].count(col)) { rows.push_back(i); }
+    }
+    return rows;
+  }
+
+  // The live column loses its entry in `row`: with one entry left, that row gets the event.
+  void expect_entry_leaves(int32_t row, int32_t col)
+  {
+    std::vector<int32_t> rows = rows_of_col(col);
+    if (!sh.live(col) || rows.size() != 2) { return; }
+    row_events[rows[0] == row ? rows[1] : rows[0]] |= row_event::singleton;
+  }
+
+  // The live column gets a second entry: the row of the first one gets the event.
+  void expect_entry_joins(int32_t col)
+  {
+    std::vector<int32_t> rows = rows_of_col(col);
+    if (rows.size() == 1) { row_events[rows[0]] |= row_event::singleton; }
+  }
+
   void expect_live_cols_of_row(int32_t row)
   {
     for (const auto& entry : sh.row[row]) {
@@ -156,7 +229,7 @@ struct run_t {
     double v = rng.chance(0.12) ? -inf : random_bound_value(rng);
     if (v > sh.col_upper[j]) { v = sh.col_upper[j] - std::fabs(random_bound_value(rng)); }
     if (v == sh.col_lower[j]) { return false; }
-    expect_rows_of_col(j, row_event::activity);
+    expect_rows_of_bound(j, true);
     st.set_col_lower(j, v);
     sh.col_lower[j] = v;
     return true;
@@ -169,7 +242,7 @@ struct run_t {
     double v = rng.chance(0.12) ? inf : random_bound_value(rng);
     if (v < sh.col_lower[j]) { v = sh.col_lower[j] + std::fabs(random_bound_value(rng)); }
     if (v == sh.col_upper[j]) { return false; }
-    expect_rows_of_col(j, row_event::activity);
+    expect_rows_of_bound(j, false);
     st.set_col_upper(j, v);
     sh.col_upper[j] = v;
     return true;
@@ -257,6 +330,9 @@ struct run_t {
     int32_t i = random_live_row();
     if (i < 0) { return false; }
     expect_live_cols_of_row(i);
+    for (const auto& entry : sh.row[i]) {
+      expect_entry_leaves(i, entry.first);
+    }
     st.delete_row(i);
     sh.delete_row(i);
     return true;
@@ -343,10 +419,11 @@ struct run_t {
   {
     entry_t entry = random_free_entry();
     if (entry.slot < 0) { return false; }
+    expect_entry_leaves(entry.row, entry.col);
     st.delete_entry(entry.slot);
     sh.row[entry.row].erase(entry.col);
     ++sh.version[entry.row];
-    row_events[entry.row] = row_event::entries;
+    row_events[entry.row] |= row_event::entries;
     col_events[entry.col] = col_event::locks;
     return true;
   }
@@ -362,11 +439,13 @@ struct run_t {
     }
     if (target < 0) { return false; }
     double v = random_coefficient(rng, decimal);
+    expect_entry_leaves(entry.row, entry.col);
+    expect_entry_joins(target);
     st.move_entry(entry.slot, target, v);
     sh.row[entry.row].erase(entry.col);
     sh.row[entry.row][target] = v;
     ++sh.version[entry.row];
-    row_events[entry.row] = row_event::entries;
+    row_events[entry.row] |= row_event::entries;
     col_events[entry.col] = col_event::locks;
     col_events[target]    = col_event::locks;
     if (st.csr.index[entry.slot] != target) { failure = "move_entry changed the CSR slot"; }
@@ -393,6 +472,29 @@ struct run_t {
     return true;
   }
 
+  // The model of the state is the same before and after, bit for bit, and no fixed column has
+  // an entry left.
+  bool absorb()
+  {
+    std::vector<int32_t> row_origin, col_origin, row_origin_after, col_origin_after;
+    model_t before = reduced_model(st, row_origin, col_origin);
+    expect_rows_of_fixed_cols();
+    st.absorb_fixed_terms();
+    sh.absorb_fixed_terms();
+    model_t after = reduced_model(st, row_origin_after, col_origin_after);
+    if (!same_model(before, after) || row_origin != row_origin_after ||
+        col_origin != col_origin_after) {
+      failure = "absorb_fixed_terms changed the model";
+    }
+    if (st.fixed_nnz != 0) { failure = "absorb_fixed_terms left entries of fixed columns"; }
+    for (int32_t j = 0; j < st.ncols; ++j) {
+      if (st.col_status[j] == col_status_t::fixed && st.csc.size[j] != 0) {
+        failure = "absorb_fixed_terms left a fixed column with entries";
+      }
+    }
+    return true;
+  }
+
   bool rebuild()
   {
     std::vector<int32_t> row_origin, col_origin, ref_row_origin, ref_col_origin;
@@ -402,6 +504,7 @@ struct run_t {
         col_origin != ref_col_origin) {
       failure = "reduced_model is not the model of the state";
     }
+    expect_rows_of_fixed_cols();
     st.rebuild();
     sh.rebuild();
     model_t after = extract_model(st, row_origin, col_origin);
@@ -463,6 +566,7 @@ struct run_t {
       case op::compact: return compact();
       case op::rebuild: return rebuild();
       case op::find_entry: return find_entry();
+      case op::absorb: return absorb();
       default: return false;
     }
   }
@@ -476,9 +580,10 @@ struct run_t {
     if (!apply(kind)) { return false; }
     if (!failure.empty()) { return true; }
     for (int32_t i = 0; i < st.nrows; ++i) {
-      if ((st.row_frontier.pending[i] & row_event::entries) != row_events[i]) {
+      uint8_t rule_lists = row_event::entries | row_event::singleton;
+      if ((st.row_frontier.pending[i] & rule_lists) != row_events[i]) {
         failure = "row " + std::to_string(i) + ": events " +
-                  std::to_string(st.row_frontier.pending[i] & row_event::entries) + ", expected " +
+                  std::to_string(st.row_frontier.pending[i] & rule_lists) + ", expected " +
                   std::to_string(row_events[i]);
         return true;
       }
