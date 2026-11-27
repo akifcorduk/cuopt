@@ -16,7 +16,17 @@
 //   3. z = postsolve(crush(x)) meets rows, bounds and integrality of the original model;
 //   4. objective(z) equals the reduced objective of crush(x), and is not above objective(x);
 //   5. a result without a dual finding (result_t::dual_findings == 0, which primal-only mode
-//      guarantees): objective(z) equals objective(x) and z equals x.
+//      guarantees): objective(z) equals objective(x) and z equals x, with two allowances for
+//      the columns of col_from_rows records (postsolve.hpp). A column of a defined record is
+//      what its saved row gives it at the values of the saved columns, so z may differ from x
+//      there by what x misses the saved row by and by what the saved columns differ by between
+//      z and x, each over the coefficient of the column:
+//        check_tolerance * max(1, |x|) + (|residual of x in the saved row| +
+//          sum of |a_i| * |z_i - x_i| over the saved columns) / |a|.
+//      The columns of interval and forcing records are exempt: their rows leave them a range
+//      of values, of which the undo picks one, and they have no cost. A column that was
+//      substituted by one of these columns before follows it: exempt with an exempt one, else
+//      allowed what its rep differs by, times the scale of the alias.
 //
 // Why 2 to 4 hold in both modes: an induction over the reductions in the order they were made.
 // Let M_t be the model after t reductions and p_t the image of x in M_t, with p_0 = x; crush(x)
@@ -30,7 +40,12 @@
 // integral scaling, side rounding, coefficient strengthening, parallel rows), which keep the
 // integer-feasible set of the row under the explicit bounds; an equation subtracted from a row
 // that is parallel to it up to singleton columns, which leaves the points that meet both rows
-// as they are; a doubleton substitution, which removes a column whose value the equation gives.
+// as they are; a doubleton substitution, and a free singleton column with an equation as pivot
+// row, which remove a column whose value the equation gives and move its cost onto the columns
+// that the equation names; the zero-cost singleton columns of a row and a forcing column
+// (rules.hpp (h)), which are projections: the rows that M_(t+1) has in place of theirs are what
+// the other columns must meet for values of the removed columns to exist, which they do at
+// p_t, and the removed columns cost nothing.
 // A dual reduction keeps an optimal point of M_t and not every feasible one. Its map first
 // moves p_t to a feasible point of M_t that the reduction keeps and that costs no more, then
 // drops the columns it removes. One sentence per dual rule says why such a move exists:
@@ -38,6 +53,12 @@
 //     elsewhere. The move takes j to that bound: no live row of M_t objects (no lock in that
 //     direction) and the objective of M_t does not rise with it. Dropping j is that move, so
 //     the map needs no record.
+//   - A free singleton column with an inequality as pivot row (rules.hpp (h)) removes column j
+//     with its only row, taken as tight at the side that the cost of j pushes it against. The
+//     move takes j along its cost until the row is tight: no other row holds j, the row implies
+//     the bound of j in that direction, and the objective of M_t does not rise. M_(t+1) has the
+//     cost of j moved onto the other columns of the row, so its objective at the remaining
+//     columns is that of the moved point. Dropping j is that move.
 // A bound fact of M_t stays true on the smaller feasible set of M_(t+1). By induction crush(x)
 // is feasible in the reduced model with a reduced objective not above objective(x), and 3 and
 // the first half of 4 are the contract of the postsolve. A dual reduction costs equality: z
@@ -370,10 +391,13 @@ struct crush_report_t {
 
   // z against x: the largest difference in an integer column, the largest difference in a
   // continuous column relative to max(1, |x|), and the largest number of columns of one point
-  // that differ by more than check_tolerance.
+  // that differ by more than check_tolerance. The columns of interval and forcing records are
+  // left out (exempt_columns of them in the result), and a column of a defined record counts
+  // with what is above its allowance (requirement 5).
   double moved_integer       = 0.;
   double moved_continuous    = 0.;
   int64_t moved_columns      = 0;
+  int64_t exempt_columns     = 0;
   int32_t failed_round_trip  = 0;
   int32_t first_failed_point = -1;
 };
@@ -393,6 +417,53 @@ inline crush_report_t crush_check(const gprs::model_t& model,
   c.dual_findings = result.dual_findings;
   c.exact         = primal_only || result.dual_findings == 0;
   if (!c.has_reduced) { return c; }
+  const gprs::postsolve_t& ps = result.postsolve;
+  // How a column that a col_from_rows record reaches is held to the round trip. plain: as
+  // every column; exempt: a column of an interval or a forcing record; defined: a column of a
+  // defined record, `at` its record; alias: an alias of a column that is not plain, `at` its
+  // record, which may differ by what its rep differs by, times the scale, and is exempt when
+  // its rep is.
+  enum reach_t : uint8_t { plain, exempt, defined, alias };
+  std::vector<uint8_t> reach(model.ncols, plain);
+  std::vector<size_t> at(model.ncols, 0);
+  size_t aliases = ps.aliases.size(), from_rows = ps.col_from_rows.size();
+  for (size_t k = ps.order.size(); k-- > 0;) {
+    if (ps.order[k] == gprs::record_kind_t::col_from_rows) {
+      const gprs::col_from_rows_record_t& r = ps.col_from_rows[--from_rows];
+      bool is_defined                       = r.kind == gprs::col_from_rows_kind_t::defined;
+      for (int32_t col = r.cols_begin; col < r.cols_end; ++col) {
+        reach[ps.record_cols[col].col] = is_defined ? defined : exempt;
+        at[ps.record_cols[col].col]    = from_rows;
+        c.exempt_columns += !is_defined;
+      }
+    } else if (ps.order[k] == gprs::record_kind_t::alias) {
+      const gprs::alias_record_t& r = ps.aliases[--aliases];
+      if (reach[r.rep] == plain) { continue; }
+      reach[r.col] = reach[r.rep] == exempt ? exempt : alias;
+      at[r.col]    = aliases;
+      c.exempt_columns += reach[r.col] == exempt;
+    }
+  }
+  // What z may differ from x by in column j, above check_tolerance.
+  auto allowance = [&](int32_t j, const std::vector<double>& x, const std::vector<double>& z) {
+    if (reach[j] == alias) {
+      const gprs::alias_record_t& r = ps.aliases[at[j]];
+      return std::fabs(r.scale) * std::fabs(z[r.rep] - x[r.rep]);
+    }
+    const gprs::col_from_rows_record_t& r = ps.col_from_rows[at[j]];
+    const gprs::saved_row_t& row          = ps.saved_rows[r.rows_begin];
+    double a                              = ps.record_coefficients[r.coefficients];
+    sum_t residual;
+    residual.add(a, x[j]);
+    residual.add(-row.upper, 1.);
+    double moved = 0.;
+    for (int64_t e = row.begin; e < row.end; ++e) {
+      int32_t col = ps.saved_entries.col[e];
+      residual.add(ps.saved_entries.value[e], x[col]);
+      moved += std::fabs(ps.saved_entries.value[e]) * std::fabs(z[col] - x[col]);
+    }
+    return (std::fabs(residual.value()) + moved) / std::fabs(a);
+  };
   std::vector<double> crushed, z;
   for (size_t k = 0; k < set.points.size(); ++k) {
     const std::vector<double>& x = set.points[k];
@@ -440,7 +511,13 @@ inline crush_report_t crush_check(const gprs::model_t& model,
     double moved_integer = 0., moved_continuous = 0.;
     int64_t moved = 0;
     for (int32_t j = 0; j < model.ncols; ++j) {
+      if (reach[j] == exempt) { continue; }
       double difference = std::fabs(z[j] - x[j]);
+      // Only an exact result is held to the round trip, and only then is the allowance read.
+      if (reach[j] != plain && c.exact) {
+        double allowed = allowance(j, x, z);
+        difference     = !(difference <= allowed) ? difference - allowed : 0.;
+      }
       if (model.col_type[j]) {
         raise_to(moved_integer, difference);
         moved += !(difference <= 0.5);

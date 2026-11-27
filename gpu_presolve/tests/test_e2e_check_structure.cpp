@@ -91,6 +91,7 @@ bool silent(const structure_report_t& s)
 {
   return s.stack_error.empty() && s.lost_integers == 0 && s.bound_failures == 0 &&
          s.row_failures == 0 && s.kept_failures == 0 && s.added_failures == 0 &&
+         s.box_failures == 0 && s.integral_failures == 0 && s.snapshot_failures == 0 &&
          s.objective_failures == 0 && s.postsolve_failures == 0;
 }
 

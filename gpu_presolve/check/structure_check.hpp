@@ -9,11 +9,11 @@
 
 // The structure check: what one presolve result must satisfy whatever point is postsolved. It
 // reads the postsolve stack, the origin maps and the reduced model, needs no solver and no
-// solution file, and costs O(columns + records + nonzeros) (a row whose coefficients were
-// edited one by one costs its length times the number of its different coefficient ratios; a
-// row that had equations subtracted costs the entries of its reduced row and of theirs times
-// the points that its search visits, see added_rows).
-// It sees what the crush check cannot: a reduction that relaxes.
+// solution file, and costs O(columns + records + nonzeros + saved entries) (a row whose
+// coefficients were edited one by one costs its length times the number of its different
+// coefficient ratios; a row that had equations subtracted costs the entries of its reduced row and
+// of theirs times the points that its search visits, see added_rows). It sees what the crush check
+// cannot: a reduction that relaxes.
 //
 //   stack      The stack and the maps keep the contract of postsolve.hpp: every record is of a
 //              kind that this check reads; every column is left in the reduced model or removed
@@ -24,30 +24,51 @@
 //              none for a lock, either for simple probing); a ratio is finite and not zero; a
 //              row addition has a finite factor other than zero and names two different rows,
 //              neither of which an earlier record took out of the model (the removed row of a
-//              parallel record, the row of an alias that has one).
-//              A result of primal-only mode has no dual finding (result_t::dual_findings) and
-//              no alias of origin lock.
+//              parallel record, the row of an alias that has one, the rows of a defined or a
+//              forcing record). A col_from_rows record has the counts of its kind, finite
+//              coefficients other than zero, bounds lower <= upper, saved rows that an earlier
+//              record did not take out of the model and that name no removed column and none of
+//              its own; a defined record an equation with a finite side; an interval record
+//              continuous columns in increasing index and two finite sides; a forcing record
+//              rows that each have one finite side and bound its column from one and the same
+//              end, at which the column has no bound: a value of the column then exists
+//              whatever the other columns are, which is all that such a record claims.
+//              A result of primal-only mode has no dual finding (result_t::dual_findings), no
+//              alias of origin lock, no defined record with the dual flag and no interval or
+//              forcing record.
 //   types      A column that is integer in the original model is integer in the reduced model.
+//   The check variables are the reduced columns and, each with the bounds of its record as its
+//   box, the columns of the col_from_rows records: their values at a postsolved point are not
+//   functions of one reduced column. The anchors are the constraints over check variables that
+//   hold at every postsolved point: the rows of the reduced model, and every row that a
+//   col_from_rows record saved, with the record's own columns in it, because the undo of the
+//   record makes it hold (a defined record by solving the row for its column, a forcing record
+//   by its contract; an interval record where its snapshot holds, below). The anchor of a row
+//   after a position of the stack is its first saved row after it, else its row of the reduced
+//   model, else that of the row it was removed into as a parallel row after that.
 //   bounds     With the records composed, every original column is a constant or
-//              scale * (one reduced column) + offset. Over the bounds of that reduced column it
-//              stays within its original bounds.
+//              scale * (one check variable) + offset. Over the box of that variable it stays
+//              within its original bounds.
 //   rows       The activity of an original row at a postsolved point is a linear function g of
-//              the reduced columns. A row that left the model holds at the postsolve of every
-//              point within the bounds of the reduced model: the range of g over the bounds
-//              lies within the sides of the row.
-//   kept_rows  A row that is in the reduced model, as row c with sides [l, u], holds at the
-//              postsolve of every point within the bounds that meets that reduced row: the
-//              maximum of g over { bounds, l <= c * r <= u } is not above its upper side, and
-//              the minimum not below its lower side. A row removed as a parallel row is tested
-//              in the same way against the reduced row of its kept row, or as a row that left
-//              the model when the kept row left it.
+//              the check variables. A row without an anchor holds at the postsolve of every
+//              point within the boxes: the range of g over the boxes lies within the sides of
+//              the row.
+//   kept_rows  A row with an anchor c with sides [l, u] holds at the postsolve of every point
+//              within the boxes that meets the anchor: the maximum of g over
+//              { boxes, l <= c * r <= u } is not above its upper side, and the minimum not below
+//              its lower side. A row removed as a parallel row is tested in the same way
+//              against the anchor of its kept row, or as a row without one. The pivot row of a
+//              free singleton column and the rows of a forcing column are multiples of their
+//              saved rows and pass with one multiplier.
 //              The maximum is the smallest of the bounds  lambda * (u or l) + max over the
 //              bounds of (g - lambda * c) * r,  which is reached at lambda = 0 or at a ratio
 //              g[k] / c[k].
 //   added_rows A row that had an equation subtracted (a row_addition record) is no multiple of
-//              its reduced row: it is that row plus multiples of the equations. It holds at the
+//              its anchor: it is that row plus multiples of the equations. Below, "reduced row"
+//              stands for the anchor of a row and "bounds" for the boxes of the check
+//              variables; without a col_from_rows record they are the same. The row holds at the
 //              postsolve of every point within the bounds that meets its reduced row, if it has
-//              one, and the reduced rows of those equations (row_equations_t): the maximum of g
+//              one, and the reduced rows of those equations (proof_rows): the maximum of g
 //              over { bounds, l <= c * r <= u, le <= e * r <= ue for each equation e } is not
 //              above its upper side, and the minimum not below its lower side.
 //              The maximum is bounded by weak duality: for any multipliers lambda and mu_e,
@@ -74,49 +95,94 @@
 //              point within the bounds meets the reduced rows together: the bounds then have
 //              no smallest one, which the same search finds as a negative bound of the
 //              function zero (no_common_point).
-//              The reduced row of an equation is its own, or that of the row it was merged
-//              into as a parallel row. An equation without one (deleted, turned into a bound,
-//              substituted) gets no multiplier: its part of g is then tested over the bounds
-//              like the rest. A row all of whose equations are without one is tested as a row
-//              that left the model or as a kept row.
+//              The anchor of an equation is taken after the position of the record that
+//              subtracted it, and the equations of a row are those of the records between the
+//              position of the row and the position of its anchor: what is subtracted from the
+//              row later is the business of the anchor. An equation without an anchor (deleted,
+//              turned into a bound, substituted) gets no multiplier: its part of g is then
+//              tested over the boxes like the rest. A row all of whose equations are without
+//              one is tested as a row without an anchor or as a kept row.
+//   columns    What the saved rows prove of the columns that left the model with them.
+//              Box of a defined column: the range of (side - rest) / coefficient over the boxes
+//              of the variables of its saved row lies inside the bounds of the record, which is
+//              the engine's test "the row implies the bounds of the column" recomputed on the
+//              reduced model, so the column is inside its bounds at the postsolve of every
+//              point within the boxes. An integer column of a defined record has integer
+//              columns in its saved row, and ratios and a side that are integral for it up to a
+//              drift, over the boxes, within the tolerance in the units of the row: only then
+//              does the rounded value leave the saved row true.
+//              Snapshot of an interval record: the saved entries without the record's columns,
+//              with the sides less the largest and the smallest sum of the terms of those
+//              columns over their bounds (recomputed from the record), hold at the postsolve of
+//              every point within the boxes that meets the anchor of that row after the record,
+//              and the equations subtracted from the row between the record and that anchor.
+//              Tested as a row is, against that anchor and those equations. Where it holds,
+//              values of the record's columns exist inside their bounds with which the saved
+//              row holds, and the undo finds them; so the saved row is an anchor only as far as
+//              its snapshot passes, and a snapshot failure is read before any other.
 //   objective  The objective of the original model at a postsolved point is the reduced
 //              objective at the reduced point: with the records composed, the difference of the
-//              two is a linear function D of the reduced columns, and it is the zero function.
-//              Every coefficient of D is zero within composed_zero of the sum of the absolute
-//              values it is made of, and its constant within identity_tolerance of the sum of
-//              the absolute values of its terms, an offset counted with the terms that the
-//              aliases composed it of. This reads what the bounds and the rows do not: the cost
-//              that a substitution moves to the root and the offset that it and a fixing leave.
-//   postsolve  postsolve_t::postsolve of one point within the bounds of the reduced model gives
-//              what the composed records give.
+//              two is a linear function D of the check variables. In the order of the stack,
+//              the variable of every defined record is eliminated from D with its saved row,
+//              which gives its value at every postsolved point; what is left is the zero
+//              function. Every coefficient of D is zero within composed_zero of the sum of the
+//              absolute values it is made of, and its constant within identity_tolerance of the
+//              sum of the absolute values of its terms, an offset counted with the terms that
+//              the aliases composed it of. This reads what the bounds and the rows do not: the
+//              cost that a substitution or a free singleton column moves onto other columns,
+//              the offset that they and a fixing leave, and the cost of a column of an interval
+//              or a forcing record, which must be zero.
+//   postsolve  postsolve_t::postsolve gives what the composed records give, with every column
+//              of a col_from_rows record computed a second time from its anchors by the rule
+//              of its kind (postsolve.hpp), at these points of the reduced model: every column
+//              at its lower bound, at its upper bound and between them, and for up to
+//              max_replay_points interval records a point at which the undo has to move the
+//              record's columns. At each of them every saved row of a defined or a forcing
+//              record holds at the postsolved point, that of an interval record where the rest
+//              of the row lies inside the sides of its snapshot, and the columns of interval
+//              and forcing records are inside their bounds.
 //
-// Why bounds, rows, kept_rows and added_rows hold for the Stage 1 rules, in both modes. No rule
-// relaxes a bound, and the bounds of a substituted column are transferred to its root. A row
-// leaves the model because its sides hold over the bounds of its columns (redundant, empty),
-// because its bound went to its only column (singleton), because all its columns were fixed
-// (forcing), or because it defines a substituted column (doubleton equation, whose g is then a
-// constant); and bounds only tighten afterwards. Every edit of one row that stays gives a row
-// that implies the row before the edit over the bounds, for real points as well: scaling and
-// substitution keep it, a rounded or intersected side is tighter, and a strengthened
-// coefficient a -> d with the side moved by (a - d) * bound differs from the old row by
-// (a - d) * (bound - x) >= 0. The one edit that combines rows is the subtraction of an equation
-// from a row that is parallel to it up to singleton columns (rules.hpp (e)): the row before is
-// the row after plus the factor times the equation, entry by entry and in the sides, so it
-// holds wherever the row after and the equation hold; and an equation stays one, since sides
-// only tighten. By induction over the records an original row is implied, over the bounds, by
-// the rows it is made of. The proof that the induction gives has the multipliers of the
-// subtractions on the equations, in the units of the rows as they are now. Where the bounds
-// have a smallest one, the search finds it, and it is not above the bound of that proof. They
-// have none only when no point within the bounds meets the rows the row is made of, and the
-// row is then counted as not tested unless the search proves it.
+// Why bounds, rows, kept_rows, added_rows and columns hold, in both modes. No rule relaxes a
+// bound of a column that stays, and the bounds of a substituted column are transferred to its
+// root. A row leaves the model because its sides hold over the bounds of its columns
+// (redundant, empty), because its bound went to its only column (singleton), because all its
+// columns were fixed (forcing), or because it defines a column that leaves with it: a
+// doubleton equation, whose g is then a constant, and the pivot row of a free singleton column,
+// which the undo solves for that column whatever the other columns are, so that the row holds
+// by construction and what is left to prove is that the value is inside the bounds of the
+// column (the box test). The rows of a forcing column leave because a value of the column
+// exists that meets them all, whatever the other columns are. Bounds only tighten afterwards.
+// Every edit of one row that stays gives a row that implies the row before the edit over the
+// bounds, for real points as well: scaling and substitution keep it, a rounded or intersected
+// side is tighter, and a strengthened coefficient a -> d with the side moved by
+// (a - d) * bound differs from the old row by (a - d) * (bound - x) >= 0. Two edits are of
+// another kind. The subtraction of an equation from a row that is parallel to it up to
+// singleton columns (rules.hpp (e)) combines rows: the row before is the row after plus the
+// factor times the equation, entry by entry and in the sides, so it holds wherever the row
+// after and the equation hold; and an equation stays one, since sides only tighten. And the
+// zero-cost singleton columns of a row (rules.hpp (h)) leave it with sides that are wider than
+// before: the row after the edit does not imply the row before it, it is the projection of
+// that row onto the other columns, and the row before holds because the undo then gives the
+// removed columns values with which it does. That is why a saved row is an anchor and why the
+// snapshot of the record is an obligation of its own. By induction over the records, from the
+// end of the stack, every anchor holds at the postsolved point, and an original row is implied,
+// over the boxes, by its anchor and the anchors of the equations it is made of. The proof that
+// the induction gives has the multipliers of the subtractions on the equations, in the units
+// of the rows as they are at their anchors. Where the bounds have a smallest one, the search
+// finds it, and it is not above the bound of that proof. They have none only when no point
+// within the boxes meets the anchors the row is made of, and the row is then counted as not
+// tested unless the search proves it.
 // Why objective holds: a fixing puts cost * value into the offset, a substitution puts
-// cost * scale onto the cost of the root and cost * offset into the offset, and no other
-// Stage 1 rule touches a cost; a fixing by locks is a fixing here. What the check cannot see is
-// a restriction: a column fixed or aliased where it must not be passes every part as long as it
-// stays inside its bounds, and the crush check and the oracle test that.
+// cost * scale onto the cost of the root and cost * offset into the offset, a free singleton
+// column puts its cost over its coefficient, times the row, onto the other columns of its pivot
+// row and into the offset, the other column rules built so far remove columns without a cost,
+// and no other rule touches a cost; a fixing by locks is a fixing here. What the check cannot
+// see is a restriction: a column fixed or aliased where it must not be, or an inequality taken
+// as tight at the wrong side, passes every part as long as it stays inside its bounds, and the
+// crush check and the oracle test that.
 // Like the crush check, this has to be reread when a rule is added that relaxes a bound,
-// deletes a row for another reason or combines rows in another way (Stage 3: free column
-// substitution, dominated columns, sparsification).
+// deletes a row for another reason or combines rows in another way (dominated columns,
+// parallel columns, sparsification).
 // The tolerance is wider than that of a tested point: a row can use the tolerance of its
 // deletion and that of a rounded bound together. A row that is made of equations uses theirs
 // as well: an equation holds within the tolerance of the rule that last moved its side (a
@@ -172,8 +238,17 @@ constexpr double rounding_share = 1e-9;
 // A difference of costs up to the smallest normal double is what a product loses when it
 // underflows, whatever the sizes of its terms are.
 constexpr double underflow_size = std::numeric_limits<double>::min();
+// A ratio of two coefficients within this of an integer is taken as that integer where a saved
+// row defines an integer column; what the rounding moves the row by is tested apart.
+constexpr double integral_ratio = 1e-7;
+// Interval records that get a point of their own in the postsolve part.
+constexpr size_t max_replay_points = 8;
+// The value that a row leaves an integer forcing column counts as an integer when it lies
+// within this share of the terms it is computed from of one (postsolve.hpp).
+constexpr double forcing_rounding = 8 * 0x1p-53;
 
-// x[original column] = scale * x_reduced[root] + offset; root -1 for a constant.
+// x[original column] = scale * v[root] + offset over the check variables; root -1 for a
+// constant.
 struct column_map_t {
   int32_t root;
   double scale;
@@ -234,6 +309,28 @@ struct structure_report_t {
   int32_t objective_worst_col = -1;
   double objective_constant   = 0.;
 
+  // Ends of the boxes of defined columns that were tested (a finite bound each), and those
+  // that the saved row does not imply; the worst is relative to max(1, |bound|, largest term
+  // of the row over the coefficient).
+  int64_t box_tested    = 0;
+  int64_t box_failures  = 0;
+  double box_worst      = 0.;
+  int32_t box_worst_col = -1;
+  // Integer columns of defined records whose saved row is not integral for them.
+  int64_t integral_failures  = 0;
+  int32_t first_integral_col = -1;
+  // Snapshots of interval records: tested, not tested (as a kept or an added row is not) and
+  // failed, with the row of the worst one.
+  int64_t snapshot_tested    = 0;
+  int64_t snapshot_untested  = 0;
+  int64_t snapshot_failures  = 0;
+  double snapshot_worst      = 0.;
+  int32_t snapshot_worst_row = -1;
+  // Records by kind, for the reports.
+  int64_t defined_records  = 0;
+  int64_t interval_records = 0;
+  int64_t forcing_records  = 0;
+
   int64_t postsolve_failures  = 0;
   double postsolve_worst      = 0.;  // relative to max(1, largest term)
   int32_t postsolve_worst_col = -1;
@@ -241,21 +338,80 @@ struct structure_report_t {
 
 inline bool is_integral(double v) { return v == std::round(v); }
 
+// What happens to an original row at one position of the stack.
+struct row_event_t {
+  enum kind_t : uint8_t { saved, parallel, addition };
+  size_t position;
+  kind_t kind;
+  // saved: the anchor of the saved row; parallel: the kept row; addition: the equation row.
+  int32_t index;
+};
+
+// The records composed: the check variables with their boxes, the map of every original column
+// onto them, the anchors, and what the stack does to each row.
+struct system_t {
+  int32_t reduced_cols = 0;
+  int32_t reduced_rows = 0;
+  std::vector<column_map_t> map;
+  // By original column: the sum of the absolute values that the offset of its map is made of.
+  // An alias adds its own offset to the scaled offset of its rep, and the two can cancel.
+  std::vector<double> offset_parts;
+  // Variables: the reduced columns, then the columns of the col_from_rows records in the order
+  // of the stack.
+  std::vector<double> lower;
+  std::vector<double> upper;
+  std::vector<int32_t> origin;  // original column
+  // Anchors: the rows of the reduced model, then the saved rows of the col_from_rows records,
+  // each with its entries [start[a], start[a + 1]) over the variables, the record's own columns
+  // among them, and its sides less the constants of the composition.
+  std::vector<int64_t> start;
+  std::vector<int32_t> var;
+  std::vector<double> value;
+  std::vector<double> low;
+  std::vector<double> high;
+  std::vector<int32_t> row;  // original row
+  // By anchor: the sum of the absolute values that its sides are made of, which are the side of
+  // the saved row and the constants of the composition; 0 for a row of the reduced model.
+  std::vector<double> side_parts;
+  // By original row: its row of the reduced model as an anchor, or -1, and its events
+  // [first[row], first[row + 1]) in the order of the stack.
+  std::vector<int32_t> reduced_anchor;
+  std::vector<int32_t> first;
+  std::vector<row_event_t> events;
+  // By col_from_rows record: its position in the order of the stack, its first variable, and
+  // the anchor of its first saved row; the others follow.
+  std::vector<size_t> position;
+  std::vector<int32_t> first_var;
+  std::vector<int32_t> first_anchor;
+
+  int32_t nvars() const { return lower.size(); }
+  int32_t anchors() const { return low.size(); }
+};
+
+// A forcing record bounds its column from above (postsolve.hpp).
+inline bool forcing_from_above(const gprs::postsolve_t& ps, const gprs::col_from_rows_record_t& r)
+{
+  return (ps.record_coefficients[r.coefficients] > 0) ==
+         (ps.saved_rows[r.rows_begin].upper < gprs::inf);
+}
+
 // Tests the contract of the stack, for a result of the given mode, and composes its records. On
 // a broken contract `error` says which part, with the index of the record or column.
 inline bool compose_records(const gprs::model_t& model,
                             const gprs::result_t& result,
                             bool primal_only,
-                            std::vector<column_map_t>& map,
+                            system_t& sys,
                             std::string& error)
 {
-  const gprs::postsolve_t& ps  = result.postsolve;
-  const gprs::model_t& reduced = result.reduced;
-  auto fail                    = [&](const char* what, int64_t index) {
+  const gprs::postsolve_t& ps    = result.postsolve;
+  const gprs::model_t& reduced   = result.reduced;
+  std::vector<column_map_t>& map = sys.map;
+  auto fail                      = [&](const char* what, int64_t index) {
     error = std::string(what) + " " + std::to_string(index);
     return false;
   };
   if (ps.ncols != model.ncols || ps.nrows != model.nrows) { return fail("sizes of the stack", 0); }
+  if (ps.col_type != model.col_type) { return fail("column types of the stack", 0); }
   if (primal_only && result.dual_findings != 0) {
     return fail("dual findings in a primal-only result:", result.dual_findings);
   }
@@ -284,8 +440,11 @@ inline bool compose_records(const gprs::model_t& model,
   std::vector<uint8_t> removed(model.ncols, 0);
   // Rows that a record took out of the model.
   std::vector<uint8_t> row_gone(model.nrows, 0);
-  size_t fixed = 0, alias = 0, parallel = 0, addition = 0;
+  size_t fixed = 0, alias = 0, parallel = 0, addition = 0, from_rows = 0;
+  int32_t cols_used = 0, rows_used = 0;
+  int64_t coefficients_used = 0, entries_used = 0;
   int64_t left = model.ncols - reduced.ncols;
+  std::vector<int32_t> events_of(model.nrows + 1, 0);
   for (size_t k = 0; k < ps.order.size(); ++k) {
     if (ps.order[k] == gprs::record_kind_t::fixed_col) {
       if (fixed == ps.fixed_cols.size()) { return fail("fixed records missing at", k); }
@@ -293,7 +452,7 @@ inline bool compose_records(const gprs::model_t& model,
       if (!column_ok(r.col) || removed[r.col] || map[r.col].root != unset) {
         return fail("column of fixed record", k);
       }
-      if (!std::isfinite(r.value) || (model.col_type[r.col] && !is_integral(r.value))) {
+      if (!std::isfinite(r.value) || (ps.integer_at(r.col, k) && !is_integral(r.value))) {
         return fail("value of fixed record", k);
       }
       removed[r.col] = 1;
@@ -315,8 +474,8 @@ inline bool compose_records(const gprs::model_t& model,
       if (!std::isfinite(r.scale) || r.scale == 0. || !std::isfinite(r.offset)) {
         return fail("scale or offset of alias record", k);
       }
-      if (model.col_type[r.col] &&
-          !(model.col_type[r.rep] && is_integral(r.scale) && is_integral(r.offset))) {
+      if (ps.integer_at(r.col, k) &&
+          !(ps.integer_at(r.rep, k) && is_integral(r.scale) && is_integral(r.offset))) {
         return fail("integer column of alias record", k);
       }
       removed[r.col] = 1;
@@ -330,6 +489,7 @@ inline bool compose_records(const gprs::model_t& model,
         return fail("parallel record", k);
       }
       row_gone[r.removed_row] = 1;
+      ++events_of[r.removed_row + 1];
     } else if (ps.order[k] == gprs::record_kind_t::row_addition) {
       if (addition == ps.row_additions.size()) {
         return fail("row addition records missing at", k);
@@ -342,26 +502,250 @@ inline bool compose_records(const gprs::model_t& model,
       if (row_gone[r.row] || row_gone[r.equation_row]) {
         return fail("rows of row addition record", k);
       }
+      ++events_of[r.row + 1];
+    } else if (ps.order[k] == gprs::record_kind_t::col_from_rows) {
+      if (from_rows == ps.col_from_rows.size()) {
+        return fail("col_from_rows records missing at", k);
+      }
+      const gprs::col_from_rows_record_t& r = ps.col_from_rows[from_rows++];
+      int64_t ncols                         = (int64_t)r.cols_end - r.cols_begin,
+              nrows                         = (int64_t)r.rows_end - r.rows_begin;
+      int64_t count                         = ncols > nrows ? ncols : nrows;
+      if (r.cols_begin < cols_used || ncols < 1 || (size_t)r.cols_end > ps.record_cols.size() ||
+          r.rows_begin < rows_used || nrows < 1 || (size_t)r.rows_end > ps.saved_rows.size() ||
+          r.coefficients < coefficients_used ||
+          (size_t)(r.coefficients + count) > ps.record_coefficients.size()) {
+        return fail("ranges of col_from_rows record", k);
+      }
+      cols_used         = r.cols_end;
+      rows_used         = r.rows_end;
+      coefficients_used = r.coefficients + count;
+      bool defined      = r.kind == gprs::col_from_rows_kind_t::defined;
+      bool interval     = r.kind == gprs::col_from_rows_kind_t::interval;
+      bool forcing      = r.kind == gprs::col_from_rows_kind_t::forcing;
+      if ((!defined && !interval && !forcing) || (!interval && ncols != 1) ||
+          (!forcing && nrows != 1) || (r.dual && !defined)) {
+        return fail("kind or counts of col_from_rows record", k);
+      }
+      if (primal_only && r.dual) { return fail("dual record in a primal-only result at", k); }
+      if (primal_only && !defined) {
+        return fail("interval or forcing record in a primal-only result at", k);
+      }
+      for (int64_t n = 0; n < count; ++n) {
+        double a = ps.record_coefficients[r.coefficients + n];
+        if (!std::isfinite(a) || a == 0.) { return fail("coefficient of col_from_rows record", k); }
+      }
+      for (int32_t n = r.cols_begin; n < r.cols_end; ++n) {
+        const gprs::record_col_t& c = ps.record_cols[n];
+        if (!column_ok(c.col) || removed[c.col] || map[c.col].root != unset ||
+            (n > r.cols_begin && ps.record_cols[n - 1].col >= c.col)) {
+          return fail("column of col_from_rows record", k);
+        }
+        if (!(c.lower <= c.upper) || std::isnan(c.prefer)) {
+          return fail("bounds of col_from_rows record", k);
+        }
+        if (interval && ps.integer_at(c.col, k)) {
+          return fail("integer column of interval record", k);
+        }
+        removed[c.col] = 1;
+        --left;
+      }
+      const gprs::record_col_t& c = ps.record_cols[r.cols_begin];
+      bool from_above             = forcing && forcing_from_above(ps, r);
+      if (forcing && (from_above ? c.lower != -gprs::inf : c.upper != gprs::inf)) {
+        return fail("bound of forcing record", k);
+      }
+      for (int32_t n = r.rows_begin; n < r.rows_end; ++n) {
+        const gprs::saved_row_t& row = ps.saved_rows[n];
+        if (!row_ok(row.row) || row_gone[row.row] || row.begin < entries_used ||
+            row.begin > row.end || (size_t)row.end > ps.saved_entries.col.size() ||
+            ps.saved_entries.value.size() != ps.saved_entries.col.size() ||
+            !(row.lower <= row.upper)) {
+          return fail("saved row of col_from_rows record", k);
+        }
+        entries_used = row.end;
+        if (defined && !(row.lower == row.upper && std::isfinite(row.upper))) {
+          return fail("side of defined record", k);
+        }
+        if (interval && !(std::isfinite(row.lower) && std::isfinite(row.upper))) {
+          return fail("sides of interval record", k);
+        }
+        if (forcing) {
+          // Every row bounds the column from the end that the first one does.
+          double a   = ps.record_coefficients[r.coefficients + (n - r.rows_begin)];
+          bool upper = from_above == (a > 0);
+          if (!std::isfinite(upper ? row.upper : row.lower) ||
+              !std::isinf(upper ? row.lower : row.upper)) {
+            return fail("row of forcing record", k);
+          }
+        }
+        for (int64_t e = row.begin; e < row.end; ++e) {
+          int32_t col = ps.saved_entries.col[e];
+          double a    = ps.saved_entries.value[e];
+          if (!column_ok(col) || removed[col] || !std::isfinite(a) || a == 0.) {
+            return fail("entry of col_from_rows record", k);
+          }
+        }
+        if (!interval) { row_gone[row.row] = 1; }
+        ++events_of[row.row + 1];
+      }
     } else {
       return fail("unknown record kind at", k);
     }
   }
   if (fixed != ps.fixed_cols.size() || alias != ps.aliases.size() ||
-      parallel != ps.parallel_rows.size() || addition != ps.row_additions.size()) {
+      parallel != ps.parallel_rows.size() || addition != ps.row_additions.size() ||
+      from_rows != ps.col_from_rows.size()) {
     return fail("records outside the order", 0);
   }
   if (left != 0) { return fail("columns neither left nor removed:", left); }
 
-  fixed = ps.fixed_cols.size();
-  alias = ps.aliases.size();
+  // Variables and anchors of the reduced model.
+  sys.reduced_cols = reduced.ncols;
+  sys.reduced_rows = reduced.nrows;
+  sys.lower        = reduced.col_lower;
+  sys.upper        = reduced.col_upper;
+  sys.origin       = ps.col_origin;
+  sys.first_var.assign(ps.col_from_rows.size(), 0);
+  sys.first_anchor.assign(ps.col_from_rows.size(), 0);
+  sys.position.assign(ps.col_from_rows.size(), 0);
+  int32_t saved_anchors = 0;
+  for (size_t n = 0; n < ps.col_from_rows.size(); ++n) {
+    const gprs::col_from_rows_record_t& r = ps.col_from_rows[n];
+    sys.first_var[n]                      = sys.lower.size();
+    sys.first_anchor[n]                   = reduced.nrows + saved_anchors;
+    saved_anchors += r.rows_end - r.rows_begin;
+    for (int32_t c = r.cols_begin; c < r.cols_end; ++c) {
+      sys.lower.push_back(ps.record_cols[c].lower);
+      sys.upper.push_back(ps.record_cols[c].upper);
+      sys.origin.push_back(ps.record_cols[c].col);
+    }
+  }
+  sys.start.assign(reduced.row_start.begin(), reduced.row_start.end());
+  sys.var   = reduced.col_index;
+  sys.value = reduced.value;
+  sys.low   = reduced.row_lower;
+  sys.high  = reduced.row_upper;
+  sys.row   = ps.row_origin;
+  sys.reduced_anchor.assign(model.nrows, -1);
+  for (int32_t k = 0; k < reduced.nrows; ++k) {
+    sys.reduced_anchor[ps.row_origin[k]] = k;
+  }
+
+  // The maps, from the end of the stack. A saved row is composed with the maps as they are when
+  // the pass reaches its record, which are the meanings of its columns at that position; only
+  // then do the record's own columns get their variables. The anchors of a record are composed
+  // into their places afterwards, since the pass meets the records in reverse.
+  struct composed_row_t {
+    std::vector<int32_t> var;
+    std::vector<double> value;
+    double low;
+    double high;
+    double side_parts;
+    int32_t row;
+  };
+  std::vector<composed_row_t> composed(saved_anchors);
+  std::vector<sum_t> sum(sys.nvars());
+  std::vector<double> parts(sys.nvars(), 0.);
+  std::vector<int32_t> touched;
+  std::vector<double>& offset_parts = sys.offset_parts;
+  offset_parts.assign(model.ncols, 0.);
+  fixed     = ps.fixed_cols.size();
+  alias     = ps.aliases.size();
+  from_rows = ps.col_from_rows.size();
   for (size_t k = ps.order.size(); k-- > 0;) {
     if (ps.order[k] == gprs::record_kind_t::fixed_col) {
       const gprs::fixed_col_record_t& r = ps.fixed_cols[--fixed];
       map[r.col]                        = column_map_t{-1, 0., r.value};
+      offset_parts[r.col]               = std::fabs(r.value);
     } else if (ps.order[k] == gprs::record_kind_t::alias) {
       const gprs::alias_record_t& r = ps.aliases[--alias];
       const column_map_t& rep       = map[r.rep];
       map[r.col] = column_map_t{rep.root, r.scale * rep.scale, r.scale * rep.offset + r.offset};
+      offset_parts[r.col] = std::fabs(r.scale) * offset_parts[r.rep] + std::fabs(r.offset);
+    } else if (ps.order[k] == gprs::record_kind_t::col_from_rows) {
+      const gprs::col_from_rows_record_t& r = ps.col_from_rows[--from_rows];
+      sys.position[from_rows]               = k;
+      int32_t ncols                         = r.cols_end - r.cols_begin;
+      for (int32_t n = r.rows_begin; n < r.rows_end; ++n) {
+        const gprs::saved_row_t& row = ps.saved_rows[n];
+        composed_row_t& out =
+          composed[sys.first_anchor[from_rows] - reduced.nrows + (n - r.rows_begin)];
+        sum_t constant;
+        double side = 0.;
+        if (std::isfinite(row.lower)) { side = std::fabs(row.lower); }
+        if (std::isfinite(row.upper)) { side = std::fmax(side, std::fabs(row.upper)); }
+        out.side_parts = side;
+        for (int64_t e = row.begin; e < row.end; ++e) {
+          const column_map_t& m = map[ps.saved_entries.col[e]];
+          double a              = ps.saved_entries.value[e];
+          constant.add(a, m.offset);
+          out.side_parts += std::fabs(a) * offset_parts[ps.saved_entries.col[e]];
+          if (m.root < 0) { continue; }
+          if (parts[m.root] == 0.) { touched.push_back(m.root); }
+          sum[m.root].add(a, m.scale);
+          parts[m.root] += std::fabs(a * m.scale);
+        }
+        for (int32_t v : touched) {
+          double a = sum[v].value();
+          // What is left of terms that cancel is their rounding.
+          if (std::fabs(a) > rounding_zero * parts[v]) {
+            out.var.push_back(v);
+            out.value.push_back(a);
+          }
+          sum[v]   = sum_t();
+          parts[v] = 0.;
+        }
+        touched.clear();
+        // The record's own columns: all of them in its one row, or its one column in each row.
+        for (int32_t c = 0; c < (ncols > 1 ? ncols : 1); ++c) {
+          int32_t at = ncols > 1 ? c : n - r.rows_begin;
+          out.var.push_back(sys.first_var[from_rows] + c);
+          out.value.push_back(ps.record_coefficients[r.coefficients + at]);
+        }
+        out.low  = row.lower - constant.value();
+        out.high = row.upper - constant.value();
+        out.row  = row.row;
+      }
+      for (int32_t c = 0; c < ncols; ++c) {
+        map[ps.record_cols[r.cols_begin + c].col] =
+          column_map_t{sys.first_var[from_rows] + c, 1., 0.};
+      }
+    }
+  }
+  sys.side_parts.assign(reduced.nrows, 0.);
+  for (const composed_row_t& row : composed) {
+    sys.var.insert(sys.var.end(), row.var.begin(), row.var.end());
+    sys.value.insert(sys.value.end(), row.value.begin(), row.value.end());
+    sys.start.push_back(sys.var.size());
+    sys.low.push_back(row.low);
+    sys.high.push_back(row.high);
+    sys.side_parts.push_back(row.side_parts);
+    sys.row.push_back(row.row);
+  }
+
+  // The events of the rows, in the order of the stack.
+  for (int32_t i = 0; i < model.nrows; ++i) {
+    events_of[i + 1] += events_of[i];
+  }
+  sys.first = events_of;
+  sys.events.resize(events_of[model.nrows]);
+  std::vector<int32_t> fill(events_of.begin(), events_of.end() - 1);
+  parallel = addition = from_rows = 0;
+  for (size_t k = 0; k < ps.order.size(); ++k) {
+    if (ps.order[k] == gprs::record_kind_t::parallel_row) {
+      const gprs::parallel_row_record_t& r = ps.parallel_rows[parallel++];
+      sys.events[fill[r.removed_row]++]    = row_event_t{k, row_event_t::parallel, r.kept_row};
+    } else if (ps.order[k] == gprs::record_kind_t::row_addition) {
+      const gprs::row_addition_record_t& r = ps.row_additions[addition++];
+      sys.events[fill[r.row]++]            = row_event_t{k, row_event_t::addition, r.equation_row};
+    } else if (ps.order[k] == gprs::record_kind_t::col_from_rows) {
+      const gprs::col_from_rows_record_t& r = ps.col_from_rows[from_rows];
+      for (int32_t n = r.rows_begin; n < r.rows_end; ++n) {
+        int32_t anchor                           = sys.first_anchor[from_rows] + (n - r.rows_begin);
+        sys.events[fill[ps.saved_rows[n].row]++] = row_event_t{k, row_event_t::saved, anchor};
+      }
+      ++from_rows;
     }
   }
   return true;
@@ -426,57 +810,6 @@ inline double implied_maximum(const std::vector<row_term_t>& terms,
   }
   return best;
 }
-
-// The equations that the rows are made of, by original index. The row before a record
-// row <- row - factor * equation_row is the row after it plus the factor times the equation as
-// it is then, and that equation is in turn made of what is subtracted from it later; a row
-// removed as a parallel row is, from then on, made of what its kept row is made of. Read from
-// the records in reverse, each record therefore gives the row it names what the other row has
-// collected so far. A row is not its own equation: that part is a multiple of its reduced row.
-struct row_equations_t {
-  // The list of a row in `lists`, -1 for a row that is made of itself alone.
-  std::vector<int32_t> list;
-  std::vector<std::vector<int32_t>> lists;
-
-  // A list longer than max_row_equations is not completed: its row is not tested.
-  void add(int32_t row, int32_t equation)
-  {
-    if (equation == row) { return; }
-    if (list[row] < 0) {
-      list[row] = lists.size();
-      lists.emplace_back();
-    }
-    std::vector<int32_t>& of = lists[list[row]];
-    if (of.size() > max_row_equations || std::find(of.begin(), of.end(), equation) != of.end()) {
-      return;
-    }
-    of.push_back(equation);
-  }
-
-  void add_all(int32_t row, int32_t from)
-  {
-    if (list[from] < 0) { return; }
-    for (size_t k = 0; k < lists[list[from]].size(); ++k) {
-      add(row, lists[list[from]][k]);
-    }
-  }
-
-  // The stack keeps its contract (compose_records).
-  explicit row_equations_t(const gprs::postsolve_t& ps) : list(ps.nrows, -1)
-  {
-    size_t parallel = ps.parallel_rows.size(), addition = ps.row_additions.size();
-    for (size_t k = ps.order.size(); k-- > 0;) {
-      if (ps.order[k] == gprs::record_kind_t::parallel_row) {
-        const gprs::parallel_row_record_t& r = ps.parallel_rows[--parallel];
-        add_all(r.removed_row, r.kept_row);
-      } else if (ps.order[k] == gprs::record_kind_t::row_addition) {
-        const gprs::row_addition_record_t& r = ps.row_additions[--addition];
-        add(r.row, r.equation_row);
-        add_all(r.row, r.equation_row);
-      }
-    }
-  }
-};
 
 // The test of a row against several reduced rows together: its own, if it has one, as row 0,
 // and those of its equations. A point v holds one multiplier per row.
@@ -791,213 +1124,221 @@ inline bool no_common_point(combined_t p)
   return negative;
 }
 
-// The objective part of the check. The stack keeps its contract and `map` holds its records
-// composed (compose_records). O(columns + records).
-inline void objective_check(const gprs::model_t& model,
-                            const gprs::result_t& result,
-                            const std::vector<column_map_t>& map,
-                            structure_report_t& s)
-{
-  const gprs::postsolve_t& ps  = result.postsolve;
-  const gprs::model_t& reduced = result.reduced;
-  // The sum of the absolute values that the composed offset of a column is made of: an alias
-  // adds its own offset to the scaled offset of its rep, and the two can cancel.
-  std::vector<double> offset_parts(model.ncols, 0.);
-  size_t fixed = ps.fixed_cols.size(), alias = ps.aliases.size();
-  for (size_t k = ps.order.size(); k-- > 0;) {
-    if (ps.order[k] == gprs::record_kind_t::fixed_col) {
-      const gprs::fixed_col_record_t& r = ps.fixed_cols[--fixed];
-      offset_parts[r.col]               = std::fabs(r.value);
-    } else if (ps.order[k] == gprs::record_kind_t::alias) {
-      const gprs::alias_record_t& r = ps.aliases[--alias];
-      offset_parts[r.col] = std::fabs(r.scale) * offset_parts[r.rep] + std::fabs(r.offset);
-    }
-  }
+// The anchors that a function of a row at a position of the stack is proved from: the anchor of
+// the row after that position, and the anchors of the equations that the records between the
+// position and that anchor subtracted from it, each taken after its record, with the equations
+// that were subtracted from those in turn. A row removed as a parallel row is, from then on,
+// made of what its kept row is made of.
+struct proof_rows_t {
+  int32_t own = -1;
+  // The own anchor belongs to another row: the kept row of a parallel record.
+  bool other_row = false;
+  // A record subtracted an equation other than the row itself.
+  bool made_of_equations = false;
+  // More than max_row_equations equations, or a walk above max_proof_visits: not tested.
+  bool too_many = false;
+  // Anchors of the equations, each once and none the own one.
+  std::vector<int32_t> equations;
 
-  std::vector<sum_t> coefficient(reduced.ncols);
-  std::vector<double> parts(reduced.ncols, 0.);
-  sum_t constant;
-  constant.add(model.objective_offset, 1.);
-  constant.add(-reduced.objective_offset, 1.);
-  double terms = std::fabs(model.objective_offset) + std::fabs(reduced.objective_offset);
-  for (int32_t j = 0; j < model.ncols; ++j) {
-    double cost = model.cost[j];
-    if (cost == 0.) { continue; }
-    const column_map_t& m = map[j];
-    constant.add(cost, m.offset);
-    terms += std::fabs(cost) * offset_parts[j];
-    if (m.root < 0) { continue; }
-    coefficient[m.root].add(cost, m.scale);
-    parts[m.root] += std::fabs(cost * m.scale);
+  struct visit_t {
+    int32_t row;
+    int64_t position;
+  };
+  std::vector<int32_t> rows;
+  std::vector<visit_t> pending;
+};
+
+// Follows a row from a position of the stack: a saved row ends the walk with its anchor, a
+// parallel record continues it with the kept row, and the equations subtracted on the way go
+// to p.pending. Without a saved row the walk ends with the row of the reduced model, or -1.
+// `last` gets the row that the anchor belongs to.
+inline int32_t walk_row(const system_t& sys,
+                        const gprs::postsolve_t& ps,
+                        int32_t row,
+                        int64_t position,
+                        proof_rows_t& p,
+                        int32_t& last)
+{
+  for (size_t hops = 0; hops <= ps.parallel_rows.size(); ++hops) {
+    int32_t e = sys.first[row], end = sys.first[row + 1];
+    while (e < end && (int64_t)sys.events[e].position <= position) {
+      ++e;
+    }
+    bool moved = false;
+    for (; e < end && !moved; ++e) {
+      const row_event_t& event = sys.events[e];
+      if (event.kind == row_event_t::saved) {
+        last = row;
+        return event.index;
+      }
+      if (event.kind == row_event_t::addition) {
+        p.pending.push_back(proof_rows_t::visit_t{event.index, (int64_t)event.position});
+        continue;
+      }
+      row      = event.index;
+      position = event.position;
+      moved    = true;
+    }
+    if (!moved) { break; }
   }
-  for (int32_t k = 0; k < reduced.ncols; ++k) {
-    coefficient[k].add(-reduced.cost[k], 1.);
-    parts[k] += std::fabs(reduced.cost[k]);
-    double difference = std::fabs(coefficient[k].value());
-    if (difference <= underflow_size) { continue; }
-    double relative = difference / parts[k];
-    if (!(relative <= s.objective_worst)) { s.objective_worst_col = ps.col_origin[k]; }
-    raise_to(s.objective_worst, relative);
-    s.objective_failures += !(relative <= composed_zero);
-  }
-  double difference = std::fabs(constant.value());
-  if (!(difference <= underflow_size)) {
-    s.objective_constant = difference / terms;
-    s.objective_failures += !(s.objective_constant <= identity_tolerance);
-  }
+  last = row;
+  return sys.reduced_anchor[row];
 }
 
-// The check of one result of a presolve in the given mode (options_t::primal_only).
-inline structure_report_t structure_check(const gprs::model_t& model,
-                                          const gprs::result_t& result,
-                                          bool primal_only)
+// Steps of the walks of one obligation; above it the obligation is not tested.
+constexpr size_t max_proof_visits = 1024;
+
+inline void proof_rows(
+  const system_t& sys, const gprs::postsolve_t& ps, int32_t row, int64_t position, proof_rows_t& p)
 {
-  structure_report_t s;
-  s.ran = true;
-  std::vector<column_map_t> map;
-  if (!compose_records(model, result, primal_only, map, s.stack_error)) { return s; }
-  s.composed                   = true;
-  const gprs::postsolve_t& ps  = result.postsolve;
-  const gprs::model_t& reduced = result.reduced;
-
-  for (int32_t k = 0; k < reduced.ncols; ++k) {
-    int32_t col = ps.col_origin[k];
-    if (model.col_type[col] && !reduced.col_type[k]) {
-      if (s.lost_integers++ == 0) { s.first_lost_integer = col; }
+  p.equations.clear();
+  p.rows.clear();
+  p.pending.clear();
+  p.made_of_equations = false;
+  int32_t last        = row;
+  p.own               = walk_row(sys, ps, row, position, p, last);
+  p.other_row         = last != row;
+  for (size_t n = 0; n < p.pending.size(); ++n) {
+    if (p.rows.size() > max_row_equations || p.pending.size() > max_proof_visits) { break; }
+    proof_rows_t::visit_t visit = p.pending[n];
+    bool again                  = false;
+    for (size_t m = 0; m < n && !again; ++m) {
+      again = p.pending[m].row == visit.row && p.pending[m].position == visit.position;
+    }
+    if (again) { continue; }
+    if (visit.row != row) {
+      p.made_of_equations = true;
+      if (std::find(p.rows.begin(), p.rows.end(), visit.row) == p.rows.end()) {
+        p.rows.push_back(visit.row);
+      }
+    }
+    int32_t anchor = walk_row(sys, ps, visit.row, visit.position, p, last);
+    if (anchor >= 0 && anchor != p.own &&
+        std::find(p.equations.begin(), p.equations.end(), anchor) == p.equations.end()) {
+      p.equations.push_back(anchor);
     }
   }
+  p.too_many = p.rows.size() > max_row_equations || p.pending.size() > max_proof_visits;
+}
 
-  objective_check(model, result, map, s);
+// How an obligation was tested and what it gave.
+struct proof_t {
+  // 0: over the boxes; 1: against its anchor; 2: against anchors of equations as well.
+  int32_t path = 0;
+  // False for what the three paths count as not tested (kept_untested, added_untested).
+  bool tested = true;
+  // The violation, relative as the path defines it; 0 without one.
+  double scaled = 0.;
+  // Path 2: the largest multiplier of an equation.
+  double multiplier = 0.;
+};
 
-  for (int32_t j = 0; j < model.ncols; ++j) {
-    const column_map_t& m = map[j];
-    double low = m.offset, high = m.offset;
-    if (m.root >= 0) {
-      double a = m.scale * reduced.col_lower[m.root] + m.offset;
-      double b = m.scale * reduced.col_upper[m.root] + m.offset;
-      low      = m.scale > 0 ? a : b;
-      high     = m.scale > 0 ? b : a;
-    }
-    double below     = model.col_lower[j] == -gprs::inf ? -gprs::inf : model.col_lower[j] - low;
-    double above     = model.col_upper[j] == gprs::inf ? -gprs::inf : high - model.col_upper[j];
-    double violation = !(below <= above) ? below : above;
-    if (violation <= 0.) { continue; }
-    double bound  = below > above ? model.col_lower[j] : model.col_upper[j];
-    double scaled = violation / std::fmax(1., std::fabs(bound));
-    if (!(scaled <= s.bound_worst)) { s.bound_worst_col = j; }
-    raise_to(s.bound_worst, scaled);
-    s.bound_failures += !(scaled <= structure_tolerance);
-  }
-
-  // The reduced row an original row is tested against: its own, or that of the row it was
-  // merged into as a parallel row, or none.
-  std::vector<int32_t> reduced_row(model.nrows, -1), kept_row(model.nrows, -1);
-  for (int32_t k = 0; k < reduced.nrows; ++k) {
-    reduced_row[ps.row_origin[k]] = k;
-  }
-  for (const gprs::parallel_row_record_t& r : ps.parallel_rows) {
-    kept_row[r.removed_row] = r.kept_row;
-  }
-  auto final_row = [&](int32_t row) {
-    for (size_t hops = 0;
-         reduced_row[row] < 0 && kept_row[row] >= 0 && hops <= ps.parallel_rows.size();
-         ++hops) {
-      row = kept_row[row];
-    }
-    return row;
-  };
-  row_equations_t equations(ps);
-  std::vector<double> g(reduced.ncols, 0.), parts(reduced.ncols, 0.), c(reduced.ncols, 0.);
+// The three tests of a linear function of the check variables with sides. The caller fills the
+// function into g and parts, with touched naming its variables, and prove() empties them.
+struct prover_t {
+  const system_t& sys;
+  std::vector<double> g;
+  std::vector<double> parts;
+  std::vector<double> c;
   std::vector<int32_t> touched;
   std::vector<row_term_t> terms;
   std::vector<double> multipliers;
-  // For a row that is made of equations: their reduced rows, the columns of the test with the
-  // place of each in it, and the entries of the rows of the test, up to entry_end for each row.
-  std::vector<int32_t> equation_rows, cols, slot(reduced.ncols, -1), entry_col;
+  // For a function that is made of equations: the variables of the test with the place of each
+  // in it, and the entries of the anchors of the test, up to entry_end for each of them.
+  std::vector<int32_t> cols;
+  std::vector<int32_t> slot;
+  std::vector<int32_t> entry_col;
   std::vector<double> entry_value;
-  std::vector<size_t> entry_end(max_row_equations + 1);
+  std::vector<size_t> entry_end;
   combined_t p;
   double kept_work = 0.;
-  for (int32_t i = 0; i < model.nrows; ++i) {
-    int32_t against = final_row(i);
-    int32_t k       = reduced_row[against];
 
-    sum_t constant;
-    double largest = 1.;
-    for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
-      const column_map_t& m = map[model.col_index[e]];
-      double a              = model.value[e];
-      constant.add(a, m.offset);
-      raise_to(largest, std::fabs(a * m.offset));
-      if (m.root < 0) { continue; }
-      if (parts[m.root] == 0.) { touched.push_back(m.root); }
-      g[m.root] += a * m.scale;
-      parts[m.root] += std::fabs(a * m.scale);
+  explicit prover_t(const system_t& system)
+    : sys(system),
+      g(system.nvars(), 0.),
+      parts(system.nvars(), 0.),
+      c(system.nvars(), 0.),
+      slot(system.nvars(), -1),
+      entry_end(max_row_equations + 1)
+  {
+  }
+
+  void add_variable(int32_t v, double coefficient)
+  {
+    if (parts[v] == 0.) { touched.push_back(v); }
+    g[v] += coefficient;
+    parts[v] += std::fabs(coefficient);
+  }
+
+  // The term a * (original column) of the function.
+  void add_column(const column_map_t& m, double a, sum_t& constant, double& largest)
+  {
+    constant.add(a, m.offset);
+    raise_to(largest, std::fabs(a * m.offset));
+    if (m.root >= 0) { add_variable(m.root, a * m.scale); }
+  }
+
+  void clear()
+  {
+    for (int32_t v : touched) {
+      g[v]     = 0.;
+      parts[v] = 0.;
     }
-    double lower = model.row_lower[i], upper = model.row_upper[i];
+    touched.clear();
+  }
+
+  // lower <= constant + g * r <= upper at every point within the boxes that meets the anchors
+  // of `with`; `largest` is the largest term of the constant, at least 1.
+  proof_t prove(
+    double lower, double upper, const sum_t& constant, double largest, const proof_rows_t& with)
+  {
+    proof_t out;
+    int32_t k    = with.own;
     double below = -gprs::inf, above = -gprs::inf;
-
-    equation_rows.clear();
-    bool too_many = false;
-    if (equations.list[i] >= 0) {
-      ++s.added_rows;
-      const std::vector<int32_t>& of = equations.lists[equations.list[i]];
-      too_many                       = of.size() > max_row_equations;
-      for (int32_t equation : of) {
-        int32_t e = reduced_row[final_row(equation)];
-        if (e >= 0 && e != k &&
-            std::find(equation_rows.begin(), equation_rows.end(), e) == equation_rows.end()) {
-          equation_rows.push_back(e);
-        }
-      }
+    if (with.too_many) {
+      clear();
+      out.path   = 2;
+      out.tested = false;
+      return out;
     }
-    if (too_many) {
-      for (int32_t col : touched) {
-        g[col]     = 0.;
-        parts[col] = 0.;
-      }
-      touched.clear();
-      ++s.added_untested;
-      continue;
-    }
-    if (!equation_rows.empty()) {
-      p.own  = k >= 0;
-      p.rows = p.own + equation_rows.size();
+    if (!with.equations.empty()) {
+      out.path = 2;
+      p.own    = k >= 0;
+      p.rows   = p.own + with.equations.size();
       p.low.clear();
       p.high.clear();
       p.columns.clear();
       cols.clear();
       entry_col.clear();
       entry_value.clear();
-      for (int32_t col : touched) {
-        slot[col] = p.columns.size();
-        cols.push_back(col);
-        p.columns.push_back(
-          combined_t::column_t{g[col], parts[col], reduced.col_lower[col], reduced.col_upper[col]});
-        g[col]     = 0.;
-        parts[col] = 0.;
+      for (int32_t v : touched) {
+        slot[v] = p.columns.size();
+        cols.push_back(v);
+        p.columns.push_back(combined_t::column_t{g[v], parts[v], sys.lower[v], sys.upper[v]});
+        g[v]     = 0.;
+        parts[v] = 0.;
       }
       touched.clear();
-      // The entries of the rows, row after row; a column that only they have gets g = 0.
+      // The entries of the anchors, one after the other; a variable that only they have gets
+      // g = 0.
       for (int32_t n = 0; n < p.rows; ++n) {
-        int32_t row = p.own ? (n == 0 ? k : equation_rows[n - 1]) : equation_rows[n];
-        p.low.push_back(reduced.row_lower[row]);
-        p.high.push_back(reduced.row_upper[row]);
-        for (int64_t e = reduced.row_start[row]; e < reduced.row_start[row + 1]; ++e) {
-          int32_t col = reduced.col_index[e];
-          if (slot[col] < 0) {
-            slot[col] = p.columns.size();
-            cols.push_back(col);
-            p.columns.push_back(
-              combined_t::column_t{0., 0., reduced.col_lower[col], reduced.col_upper[col]});
+        int32_t anchor = p.own ? (n == 0 ? k : with.equations[n - 1]) : with.equations[n];
+        p.low.push_back(sys.low[anchor]);
+        p.high.push_back(sys.high[anchor]);
+        for (int64_t e = sys.start[anchor]; e < sys.start[anchor + 1]; ++e) {
+          int32_t v = sys.var[e];
+          if (slot[v] < 0) {
+            slot[v] = p.columns.size();
+            cols.push_back(v);
+            p.columns.push_back(combined_t::column_t{0., 0., sys.lower[v], sys.upper[v]});
           }
-          entry_col.push_back(slot[col]);
-          entry_value.push_back(reduced.value[e]);
+          entry_col.push_back(slot[v]);
+          entry_value.push_back(sys.value[e]);
         }
         entry_end[n] = entry_col.size();
       }
-      for (int32_t col : cols) {
-        slot[col] = -1;
+      for (int32_t v : cols) {
+        slot[v] = -1;
       }
       p.a.assign(p.columns.size() * p.rows, 0.);
       for (size_t e = 0, n = 0; e < entry_col.size(); ++e) {
@@ -1009,8 +1350,8 @@ inline structure_report_t structure_check(const gprs::model_t& model,
       hyperplanes_t h(p);
       double work = h.count() * (double)p.a.size();
       if (work > max_kept_row_work || kept_work + work > max_kept_work) {
-        ++s.added_untested;
-        continue;
+        out.tested = false;
+        return out;
       }
       kept_work += work;
       smallest_bound_t most, least;
@@ -1022,19 +1363,15 @@ inline structure_report_t structure_check(const gprs::model_t& model,
       if (lower > -gprs::inf) { below = lower - constant.value() + least.value; }
       double violation = !(below <= above) ? below : above;
       double scaled    = violation / std::fmax(largest, below > above ? least.size : most.size);
-      // A bound that proves the row does so whether a point meets the reduced rows or not; a
+      // A bound that proves the function does so whether a point meets the anchors or not; a
       // search that finds none says nothing when no point meets them.
       if (violation > 0. && !(scaled <= structure_tolerance) && no_common_point(p)) {
-        ++s.added_untested;
-        continue;
+        out.tested = false;
+        return out;
       }
-      ++s.added_tested;
-      raise_to(s.added_multiplier, std::fmax(most.multiplier, least.multiplier));
-      if (violation <= 0.) { continue; }
-      if (!(scaled <= s.added_worst)) { s.added_worst_row = i; }
-      raise_to(s.added_worst, scaled);
-      s.added_failures += !(scaled <= structure_tolerance);
-      continue;
+      out.multiplier = std::fmax(most.multiplier, least.multiplier);
+      out.scaled     = violation <= 0. ? 0. : scaled;
+      return out;
     }
 
     if (k < 0) {
@@ -1042,14 +1379,14 @@ inline structure_report_t structure_check(const gprs::model_t& model,
       sum_t low = constant, high = constant;
       double largest_low = largest, largest_high = largest;
       bool low_infinite = false, high_infinite = false;
-      for (int32_t col : touched) {
-        double coefficient = g[col];
-        bool cancelled     = std::fabs(coefficient) <= composed_zero * std::fmax(1., parts[col]);
-        g[col]             = 0.;
-        parts[col]         = 0.;
+      for (int32_t v : touched) {
+        double coefficient = g[v];
+        bool cancelled     = std::fabs(coefficient) <= composed_zero * std::fmax(1., parts[v]);
+        g[v]               = 0.;
+        parts[v]           = 0.;
         if (cancelled) { continue; }
-        double at_low  = coefficient > 0 ? reduced.col_lower[col] : reduced.col_upper[col];
-        double at_high = coefficient > 0 ? reduced.col_upper[col] : reduced.col_lower[col];
+        double at_low  = coefficient > 0 ? sys.lower[v] : sys.upper[v];
+        double at_high = coefficient > 0 ? sys.upper[v] : sys.lower[v];
         if (std::isfinite(at_low)) {
           low.add(coefficient, at_low);
           raise_to(largest_low, std::fabs(coefficient * at_low));
@@ -1067,29 +1404,27 @@ inline structure_report_t structure_check(const gprs::model_t& model,
       if (lower > -gprs::inf) { below = low_infinite ? gprs::inf : lower - low.value(); }
       if (upper < gprs::inf) { above = high_infinite ? gprs::inf : high.value() - upper; }
       double violation = !(below <= above) ? below : above;
-      ++s.rows_tested;
-      if (violation <= 0.) { continue; }
-      double scaled = violation / (!(below <= above) ? largest_low : largest_high);
-      if (!(scaled <= s.row_worst)) { s.row_worst_row = i; }
-      raise_to(s.row_worst, scaled);
-      s.row_failures += !(scaled <= structure_tolerance);
-      continue;
+      if (!(violation <= 0.)) {
+        out.scaled = violation / (!(below <= above) ? largest_low : largest_high);
+      }
+      return out;
     }
 
-    for (int64_t e = reduced.row_start[k]; e < reduced.row_start[k + 1]; ++e) {
-      int32_t col = reduced.col_index[e];
-      if (parts[col] == 0. && c[col] == 0.) { touched.push_back(col); }
-      c[col] = reduced.value[e];
+    out.path = 1;
+    for (int64_t e = sys.start[k]; e < sys.start[k + 1]; ++e) {
+      int32_t v = sys.var[e];
+      if (parts[v] == 0. && c[v] == 0.) { touched.push_back(v); }
+      c[v] = sys.value[e];
     }
     terms.clear();
     multipliers.assign(1, 0.);
     sum_t least, most;
     bool least_infinite = false, most_infinite = false;
-    for (int32_t col : touched) {
-      row_term_t t{g[col], c[col], parts[col], reduced.col_lower[col], reduced.col_upper[col]};
-      g[col]     = 0.;
-      parts[col] = 0.;
-      c[col]     = 0.;
+    for (int32_t v : touched) {
+      row_term_t t{g[v], c[v], parts[v], sys.lower[v], sys.upper[v]};
+      g[v]     = 0.;
+      parts[v] = 0.;
+      c[v]     = 0.;
       terms.push_back(t);
       if (t.c == 0.) { continue; }
       multipliers.push_back(t.g / t.c);
@@ -1113,19 +1448,17 @@ inline structure_report_t structure_check(const gprs::model_t& model,
       double a = multipliers[m - 1], b = multipliers[m];
       different += !(std::fabs(b - a) <= same_ratio * std::fmax(std::fabs(a), std::fabs(b)));
     }
-    double low = reduced.row_lower[k], high = reduced.row_upper[k];
+    double low = sys.low[k], high = sys.high[k];
     bool empty =
       (!least_infinite &&
        least.value() - high > check_tolerance * std::fmax(1., std::fabs(high))) ||
       (!most_infinite && low - most.value() > check_tolerance * std::fmax(1., std::fabs(low)));
     double work = (double)different * (double)terms.size();
     if (empty || work > max_kept_row_work || kept_work + work > max_kept_work) {
-      ++s.kept_untested;
-      continue;
+      out.tested = false;
+      return out;
     }
     kept_work += work;
-    ++s.kept_tested;
-    s.kept_parallel += against != i;
     double size_above = 1., size_below = 1.;
     if (upper < gprs::inf) {
       above =
@@ -1136,30 +1469,607 @@ inline structure_report_t structure_check(const gprs::model_t& model,
         lower - constant.value() + implied_maximum(terms, -1., low, high, multipliers, size_below);
     }
     double violation = !(below <= above) ? below : above;
-    if (violation <= 0.) { continue; }
-    double scaled = violation / std::fmax(largest, below > above ? size_below : size_above);
-    if (!(scaled <= s.kept_worst)) { s.kept_worst_row = i; }
-    raise_to(s.kept_worst, scaled);
-    s.kept_failures += !(scaled <= structure_tolerance);
+    if (!(violation <= 0.)) {
+      out.scaled = violation / std::fmax(largest, below > above ? size_below : size_above);
+    }
+    return out;
   }
+};
 
-  std::vector<double> point(reduced.ncols), z;
-  for (int32_t k = 0; k < reduced.ncols; ++k) {
-    double v = 1.;
-    if (v < reduced.col_lower[k]) { v = reduced.col_lower[k]; }
-    if (v > reduced.col_upper[k]) { v = reduced.col_upper[k]; }
-    point[k] = model.col_type[ps.col_origin[k]] ? std::round(v) : v;
+// The largest and the smallest sum of the terms of the columns of an interval record over
+// their bounds; an infinite one is flagged.
+struct term_range_t {
+  sum_t most;
+  sum_t least;
+  bool most_infinite  = false;
+  bool least_infinite = false;
+  // The sum of the terms at prefer.
+  sum_t preferred;
+};
+
+inline term_range_t term_range(const gprs::postsolve_t& ps, const gprs::col_from_rows_record_t& r)
+{
+  term_range_t range;
+  for (int32_t n = r.cols_begin; n < r.cols_end; ++n) {
+    const gprs::record_col_t& col = ps.record_cols[n];
+    double a                      = ps.record_coefficients[r.coefficients + (n - r.cols_begin)];
+    double at_most = a > 0 ? col.upper : col.lower, at_least = a > 0 ? col.lower : col.upper;
+    if (std::isinf(at_most)) {
+      range.most_infinite = true;
+    } else {
+      range.most.add(a, at_most);
+    }
+    if (std::isinf(at_least)) {
+      range.least_infinite = true;
+    } else {
+      range.least.add(a, at_least);
+    }
+    range.preferred.add(a, col.prefer);
   }
-  ps.postsolve(point, z);
+  return range;
+}
+
+// The columns part of the check: the boxes and the integral forms of defined records and the
+// snapshots of interval records. The stack keeps its contract and `sys` holds its records
+// composed.
+inline void columns_check(const gprs::result_t& result,
+                          const system_t& sys,
+                          prover_t& prover,
+                          structure_report_t& s)
+{
+  const gprs::postsolve_t& ps = result.postsolve;
+  proof_rows_t with;
+  for (size_t n = 0; n < ps.col_from_rows.size(); ++n) {
+    const gprs::col_from_rows_record_t& r = ps.col_from_rows[n];
+    int32_t own                           = sys.first_var[n];
+    int32_t anchor                        = sys.first_anchor[n];
+    int32_t ncols                         = r.cols_end - r.cols_begin;
+    if (r.kind == gprs::col_from_rows_kind_t::forcing) {
+      ++s.forcing_records;
+      continue;
+    }
+    if (r.kind == gprs::col_from_rows_kind_t::interval) {
+      ++s.interval_records;
+      for (int64_t e = sys.start[anchor]; e < sys.start[anchor + 1]; ++e) {
+        if (sys.var[e] < own || sys.var[e] >= own + ncols) {
+          prover.add_variable(sys.var[e], sys.value[e]);
+        }
+      }
+      term_range_t range = term_range(ps, r);
+      double lower       = range.most_infinite ? -gprs::inf : sys.low[anchor] - range.most.value();
+      double upper = range.least_infinite ? gprs::inf : sys.high[anchor] - range.least.value();
+      if (lower == -gprs::inf && upper == gprs::inf) {
+        prover.clear();
+        ++s.snapshot_tested;
+        continue;
+      }
+      proof_rows(sys, ps, sys.row[anchor], sys.position[n], with);
+      double size =
+        std::fmax(1., std::fmax(std::fabs(sys.low[anchor]), std::fabs(sys.high[anchor])));
+      proof_t proof = prover.prove(lower, upper, sum_t(), size, with);
+      if (!proof.tested) {
+        ++s.snapshot_untested;
+        continue;
+      }
+      ++s.snapshot_tested;
+      if (proof.scaled == 0.) { continue; }
+      if (!(proof.scaled <= s.snapshot_worst)) { s.snapshot_worst_row = sys.row[anchor]; }
+      raise_to(s.snapshot_worst, proof.scaled);
+      s.snapshot_failures += !(proof.scaled <= structure_tolerance);
+      continue;
+    }
+
+    ++s.defined_records;
+    const gprs::record_col_t& col = ps.record_cols[r.cols_begin];
+    double a                      = ps.record_coefficients[r.coefficients];
+    double side                   = sys.low[anchor];
+    // The range of the rest of the saved row over the boxes of its variables.
+    sum_t most, least;
+    bool most_infinite = false, least_infinite = false;
+    double largest = std::fabs(side);
+    for (int64_t e = sys.start[anchor]; e < sys.start[anchor + 1]; ++e) {
+      int32_t v = sys.var[e];
+      if (v == own) { continue; }
+      double c        = sys.value[e];
+      double at_most  = c > 0 ? sys.upper[v] : sys.lower[v];
+      double at_least = c > 0 ? sys.lower[v] : sys.upper[v];
+      if (std::isinf(at_most)) {
+        most_infinite = true;
+      } else {
+        most.add(c, at_most);
+        raise_to(largest, std::fabs(c * at_most));
+      }
+      if (std::isinf(at_least)) {
+        least_infinite = true;
+      } else {
+        least.add(c, at_least);
+        raise_to(largest, std::fabs(c * at_least));
+      }
+    }
+    // The largest value of the column is (side - rest) / a at the smallest rest for a > 0.
+    bool high_infinite = a > 0 ? least_infinite : most_infinite;
+    bool low_infinite  = a > 0 ? most_infinite : least_infinite;
+    double high        = (side - (a > 0 ? least.value() : most.value())) / a;
+    double low         = (side - (a > 0 ? most.value() : least.value())) / a;
+    auto end           = [&](double bound, bool infinite, double beyond) {
+      if (std::isinf(bound)) { return; }
+      ++s.box_tested;
+      double violation = infinite ? gprs::inf : beyond;
+      if (violation <= 0.) { return; }
+      double scaled =
+        violation / std::fmax(std::fmax(1., std::fabs(bound)), largest / std::fabs(a));
+      if (!(scaled <= s.box_worst)) { s.box_worst_col = col.col; }
+      raise_to(s.box_worst, scaled);
+      s.box_failures += !(scaled <= structure_tolerance);
+    };
+    end(col.upper, high_infinite, high - col.upper);
+    end(col.lower, low_infinite, col.lower - low);
+
+    if (!ps.integer_at(col.col, sys.position[n])) { continue; }
+    // Integral for the column: integer columns, integral ratios and side, and the drift of the
+    // rounded ratios over the boxes within the tolerance, in the units of the row.
+    const gprs::saved_row_t& row = ps.saved_rows[r.rows_begin];
+    bool integral                = true;
+    double drift                 = std::fabs(a * std::round(row.upper / a) - row.upper);
+    for (int64_t e = row.begin; e < row.end && integral; ++e) {
+      int32_t other         = ps.saved_entries.col[e];
+      double ratio          = ps.saved_entries.value[e] / a;
+      double delta          = std::fabs(ratio - std::round(ratio));
+      const column_map_t& m = sys.map[other];
+      integral              = ps.integer_at(other, sys.position[n]) && delta <= integral_ratio;
+      if (delta == 0. || !integral) { continue; }
+      double reach = std::fabs(m.offset);
+      if (m.root >= 0) {
+        reach += std::fabs(m.scale) *
+                 std::fmax(std::fabs(sys.lower[m.root]), std::fabs(sys.upper[m.root]));
+      }
+      drift += std::fabs(a) * delta * reach;
+    }
+    if (!integral || !(drift <= structure_tolerance * std::fmax(1., std::fabs(row.upper)))) {
+      if (s.integral_failures++ == 0) { s.first_integral_col = col.col; }
+    }
+  }
+}
+
+// The objective part of the check. The stack keeps its contract and `sys` holds its records
+// composed (compose_records). O(columns + records + entries of the anchors).
+inline void objective_check(const gprs::model_t& model,
+                            const gprs::result_t& result,
+                            const system_t& sys,
+                            structure_report_t& s)
+{
+  const gprs::postsolve_t& ps  = result.postsolve;
+  const gprs::model_t& reduced = result.reduced;
+  // The terms of the constant count with the absolute values that they are made of: the offset
+  // of a column (system_t::offset_parts) and the side of a saved row (side_parts).
+  const std::vector<double>& offset_parts = sys.offset_parts;
+
+  std::vector<sum_t> coefficient(sys.nvars());
+  std::vector<double> parts(sys.nvars(), 0.);
+  sum_t constant;
+  constant.add(model.objective_offset, 1.);
+  constant.add(-reduced.objective_offset, 1.);
+  double terms = std::fabs(model.objective_offset) + std::fabs(reduced.objective_offset);
   for (int32_t j = 0; j < model.ncols; ++j) {
-    const column_map_t& m = map[j];
-    double term           = m.root < 0 ? 0. : m.scale * point[m.root];
-    double size           = std::fmax(1., std::fmax(std::fabs(term), std::fabs(m.offset)));
+    double cost = model.cost[j];
+    if (cost == 0.) { continue; }
+    const column_map_t& m = sys.map[j];
+    constant.add(cost, m.offset);
+    terms += std::fabs(cost) * offset_parts[j];
+    if (m.root < 0) { continue; }
+    coefficient[m.root].add(cost, m.scale);
+    parts[m.root] += std::fabs(cost * m.scale);
+  }
+  for (int32_t k = 0; k < reduced.ncols; ++k) {
+    coefficient[k].add(-reduced.cost[k], 1.);
+    parts[k] += std::fabs(reduced.cost[k]);
+  }
+  // The variable of a defined record is what its saved row gives it. In the order of the stack
+  // every variable of a saved row is one of the reduced model or of a later record.
+  for (size_t n = 0; n < ps.col_from_rows.size(); ++n) {
+    const gprs::col_from_rows_record_t& r = ps.col_from_rows[n];
+    if (r.kind != gprs::col_from_rows_kind_t::defined) { continue; }
+    int32_t own    = sys.first_var[n];
+    int32_t anchor = sys.first_anchor[n];
+    double held    = coefficient[own].value();
+    // What is left of a cost that an earlier elimination took away is the rounding of the
+    // engine's own subtraction, and nothing to carry on.
+    if (std::fabs(held) <= composed_zero * parts[own]) {
+      coefficient[own] = sum_t();
+      parts[own]       = 0.;
+      continue;
+    }
+    double factor = held / ps.record_coefficients[r.coefficients];
+    for (int64_t e = sys.start[anchor]; e < sys.start[anchor + 1]; ++e) {
+      int32_t v = sys.var[e];
+      if (v == own) { continue; }
+      coefficient[v].add(-factor, sys.value[e]);
+      parts[v] += std::fabs(factor * sys.value[e]);
+    }
+    constant.add(factor, sys.low[anchor]);
+    terms += std::fabs(factor) * sys.side_parts[anchor];
+    coefficient[own] = sum_t();
+    parts[own]       = 0.;
+  }
+  for (int32_t v = 0; v < sys.nvars(); ++v) {
+    double difference = std::fabs(coefficient[v].value());
+    if (difference <= underflow_size) { continue; }
+    double relative = difference / parts[v];
+    if (!(relative <= s.objective_worst)) { s.objective_worst_col = sys.origin[v]; }
+    raise_to(s.objective_worst, relative);
+    s.objective_failures += !(relative <= composed_zero);
+  }
+  double difference = std::fabs(constant.value());
+  if (!(difference <= underflow_size)) {
+    s.objective_constant = difference / terms;
+    s.objective_failures += !(s.objective_constant <= identity_tolerance);
+  }
+}
+
+// The values of the check variables at one point of the reduced model, by the rules of
+// postsolve.hpp applied to the anchors: the second implementation of the undo of the
+// col_from_rows records. size is what a difference of a value is relative to.
+struct replay_t {
+  std::vector<double> value;
+  std::vector<double> size;
+};
+
+// The rest of an anchor at the values of the replay: the sum of its terms outside the variables
+// [own, own + ncols) of its record. `largest` gets the largest of those terms.
+inline double anchor_rest(const system_t& sys,
+                          const replay_t& at,
+                          int32_t anchor,
+                          int32_t own,
+                          int32_t ncols,
+                          double& largest)
+{
+  sum_t rest;
+  for (int64_t e = sys.start[anchor]; e < sys.start[anchor + 1]; ++e) {
+    int32_t v = sys.var[e];
+    if (v >= own && v < own + ncols) { continue; }
+    rest.add(sys.value[e], at.value[v]);
+    raise_to(largest, std::fabs(sys.value[e]) * at.size[v]);
+  }
+  return rest.value();
+}
+
+inline void replay(const gprs::result_t& result,
+                   const system_t& sys,
+                   const std::vector<double>& point,
+                   replay_t& at)
+{
+  const gprs::postsolve_t& ps = result.postsolve;
+  at.value.assign(sys.nvars(), 0.);
+  at.size.assign(sys.nvars(), 0.);
+  for (int32_t k = 0; k < sys.reduced_cols; ++k) {
+    bool integer = ps.integer_at(ps.col_origin[k], ps.order.size());
+    at.value[k]  = integer ? std::round(point[k]) : point[k];
+    at.size[k]   = std::fabs(at.value[k]);
+  }
+  for (size_t n = ps.col_from_rows.size(); n-- > 0;) {
+    const gprs::col_from_rows_record_t& r = ps.col_from_rows[n];
+    int32_t own = sys.first_var[n], anchor = sys.first_anchor[n];
+    int32_t ncols                 = r.cols_end - r.cols_begin;
+    const gprs::record_col_t& col = ps.record_cols[r.cols_begin];
+    if (r.kind == gprs::col_from_rows_kind_t::defined) {
+      double a       = ps.record_coefficients[r.coefficients];
+      double largest = std::fabs(sys.low[anchor]);
+      double value   = (sys.low[anchor] - anchor_rest(sys, at, anchor, own, 1, largest)) / a;
+      at.value[own]  = ps.integer_at(col.col, sys.position[n]) ? std::round(value) : value;
+      at.size[own]   = std::fmax(std::fabs(at.value[own]), largest / std::fabs(a));
+    } else if (r.kind == gprs::col_from_rows_kind_t::interval) {
+      double largest = std::fmax(std::fabs(sys.low[anchor]), std::fabs(sys.high[anchor]));
+      double rest    = anchor_rest(sys, at, anchor, own, ncols, largest);
+      sum_t activity;
+      activity.add(rest, 1.);
+      for (int32_t c = 0; c < ncols; ++c) {
+        const gprs::record_col_t& taken = ps.record_cols[r.cols_begin + c];
+        double a                        = ps.record_coefficients[r.coefficients + c];
+        at.value[own + c]               = taken.prefer;
+        activity.add(a, taken.prefer);
+        raise_to(largest, std::fabs(a * taken.prefer));
+      }
+      double below = sys.low[anchor] - activity.value();
+      double above = activity.value() - sys.high[anchor];
+      bool raise   = below > 0;
+      double side  = raise ? sys.low[anchor] : sys.high[anchor];
+      double need  = raise ? below : above;
+      for (int32_t c = 0; c < ncols && need > 0; ++c) {
+        const gprs::record_col_t& taken = ps.record_cols[r.cols_begin + c];
+        double a                        = ps.record_coefficients[r.coefficients + c];
+        bool up                         = (a > 0) == raise;
+        double target                   = up ? taken.upper : taken.lower;
+        double room                     = std::fabs(a) * std::fabs(target - taken.prefer);
+        // The row without the term of this column: its value is a quotient, not a step.
+        activity.add(-a, taken.prefer);
+        if (room <= need) {
+          at.value[own + c] = target;
+          activity.add(a, target);
+          need = raise ? side - activity.value() : activity.value() - side;
+        } else {
+          double value      = (side - activity.value()) / a;
+          at.value[own + c] = up ? std::fmin(std::fmax(value, taken.prefer), target)
+                                 : std::fmax(std::fmin(value, taken.prefer), target);
+          need              = 0.;
+        }
+      }
+      for (int32_t c = 0; c < ncols; ++c) {
+        double a         = ps.record_coefficients[r.coefficients + c];
+        at.size[own + c] = std::fmax(std::fabs(at.value[own + c]), largest / std::fabs(a));
+      }
+    } else {
+      bool from_above = forcing_from_above(ps, r);
+      double value    = from_above ? col.upper : col.lower;
+      double size     = 0.;
+      // What the value of the row that gives it can be off by; none for the bound.
+      double rounding = 0.;
+      for (int32_t j = 0; j < r.rows_end - r.rows_begin; ++j) {
+        double a       = ps.record_coefficients[r.coefficients + j];
+        double side    = from_above == (a > 0) ? sys.high[anchor + j] : sys.low[anchor + j];
+        double largest = std::fabs(side);
+        double limit   = (side - anchor_rest(sys, at, anchor + j, own, 1, largest)) / a;
+        raise_to(size, largest / std::fabs(a));
+        if (from_above ? limit < value : limit > value) {
+          double terms = sys.side_parts[anchor + j];
+          for (int64_t e = sys.start[anchor + j]; e < sys.start[anchor + j + 1]; ++e) {
+            if (sys.var[e] != own) { terms += std::fabs(sys.value[e] * at.value[sys.var[e]]); }
+          }
+          value    = limit;
+          rounding = forcing_rounding * terms / std::fabs(a);
+        }
+      }
+      if (ps.integer_at(col.col, sys.position[n])) {
+        value = from_above ? std::floor(value + rounding) : std::ceil(value - rounding);
+      }
+      at.value[own] = value;
+      at.size[own]  = std::fmax(std::fabs(value), size);
+    }
+  }
+}
+
+// The postsolve part of the check at one point of the reduced model.
+inline void postsolve_at(const gprs::model_t& model,
+                         const gprs::result_t& result,
+                         const system_t& sys,
+                         const std::vector<double>& point,
+                         replay_t& at,
+                         std::vector<double>& z,
+                         structure_report_t& s)
+{
+  const gprs::postsolve_t& ps = result.postsolve;
+  ps.postsolve(point, z);
+  replay(result, sys, point, at);
+  auto failure = [&](double scaled, int32_t col) {
+    if (!(scaled <= s.postsolve_worst)) { s.postsolve_worst_col = col; }
+    raise_to(s.postsolve_worst, scaled);
+    ++s.postsolve_failures;
+  };
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    const column_map_t& m = sys.map[j];
+    double term           = m.root < 0 ? 0. : m.scale * at.value[m.root];
+    double reach          = m.root < 0 ? 0. : std::fabs(m.scale) * at.size[m.root];
+    double size           = std::fmax(1., std::fmax(reach, std::fabs(m.offset)));
     double difference     = std::fabs(z[j] - (term + m.offset)) / size;
     if (!(difference <= s.postsolve_worst)) { s.postsolve_worst_col = j; }
     raise_to(s.postsolve_worst, difference);
     s.postsolve_failures += !(difference <= composed_tolerance);
   }
+  // The saved rows and the boxes at the point that the engine postsolved, read from the records
+  // as they are.
+  for (const gprs::col_from_rows_record_t& r : ps.col_from_rows) {
+    const gprs::record_col_t& col = ps.record_cols[r.cols_begin];
+    bool interval                 = r.kind == gprs::col_from_rows_kind_t::interval;
+    bool forcing                  = r.kind == gprs::col_from_rows_kind_t::forcing;
+    bool from_above               = forcing && forcing_from_above(ps, r);
+    for (int32_t n = r.rows_begin; n < r.rows_end; ++n) {
+      const gprs::saved_row_t& row = ps.saved_rows[n];
+      sum_t activity;
+      double largest = 1.;
+      for (int64_t e = row.begin; e < row.end; ++e) {
+        double a = ps.saved_entries.value[e], v = z[ps.saved_entries.col[e]];
+        activity.add(a, v);
+        raise_to(largest, std::fabs(a * v));
+      }
+      double rest  = activity.value();
+      double lower = row.lower, upper = row.upper;
+      if (interval) {
+        // The row need hold only where the rest lies inside the sides of the snapshot.
+        term_range_t range = term_range(ps, r);
+        double low         = range.most_infinite ? -gprs::inf : lower - range.most.value();
+        double high        = range.least_infinite ? gprs::inf : upper - range.least.value();
+        if (!(rest >= low && rest <= high)) { continue; }
+        for (int32_t c = r.cols_begin; c < r.cols_end; ++c) {
+          double a = ps.record_coefficients[r.coefficients + (c - r.cols_begin)];
+          double v = z[ps.record_cols[c].col];
+          activity.add(a, v);
+          raise_to(largest, std::fabs(a * v));
+        }
+      } else {
+        double a = ps.record_coefficients[r.coefficients + (forcing ? n - r.rows_begin : 0)];
+        activity.add(a, z[col.col]);
+        raise_to(largest, std::fabs(a * z[col.col]));
+        if (forcing) {
+          // Only the side that bounds the column is a side of the record.
+          bool upper_side = from_above == (a > 0);
+          lower           = upper_side ? -gprs::inf : lower;
+          upper           = upper_side ? upper : gprs::inf;
+        }
+      }
+      double value     = activity.value();
+      double violation = std::isnan(value) ? value : std::fmax(lower - value, value - upper);
+      double size = std::fmax(largest, lower > -gprs::inf ? std::fabs(lower) : std::fabs(upper));
+      if (!(violation / size <= structure_tolerance)) { failure(violation / size, col.col); }
+    }
+    if (!interval && !forcing) { continue; }
+    for (int32_t c = r.cols_begin; c < r.cols_end; ++c) {
+      const gprs::record_col_t& taken = ps.record_cols[c];
+      double v                        = z[taken.col];
+      double violation = std::isnan(v) ? v : std::fmax(taken.lower - v, v - taken.upper);
+      if (violation <= 0.) { continue; }
+      double bound  = v < taken.lower ? taken.lower : taken.upper;
+      double scaled = violation / std::fmax(1., std::fabs(bound));
+      if (!(scaled <= structure_tolerance)) { failure(scaled, taken.col); }
+    }
+  }
+}
+
+// The postsolve part of the check: the points of the reduced model and postsolve_at for each.
+inline void postsolve_check(const gprs::model_t& model,
+                            const gprs::result_t& result,
+                            const system_t& sys,
+                            structure_report_t& s)
+{
+  const gprs::postsolve_t& ps  = result.postsolve;
+  const gprs::model_t& reduced = result.reduced;
+  std::vector<double> point(reduced.ncols), z;
+  replay_t at;
+  // 0: 1 moved into the bounds; 1: the lower bound; 2: the upper bound; 3: between them. An
+  // infinite bound is replaced by the other one less or plus 1, or by -1 and 1.
+  for (int32_t variant = 0; variant < 4; ++variant) {
+    for (int32_t k = 0; k < reduced.ncols; ++k) {
+      double lower = reduced.col_lower[k], upper = reduced.col_upper[k];
+      double low  = lower > -gprs::inf ? lower : upper < gprs::inf ? upper - 1. : -1.;
+      double high = upper < gprs::inf ? upper : lower > -gprs::inf ? lower + 1. : 1.;
+      double v    = variant == 1 ? low : variant == 2 ? high : 0.5 * low + 0.5 * high;
+      if (variant == 0) {
+        v = 1.;
+        if (v < lower) { v = lower; }
+        if (v > upper) { v = upper; }
+      }
+      point[k] = ps.integer_at(ps.col_origin[k], ps.order.size()) ? std::round(v) : v;
+    }
+    postsolve_at(model, result, sys, point, at, z, s);
+  }
+  // For some interval records a point at which the undo has to move the columns half of the way
+  // they can go: from the point between the bounds, one reduced column of the saved row is
+  // moved so that the rest of the row asks for it. It need not lie within the bounds.
+  std::vector<size_t> interval;
+  for (size_t n = 0; n < ps.col_from_rows.size(); ++n) {
+    if (ps.col_from_rows[n].kind == gprs::col_from_rows_kind_t::interval) { interval.push_back(n); }
+  }
+  size_t count = interval.size() < max_replay_points ? interval.size() : max_replay_points;
+  std::vector<double> moved;
+  for (size_t pick = 0; pick < count; ++pick) {
+    size_t n                              = interval[pick * interval.size() / count];
+    const gprs::col_from_rows_record_t& r = ps.col_from_rows[n];
+    int32_t own = sys.first_var[n], anchor = sys.first_anchor[n];
+    replay(result, sys, point, at);
+    double largest     = 1.;
+    double rest        = anchor_rest(sys, at, anchor, own, r.cols_end - r.cols_begin, largest);
+    term_range_t range = term_range(ps, r);
+    double preferred   = range.preferred.value();
+    double up          = range.most_infinite ? gprs::inf : range.most.value() - preferred;
+    double down        = range.least_infinite ? gprs::inf : preferred - range.least.value();
+    double target;
+    if (up > 0) {
+      target = sys.low[anchor] - preferred - (std::isfinite(up) ? 0.5 * up : 1.);
+    } else if (down > 0) {
+      target = sys.high[anchor] - preferred + (std::isfinite(down) ? 0.5 * down : 1.);
+    } else {
+      continue;
+    }
+    int64_t best = -1;
+    for (int64_t e = sys.start[anchor]; e < sys.start[anchor + 1]; ++e) {
+      if (sys.var[e] < sys.reduced_cols &&
+          (best < 0 || std::fabs(sys.value[e]) > std::fabs(sys.value[best]))) {
+        best = e;
+      }
+    }
+    if (best < 0) { continue; }
+    moved = point;
+    moved[sys.var[best]] += (target - rest) / sys.value[best];
+    postsolve_at(model, result, sys, moved, at, z, s);
+  }
+}
+
+// The check of one result of a presolve in the given mode (options_t::primal_only).
+inline structure_report_t structure_check(const gprs::model_t& model,
+                                          const gprs::result_t& result,
+                                          bool primal_only)
+{
+  structure_report_t s;
+  s.ran = true;
+  system_t sys;
+  if (!compose_records(model, result, primal_only, sys, s.stack_error)) { return s; }
+  s.composed                   = true;
+  const gprs::postsolve_t& ps  = result.postsolve;
+  const gprs::model_t& reduced = result.reduced;
+
+  for (int32_t k = 0; k < reduced.ncols; ++k) {
+    int32_t col = ps.col_origin[k];
+    if (model.col_type[col] && !reduced.col_type[k]) {
+      if (s.lost_integers++ == 0) { s.first_lost_integer = col; }
+    }
+  }
+
+  objective_check(model, result, sys, s);
+
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    const column_map_t& m = sys.map[j];
+    double low = m.offset, high = m.offset;
+    if (m.root >= 0) {
+      double a = m.scale * sys.lower[m.root] + m.offset;
+      double b = m.scale * sys.upper[m.root] + m.offset;
+      low      = m.scale > 0 ? a : b;
+      high     = m.scale > 0 ? b : a;
+    }
+    double below     = model.col_lower[j] == -gprs::inf ? -gprs::inf : model.col_lower[j] - low;
+    double above     = model.col_upper[j] == gprs::inf ? -gprs::inf : high - model.col_upper[j];
+    double violation = !(below <= above) ? below : above;
+    if (violation <= 0.) { continue; }
+    double bound  = below > above ? model.col_lower[j] : model.col_upper[j];
+    double scaled = violation / std::fmax(1., std::fabs(bound));
+    if (!(scaled <= s.bound_worst)) { s.bound_worst_col = j; }
+    raise_to(s.bound_worst, scaled);
+    s.bound_failures += !(scaled <= structure_tolerance);
+  }
+
+  prover_t prover(sys);
+  // The snapshots first: an anchor of an interval record holds only as far as its snapshot.
+  columns_check(result, sys, prover, s);
+
+  proof_rows_t with;
+  for (int32_t i = 0; i < model.nrows; ++i) {
+    sum_t constant;
+    double largest = 1.;
+    for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
+      prover.add_column(sys.map[model.col_index[e]], model.value[e], constant, largest);
+    }
+    proof_rows(sys, ps, i, -1, with);
+    s.added_rows += with.made_of_equations;
+    proof_t proof = prover.prove(model.row_lower[i], model.row_upper[i], constant, largest, with);
+    if (proof.path == 2) {
+      if (!proof.tested) {
+        ++s.added_untested;
+        continue;
+      }
+      ++s.added_tested;
+      raise_to(s.added_multiplier, proof.multiplier);
+      if (proof.scaled == 0.) { continue; }
+      if (!(proof.scaled <= s.added_worst)) { s.added_worst_row = i; }
+      raise_to(s.added_worst, proof.scaled);
+      s.added_failures += !(proof.scaled <= structure_tolerance);
+    } else if (proof.path == 0) {
+      ++s.rows_tested;
+      if (proof.scaled == 0.) { continue; }
+      if (!(proof.scaled <= s.row_worst)) { s.row_worst_row = i; }
+      raise_to(s.row_worst, proof.scaled);
+      s.row_failures += !(proof.scaled <= structure_tolerance);
+    } else {
+      if (!proof.tested) {
+        ++s.kept_untested;
+        continue;
+      }
+      ++s.kept_tested;
+      s.kept_parallel += with.other_row;
+      if (proof.scaled == 0.) { continue; }
+      if (!(proof.scaled <= s.kept_worst)) { s.kept_worst_row = i; }
+      raise_to(s.kept_worst, proof.scaled);
+      s.kept_failures += !(proof.scaled <= structure_tolerance);
+    }
+  }
+
+  postsolve_check(model, result, sys, s);
   return s;
 }
 

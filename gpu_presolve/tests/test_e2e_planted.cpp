@@ -15,10 +15,13 @@
 //   feasible one that is not worse, and every other reduction keeps every feasible point. It
 //   costs the same when the result has no dual finding (result_t::dual_findings), which
 //   primal-only mode guarantees;
-// - with result_t::fixed_point a second presolve returns unchanged.
+// - with result_t::fixed_point a second presolve returns unchanged;
+// - the structure check (check/structure_check.hpp) is silent on the result.
 // Bound propagation writes explicit bounds of continuous columns along such chains, which the
-// classes of the oracle (one continuous column per row) never reach.
+// classes of the oracle (one continuous column per row) never reach; so are the singleton
+// columns of rows with several continuous columns, the last profile.
 
+#include "../check/structure_check.hpp"
 #include "harness.hpp"
 
 #include <gprs/postsolve.hpp>
@@ -26,6 +29,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -66,6 +70,10 @@ struct profile_t {
   double p_parallel_row   = 0.08;  // a multiple of an earlier row with its own sides
   double p_tight_side     = 0.5;
   double p_two_sided      = 0.2;
+  // Per row: one to three continuous columns that no other row holds, behind the columns
+  // counted above; half of them without a cost, a third of them without bounds. With 0 nothing
+  // is drawn for them.
+  double p_singleton_cols = 0.;
 };
 
 std::vector<profile_t> profiles()
@@ -110,6 +118,16 @@ std::vector<profile_t> profiles()
   p.name           = "parallel";
   p.p_parallel_row = 0.4;
   p.p_continuous   = 0.8;
+  list.push_back(p);
+
+  // Singleton columns in rows with other continuous columns, several per row: the free
+  // singleton column next to continuous columns and the zero-cost singleton columns of one row,
+  // which the oracle class has no place for.
+  p                  = profile_t();
+  p.name             = "singletons";
+  p.p_singleton_cols = 0.6;
+  p.p_two_sided      = 0.5;
+  p.p_tight_side     = 0.3;
   list.push_back(p);
   return list;
 }
@@ -197,6 +215,31 @@ planted_t generate(uint64_t seed, const profile_t& p)
         add(rng.uniform(0, n - 1), coefficient());
       }
     }
+    if (p.p_singleton_cols > 0. && rng.chance(p.p_singleton_cols)) {
+      int32_t count = rng.uniform(1, 3);
+      for (int32_t k = 0; k < count; ++k) {
+        double low = inf, high = -inf;
+        for (int32_t q = 0; q < npoints; ++q) {
+          double value = 0.25 * rng.uniform(-16, 16);
+          out.points[q].push_back(value);
+          low  = std::fmin(low, value);
+          high = std::fmax(high, value);
+        }
+        bool unbounded = rng.chance(1. / 3.);
+        double lower = -inf, upper = inf;
+        for (int32_t side = 0; side < 2 && !unbounded; ++side) {
+          if (rng.chance(0.25)) { continue; }
+          double slack =
+            rng.chance(p.p_tight_bound) ? 0. : rng.pick({0.25, 1., 1., 3., 10., 1000.});
+          (side ? upper : lower) = side ? high + slack : low - slack;
+        }
+        m.col_type.push_back(0);
+        m.col_lower.push_back(lower);
+        m.col_upper.push_back(upper);
+        m.cost.push_back(rng.chance(0.5) ? 0. : rng.uniform(-3, 3));
+        add(m.ncols++, coefficient());
+      }
+    }
     for (size_t a = 1; a < row.size(); ++a) {
       for (size_t b = a; b > 0 && row[b - 1].first > row[b].first; --b) {
         std::swap(row[b - 1], row[b]);
@@ -265,14 +308,56 @@ double objective(const model_t& m, const std::vector<double>& x)
   return dd_value(sum);
 }
 
+// What the singleton-column rules left on the stacks of the cases of a test.
+struct census_t {
+  int64_t defined         = 0;
+  int64_t defined_dual    = 0;
+  int64_t interval        = 0;
+  int64_t interval_wide   = 0;  // with two columns or more
+  int64_t forcing         = 0;
+  int64_t snapshot_tested = 0;
+  int64_t box_tested      = 0;
+};
+
 // Empty when the presolve of the case is right, else what is wrong.
-std::string planted_problem(const planted_t& c, const options_t& options)
+std::string planted_problem(const planted_t& c,
+                            const options_t& options,
+                            census_t* census = nullptr)
 {
   result_t result = presolve(c.model, options);
   if (result.status == status_t::infeasible) { return "infeasible, with a feasible point"; }
   if (result.status == status_t::unbounded_or_infeasible) { return std::string(); }
   if (options.primal_only && result.dual_findings != 0) {
     return "a dual finding in primal-only mode";
+  }
+  // What the result must satisfy whatever point is postsolved: the planted points are few, and
+  // a relaxation shows only at a point that uses it.
+  gprs_check::structure_report_t s =
+    gprs_check::structure_check(c.model, result, options.primal_only);
+  if (!s.stack_error.empty()) { return "the structure check: " + s.stack_error; }
+  if (s.lost_integers != 0 || s.bound_failures != 0 || s.row_failures != 0 ||
+      s.kept_failures != 0 || s.added_failures != 0 || s.box_failures != 0 ||
+      s.integral_failures != 0 || s.snapshot_failures != 0 || s.objective_failures != 0 ||
+      s.postsolve_failures != 0) {
+    return "the structure check fails: bounds " + std::to_string(s.bound_failures) + ", rows " +
+           std::to_string(s.row_failures) + ", kept rows " + std::to_string(s.kept_failures) +
+           ", added rows " + std::to_string(s.added_failures) + ", boxes " +
+           std::to_string(s.box_failures) + ", snapshots " + std::to_string(s.snapshot_failures) +
+           ", objective " + std::to_string(s.objective_failures) + ", postsolve " +
+           std::to_string(s.postsolve_failures) + " (worst " + std::to_string(s.postsolve_worst) +
+           " at column " + std::to_string(s.postsolve_worst_col) + ")";
+  }
+  if (census) {
+    for (const col_from_rows_record_t& r : result.postsolve.col_from_rows) {
+      census->defined += r.kind == col_from_rows_kind_t::defined && !r.dual;
+      census->defined_dual += r.dual;
+      census->interval += r.kind == col_from_rows_kind_t::interval;
+      census->interval_wide +=
+        r.kind == col_from_rows_kind_t::interval && r.cols_end - r.cols_begin >= 2;
+      census->forcing += r.kind == col_from_rows_kind_t::forcing;
+    }
+    census->snapshot_tested += s.snapshot_tested;
+    census->box_tested += s.box_tested;
   }
   for (const std::vector<double>& x : c.points) {
     std::vector<double> crushed, back;
@@ -315,7 +400,8 @@ GPRS_TEST(e2e_planted_known_cases)
                                       {"decay", 68640, true},
                                       {"big_m", 106338, false},
                                       {"big_m", 162230, true},
-                                      {"parallel", 298364, false}};
+                                      {"parallel", 298364, false},
+                                      {"parallel", 7102832, false}};
   GPRS_CHECK(known.size() >= 4);
   for (const known_t& k : known) {
     for (const profile_t& profile : profiles()) {
@@ -333,6 +419,29 @@ GPRS_TEST(e2e_planted_known_cases)
                      k.primal_only ? " primal only" : "",
                      problem.c_str());
       }
+      if (std::getenv("GPRS_PLANTED_SHOW")) {
+        std::printf("    %s %llu: %d rows, %d columns\n",
+                    k.profile,
+                    (unsigned long long)k.seed,
+                    c.model.nrows,
+                    c.model.ncols);
+        for (int32_t i = 0; i < c.model.nrows; ++i) {
+          std::printf(
+            "      row %d [%.17g, %.17g]:", i, c.model.row_lower[i], c.model.row_upper[i]);
+          for (int64_t e = c.model.row_start[i]; e < c.model.row_start[i + 1]; ++e) {
+            std::printf(" %.17g x%d", c.model.value[e], c.model.col_index[e]);
+          }
+          std::printf("\n");
+        }
+        for (int32_t j = 0; j < c.model.ncols; ++j) {
+          std::printf("      x%d %s [%.17g, %.17g] cost %.17g\n",
+                      j,
+                      c.model.col_type[j] ? "integer" : "continuous",
+                      c.model.col_lower[j],
+                      c.model.col_upper[j],
+                      c.model.cost[j]);
+        }
+      }
       GPRS_CHECK(problem.empty());
     }
   }
@@ -341,6 +450,7 @@ GPRS_TEST(e2e_planted_known_cases)
 GPRS_TEST(e2e_planted_points_survive)
 {
   int64_t models = 0, failures = 0;
+  census_t census;
   for (const profile_t& profile : profiles()) {
     for (uint64_t seed = 7100000; seed < 7103000; ++seed) {
       planted_t c = generate(seed, profile);
@@ -353,7 +463,7 @@ GPRS_TEST(e2e_planted_points_survive)
       for (bool primal_only : {false, true}) {
         options_t options;
         options.primal_only = primal_only;
-        std::string problem = planted_problem(c, options);
+        std::string problem = planted_problem(c, options, &census);
         ++models;
         if (problem.empty()) { continue; }
         ++failures;
@@ -369,5 +479,22 @@ GPRS_TEST(e2e_planted_points_survive)
     }
   }
   GPRS_CHECK_EQ(failures, 0);
-  GPRS_CHECK(models == 30000);
+  GPRS_CHECK(models == 36000);
+  // The singleton-column rules are reached on these models: columns defined by a row next to
+  // continuous columns, and several zero-cost singleton columns of one row in one record.
+  if (std::getenv("GPRS_ORACLE_CENSUS")) {
+    std::printf(
+      "    defined %lld, with the dual flag %lld, interval %lld, of them with two columns or "
+      "more %lld, forcing %lld; snapshots tested %lld, box ends tested %lld\n",
+      (long long)census.defined,
+      (long long)census.defined_dual,
+      (long long)census.interval,
+      (long long)census.interval_wide,
+      (long long)census.forcing,
+      (long long)census.snapshot_tested,
+      (long long)census.box_tested);
+  }
+  GPRS_CHECK(census.defined > 80 && census.defined_dual > 1000);
+  GPRS_CHECK(census.interval > 900 && census.interval_wide > 200 && census.forcing > 700);
+  GPRS_CHECK(census.snapshot_tested > 900 && census.box_tested > 1000);
 }

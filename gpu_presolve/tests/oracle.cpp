@@ -113,12 +113,13 @@ struct draft_row_t {
   bool has_line   = false;
   std::vector<int32_t> col;
   std::vector<double> value;
-  // The entry in a column of the row's own, behind every other column; -1 without one. A copy
-  // of the row does not get it.
-  int32_t own_col  = -1;
-  double own_value = 0.;
-  double lower     = -inf;
-  double upper     = inf;
+  // The entries in columns behind the counted ones, in increasing column order: the singleton
+  // columns of the row, then its entries in forcing columns. A copy of the row does not get
+  // them.
+  std::vector<int32_t> own_col;
+  std::vector<double> own_value;
+  double lower = -inf;
+  double upper = inf;
 };
 
 void sort_entries(draft_row_t& row)
@@ -307,10 +308,14 @@ case_t generate(uint64_t seed, const generator_options_t& o)
     }
     std::vector<int32_t> cols  = row.col;
     std::vector<double> values = row.value;
-    if (o.p_singleton_col > 0. && !row.col.empty() && base.ncols - ncols < o.max_singleton_cols &&
-        rng.chance(o.p_singleton_col)) {
+    double p_no_cost = o.p_singleton_zero_cost < 0. ? o.p_zero_cost : o.p_singleton_zero_cost;
+    for (int32_t n = 0; n < o.max_row_singletons; ++n) {
+      if (!(o.p_singleton_col > 0. && !row.col.empty() &&
+            base.ncols - ncols < o.max_singleton_cols && rng.chance(o.p_singleton_col))) {
+        break;
+      }
       bool has_line = false;
-      for (int32_t j : row.col) {
+      for (int32_t j : cols) {
         has_line = has_line || line[j];
       }
       bool is_line = !has_line && rng.chance(o.p_singleton_line);
@@ -324,16 +329,16 @@ case_t generate(uint64_t seed, const generator_options_t& o)
         lower         = enumerated_lower(rng, o, width);
         upper         = lower + width;
       }
-      double cost   = rng.chance(o.p_zero_cost) ? 0. : nonzero(rng, o.max_coefficient);
-      row.own_col   = base.ncols++;
-      row.own_value = nonzero(rng, o.max_coefficient);
+      double cost = rng.chance(p_no_cost) ? 0. : nonzero(rng, o.max_coefficient);
+      row.own_col.push_back(base.ncols++);
+      row.own_value.push_back(nonzero(rng, o.max_coefficient));
       base.col_type.push_back(type);
       base.col_lower.push_back(lower);
       base.col_upper.push_back(upper);
       base.cost.push_back(cost);
       line.push_back(is_line);
-      cols.push_back(row.own_col);
-      values.push_back(row.own_value);
+      cols.push_back(row.own_col.back());
+      values.push_back(row.own_value.back());
     }
     if (!own_sides) { continue; }
 
@@ -394,14 +399,58 @@ case_t generate(uint64_t seed, const generator_options_t& o)
     }
   }
 
+  for (int32_t n = 0; n < o.max_forcing_cols; ++n) {
+    if (!(o.p_forcing_col > 0. && rng.chance(o.p_forcing_col))) { break; }
+    bool any_sides = rng.chance(1. / 7.);
+    bool one_wrong = rng.chance(1. / 7.);
+    bool has_cost  = rng.chance(1. / 7.);
+    std::vector<int32_t> open;
+    for (int32_t i = 0; i < nrows; ++i) {
+      const draft_row_t& row = rows[i];
+      bool has_line          = false;
+      for (int32_t j : row.col) {
+        has_line = has_line || line[j];
+      }
+      for (int32_t j : row.own_col) {
+        has_line = has_line || line[j];
+      }
+      int32_t sides = (row.lower > -inf) + (row.upper < inf);
+      if (!row.col.empty() && !has_line && (sides == 1 || (any_sides && sides == 2))) {
+        open.push_back(i);
+      }
+    }
+    if (open.empty()) { break; }
+    bool down      = rng.chance(0.5);
+    uint8_t type   = rng.chance(o.p_continuous) ? 0 : 1;
+    double bound   = rng.chance(0.5) ? inf : rng.uniform(-o.max_side, o.max_side);
+    double cost    = has_cost ? nonzero(rng, o.max_coefficient) : 0.;
+    int32_t col    = base.ncols++;
+    int32_t length = rng.uniform(1, std::min(3, (int32_t)open.size()));
+    base.col_type.push_back(type);
+    base.col_lower.push_back(down ? -inf : -bound);
+    base.col_upper.push_back(down ? bound : inf);
+    base.cost.push_back(cost);
+    line.push_back(1);
+    for (int32_t k = 0; k < length; ++k) {
+      int32_t pick     = rng.uniform(0, (int32_t)open.size() - 1);
+      draft_row_t& row = rows[open[pick]];
+      open.erase(open.begin() + pick);
+      // The sign with which the finite side of the row stops the column on its way up, for a
+      // column that is free to go down.
+      double a = rng.uniform(1, o.max_coefficient);
+      if ((row.upper < inf) != down) { a = -a; }
+      if (one_wrong && k == 0) { a = -a; }
+      row.own_col.push_back(col);
+      row.own_value.push_back(a);
+    }
+  }
+
   base.row_start.push_back(0);
   for (const draft_row_t& row : rows) {
     base.col_index.insert(base.col_index.end(), row.col.begin(), row.col.end());
     base.value.insert(base.value.end(), row.value.begin(), row.value.end());
-    if (row.own_col >= 0) {
-      base.col_index.push_back(row.own_col);
-      base.value.push_back(row.own_value);
-    }
+    base.col_index.insert(base.col_index.end(), row.own_col.begin(), row.own_col.end());
+    base.value.insert(base.value.end(), row.own_value.begin(), row.own_value.end());
     base.row_start.push_back(base.value.size());
     base.row_lower.push_back(row.lower);
     base.row_upper.push_back(row.upper);

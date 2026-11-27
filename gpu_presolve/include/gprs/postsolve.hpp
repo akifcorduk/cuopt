@@ -17,7 +17,7 @@ namespace gprs {
 // A record exists where a column disappears or where a later dual postsolve needs the step.
 // Deleted rows that are empty, redundant, singleton or forcing leave no record in Stage 1.
 // A reader of the stack names every kind it knows and takes any other as a broken stack.
-enum class record_kind_t : uint8_t { fixed_col, alias, parallel_row, row_addition };
+enum class record_kind_t : uint8_t { fixed_col, alias, parallel_row, row_addition, col_from_rows };
 
 // x[col] = value.
 struct fixed_col_record_t {
@@ -63,12 +63,87 @@ struct row_addition_record_t {
   double factor;
 };
 
+// Entries of saved rows, one row after the other.
+struct row_pool_t {
+  std::vector<int32_t> col;
+  std::vector<double> value;
+};
+
+// The copy of a row at one moment: its sides less the terms of its fixed columns, and its
+// entries [begin, end) of a pool. It names live columns only.
+struct saved_row_t {
+  int32_t row;
+  double lower;
+  double upper;
+  int64_t begin;
+  int64_t end;
+};
+
+// What a col_from_rows record says of its columns.
+// defined: one column and one saved row, an equation lower == upper: the value of the column is
+// what the row gives it at the values of the saved entries. The pivot row of a free singleton
+// column, which left the model; with `dual` it was an inequality, tight at that side by the
+// cost of the column.
+// interval: one saved row with two finite sides and one or more continuous columns with zero
+// cost, in increasing index: the row stays in the model without them, its sides widened by the
+// ranges of their terms, and they take values inside their bounds with which the saved row
+// holds.
+// forcing: one column with zero cost and one or more saved rows, all of which left the model.
+// Each has one finite side and bounds the column from the same end, at which the column has no
+// bound: every row with a positive coefficient has the upper side and every row with a
+// negative one the lower side, and the lower bound of the column is -inf (the column was free
+// to go down); or the mirror.
+enum class col_from_rows_kind_t : uint8_t { defined, interval, forcing };
+
+// A column that a col_from_rows record removes, with its explicit bounds at the push.
+// prefer is the value an interval column starts from: its lower bound if finite, else its upper
+// bound if finite, else 0; the same value for a forcing column, which does not read it.
+struct record_col_t {
+  int32_t col;
+  double lower;
+  double upper;
+  double prefer;
+};
+
+// Columns [cols_begin, cols_end) of postsolve_t::record_cols, rows [rows_begin, rows_end) of
+// postsolve_t::saved_rows, and their coefficients from `coefficients` on in
+// postsolve_t::record_coefficients: one per column (defined, interval), in the record's one
+// row, or one per row (forcing), of the record's one column. A saved row holds the free entries
+// of its row other than those of the record's columns.
+// Undo, with rest the compensated sum of the saved entries of a row at the restored values:
+// defined: x = (side - rest) / coefficient, for an integer column rounded to the nearest
+//   integer; never moved into the bounds.
+// interval: every column starts at prefer. While the row with them is below its lower side, the
+//   columns are moved one after the other, in the order of the record, towards the bound that
+//   raises their term: to that bound while the row misses at least what the column can give,
+//   and the first column that can give more to (side - rest - the terms of the other columns of
+//   the record) / coefficient, kept between prefer and the bound. Above its upper side the
+//   mirror. The value is the quotient and not prefer plus a step, which loses the digits that
+//   prefer is larger by. The columns stay inside their bounds, and the row holds when the rest
+//   lies inside the widened sides.
+// forcing: the column free to go down gets min(upper, the smallest of (side - rest) /
+//   coefficient over its rows), rounded down for an integer column; the column free to go up
+//   max(lower, the largest of them), rounded up. A value of a row that lies within the rounding
+//   of its computation of an integer (a few rounding units of the side and the terms of the
+//   rest, over the coefficient) is that integer.
+struct col_from_rows_record_t {
+  col_from_rows_kind_t kind;
+  bool dual;
+  int32_t cols_begin;
+  int32_t cols_end;
+  int32_t rows_begin;
+  int32_t rows_end;
+  int64_t coefficients;
+};
+
 // The record stack. Each kind has its own array; order holds the kinds in application order, so
 // the k-th occurrence of a kind in order is element k of that kind's array. Indices are those of
 // the original model.
 struct postsolve_t {
   int32_t nrows = 0;
   int32_t ncols = 0;
+  // Nonzeros of the original model.
+  int64_t nnz = 0;
   std::vector<uint8_t> col_type;
   // Reduced index -> original index, set by the engine together with the reduced model.
   std::vector<int32_t> row_origin;
@@ -79,14 +154,33 @@ struct postsolve_t {
   std::vector<alias_record_t> aliases;
   std::vector<parallel_row_record_t> parallel_rows;
   std::vector<row_addition_record_t> row_additions;
-  // 1 once a fixed_col or alias record has removed the column.
+  std::vector<col_from_rows_record_t> col_from_rows;
+  // The columns, saved rows and coefficients of the col_from_rows records, record after record.
+  // Later record kinds save rows into the same arrays: a reader finds the rows of a record
+  // through the record and never by walking saved_rows.
+  std::vector<record_col_t> record_cols;
+  std::vector<saved_row_t> saved_rows;
+  std::vector<double> record_coefficients;
+  row_pool_t saved_entries;
+  // 1 once a fixed_col, alias or col_from_rows record has removed the column.
   std::vector<uint8_t> col_removed;
 
   // Empties the stack and takes sizes and column types from the original model.
   void init(const model_t& original);
 
-  // O(1) each. A column that a fixed_col or alias record removes must not appear in a later
-  // record.
+  // The type of a column at a position of the stack (before record `position` of order; at
+  // order.size() in the reduced model) and now, for a push. Every undo, push contract and check
+  // that depends on a type reads it here. No record changes a type so far, so it is the type of
+  // the original model.
+  bool integer_at(int32_t col, size_t position) const
+  {
+    (void)position;
+    return col_type[col] != 0;
+  }
+  bool integer_now(int32_t col) const { return integer_at(col, order.size()); }
+
+  // O(1) each. A column that a fixed_col, alias or col_from_rows record removes must not appear
+  // in a later record.
   // A fixed value is finite, and integral for an integer column. An alias has a finite scale
   // other than zero and a finite offset; an integer column has an integer rep and an integral
   // scale and offset; its row is as alias_record_t says for its origin. A ratio and a factor are
@@ -101,15 +195,39 @@ struct postsolve_t {
   void push_parallel_row(int32_t removed_row, int32_t kept_row, double ratio);
   void push_row_addition(int32_t row, int32_t equation_row, double factor);
 
+  // The three kinds of col_from_rows. Each removes its columns. The saved rows are the last
+  // ones written to saved_entries (save_row, src/saved_row.hpp), in the order given, and name
+  // columns that no record has removed and none of the record's own. Coefficients are finite
+  // and not zero, bounds satisfy lower <= upper and prefer is as record_col_t says.
+  // O(entries of the saved rows) in a build with assertions, else O(columns and rows of the
+  // record).
+  // defined: the saved row is an equation with a finite side; an integer column has integer
+  // columns in its saved row.
+  void push_defined_col(
+    int32_t col, double coefficient, double lower, double upper, const saved_row_t& row, bool dual);
+  // interval: the columns are continuous and in increasing index, cols[k] with coefficients[k];
+  // the sides of the saved row are finite with lower <= upper.
+  void push_interval_cols(const std::vector<record_col_t>& cols,
+                          const std::vector<double>& coefficients,
+                          const saved_row_t& row);
+  // forcing: rows[k] holds the column with coefficients[k]; rows and bounds are as
+  // col_from_rows_kind_t says.
+  void push_forcing_col(const record_col_t& col,
+                        const std::vector<double>& coefficients,
+                        const std::vector<saved_row_t>& rows);
+
   // Point of the reduced model -> point of the original model: integer columns of the reduced
   // point are rounded, then the records are undone in reverse order. Does not change the
-  // object, so several threads can call it at once. O(columns + records).
+  // object, so several threads can call it at once. O(columns + records + saved entries).
   void postsolve(const std::vector<double>& x_reduced, std::vector<double>& x_original) const;
 
   // Point of the original model -> point of the reduced model: the values of the columns that
   // are left. A feasible point gives a feasible point of the reduced model whose objective value
   // there is not above that of the point, and equal to it when no reduction rests on a dual
-  // argument (result_t::dual_findings == 0, which primal-only mode guarantees).
+  // argument (result_t::dual_findings == 0, which primal-only mode guarantees). A col_from_rows
+  // record only drops its columns: the reduced model holds what the other columns must meet for
+  // values of the dropped ones to exist, and with `dual` its objective is that of the point with
+  // the dropped column moved onto its tight row.
   // O(reduced columns).
   void crush(const std::vector<double>& x_original, std::vector<double>& x_reduced) const;
 };
@@ -180,9 +298,13 @@ struct alias_forest_t {
   // must be integral in the units of its row as well, since a large coefficient turns a
   // deviation below tol.zero into a violated row: with the rounded scale and offset,
   // |child coefficient * scale + parent coefficient| <= tol.zero and
-  // |rhs - child coefficient * offset| <= tol.feasibility. An edge is inadmissible as well when
-  // its scale, rounded for an integer child, is zero or not finite or its offset is not finite,
-  // and it is cut when the map composed to the root is (the root choice counts edges, not
+  // |rhs - child coefficient * offset| <= tol.feasibility; and what the rounding of the scale
+  // moves the row by over the bounds of the parent, |child coefficient| * |scale as read -
+  // scale| * max(|lower|, |upper|) of the parent, is at most tol.integral_drift_share *
+  // tol.feasibility (integral_term and drift_within, src/integral.hpp): a scale off by 5e-10
+  // next to a parent that reaches 2e6 leaves the row off by 1e-3. An edge is inadmissible as well
+  // when its scale, rounded for an integer child, is zero or not finite or its offset is not
+  // finite, and it is cut when the map composed to the root is (the root choice counts edges, not
   // composed maps). The trees are walked in the order of their first column in touched, and the
   // cut subtrees of a tree in the order they were cut.
   void freeze(const state_t& st, std::vector<alias_map_t>& maps);

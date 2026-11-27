@@ -5,9 +5,10 @@
  */
 /* clang-format on */
 
-// The events of the column rules through the Stage 1 families and the storage steps between
-// them: whatever a family, a compaction, a rebuild, make_explicit or absorb_fixed_terms changes
-// of what the column rules read must be on their lists afterwards (rules.hpp, before (g)).
+// The events of the column rules through the Stage 1 families, the singleton columns and the
+// storage steps between them: whatever a family, a compaction, a rebuild, make_explicit or
+// absorb_fixed_terms changes of what the column rules read must be on their lists afterwards
+// (rules.hpp, before (g)).
 // tests/test_state_ops.cpp and test_state_random.cpp test the same per state operation.
 
 #include "../src/saved_row.hpp"
@@ -18,6 +19,8 @@
 #include <gprs/rules.hpp>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -119,11 +122,13 @@ struct driver_t {
   doubleton_t doubleton;
   parallel_rows_t parallel_rows;
   dual_fixing_t dual_fixing;
+  singleton_cols_t singleton_cols;
   std::string failure;
-  bool ended          = false;
-  int64_t row_changes = 0;
-  int64_t col_changes = 0;
-  int64_t rebuilds    = 0;
+  bool ended                 = false;
+  int64_t row_changes        = 0;
+  int64_t col_changes        = 0;
+  int64_t rebuilds           = 0;
+  int64_t singleton_findings = 0;
 
   explicit driver_t(const model_t& m) : st(m, opt.tol) { ps.init(m); }
 
@@ -166,9 +171,14 @@ struct driver_t {
     }
   }
 
-  // One step. `change` returns the outcome of a family, ok for a storage step.
+  // One step. `change` returns the outcome of a family, ok for a storage step. A column family
+  // serves its own lists until they stay empty: what it changed need not be on them (served_rows,
+  // served_cols), and must be on the lists of the other column rules.
   template <typename change_t>
-  void step(const char* name, change_t&& change)
+  void step(const char* name,
+            change_t&& change,
+            list_mask_t served_rows = 0,
+            list_mask_t served_cols = 0)
   {
     if (ended || !failure.empty()) { return; }
     view_t before = view_of(st);
@@ -177,13 +187,15 @@ struct driver_t {
       ended = true;
       return;
     }
-    view_t after = view_of(st);
+    view_t after          = view_of(st);
+    list_mask_t row_lists = row_event::column_rules & ~served_rows;
+    list_mask_t col_lists = col_event::column_rules & ~served_cols;
     for (int32_t i = 0; i < st.nrows && failure.empty(); ++i) {
       if (!before.rows[i].alive || !after.rows[i].alive || before.rows[i] == after.rows[i]) {
         continue;
       }
       ++row_changes;
-      if ((st.row_frontier.pending[i] & row_event::column_rules) != row_event::column_rules) {
+      if ((st.row_frontier.pending[i] & row_lists) != row_lists) {
         failure = std::string(name) + " changed row " + std::to_string(i) +
                   " and left it off a row list of the column rules, pending " +
                   std::to_string(st.row_frontier.pending[i]);
@@ -194,7 +206,7 @@ struct driver_t {
         continue;
       }
       ++col_changes;
-      if ((st.col_frontier.pending[j] & col_event::column_rules) != col_event::column_rules) {
+      if ((st.col_frontier.pending[j] & col_lists) != col_lists) {
         failure = std::string(name) + " changed column " + std::to_string(j) +
                   " and left it off a column list of the column rules, pending " +
                   std::to_string(st.col_frontier.pending[j]);
@@ -249,6 +261,32 @@ struct driver_t {
     storage(rebuild);
     call("doubleton equations", rule::doubleton, doubleton);
     storage(rebuild);
+    singleton();
+    storage(rebuild);
+  }
+
+  // The singleton-column rules on every live column. Every step starts with the lists of the
+  // column rules emptied, so the family gets its column list filled first.
+  void singleton()
+  {
+    step(
+      "singleton columns",
+      [&] {
+        for (int32_t j = 0; j < st.ncols; ++j) {
+          if (st.is_live(j)) { st.col_frontier.push(list_bit(col_list::singleton_cols), j); }
+        }
+        work_budget_t budget = make_budget(opt.budget[rule::singleton_cols], st);
+        rule_result_t result = singleton_cols.run(st, budget, ps, opt);
+        singleton_findings += result.findings;
+        bool served = st.col_frontier.empty(col_list::singleton_cols) &&
+                      st.row_frontier.empty(row_list::singleton_cols);
+        if (!served && !result.stopped) {
+          failure = "singleton columns left a list and did not stop";
+        }
+        return result.outcome;
+      },
+      list_bit(row_list::singleton_cols),
+      list_bit(col_list::singleton_cols));
   }
 
   void run()
@@ -274,27 +312,34 @@ struct driver_t {
 }  // namespace
 
 // No change of a row or a column that the column rules read is left off their lists, whichever
-// Stage 1 family or storage step makes it.
+// family or storage step makes it; a column family serves its own lists.
 GPRS_TEST(columns_events_follow_every_family)
 {
-  std::vector<oracle::generator_options_t> shapes(5);
-  shapes[0].p_singleton_col      = 0.5;
-  shapes[1].p_doubleton_equation = 0.45;
-  shapes[1].p_equation           = 0.4;
-  shapes[1].p_zero_cost          = 0.5;
-  shapes[2].p_parallel_row       = 0.5;
-  shapes[2].p_huge_bound         = 0.6;
-  shapes[2].max_line_cols        = 3;
-  shapes[2].p_singleton_col      = 0.3;
-  shapes[3].p_common_factor      = 0.5;
-  shapes[3].p_scaled             = 1.;
-  shapes[3].max_coefficient      = 4;
-  shapes[4].p_continuous         = 1.;
-  shapes[4].max_line_cols        = 3;
-  shapes[4].p_infinite_bound     = 0.25;
-  shapes[4].p_forcing_side       = 0.25;
+  std::vector<oracle::generator_options_t> shapes(6);
+  shapes[5].p_singleton_col       = 0.5;
+  shapes[5].p_singleton_line      = 0.7;
+  shapes[5].p_singleton_zero_cost = 0.5;
+  shapes[5].max_singleton_cols    = 4;
+  shapes[5].max_row_singletons    = 2;
+  shapes[5].p_forcing_col         = 0.5;
+  shapes[5].p_equation            = 0.35;
+  shapes[0].p_singleton_col       = 0.5;
+  shapes[1].p_doubleton_equation  = 0.45;
+  shapes[1].p_equation            = 0.4;
+  shapes[1].p_zero_cost           = 0.5;
+  shapes[2].p_parallel_row        = 0.5;
+  shapes[2].p_huge_bound          = 0.6;
+  shapes[2].max_line_cols         = 3;
+  shapes[2].p_singleton_col       = 0.3;
+  shapes[3].p_common_factor       = 0.5;
+  shapes[3].p_scaled              = 1.;
+  shapes[3].max_coefficient       = 4;
+  shapes[4].p_continuous          = 1.;
+  shapes[4].max_line_cols         = 3;
+  shapes[4].p_infinite_bound      = 0.25;
+  shapes[4].p_forcing_side        = 0.25;
   int64_t models = 0, row_changes = 0, col_changes = 0, rebuilds = 0, aliases = 0, fixed = 0;
-  int64_t additions = 0, failures = 0;
+  int64_t additions = 0, failures = 0, singleton_findings = 0, from_rows = 0;
   for (size_t shape = 0; shape < shapes.size(); ++shape) {
     for (uint64_t seed = 7400000; seed < 7402500 && failures < 3; ++seed) {
       driver_t d(oracle::generate(seed, shapes[shape]).model);
@@ -306,6 +351,8 @@ GPRS_TEST(columns_events_follow_every_family)
       aliases += d.ps.aliases.size();
       fixed += d.ps.fixed_cols.size();
       additions += d.ps.row_additions.size();
+      singleton_findings += d.singleton_findings;
+      from_rows += d.ps.col_from_rows.size();
       if (d.failure.empty()) { continue; }
       ++failures;
       test::fail(
@@ -315,9 +362,15 @@ GPRS_TEST(columns_events_follow_every_family)
     }
   }
   GPRS_CHECK_EQ(failures, 0);
-  GPRS_CHECK_EQ(models, 5 * 2500);
+  GPRS_CHECK_EQ(models, 6 * 2500);
   GPRS_CHECK(row_changes > 5000 && col_changes > 5000);
   GPRS_CHECK(rebuilds > 5000 && aliases > 300 && fixed > 10000 && additions > 0);
+  if (std::getenv("GPRS_ORACLE_CENSUS")) {
+    std::printf("    findings of the singleton columns %lld, their records %lld\n",
+                (long long)singleton_findings,
+                (long long)from_rows);
+  }
+  GPRS_CHECK(singleton_findings > 400 && from_rows > 400);
 }
 
 // A list_mask_t has a bit for sixteen lists, and every one of them works as a list.

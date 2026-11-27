@@ -161,9 +161,9 @@ MUTANTS = {
     "r_alias_dir": [
         (
             "alias_forest.cpp",
-            "map.admissible = st.is_integer(parent) && "
-            "usable(scale, offset) &&",
-            "map.admissible = usable(scale, offset) &&",
+            "st.is_integer(parent) && usable(scale, offset) && "
+            "form.integral &&",
+            "usable(scale, offset) && form.integral &&",
         ),
         (
             "alias_forest.cpp",
@@ -549,6 +549,133 @@ MUTANTS = {
         "    x_reduced[0] = x_reduced[1];\n"
         "    x_reduced[1] = first;\n"
         "  }\n",
+    ),
+    # The mutants of the singleton-column rules, with the check that must
+    # catch each. First the free singleton column (fs_*).
+    # The lower end of the range that the pivot row gives the column is not
+    # tested against its bound: a relaxation of that bound. The box part
+    # of the structure check; the oracle.
+    "fs_implied": (
+        "rules_singleton_cols.cpp",
+        "  if (lower > -inf) {\n"
+        "    if (!range_end(c, row, s.slot, side, s.a < 0, k)) "
+        "{ return false; }",
+        "  if (lower > -inf && c.opt.max_rounds < 0) {\n"
+        "    if (!range_end(c, row, s.slot, side, s.a < 0, k)) "
+        "{ return false; }",
+    ),
+    # The cost of the column is not moved onto the other columns of its
+    # pivot row. The objective part of the structure check; requirement 4
+    # of the crush check; the optimum of the oracle.
+    "fs_cost": (
+        "rules_singleton_cols.cpp",
+        "      st.set_cost(other, sum);\n",
+        "",
+    ),
+    # ... the offset is not moved. The same checks.
+    "fs_offset": (
+        "rules_singleton_cols.cpp",
+        "    st.add_objective_offset(q, free_side);\n",
+        "",
+    ),
+    # An integer column is defined by a row that is not integral for it.
+    # The integral test of the structure check; the oracle. Not the crush
+    # check: a point of the model has integers that meet the row.
+    "fs_int": (
+        "rules_singleton_cols.cpp",
+        "    if (!form.integral ||\n"
+        "        !drift_within(c.tol, c.tol.integral_drift_share, s.a, form, "
+        "drift_units_t::row)) {",
+        "    if (c.opt.max_rounds < 0 && !form.integral &&\n"
+        "        !drift_within(c.tol, c.tol.integral_drift_share, s.a, form, "
+        "drift_units_t::row)) {",
+    ),
+    # An inequality is taken as tight at the side that the cost of the
+    # column pushes it away from: a restriction to points that cost more.
+    # Requirement 4 of the crush check; the optimum of the oracle.
+    "fs_side": (
+        "rules_singleton_cols.cpp",
+        "    side       = rises ? st.row_upper[row] : st.row_lower[row];",
+        "    side       = rises ? st.row_lower[row] : st.row_upper[row];",
+    ),
+    # The inequality as pivot row in primal-only mode. The stack part of
+    # the structure check (a dual finding and a dual record in a result of
+    # that mode); requirement 5 of the crush check.
+    "fs_primal": (
+        "rules_singleton_cols.cpp",
+        "  if (scanned.free_entries >= 2 && sub_rule_active(c.opt, sub)) {",
+        "  if (scanned.free_entries >= 2 && c.opt.sub_enabled[sub]) {",
+    ),
+    # Then the zero-cost singleton columns (zs_*). The new lower side is
+    # one unit too wide: a relaxation of the row. The snapshot of the
+    # structure check; the oracle.
+    "zs_wide": (
+        "rules_singleton_cols.cpp",
+        "  double new_lower  = most_infinite ? -inf : "
+        "dd_residual(lower, most);",
+        "  double new_lower  = most_infinite ? -inf : "
+        "dd_residual(lower, most) - 1.;",
+    ),
+    # The largest and the smallest sum of the terms are exchanged: sides
+    # that are too tight, a restriction. Requirement 2 of the crush check;
+    # the oracle. Not the structure check.
+    "zs_side": (
+        "rules_singleton_cols.cpp",
+        "  double new_lower  = most_infinite ? -inf : "
+        "dd_residual(lower, most);\n"
+        "  double new_upper  = least_infinite ? inf : "
+        "dd_residual(upper, least);",
+        "  double new_lower  = least_infinite ? -inf : "
+        "dd_residual(lower, least);\n"
+        "  double new_upper  = most_infinite ? inf : "
+        "dd_residual(upper, most);",
+    ),
+    # A column with a cost is taken. The objective part of the structure
+    # check; the oracle.
+    "zs_cost": (
+        "rules_singleton_cols.cpp",
+        "    if (st.is_integer(s.col) || st.cost[s.col] != 0.) { continue; }",
+        "    if (st.is_integer(s.col)) { continue; }",
+    ),
+    # An integer column is taken. The stack part of the structure check;
+    # the oracle.
+    "zs_int": (
+        "rules_singleton_cols.cpp",
+        "    if (st.is_integer(s.col) || st.cost[s.col] != 0.) { continue; }",
+        "    if (st.cost[s.col] != 0.) { continue; }",
+    ),
+    # The undo leaves the columns at prefer whatever the row needs.
+    # Requirement 3 of the crush check; the oracle.
+    "zs_undo": (
+        "postsolve.cpp",
+        "  if (!(below > 0) && !(above > 0)) { return; }",
+        "  if (!(below > 1e300) && !(above > 1e300)) { return; }",
+    ),
+    # Last the forcing column (fc_*). A lock in the free direction is
+    # ignored: rows that hold the column from both ends are deleted with
+    # it. The stack part of the structure check (a row of the record that
+    # does not bound the column from the one end); the oracle.
+    "fc_lock": (
+        "rules_singleton_cols.cpp",
+        "  bool down = st.down_locks[col] == 0 && lower == -inf && "
+        "st.up_locks[col] >= 1;",
+        "  bool down = lower == -inf && st.up_locks[col] >= 1;",
+    ),
+    # A column with a cost is taken. The objective part of the structure
+    # check.
+    "fc_cost": (
+        "rules_singleton_cols.cpp",
+        "  if (st.cost[col] != 0.) { return true; }\n",
+        "",
+    ),
+    # The undo rounds an integer column out of its rows. The postsolve part
+    # of the structure check; requirement 3 of the crush check; the oracle.
+    "fc_round": (
+        "postsolve.cpp",
+        "      value = from_above ? std::floor(value + rounding) : "
+        "std::ceil(value - rounding);",
+        "      value = from_above ? std::ceil(value + rounding) : "
+        "std::floor(value - rounding);",
     ),
 }
 

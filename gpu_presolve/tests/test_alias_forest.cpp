@@ -379,12 +379,38 @@ GPRS_TEST(alias_integer_edge_needs_integral_scale_and_offset)
   GPRS_CHECK(frozen(st, {alias_edge_t{0, 0, 1, 3., -2., 0.}}).empty());
   GPRS_CHECK(frozen(st, {alias_edge_t{0, 0, 1, 1., -2., 0.5}}).empty());
 
-  // Within tol.zero the scale and the offset are rounded.
-  double zero = st.tol.zero;
-  check_maps(frozen(st, {alias_edge_t{0, 0, 1, 1., -(2. + 0.5 * zero), 3. - 0.5 * zero}}),
-             {alias_map_t{0, 1, 0, 2., 3.}});
+  // Within tol.zero the scale and the offset are rounded, when the parent cannot carry the
+  // rounding of the scale far: with x1 in [-100, 100] the row is off by at most 5e-10 * 100.
+  double zero         = st.tol.zero;
+  state_t short_reach = column_state({1, 1}, {1, 1});
+  short_reach.set_col_lower(1, -100.);
+  short_reach.set_col_upper(1, 100.);
+  alias_edge_t near_two{0, 0, 1, 1., -(2. + 0.5 * zero), 3. - 0.5 * zero};
+  check_maps(frozen(short_reach, {near_two}), {alias_map_t{0, 1, 0, 2., 3.}});
   GPRS_CHECK(frozen(st, {alias_edge_t{0, 0, 1, 1., -(2. + 5. * zero), 3.}}).empty());
   GPRS_CHECK(frozen(st, {alias_edge_t{0, 0, 1, 1., -2., 3. + 5. * zero}}).empty());
+  // The drift: the same edge with a parent that reaches 1000 leaves the row off by 5e-7, more
+  // than tol.integral_drift_share of the tolerance, and a parent without a bound by anything. A
+  // scale that is an integer exactly has no drift whatever the bounds are, and a larger share
+  // takes the edge.
+  state_t long_reach = column_state({1, 1}, {1, 1});
+  long_reach.set_col_lower(1, -100.);
+  long_reach.set_col_upper(1, 1000.);
+  GPRS_CHECK(frozen(long_reach, {near_two}).empty());
+  GPRS_CHECK(frozen(st, {near_two}).empty());
+  check_maps(frozen(st, {alias_edge_t{0, 0, 1, 1., -2., 3. - 0.5 * zero}}),
+             {alias_map_t{0, 1, 0, 2., 3.}});
+  long_reach.tol.integral_drift_share = 1.;
+  check_maps(frozen(long_reach, {near_two}), {alias_map_t{0, 1, 0, 2., 3.}});
+  // The model of the review: x - 1.0000000005 y = 0 with y in [0, 2000000]. x = y would leave
+  // the row off by 1e-3 at the upper bound.
+  state_t review = column_state({1, 1}, {1, 1});
+  review.set_col_lower(1, 0.);
+  review.set_col_upper(1, 2000000.);
+  GPRS_CHECK(frozen(review, {alias_edge_t{0, 0, 1, 1., -1.0000000005, 0.}}).empty());
+  review.set_col_upper(1, 100.);
+  check_maps(frozen(review, {alias_edge_t{0, 0, 1, 1., -1.0000000005, 0.}}),
+             {alias_map_t{0, 1, 0, 1., 0.}});
 
   // A scale that rounds to zero is no map: x0 = 1e-10 x1 is refused, x1 = 1e10 x0 is taken,
   // also when the entries speak for column 1 as the root.

@@ -15,9 +15,11 @@
 //     objective value or a usable point of a solution file; limit and failed always fail.
 //   Structure check (structure_check.hpp), in default and in primal-only mode: the postsolve
 //     stack for that mode, the column types, the bounds, every original row against the bounds,
-//     against its row of the reduced model or, when an equation was subtracted from it,
-//     against that row and the reduced rows of the equations, and the objective against the
-//     reduced objective. It needs neither a point nor a solver.
+//     against its row of the reduced model or the row that a record saved of it or, when an
+//     equation was subtracted from it, against that row and those of the equations, the columns
+//     that left the model with saved rows (the bounds of a column that a row defines, the row
+//     that zero-cost singleton columns left behind), and the objective against the reduced
+//     objective. It needs neither a point nor a solver.
 //   Crush check (crush_check.hpp), in default and in primal-only mode, with every usable point
 //     of the solution files (solution_file.hpp) and up to --push-points (at most 4) points
 //     made from each by moving its columns to where bounds and rows stop them.
@@ -301,10 +303,11 @@ void put_crush(FILE* out, const char* name, const crush_report_t& c, bool last)
                c.failed_objective);
   std::fprintf(out,
                "      \"round_trip\": {\"integer\": %s, \"continuous\": %s, \"columns\": %lld, "
-               "\"failed\": %d}}%s\n",
+               "\"exempt_columns\": %lld, \"failed\": %d}}%s\n",
                number(c.moved_integer, "%.3g").c_str(),
                number(c.moved_continuous, "%.3g").c_str(),
                (long long)c.moved_columns,
+               (long long)c.exempt_columns,
                c.failed_round_trip,
                last ? "" : ",");
 }
@@ -350,6 +353,26 @@ void put_structure(FILE* out, const char* name, const structure_report_t& s, boo
                number(s.added_worst, "%.3g").c_str(),
                s.added_worst_row,
                (long long)s.added_failures);
+  std::fprintf(out,
+               "      \"columns\": {\"defined\": %lld, \"interval\": %lld, \"forcing\": %lld, "
+               "\"box_tested\": %lld, \"box_worst\": %s, \"box_column\": %d, \"box_failed\": %lld, "
+               "\"integral_failed\": %lld, \"integral_column\": %d, \"snapshot_tested\": %lld, "
+               "\"snapshot_not_tested\": %lld, \"snapshot_worst\": %s, \"snapshot_row\": %d, "
+               "\"snapshot_failed\": %lld},\n",
+               (long long)s.defined_records,
+               (long long)s.interval_records,
+               (long long)s.forcing_records,
+               (long long)s.box_tested,
+               number(s.box_worst, "%.3g").c_str(),
+               s.box_worst_col,
+               (long long)s.box_failures,
+               (long long)s.integral_failures,
+               s.first_integral_col,
+               (long long)s.snapshot_tested,
+               (long long)s.snapshot_untested,
+               number(s.snapshot_worst, "%.3g").c_str(),
+               s.snapshot_worst_row,
+               (long long)s.snapshot_failures);
   std::fprintf(out,
                "      \"objective\": {\"worst\": %s, \"column\": %d, \"constant\": %s, "
                "\"failed\": %lld},\n",
@@ -411,6 +434,10 @@ void mode_verdicts(const mode_report_t& r, bool primal_only, std::vector<named_v
   out.push_back({"structure_" + mode + "rows", verdict(composed, s.row_failures == 0)});
   out.push_back({"structure_" + mode + "kept_rows", verdict(composed, s.kept_failures == 0)});
   out.push_back({"structure_" + mode + "added_rows", verdict(composed, s.added_failures == 0)});
+  out.push_back(
+    {"structure_" + mode + "columns",
+     verdict(composed,
+             s.box_failures == 0 && s.integral_failures == 0 && s.snapshot_failures == 0)});
   out.push_back({"structure_" + mode + "objective", verdict(composed, s.objective_failures == 0)});
   out.push_back({"structure_" + mode + "postsolve", verdict(composed, s.postsolve_failures == 0)});
   const crush_report_t& c = r.crush;

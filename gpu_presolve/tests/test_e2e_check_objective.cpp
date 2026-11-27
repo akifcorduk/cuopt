@@ -314,7 +314,7 @@ GPRS_TEST(e2e_structure_rejects_a_record_kind_it_does_not_know)
 {
   model_t m       = cost_model();
   result_t result = substituted(m, 8., 5., 14.);
-  result.postsolve.order.push_back((record_kind_t)4);
+  result.postsolve.order.push_back((record_kind_t)((uint8_t)record_kind_t::col_from_rows + 1));
   GPRS_CHECK_EQ(structure_check(m, result, false).stack_error, "unknown record kind at 2");
   result.postsolve.order.back() = (record_kind_t)255;
   GPRS_CHECK_EQ(structure_check(m, result, true).stack_error, "unknown record kind at 2");

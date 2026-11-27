@@ -127,12 +127,14 @@ struct options_t {
   merge_integers_t merge_integers = merge_integers_t::range_kept;
 
   // Entries that the records of the singleton-column rules may save of rows that stay in the
-  // model, in nonzeros of the input model. Beyond it such a row is left, and the family reports
-  // limited.
+  // model (the zero-cost singleton columns, rules.hpp (h)), in nonzeros of the input model.
+  // Beyond it such a row is left, and the family reports limited.
   double saved_row_factor = 4.;
 
-  // Largest growth factor of a substituted free singleton column: the largest coefficient of its
-  // pivot row over its own, times the factor that earlier substitutions gave the column.
+  // Largest growth factor of a substituted free singleton column with a finite bound: the
+  // largest coefficient of the other entries of its pivot row over its own, times the factor
+  // that earlier substitutions gave the column (at least 1). A column without a finite bound has
+  // no bound to pass and no limit, unless an earlier substitution gave it a factor.
   double pivot_growth_limit = 1000.;
 
   // Free entries of a lock row above which the lock alias leaves the row; 0 for no limit.
@@ -191,9 +193,12 @@ enum class status_t : uint8_t {
 const char* status_name(status_t status);
 
 struct rule_stats_t {
-  int64_t calls    = 0;
-  int64_t work     = 0;
-  int64_t findings = 0;
+  int64_t calls = 0;
+  int64_t work  = 0;
+  // Of work: that of the first call, which serves the lists as the construction of the state
+  // fills them (every column for a column family).
+  int64_t first_work = 0;
+  int64_t findings   = 0;
   // Implied bounds recorded (rule_result_t::records); only bound propagation has them.
   int64_t records      = 0;
   double seconds       = 0.;
@@ -228,7 +233,9 @@ struct result_t {
   // of it stopped on its budget, no list of the cascade is left, no family reported limited
   // (rule_result_t::limited: a bound of a continuous column that has had its steps, a
   // subtraction of parallel rows left to a row that the presolve has changed, rows of a bucket
-  // of parallel rows that were not compared), no column family is left with a list, no row
+  // of parallel rows that were not compared, a free singleton column that only the growth
+  // factor of earlier substitutions kept in the model, zero-cost singleton columns left for
+  // saved_row_factor), no column family is left with a list, no row
   // holds a term of a fixed column that a family could read, and no limit (max_rounds,
   // max_cascade_passes, time_limit) cut it short.
   // presolve(reduced, options) then returns unchanged; see presolve().

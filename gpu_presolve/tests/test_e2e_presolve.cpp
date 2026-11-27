@@ -114,15 +114,30 @@ std::vector<profile_t> profiles()
   o.max_line_cols      = 1;
   o.p_infinite_bound   = 0.3;
   list.push_back({"near_parallel_lines", o});
+
+  // What the singleton-column rules act on: up to two singleton columns per row, most of them
+  // line columns and half of them without a cost, in rows of which a third are equations, and
+  // forcing columns.
+  o                       = generator_options_t();
+  o.p_singleton_col       = 0.5;
+  o.p_singleton_line      = 0.7;
+  o.p_singleton_zero_cost = 0.5;
+  o.max_singleton_cols    = 4;
+  o.max_row_singletons    = 2;
+  o.p_forcing_col         = 0.5;
+  o.p_equation            = 0.35;
+  list.push_back({"columns", o});
   return list;
 }
 
-// The two profiles with singleton columns.
+// The two profiles with rows that are parallel up to singleton columns.
 std::vector<profile_t> near_profiles()
 {
   std::vector<profile_t> list;
   for (const profile_t& profile : profiles()) {
-    if (profile.options.p_singleton_col > 0.) { list.push_back(profile); }
+    if (profile.options.p_parallel_row >= 0.5 && profile.options.p_singleton_col > 0.) {
+      list.push_back(profile);
+    }
   }
   return list;
 }
@@ -174,6 +189,16 @@ std::string options_code(const options_t& options)
       "  options.parallel_bucket_limit = " + std::to_string(options.parallel_bucket_limit) + ";\n";
   }
   if (!options.near_parallel_rows) { out += "  options.near_parallel_rows = false;\n"; }
+  for (int32_t s = 0; s < sub_rule::count; ++s) {
+    if (options.sub_enabled[s]) { continue; }
+    out += "  options.sub_enabled[" + std::to_string(s) + "] = false;\n";
+  }
+  if (options.pivot_growth_limit != defaults.pivot_growth_limit) {
+    out += "  options.pivot_growth_limit = " + real(options.pivot_growth_limit) + ";\n";
+  }
+  if (options.saved_row_factor != defaults.saved_row_factor) {
+    out += "  options.saved_row_factor = " + real(options.saved_row_factor) + ";\n";
+  }
   return out;
 }
 
@@ -347,6 +372,99 @@ GPRS_TEST(e2e_without_singleton_cols) { run_without(rule::singleton_cols); }
 GPRS_TEST(e2e_without_dual_cols) { run_without(rule::dual_cols); }
 GPRS_TEST(e2e_without_parallel_cols) { run_without(rule::parallel_cols); }
 
+// The reductions of the singleton-column rules, each as the only one of the column rules and
+// each switched off, and the two limits of the family at their tightest.
+GPRS_TEST(e2e_singleton_cols_reductions)
+{
+  for (int32_t sub : {sub_rule::free_singleton,
+                      sub_rule::zero_cost_singleton,
+                      sub_rule::forcing_column,
+                      sub_rule::free_singleton_dual}) {
+    options_t alone;
+    alone.sub_enabled.fill(false);
+    alone.sub_enabled[sub] = true;
+    run_suite((std::string("only_") + sub_rule_name(sub)).c_str(), alone, 60);
+    options_t off;
+    off.sub_enabled[sub] = false;
+    run_suite((std::string("without_") + sub_rule_name(sub)).c_str(), off, 60);
+  }
+  options_t tight;
+  tight.pivot_growth_limit = 1.;
+  tight.saved_row_factor   = 0.;
+  run_suite("tight_singleton_limits", tight, 60);
+}
+
+// Fixed model 6: 2 k + y = 4 with an integer singleton column k in [0, 2] and y integer in
+// [0, 3]. The row is no definition of k: y = 1 would give 1.5. And 2 k + 2 y = 3, which has no
+// integer point, with the tightening family off, which would say so.
+GPRS_TEST(e2e_case_integer_singleton_column_needs_an_integral_row)
+{
+  model_t base;
+  base.nrows            = 2;
+  base.ncols            = 3;
+  base.row_start        = {0, 2, 4};
+  base.col_index        = {0, 1, 1, 2};
+  base.value            = {2., 1., 1., 1.};
+  base.row_lower        = {4., -inf};
+  base.row_upper        = {4., 4.};
+  base.col_lower        = {0., 0., 0.};
+  base.col_upper        = {2., 3., 3.};
+  base.cost             = {1., -1., -1.};
+  base.col_type         = {1, 1, 1};
+  base.objective_offset = 0.;
+  for (bool primal_only : {false, true}) {
+    options_t options;
+    options.primal_only = primal_only;
+    result_t result     = presolve(base, options);
+    GPRS_CHECK_EQ(result.sub_findings[sub_rule::free_singleton], 0);
+    oracle::verdict_t verdict =
+      oracle::check_result(oracle::make_case(base, {}, {}), options, result);
+    if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+
+    model_t odd                       = base;
+    odd.value[1]                      = 2.;
+    odd.row_lower[0]                  = 3.;
+    odd.row_upper[0]                  = 3.;
+    options_t without                 = options;
+    without.enabled[rule::tightening] = false;
+    result                            = presolve(odd, without);
+    verdict = oracle::check_result(oracle::make_case(odd, {}, {}), without, result);
+    if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+  }
+}
+
+// Found by the campaign (profile dense, seed 200045869, variant 9): the zero-cost singleton
+// column x0 with a lower bound of -1.28e9 after scaling, whose undo stepped from that bound to
+// 597.33 and lost the digits that row 6, parallel to its row at 2^18 times the scale, reads.
+GPRS_TEST(e2e_case_interval_undo_far_from_prefer)
+{
+  model_t base;
+  base.nrows            = 7;
+  base.ncols            = 3;
+  base.row_start        = {0, 2, 5, 7, 9, 12, 12, 15};
+  base.col_index        = {0, 1, 0, 1, 2, 0, 2, 0, 1, 0, 1, 2, 0, 1, 2};
+  base.value            = {2., -3., -2., 1., 1., 3., 3., 2., -3., -3., -3., 2., -3., -3., 2.};
+  base.row_lower        = {-inf, -10., -inf, -inf, -12., 0., -12.};
+  base.row_upper        = {10., inf, inf, 10., -12., 0., -12.};
+  base.col_lower        = {-10000000., 0., 0.};
+  base.col_upper        = {5., 2., 2.};
+  base.cost             = {0., 0., 0.};
+  base.col_type         = {0, 1, 1};
+  base.objective_offset = 3.;
+  oracle::case_t c      = oracle::make_case(
+    base, {0.015625, 0.125, 0.5, 0.5, 0.00390625, 64., 1024.}, {0.0078125, 1., 1.});
+  options_t options;
+  options.max_rounds            = 1;
+  options.max_cascade_passes    = 2;
+  options.parallel_bucket_limit = 1;
+  for (const options_t& o : {options, options_t()}) {
+    result_t result = presolve(c.model, o);
+    GPRS_CHECK_EQ(result.sub_findings[sub_rule::zero_cost_singleton], 1);
+    oracle::verdict_t verdict = oracle::check_result(c, o, result);
+    if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+  }
+}
+
 // The start step alone.
 GPRS_TEST(e2e_no_rule)
 {
@@ -482,19 +600,24 @@ GPRS_TEST(e2e_case_near_parallel_rows_end)
     base.cost             = {1., 2., 3., -1., 2., 0.};
     base.col_type         = {1, 1, 1, type, type, type};
     base.objective_offset = 0.;
-    options_t options;
-    options.max_rounds = 200;
-    result_t result    = presolve(base, options);
-    GPRS_CHECK(result.status == status_t::reduced);
-    GPRS_CHECK(result.rounds <= 4);
-    GPRS_CHECK_EQ(result.postsolve.row_additions.size(), 1u);
-    GPRS_CHECK_EQ(result.reduced.nnz(), 6);
-    // Three continuous columns in one row are outside the oracle class; integer ones are
-    // enumerated.
-    if (type == 1) {
-      oracle::verdict_t verdict =
-        oracle::check_result(oracle::make_case(base, {}, {}), options, result);
-      if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+    // Without the singleton-column rules the two rows are what is left; with them the row of
+    // the singleton columns is taken apart as well, and the rounds still end early.
+    for (bool singleton_cols : {false, true}) {
+      options_t options;
+      options.max_rounds                    = 200;
+      options.enabled[rule::singleton_cols] = singleton_cols;
+      result_t result                       = presolve(base, options);
+      GPRS_CHECK(result.status == status_t::reduced);
+      GPRS_CHECK(result.rounds <= (singleton_cols ? 8 : 4));
+      GPRS_CHECK_EQ(result.postsolve.row_additions.size(), 1u);
+      if (!singleton_cols) { GPRS_CHECK_EQ(result.reduced.nnz(), 6); }
+      // Three continuous columns in one row are outside the oracle class; integer ones are
+      // enumerated.
+      if (type == 1) {
+        oracle::verdict_t verdict =
+          oracle::check_result(oracle::make_case(base, {}, {}), options, result);
+        if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+      }
     }
   }
 }

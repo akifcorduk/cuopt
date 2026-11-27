@@ -12,6 +12,7 @@
 // the column rules, whose records save rows.
 
 #include <gprs/numerics.hpp>
+#include <gprs/postsolve.hpp>
 #include <gprs/state.hpp>
 
 #include <cmath>
@@ -49,24 +50,8 @@ inline double free_side(double side, dd_t fixed_terms)
   return std::isinf(side) ? side : dd_residual(side, fixed_terms);
 }
 
-// Entries of saved rows, one row after the other.
-struct row_pool_t {
-  std::vector<int32_t> col;
-  std::vector<double> value;
-};
-
-// The copy of a row at one moment: its sides less the terms of its fixed columns, and its
-// entries [begin, end) of a pool. It names live columns only.
-struct saved_row_t {
-  int32_t row;
-  double lower;
-  double upper;
-  int64_t begin;
-  int64_t end;
-};
-
 // Appends the free entries of the row that `keep(col)` accepts to the pool, in storage order,
-// and returns the saved row. O(csr.used[row]).
+// and returns the saved row (row_pool_t and saved_row_t, postsolve.hpp). O(csr.used[row]).
 template <typename keep_t>
 inline saved_row_t save_row(const state_t& st, int32_t row, row_pool_t& pool, keep_t&& keep)
 {

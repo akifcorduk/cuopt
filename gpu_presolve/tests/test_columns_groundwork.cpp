@@ -6,8 +6,9 @@
 /* clang-format on */
 
 // The groundwork of the column rules: the four families in the round, their options and
-// statistics, and the dual findings of a result. While the families hold no reduction, a
-// presolve with them is the presolve without them.
+// statistics, and the dual findings of a result. While a family holds no reduction, a presolve
+// with it is the presolve without it; the singleton columns hold theirs
+// (tests/test_columns_singleton.cpp).
 
 #include "harness.hpp"
 #include "oracle.hpp"
@@ -28,6 +29,18 @@ options_t without_column_rules(options_t options)
   for (int32_t r = rule::simple_probing; r <= rule::parallel_cols; ++r) {
     options.enabled[r] = false;
   }
+  return options;
+}
+
+// The families that hold no reduction yet.
+bool is_empty_family(int32_t r)
+{
+  return r == rule::simple_probing || r == rule::dual_cols || r == rule::parallel_cols;
+}
+
+options_t without_singleton_cols(options_t options)
+{
+  options.enabled[rule::singleton_cols] = false;
   return options;
 }
 
@@ -108,12 +121,13 @@ GPRS_TEST(columns_sub_rules_by_mode)
 }
 
 // The families are called once per round, find nothing and leave no list behind: the result is
-// a fixed point with them as without them.
+// a fixed point with them as without them. A family without a reduction spends no work.
 GPRS_TEST(columns_families_are_called_and_find_nothing)
 {
   //   r0:  x0 + x1 + x2 <= 4
   //   r1:  x0 - x1       >= -1
-  // Nothing to reduce but x2, which no row stops from moving to its lower bound.
+  // Nothing to reduce but x2, which no row stops from moving to its lower bound: it is fixed
+  // there before the singleton columns are served.
   model_t m = make_model({{1., 1., 1.}, {1., -1., 0.}},
                          {-inf, -1.},
                          {4., inf},
@@ -132,7 +146,8 @@ GPRS_TEST(columns_families_are_called_and_find_nothing)
       GPRS_CHECK(result.stats[r].calls >= 1);
       GPRS_CHECK(result.stats[r].calls <= result.rounds);
       GPRS_CHECK_EQ(result.stats[r].findings, 0);
-      GPRS_CHECK_EQ(result.stats[r].work, 0);
+      GPRS_CHECK(is_empty_family(r) ? result.stats[r].work == 0 : result.stats[r].work > 0);
+      GPRS_CHECK(result.stats[r].first_work <= result.stats[r].work);
       GPRS_CHECK_EQ(result.stats[r].rows_removed, 0);
       GPRS_CHECK_EQ(result.stats[r].cols_removed, 0);
     }
@@ -191,7 +206,8 @@ GPRS_TEST(columns_family_sees_a_row_that_lost_a_fixed_term)
 
 // On generated models, in both modes and with a rebuild after every phase or none: the reduced
 // model, the stack, the flag, the rounds and the statistics of the Stage 1 families are the same
-// with the four families switched on and switched off. Seven phase hashes per round.
+// with the three families that hold no reduction switched on and switched off, the singleton
+// columns being off in both. Seven phase hashes per round.
 GPRS_TEST(columns_empty_families_change_no_result)
 {
   std::vector<oracle::generator_options_t> shapes(3);
@@ -214,7 +230,7 @@ GPRS_TEST(columns_empty_families_change_no_result)
           options.rebuild_dead_fraction  = 0.;
           options.rebuild_fixed_fraction = 0.;
         }
-        result_t on  = presolve(m, options);
+        result_t on  = presolve(m, without_singleton_cols(options));
         result_t off = presolve(m, without_column_rules(options));
         ++compared;
         reduced += on.status == status_t::reduced;
@@ -238,31 +254,44 @@ GPRS_TEST(columns_empty_families_change_no_result)
   GPRS_CHECK(reduced > 5000);
 }
 
-// result_t::dual_findings counts the fixings by locks: none in primal-only mode, none with the
-// family switched off, and with none the default result is the primal-only one.
+// result_t::dual_findings counts the fixings by locks and the free singleton columns with an
+// inequality as pivot row: none in primal-only mode, and with the lock rule switched off only
+// the latter. A default result without a dual finding, and without a zero-cost singleton or a
+// forcing column, which that mode leaves out as well, is the primal-only one.
 GPRS_TEST(columns_dual_findings_are_the_lock_fixings)
 {
   oracle::generator_options_t shape;
-  shape.p_zero_cost = 0.5;
-  int64_t with = 0, without = 0;
+  shape.p_zero_cost     = 0.5;
+  shape.p_singleton_col = 0.3;
+  int64_t with = 0, without = 0, pivots = 0;
   for (uint64_t seed = 7310000; seed < 7313000; ++seed) {
     model_t m = oracle::generate(seed, shape).model;
     options_t options;
     result_t result = presolve(m, options);
-    GPRS_CHECK_EQ(result.dual_findings, result.stats[rule::dual_fixing].findings);
+    GPRS_CHECK_EQ(result.dual_findings,
+                  result.stats[rule::dual_fixing].findings +
+                    result.sub_findings[sub_rule::free_singleton_dual]);
     with += result.dual_findings > 0;
+    pivots += result.sub_findings[sub_rule::free_singleton_dual] > 0;
     options.primal_only = true;
     result_t primal     = presolve(m, options);
     GPRS_CHECK_EQ(primal.dual_findings, 0);
     GPRS_CHECK_EQ(primal.stats[rule::dual_fixing].calls, 0);
-    if (result.dual_findings == 0 && result.status != status_t::unbounded_or_infeasible) {
+    for (int32_t sub :
+         {sub_rule::free_singleton_dual, sub_rule::zero_cost_singleton, sub_rule::forcing_column}) {
+      GPRS_CHECK_EQ(primal.sub_findings[sub], 0);
+    }
+    if (result.dual_findings == 0 && result.sub_findings[sub_rule::zero_cost_singleton] == 0 &&
+        result.sub_findings[sub_rule::forcing_column] == 0 &&
+        result.status != status_t::unbounded_or_infeasible) {
       ++without;
       GPRS_CHECK_EQ(result.hash, primal.hash);
       GPRS_CHECK_EQ(postsolve_hash(result.postsolve), postsolve_hash(primal.postsolve));
     }
     options                            = options_t();
     options.enabled[rule::dual_fixing] = false;
-    GPRS_CHECK_EQ(presolve(m, options).dual_findings, 0);
+    result_t unlocked                  = presolve(m, options);
+    GPRS_CHECK_EQ(unlocked.dual_findings, unlocked.sub_findings[sub_rule::free_singleton_dual]);
   }
-  GPRS_CHECK(with > 500 && without > 500);
+  GPRS_CHECK(with > 500 && without > 500 && pivots > 20);
 }
