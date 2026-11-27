@@ -10,6 +10,7 @@
 #include <gprs/numerics.hpp>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace gprs {
@@ -215,6 +216,9 @@ struct state_t {
   std::vector<int32_t> row_free_size;
   // Incremented when an entry or a side of the row changes; an implied bound recorded from the
   // row is void afterwards.
+  // Not incremented when a bound of one of its columns changes or the column is fixed, nor by
+  // delete_row (a deleted source row voids the record) or rebuild (a fixed term moves into the
+  // sides, the constraint stays the same).
   std::vector<uint32_t> row_version;
   activity_t min_act;
   activity_t max_act;
@@ -245,9 +249,16 @@ struct state_t {
   int32_t live_cols;  // status live
   int64_t live_nnz;   // live entries, entries of fixed columns included
   int64_t fixed_nnz;  // live entries of fixed columns
+  // One per bound value that moved (fix_col: each of the two that moved), per side value that
+  // changed (shift_row_sides and scale_row: each finite side) and per entry changed, deleted or
+  // moved (scale_row: each live entry).
   int64_t bound_changes       = 0;
   int64_t side_changes        = 0;
   int64_t coefficient_changes = 0;
+  // Slots of the stores that the mutating operations and find_entry have visited since
+  // construction, the summations they trigger included. It is no part of the model: tests bound
+  // the cost of an operation with it.
+  mutable int64_t slot_visits = 0;
 
   frontier_set_t row_frontier;  // lists row_list::*
   frontier_set_t col_frontier;  // lists col_list::*
@@ -289,6 +300,8 @@ struct state_t {
   // a * (new - old): the old term leaves (dd_sub_product, or inf_count and inf_slot when it
   // is_infinite_term) and the new one enters (dd_add_product, or inf_count and inf_slot).
   // row_event::activity for each of those rows. O(csc.used[col]).
+  // A lower bound of +inf and an upper bound of -inf are not accepted (the same for the sides of
+  // a row below): the caller reports infeasibility instead.
   void set_col_lower(int32_t col, double lower);
   void set_col_upper(int32_t col, double upper);
 
@@ -331,6 +344,8 @@ struct state_t {
   // activities (row_event::entries). With integral set, each product a * factor is replaced by
   // the nearest integer; the caller has checked that every product is one within its tolerance.
   // The sides are multiplied, not rounded. O(csr.used[row]).
+  // Only the products of live columns are rounded: the entry of a fixed column is a constant of
+  // the row and gets the plain product.
   void scale_row(int32_t row, double factor, bool integral);
 
   // ---- Entries, addressed by CSR slot ----
@@ -353,6 +368,8 @@ struct state_t {
   // free slot is first moved to the end of the store with twice the capacity, at the cost of
   // its live entries, which changes the CSC slots of col only. The arrays of csc can be
   // reallocated: no pointer or reference into them survives the call.
+  // The moved column gets at least 4 slots; its old slots stay as tombstones that no line owns
+  // until the next rebuild.
   void move_entry(int64_t row_slot, int32_t col, double value);
 
   // ---- Activities ----
@@ -385,11 +402,22 @@ struct state_t {
   // loses a slot gets its activities recomputed; for the other rows inf_slot follows the shift
   // of the row. The live entries of a line keep their order. All slots change; lists, versions
   // and implied bounds are kept. O(slots + rows + columns).
+  // The two compaction lists are emptied: the rebuild has served them.
+  // A build with assertions ends the rebuild with check_consistency.
   void rebuild();
 
   // Recomputes sizes, twins, locks, counters and activities from the stores and asserts that the
   // state agrees, activities within their error bound. O(slots). For tests and assertion builds.
+  // It runs and fails in every build, GPRS_ASSERT or not: a caller that wants it in assertion
+  // builds only writes gprs_assert((st.check_consistency(), true)).
   void check_consistency();
+
+  // The check behind check_consistency: an empty string, or the first broken invariant with the
+  // row, column or slot where it broke. check_consistency fails with this text, in every build.
+  // A stored activity must agree with the fold within 9 * (n + 1)^3 * u^2 * max_term for each of
+  // the two accumulators (n its updates or terms), which holds for every sequence of updates.
+  // activity_error(updates, max_term) is not the tolerance: valid states exceed it.
+  std::string consistency_error();
 };
 
 // The live rows and live columns of a rebuilt state as a well_formed model, in index order,

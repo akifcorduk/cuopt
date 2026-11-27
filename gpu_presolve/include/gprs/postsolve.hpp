@@ -57,12 +57,17 @@ struct postsolve_t {
   std::vector<fixed_col_record_t> fixed_cols;
   std::vector<alias_record_t> aliases;
   std::vector<parallel_row_record_t> parallel_rows;
+  // 1 once a fixed_col or alias record has removed the column.
+  std::vector<uint8_t> col_removed;
 
   // Empties the stack and takes sizes and column types from the original model.
   void init(const model_t& original);
 
   // O(1) each. A column that a fixed_col or alias record removes must not appear in a later
   // record.
+  // A fixed value is finite, and integral for an integer column. An alias has a finite scale
+  // other than zero and a finite offset; an integer column has an integer rep and an integral
+  // scale and offset. A ratio is finite and not zero.
   void push_fixed_col(int32_t col, double value);
   void push_alias(int32_t col, int32_t rep, int32_t row, double scale, double offset);
   void push_parallel_row(int32_t removed_row, int32_t kept_row, double ratio);
@@ -119,6 +124,8 @@ struct alias_forest_t {
   std::vector<int32_t> link;        // union-find parent of a column of the batch, -1 otherwise
   std::vector<int32_t> touched;     // columns of the batch in order of first appearance
   std::vector<alias_edge_t> edges;  // tree edges in the order they were added
+  std::vector<int32_t> position;    // index in touched of a column of the batch, -1 otherwise
+  std::vector<int32_t> set_size;    // by position: columns of the set of a union-find root
 
   // O(columns), once.
   void init(int32_t ncols);
@@ -138,6 +145,15 @@ struct alias_forest_t {
   // in the model and the child becomes the root of its subtree, which is walked after the tree.
   // Returns in maps every column that is not a root with its map composed to its root, the maps
   // of one root contiguous and parents before children. O(edges of the batch).
+  // Added with the implementation. The columns of the edges are live. An edge between integers
+  // must be integral in the units of its row as well, since a large coefficient turns a
+  // deviation below tol.zero into a violated row: with the rounded scale and offset,
+  // |child coefficient * scale + parent coefficient| <= tol.zero and
+  // |rhs - child coefficient * offset| <= tol.feasibility. An edge is inadmissible as well when
+  // its scale, rounded for an integer child, is zero or not finite or its offset is not finite,
+  // and it is cut when the map composed to the root is (the root choice counts edges, not
+  // composed maps). The trees are walked in the order of their first column in touched, and the
+  // cut subtrees of a tree in the order they were cut.
   void freeze(const state_t& st, std::vector<alias_map_t>& maps);
 
   // Ends the batch. O(columns of the batch).

@@ -9,51 +9,870 @@
 
 #include <gprs/assert.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <limits>
+#include <sstream>
+
 namespace gprs {
 namespace oracle {
 
-rng_t::rng_t(uint64_t) : state(0) { gprs_assert(false && "not implemented"); }
+rng_t::rng_t(uint64_t seed) : state(seed) {}
 
 uint64_t rng_t::next()
 {
-  gprs_assert(false && "not implemented");
-  return {};
+  state += 0x9e3779b97f4a7c15ull;
+  uint64_t z = state;
+  z          = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+  z          = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+  return z ^ (z >> 31);
 }
 
-int32_t rng_t::uniform(int32_t, int32_t)
+int32_t rng_t::uniform(int32_t lo, int32_t hi)
 {
-  gprs_assert(false && "not implemented");
-  return {};
+  gprs_assert(lo <= hi);
+  uint64_t range = (uint64_t)((int64_t)hi - lo) + 1;
+  // Draws below 2^64 mod range are rejected, which leaves a multiple of range.
+  uint64_t reject = (0ull - range) % range;
+  uint64_t draw   = next();
+  while (draw < reject) {
+    draw = next();
+  }
+  return (int32_t)(lo + (int64_t)(draw % range));
 }
 
-bool rng_t::chance(double)
+bool rng_t::chance(double probability) { return (next() >> 11) * 0x1p-53 < probability; }
+
+namespace {
+
+// Every draw is a statement of its own: the order of two draws inside one expression is not
+// fixed by the language.
+
+double nonzero(rng_t& rng, int32_t largest)
 {
-  gprs_assert(false && "not implemented");
-  return {};
+  int32_t magnitude = rng.uniform(1, largest);
+  return rng.chance(0.5) ? magnitude : -magnitude;
 }
 
-case_t generate(uint64_t, const generator_options_t&)
+// Around the limit of an infinite activity term (1e20) for coefficients 1 to 3, and below it.
+constexpr double huge_bounds[] = {1e7, 1e10, 1e15, 3e19, 4e19, 1e20, 2e20, 1e21, 1e22};
+
+double huge_bound(rng_t& rng) { return huge_bounds[rng.uniform(0, 8)]; }
+
+int32_t enumerated_lower(rng_t& rng, const generator_options_t& o, int32_t width)
 {
-  gprs_assert(false && "not implemented");
-  return {};
+  int32_t kind = rng.uniform(0, 9);
+  if (kind < 6) { return 0; }
+  int32_t from = -o.max_side, to = o.max_side - width;
+  if (kind < 9) {
+    from = std::max(from, -3);
+    to   = std::min(to, 3);
+  }
+  return rng.uniform(from, to);
 }
 
-bool classify(const model_t&, int32_t, std::vector<uint8_t>&)
+void draw_line_bounds(
+  rng_t& rng, const generator_options_t& o, bool integer, bool fixed, double& lower, double& upper)
 {
-  gprs_assert(false && "not implemented");
-  return {};
+  if (fixed) {
+    lower = upper = rng.uniform(-o.max_side, o.max_side);
+    return;
+  }
+  bool lower_infinite = rng.chance(o.p_infinite_bound);
+  bool upper_infinite = rng.chance(o.p_infinite_bound);
+  bool lower_huge     = !lower_infinite && rng.chance(o.p_huge_bound);
+  bool upper_huge     = !upper_infinite && rng.chance(o.p_huge_bound);
+  bool lower_small    = !lower_infinite && !lower_huge;
+  bool upper_small    = !upper_infinite && !upper_huge;
+  lower               = -inf;
+  upper               = inf;
+  if (lower_huge) { lower = -huge_bound(rng); }
+  if (upper_huge) { upper = huge_bound(rng); }
+  if (lower_small && upper_small) {
+    int32_t gap = integer ? o.max_width + 1 : 0;
+    int32_t l   = rng.uniform(-o.max_side, o.max_side - gap);
+    lower       = l;
+    upper       = rng.uniform(l + gap, o.max_side);
+  } else if (lower_small) {
+    lower = rng.uniform(-o.max_side, o.max_side);
+  } else if (upper_small) {
+    upper = rng.uniform(-o.max_side, o.max_side);
+  }
+  if (integer && lower_small && rng.chance(o.p_fractional_bound)) { lower -= 0.5; }
+  if (integer && upper_small && rng.chance(o.p_fractional_bound)) { upper += 0.5; }
 }
 
-solution_t solve(const model_t&, const std::vector<uint8_t>&, int32_t)
+enum class row_kind_t { parallel, empty, singleton, doubleton, general };
+
+struct draft_row_t {
+  row_kind_t kind = row_kind_t::empty;
+  int32_t source  = -1;  // parallel: the row it is a multiple of
+  int32_t factor  = 1;   // general: every coefficient is a multiple of it
+  bool has_line   = false;
+  std::vector<int32_t> col;
+  std::vector<double> value;
+  double lower = -inf;
+  double upper = inf;
+};
+
+void sort_entries(draft_row_t& row)
 {
-  gprs_assert(false && "not implemented");
-  return {};
+  std::vector<int32_t> order(row.col.size());
+  for (size_t k = 0; k < order.size(); ++k) {
+    order[k] = k;
+  }
+  std::sort(
+    order.begin(), order.end(), [&](int32_t a, int32_t b) { return row.col[a] < row.col[b]; });
+  draft_row_t sorted = row;
+  for (size_t k = 0; k < order.size(); ++k) {
+    sorted.col[k]   = row.col[order[k]];
+    sorted.value[k] = row.value[order[k]];
+  }
+  row = sorted;
 }
 
-verdict_t check_presolve(const case_t&, const options_t&)
+bool is_integer(double v) { return v == std::floor(v); }
+
+bool on_half_grid(double v) { return 2. * v == std::floor(2. * v); }
+
+// First and last integer of [lower, upper]; a bound off the half grid gets the tolerance.
+double first_integer(double lower)
 {
-  gprs_assert(false && "not implemented");
-  return {};
+  if (on_half_grid(lower)) { return std::ceil(lower); }
+  return std::ceil(lower - solve_tolerance * std::max(1., std::fabs(lower)));
+}
+
+double last_integer(double upper)
+{
+  if (on_half_grid(upper)) { return std::floor(upper); }
+  return std::floor(upper + solve_tolerance * std::max(1., std::fabs(upper)));
+}
+
+}  // namespace
+
+case_t generate(uint64_t seed, const generator_options_t& o)
+{
+  gprs_assert(o.max_rows >= 0 && o.max_enum_cols >= 0 && o.max_line_cols >= 0);
+  gprs_assert(o.max_coefficient >= 1 && o.max_width >= 0 && o.max_side > o.max_width);
+  gprs_assert(o.max_scale_exp2 >= 0 && o.max_scale_exp2 <= 30);
+  rng_t rng(seed);
+  int32_t nrows  = rng.uniform(0, o.max_rows);
+  int32_t n_enum = rng.uniform(0, o.max_enum_cols);
+  int32_t n_line = rng.uniform(0, o.max_line_cols);
+  int32_t ncols  = n_enum + n_line;
+
+  std::vector<uint8_t> line(ncols, 0);
+  std::fill(line.begin(), line.begin() + n_line, 1);
+  for (int32_t j = ncols - 1; j > 0; --j) {
+    std::swap(line[j], line[rng.uniform(0, j)]);
+  }
+
+  model_t base;
+  base.nrows = nrows;
+  base.ncols = ncols;
+  base.col_lower.resize(ncols);
+  base.col_upper.resize(ncols);
+  base.cost.resize(ncols);
+  base.col_type.resize(ncols);
+  std::vector<int32_t> usable;
+  for (int32_t j = 0; j < ncols; ++j) {
+    if (!rng.chance(o.p_empty_col)) { usable.push_back(j); }
+    bool fixed = rng.chance(o.p_fixed_col);
+    if (line[j]) {
+      base.col_type[j] = rng.chance(o.p_continuous) ? 0 : 1;
+      draw_line_bounds(rng, o, base.col_type[j] == 1, fixed, base.col_lower[j], base.col_upper[j]);
+    } else {
+      base.col_type[j]  = 1;
+      int32_t width     = fixed ? 0 : rng.uniform(std::min(1, o.max_width), o.max_width);
+      int32_t lower     = enumerated_lower(rng, o, width);
+      base.col_lower[j] = lower;
+      base.col_upper[j] = lower + width;
+      if (width < o.max_width && rng.chance(o.p_fractional_bound)) {
+        if (rng.chance(0.5)) {
+          base.col_lower[j] -= 0.5;
+        } else {
+          base.col_upper[j] += 0.5;
+        }
+      }
+    }
+    base.cost[j] = rng.chance(o.p_zero_cost) ? 0. : nonzero(rng, o.max_coefficient);
+  }
+
+  // Kind of every row, and the entries of the rows that are not copies.
+  std::vector<draft_row_t> rows(nrows);
+  std::vector<uint8_t> used(ncols, 0);
+  auto add_entry = [&](draft_row_t& row, int32_t j, double a) {
+    row.col.push_back(j);
+    row.value.push_back(a);
+    row.has_line = row.has_line || line[j];
+    used[j]      = 1;
+  };
+  for (int32_t i = 0; i < nrows; ++i) {
+    draft_row_t& row = rows[i];
+    if (i > 0 && rng.chance(o.p_parallel_row)) {
+      row.kind   = row_kind_t::parallel;
+      row.source = rng.uniform(0, i - 1);
+    } else if (rng.chance(o.p_empty_row)) {
+    } else if (!usable.empty() && rng.chance(o.p_singleton_row)) {
+      row.kind  = row_kind_t::singleton;
+      int32_t j = usable[rng.uniform(0, (int32_t)usable.size() - 1)];
+      add_entry(row, j, nonzero(rng, o.max_coefficient));
+    } else if (usable.size() >= 2 && rng.chance(o.p_doubleton_equation)) {
+      row.kind      = row_kind_t::doubleton;
+      int32_t first = usable[rng.uniform(0, (int32_t)usable.size() - 1)];
+      std::vector<int32_t> partners;
+      for (int32_t j : usable) {
+        if (j != first && !(line[first] && line[j])) { partners.push_back(j); }
+      }
+      add_entry(row, first, nonzero(rng, o.max_coefficient));
+      if (!partners.empty()) {
+        int32_t second = partners[rng.uniform(0, (int32_t)partners.size() - 1)];
+        add_entry(row, second, nonzero(rng, o.max_coefficient));
+      }
+    } else {
+      row.kind = row_kind_t::general;
+      if (o.max_coefficient >= 2 && rng.chance(o.p_common_factor)) {
+        row.factor = rng.uniform(2, o.max_coefficient);
+      }
+      std::vector<int32_t> left;
+      for (int32_t j : usable) {
+        if (rng.chance(o.density) && !(line[j] && row.has_line)) {
+          add_entry(row, j, row.factor * nonzero(rng, o.max_coefficient / row.factor));
+        } else {
+          left.push_back(j);
+        }
+      }
+      // At least two entries where the columns allow it; shorter rows have their own knobs.
+      while (row.col.size() < 2 && !left.empty()) {
+        int32_t pick = rng.uniform(0, (int32_t)left.size() - 1);
+        int32_t j    = left[pick];
+        left.erase(left.begin() + pick);
+        if (line[j] && row.has_line) { continue; }
+        add_entry(row, j, row.factor * nonzero(rng, o.max_coefficient / row.factor));
+      }
+    }
+  }
+  // A usable column that no row took goes into a row drawn entry by entry, if one can hold it.
+  for (int32_t j : usable) {
+    if (used[j]) { continue; }
+    std::vector<int32_t> open;
+    for (int32_t i = 0; i < nrows; ++i) {
+      if (rows[i].kind == row_kind_t::general && !(line[j] && rows[i].has_line)) {
+        open.push_back(i);
+      }
+    }
+    if (open.empty()) { continue; }
+    draft_row_t& row = rows[open[rng.uniform(0, (int32_t)open.size() - 1)]];
+    add_entry(row, j, row.factor * nonzero(rng, o.max_coefficient / row.factor));
+  }
+
+  for (int32_t i = 0; i < nrows; ++i) {
+    draft_row_t& row = rows[i];
+    bool own_sides   = true;
+    if (row.kind == row_kind_t::parallel) {
+      const draft_row_t& other = rows[row.source];
+      double largest           = 1.;
+      for (double a : other.value) {
+        largest = std::max(largest, std::fabs(a));
+      }
+      double factor = nonzero(rng, (int32_t)(o.max_coefficient / largest));
+      row.col       = other.col;
+      row.value     = other.value;
+      for (double& a : row.value) {
+        a *= factor;
+      }
+      if (std::fabs(factor) == 1. && rng.chance(1. / 3.)) {
+        own_sides = false;
+        row.lower = factor > 0 ? other.lower : -other.upper;
+        row.upper = factor > 0 ? other.upper : -other.lower;
+      }
+    } else {
+      sort_entries(row);
+    }
+    if (!own_sides) { continue; }
+
+    // Activity range over the small bounds. An end that an infinite or huge bound leaves open
+    // is put four from the other end, so that the sides stay where the row can be met.
+    double act_min = 0., act_max = 0.;
+    bool min_open = false, max_open = false;
+    for (size_t k = 0; k < row.col.size(); ++k) {
+      int32_t j    = row.col[k];
+      double a     = row.value[k];
+      double first = std::ceil(base.col_lower[j]), last = std::floor(base.col_upper[j]);
+      double low = a > 0 ? first : last, high = a > 0 ? last : first;
+      if (std::fabs(low) <= o.max_side + 1) {
+        act_min += a * low;
+      } else {
+        min_open = true;
+      }
+      if (std::fabs(high) <= o.max_side + 1) {
+        act_max += a * high;
+      } else {
+        max_open = true;
+      }
+    }
+    if (min_open && max_open) {
+      act_min = -3.;
+      act_max = 3.;
+    } else if (min_open) {
+      act_min = act_max - 4.;
+    } else if (max_open) {
+      act_max = act_min + 4.;
+    }
+    double limit = o.max_side;
+    auto side    = [&]() -> double {
+      if (rng.chance(o.p_forcing_side)) {
+        return std::clamp(rng.chance(0.5) ? act_min : act_max, -limit, limit);
+      }
+      if (rng.chance(o.p_outside_side)) {
+        return std::clamp(rng.chance(0.5) ? act_min - 1. : act_max + 1., -limit, limit);
+      }
+      int32_t from = std::clamp(act_min, -limit, limit);
+      int32_t to   = std::clamp(act_max, -limit, limit);
+      return rng.uniform(from, to);
+    };
+    if (row.kind == row_kind_t::doubleton) {
+      row.lower = row.upper = side();
+    } else if (rng.chance(o.p_free_row)) {
+    } else if (rng.chance(o.p_equation)) {
+      row.lower = row.upper = side();
+    } else if (rng.chance(o.p_ranged_row)) {
+      double a  = side();
+      double b  = side();
+      row.lower = std::min(a, b);
+      row.upper = std::max(a, b);
+    } else if (rng.chance(0.5)) {
+      row.upper = side();
+    } else {
+      row.lower = side();
+    }
+  }
+
+  base.row_start.push_back(0);
+  for (const draft_row_t& row : rows) {
+    base.col_index.insert(base.col_index.end(), row.col.begin(), row.col.end());
+    base.value.insert(base.value.end(), row.value.begin(), row.value.end());
+    base.row_start.push_back(base.value.size());
+    base.row_lower.push_back(row.lower);
+    base.row_upper.push_back(row.upper);
+  }
+  if (rng.chance(0.5)) { base.objective_offset = rng.uniform(-o.max_side, o.max_side); }
+
+  if (nrows + ncols > 0 && rng.chance(o.p_crossing)) {
+    int32_t pick  = rng.uniform(0, nrows + ncols - 1);
+    int32_t gap   = rng.uniform(1, std::min(3, 2 * o.max_side));
+    int32_t upper = rng.uniform(-o.max_side, o.max_side - gap);
+    if (pick < nrows) {
+      base.row_upper[pick] = upper;
+      base.row_lower[pick] = upper + gap;
+    } else {
+      base.col_upper[pick - nrows] = upper;
+      base.col_lower[pick - nrows] = upper + gap;
+    }
+  }
+
+  std::vector<double> row_scale(nrows, 1.), col_scale(ncols, 1.);
+  if (rng.chance(o.p_scaled)) {
+    for (int32_t i = 0; i < nrows; ++i) {
+      row_scale[i] = std::ldexp(1., rng.uniform(-o.max_scale_exp2, o.max_scale_exp2));
+    }
+    for (int32_t j = 0; j < ncols; ++j) {
+      if (base.col_type[j] == 1) { continue; }
+      col_scale[j] = std::ldexp(1., rng.uniform(-o.max_scale_exp2, o.max_scale_exp2));
+    }
+  }
+  case_t c = make_case(base, row_scale, col_scale);
+  gprs_assert(classify(c.base, o.max_width, line));
+  return c;
+}
+
+model_t scale_model(const model_t& base,
+                    const std::vector<double>& row_scale,
+                    const std::vector<double>& col_scale)
+{
+  gprs_assert((int32_t)row_scale.size() == base.nrows);
+  gprs_assert((int32_t)col_scale.size() == base.ncols);
+  model_t model = base;
+  for (int32_t i = 0; i < base.nrows; ++i) {
+    gprs_assert(row_scale[i] > 0 && std::isfinite(row_scale[i]));
+    for (int64_t e = base.row_start[i]; e < base.row_start[i + 1]; ++e) {
+      model.value[e] = row_scale[i] * base.value[e] * col_scale[base.col_index[e]];
+    }
+    model.row_lower[i] = row_scale[i] * base.row_lower[i];
+    model.row_upper[i] = row_scale[i] * base.row_upper[i];
+  }
+  for (int32_t j = 0; j < base.ncols; ++j) {
+    gprs_assert(col_scale[j] > 0 && std::isfinite(col_scale[j]));
+    model.col_lower[j] = base.col_lower[j] / col_scale[j];
+    model.col_upper[j] = base.col_upper[j] / col_scale[j];
+    model.cost[j]      = base.cost[j] * col_scale[j];
+  }
+  return model;
+}
+
+case_t make_case(const model_t& base,
+                 const std::vector<double>& row_scale,
+                 const std::vector<double>& col_scale)
+{
+  gprs_assert(well_formed(base));
+  case_t c;
+  c.base      = base;
+  c.row_scale = row_scale.empty() ? std::vector<double>(base.nrows, 1.) : row_scale;
+  c.col_scale = col_scale.empty() ? std::vector<double>(base.ncols, 1.) : col_scale;
+  c.model     = scale_model(base, c.row_scale, c.col_scale);
+  gprs_assert(well_formed(c.model));
+  return c;
+}
+
+namespace {
+
+std::string number(double v)
+{
+  if (v == inf) { return "inf"; }
+  if (v == -inf) { return "-inf"; }
+  char text[40];
+  std::snprintf(text, sizeof(text), "%.17g", v);
+  std::string s = text;
+  if (s.find_first_of(".en") == std::string::npos) { s += '.'; }
+  return s;
+}
+
+template <typename T, typename F>
+std::string list(const std::vector<T>& values, F text)
+{
+  std::string out = "{";
+  size_t width    = 0;
+  for (size_t k = 0; k < values.size(); ++k) {
+    std::string item = text(values[k]);
+    if (k > 0 && width + item.size() > 78) {
+      out += ",\n    ";
+      width = 0;
+    } else if (k > 0) {
+      out += ", ";
+    }
+    out += item;
+    width += item.size() + 2;
+  }
+  return out + "}";
+}
+
+std::string integers(const std::vector<int64_t>& v)
+{
+  return list(v, [](int64_t a) { return std::to_string(a); });
+}
+
+std::string numbers(const std::vector<double>& v) { return list(v, number); }
+
+}  // namespace
+
+std::string to_code(const case_t& c)
+{
+  const model_t& b = c.base;
+  std::vector<int64_t> col_index(b.col_index.begin(), b.col_index.end());
+  std::vector<int64_t> col_type(b.col_type.begin(), b.col_type.end());
+  std::string out;
+  out += "  model_t base;\n";
+  out += "  base.nrows = " + std::to_string(b.nrows) + ";\n";
+  out += "  base.ncols = " + std::to_string(b.ncols) + ";\n";
+  out += "  base.row_start = " + integers(b.row_start) + ";\n";
+  out += "  base.col_index = " + integers(col_index) + ";\n";
+  out += "  base.value = " + numbers(b.value) + ";\n";
+  out += "  base.row_lower = " + numbers(b.row_lower) + ";\n";
+  out += "  base.row_upper = " + numbers(b.row_upper) + ";\n";
+  out += "  base.col_lower = " + numbers(b.col_lower) + ";\n";
+  out += "  base.col_upper = " + numbers(b.col_upper) + ";\n";
+  out += "  base.cost = " + numbers(b.cost) + ";\n";
+  out += "  base.col_type = " + integers(col_type) + ";\n";
+  out += "  base.objective_offset = " + number(b.objective_offset) + ";\n";
+  out += "  oracle::case_t c = oracle::make_case(\n    base,\n    " + numbers(c.row_scale) +
+         ",\n    " + numbers(c.col_scale) + ");\n";
+  return out;
+}
+
+bool classify(const model_t& model, int32_t max_width, std::vector<uint8_t>& line_col)
+{
+  line_col.resize(model.ncols);
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    double lower = model.col_lower[j], upper = model.col_upper[j];
+    line_col[j] = !(model.col_type[j] == 1 && std::isfinite(lower) && std::isfinite(upper) &&
+                    upper - lower <= max_width);
+  }
+  for (int32_t i = 0; i < model.nrows; ++i) {
+    int32_t lines = 0;
+    for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
+      lines += line_col[model.col_index[e]];
+    }
+    if (lines > 1) { return false; }
+  }
+  return true;
+}
+
+double assignments(const model_t& model, const std::vector<uint8_t>& line_col)
+{
+  double count = 1.;
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    if (line_col[j]) { continue; }
+    count *=
+      std::max(0., last_integer(model.col_upper[j]) - first_integer(model.col_lower[j]) + 1.);
+  }
+  return count;
+}
+
+bool classify_widest(const model_t& model, double max_assignments, std::vector<uint8_t>& line_col)
+{
+  // Below every width: no column is enumerated.
+  std::vector<int32_t> limits = {std::numeric_limits<int32_t>::min()};
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    double width = model.col_upper[j] - model.col_lower[j];
+    if (model.col_type[j] == 1 && std::fabs(width) <= 0x1p20) {
+      limits.push_back((int32_t)std::ceil(width));
+    }
+  }
+  std::sort(limits.begin(), limits.end());
+  limits.erase(std::unique(limits.begin(), limits.end()), limits.end());
+  bool found = false;
+  std::vector<uint8_t> trial;
+  for (int32_t limit : limits) {
+    if (!classify(model, limit, trial) || assignments(model, trial) > max_assignments) { continue; }
+    line_col = trial;
+    found    = true;
+  }
+  return found;
+}
+
+solution_t solve(const model_t& model, const std::vector<uint8_t>& line_col, int32_t keep_points)
+{
+  gprs_assert(well_formed(model));
+  gprs_assert((int32_t)line_col.size() == model.ncols);
+  int32_t nrows = model.nrows, ncols = model.ncols;
+
+  std::vector<int32_t> enumerated;
+  std::vector<double> first, last;
+  for (int32_t j = 0; j < ncols; ++j) {
+    if (line_col[j]) { continue; }
+    gprs_assert(model.col_type[j] == 1);
+    gprs_assert(std::isfinite(model.col_lower[j]) && std::isfinite(model.col_upper[j]));
+    enumerated.push_back(j);
+    first.push_back(first_integer(model.col_lower[j]));
+    last.push_back(last_integer(model.col_upper[j]));
+  }
+
+  std::vector<int32_t> row_line(nrows, -1);
+  std::vector<double> row_line_value(nrows, 0.);
+  std::vector<uint8_t> row_exact(nrows);
+  for (int32_t i = 0; i < nrows; ++i) {
+    double lower = model.row_lower[i], upper = model.row_upper[i];
+    row_exact[i] = is_integer(lower) && is_integer(upper);
+    for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
+      int32_t j = model.col_index[e];
+      if (line_col[j]) {
+        gprs_assert(row_line[i] < 0);
+        row_line[i]       = j;
+        row_line_value[i] = model.value[e];
+      } else if (!is_integer(model.value[e])) {
+        row_exact[i] = 0;
+      }
+    }
+  }
+
+  solution_t solution;
+  bool unbounded = false, has_best = false;
+  double best = 0.;
+  std::vector<double> x(ncols, 0.), far(ncols, 0.), lower_end(ncols), upper_end(ncols);
+  // Tolerance of each end: zero when the end is an exact bound or comes from an exact row, so
+  // that a huge exact bound is never moved.
+  std::vector<double> lower_slack(ncols), upper_slack(ncols);
+  auto slack_of = [](double end, bool exact) {
+    return exact || !std::isfinite(end) ? 0. : solve_tolerance * std::max(1., std::fabs(end));
+  };
+
+  // Completes the assignment of the enumerated columns held in x. False when it is infeasible;
+  // ray is set when a line column can move without limit in the direction of its cost.
+  auto complete = [&](bool& ray) {
+    for (int32_t j = 0; j < ncols; ++j) {
+      lower_end[j]   = model.col_lower[j];
+      upper_end[j]   = model.col_upper[j];
+      lower_slack[j] = slack_of(lower_end[j], on_half_grid(lower_end[j]));
+      upper_slack[j] = slack_of(upper_end[j], on_half_grid(upper_end[j]));
+    }
+    for (int32_t i = 0; i < nrows; ++i) {
+      double activity = 0., magnitude = 0.;
+      for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
+        int32_t j = model.col_index[e];
+        if (line_col[j]) { continue; }
+        double term = model.value[e] * x[j];
+        activity += term;
+        magnitude += std::fabs(term);
+      }
+      double lower = model.row_lower[i], upper = model.row_upper[i];
+      if (row_line[i] < 0) {
+        // Each side with its own size: a huge side must not loosen the other one.
+        auto slack = [&](double side) {
+          if (row_exact[i] || !std::isfinite(side)) { return 0.; }
+          return solve_tolerance * std::max({1., magnitude, std::fabs(side)});
+        };
+        if (activity < lower - slack(lower) || activity > upper + slack(upper)) { return false; }
+        continue;
+      }
+      int32_t j = row_line[i];
+      double a  = row_line_value[i];
+      // An infinite side gives the infinite end of the right sign for either sign of a.
+      double from = (lower - activity) / a, to = (upper - activity) / a;
+      if (a < 0) { std::swap(from, to); }
+      if (from > lower_end[j]) {
+        lower_end[j]   = from;
+        lower_slack[j] = slack_of(from, row_exact[i]);
+      }
+      if (to < upper_end[j]) {
+        upper_end[j]   = to;
+        upper_slack[j] = slack_of(to, row_exact[i]);
+      }
+    }
+    ray = false;
+    for (int32_t j = 0; j < ncols; ++j) {
+      if (!line_col[j]) { continue; }
+      double from = lower_end[j], to = upper_end[j];
+      if (model.col_type[j] == 1) {
+        from = std::ceil(from - lower_slack[j]);
+        to   = std::floor(to + upper_slack[j]);
+        if (from > to) { return false; }
+      } else {
+        if (from > to + std::max(lower_slack[j], upper_slack[j])) { return false; }
+        if (from > to) { from = to = 0.5 * (from + to); }
+      }
+      double cost = model.cost[j];
+      if (cost < 0) {
+        ray  = ray || to == inf;
+        x[j] = std::isfinite(to) ? to : std::isfinite(from) ? from : 0.;
+      } else {
+        ray  = ray || (cost > 0 && from == -inf);
+        x[j] = std::isfinite(from) ? from : std::isfinite(to) ? to : 0.;
+      }
+      double step = far_step * std::max(1., std::fabs(x[j]));
+      if (from == to) {
+        far[j] = x[j];
+      } else if (x[j] == to) {
+        far[j] = std::isfinite(from) ? from : to - step;
+      } else {
+        far[j] = std::isfinite(to) ? to : x[j] + step;
+      }
+    }
+    return true;
+  };
+
+  int32_t n_enum = enumerated.size();
+  bool has_point = true;
+  for (int32_t k = 0; k < n_enum; ++k) {
+    has_point        = has_point && first[k] <= last[k];
+    x[enumerated[k]] = first[k];
+  }
+  while (has_point) {
+    bool ray = false;
+    if (complete(ray)) {
+      if ((int32_t)solution.feasible.size() < keep_points) {
+        solution.feasible.push_back(x);
+        solution.far.push_back(x);
+        for (int32_t j = 0; j < ncols; ++j) {
+          if (line_col[j]) { solution.far.back()[j] = far[j]; }
+        }
+      }
+      double objective = model.objective_offset;
+      for (int32_t j = 0; j < ncols; ++j) {
+        objective += model.cost[j] * x[j];
+      }
+      unbounded = unbounded || ray;
+      if (!ray && (!has_best || objective < best)) {
+        has_best   = true;
+        best       = objective;
+        solution.x = x;
+      }
+    }
+    int32_t k = n_enum - 1;
+    while (k >= 0 && x[enumerated[k]] == last[k]) {
+      x[enumerated[k]] = first[k];
+      --k;
+    }
+    if (k < 0) { break; }
+    x[enumerated[k]] += 1.;
+  }
+
+  if (unbounded) {
+    solution.outcome = outcome_t::unbounded;
+    solution.x.clear();
+  } else if (has_best) {
+    solution.outcome   = outcome_t::optimal;
+    solution.objective = best;
+  }
+  return solution;
+}
+
+namespace {
+
+const char* outcome_name(outcome_t outcome)
+{
+  switch (outcome) {
+    case outcome_t::optimal: return "optimal";
+    case outcome_t::infeasible: return "infeasible";
+    default: return "unbounded";
+  }
+}
+
+bool close(double a, double b)
+{
+  return std::fabs(a - b) <= 1e-9 * std::max({1., std::fabs(a), std::fabs(b)});
+}
+
+verdict_t failure(const std::string& message) { return verdict_t{false, message}; }
+
+std::string point_text(const std::vector<double>& x) { return numbers(x); }
+
+std::string violation_text(const point_check_t& check)
+{
+  return "row violation " + number(check.row_violation) + ", bound violation " +
+         number(check.bound_violation) + ", integrality violation " +
+         number(check.integrality_violation);
+}
+
+// origin names distinct indices below size, one per row or column of the reduced model.
+bool origin_valid(const std::vector<int32_t>& origin, int32_t reduced_size, int32_t size)
+{
+  if ((int32_t)origin.size() != reduced_size) { return false; }
+  std::vector<uint8_t> seen(std::max(size, 0), 0);
+  for (int32_t index : origin) {
+    if (index < 0 || index >= size || seen[index]) { return false; }
+    seen[index] = 1;
+  }
+  return true;
+}
+
+// Indices of at most checked_points of n points, evenly spaced.
+std::vector<int64_t> sample(int64_t n)
+{
+  int64_t count = std::min<int64_t>(n, checked_points);
+  std::vector<int64_t> picked(count);
+  for (int64_t k = 0; k < count; ++k) {
+    picked[k] = k * n / count;
+  }
+  return picked;
+}
+
+}  // namespace
+
+verdict_t check_result(const case_t& c, const options_t& options, const result_t& result)
+{
+  gprs_assert(well_formed(c.base) && well_formed(c.model));
+  gprs_assert((int32_t)c.col_scale.size() == c.base.ncols);
+  int32_t keep = (int32_t)check_max_assignments;
+
+  std::vector<uint8_t> base_line;
+  if (!classify_widest(c.base, check_max_assignments, base_line)) {
+    return failure("the base model is outside the oracle class");
+  }
+  solution_t base = solve(c.base, base_line, keep);
+
+  if (result.status == status_t::failed) { return failure("presolve returned status failed"); }
+  if (result.status == status_t::infeasible) {
+    if (base.outcome == outcome_t::infeasible) { return verdict_t(); }
+    return failure(std::string("presolve returned infeasible, the base model is ") +
+                   outcome_name(base.outcome));
+  }
+  if (result.status == status_t::unbounded_or_infeasible) {
+    if (base.outcome != outcome_t::optimal) { return verdict_t(); }
+    return failure("presolve returned unbounded_or_infeasible, the base model is optimal with " +
+                   number(base.objective));
+  }
+
+  const model_t& reduced = result.reduced;
+  const postsolve_t& ps  = result.postsolve;
+  if (!well_formed(reduced)) { return failure("the reduced model is not well_formed"); }
+  if (ps.nrows != c.model.nrows || ps.ncols != c.model.ncols) {
+    return failure("the postsolve stack does not have the sizes of the model");
+  }
+  if (!origin_valid(ps.row_origin, reduced.nrows, ps.nrows) ||
+      !origin_valid(ps.col_origin, reduced.ncols, ps.ncols)) {
+    return failure(
+      "row_origin / col_origin are not distinct rows / columns of the model, one "
+      "per row / column of the reduced model");
+  }
+  std::vector<uint8_t> reduced_line;
+  if (!classify_widest(reduced, check_max_assignments, reduced_line)) {
+    return failure("the reduced model is outside the oracle class");
+  }
+  solution_t red = solve(reduced, reduced_line, keep);
+  if (red.outcome != base.outcome) {
+    return failure(std::string("the reduced model is ") + outcome_name(red.outcome) +
+                   ", the base model is " + outcome_name(base.outcome));
+  }
+
+  // Postsolves a point of the reduced model; an empty text when it is feasible for c.model.
+  std::vector<double> x;
+  double objective = 0.;
+  auto postsolved  = [&](const std::vector<double>& x_reduced) -> std::string {
+    ps.postsolve(x_reduced, x);
+    if ((int32_t)x.size() != c.model.ncols) { return "the postsolved point has the wrong size"; }
+    point_check_t check = check_point(c.model, x);
+    objective           = check.objective;
+    if (point_feasible(check, options.tol)) { return std::string(); }
+    return "reduced point " + point_text(x_reduced) + " postsolves to " + point_text(x) +
+           ", infeasible for the model: " + violation_text(check);
+  };
+
+  if (red.outcome == outcome_t::optimal) {
+    if (!close(red.objective, base.objective)) {
+      return failure("the reduced optimum is " + number(red.objective) + ", the base optimum " +
+                     number(base.objective));
+    }
+    std::string error = postsolved(red.x);
+    if (!error.empty()) { return failure("optimal point: " + error); }
+    if (!close(objective, base.objective)) {
+      return failure("the postsolved optimal point " + point_text(x) + " has objective " +
+                     number(objective) + ", the base optimum is " + number(base.objective));
+    }
+  }
+  for (int64_t k : sample(red.feasible.size())) {
+    std::string error = postsolved(red.feasible[k]);
+    if (!error.empty()) { return failure("feasible point " + std::to_string(k) + ": " + error); }
+    error = postsolved(red.far[k]);
+    if (!error.empty()) { return failure("far point " + std::to_string(k) + ": " + error); }
+  }
+
+  bool primal = options.primal_only || !options.enabled[rule::dual_fixing] ||
+                result.stats[rule::dual_fixing].findings == 0;
+  if (!primal || base.outcome == outcome_t::infeasible) { return verdict_t(); }
+  std::vector<const std::vector<double>*> points;
+  if (base.outcome == outcome_t::optimal) { points.push_back(&base.x); }
+  for (int64_t k : sample(base.feasible.size())) {
+    points.push_back(&base.feasible[k]);
+    points.push_back(&base.far[k]);
+  }
+  std::vector<double> x_model(c.model.ncols), x_reduced;
+  for (const std::vector<double>* point : points) {
+    for (int32_t j = 0; j < c.model.ncols; ++j) {
+      x_model[j] = (*point)[j] / c.col_scale[j];
+    }
+    ps.crush(x_model, x_reduced);
+    if ((int32_t)x_reduced.size() != reduced.ncols) {
+      return failure("the crushed point has the wrong size");
+    }
+    point_check_t check = check_point(reduced, x_reduced);
+    if (!point_feasible(check, options.tol)) {
+      return failure("feasible point " + point_text(x_model) + " of the model crushes to " +
+                     point_text(x_reduced) +
+                     ", infeasible for the reduced model: " + violation_text(check));
+    }
+    double original = check_point(c.model, x_model).objective;
+    if (!close(check.objective, original)) {
+      return failure("feasible point " + point_text(x_model) + " of the model has objective " +
+                     number(original) + ", its crushed point " + number(check.objective));
+    }
+  }
+  return verdict_t();
+}
+
+verdict_t check_presolve(const case_t& c, const options_t& options)
+{
+  return check_result(c, options, presolve(c.model, options));
 }
 
 }  // namespace oracle

@@ -168,16 +168,46 @@ struct result_t {
 // the state compacts sparse lines and rebuilds by the two fractions above. At the end recorded
 // implied bounds are made explicit, the state is rebuilt and the reduced model extracted.
 // A family is called with make_budget(options.budget[rule], state).
+// Added with the implementation:
+// - A family is called when it is switched on and its list is not empty; dual fixing never in
+//   primal-only mode. A call that stops on its budget ends the cascade after the pass it is in,
+//   and the family goes on with a new budget in the cascade of the next round. A round changes
+//   nothing when its calls report no finding.
+// - Sparse lines are compacted after every cascade pass and after every phase. The state is
+//   rebuilt only after a phase (cascade, parallel rows, doubleton equations) and at the end: a
+//   rebuild costs O(rows + columns) of the input model, whatever is left of it.
+// - make_explicit runs when bound propagation is switched on (no other family records an
+//   implied bound). Its findings, seconds and removals are booked under rule::propagation,
+//   not as a call. Rows, columns and nonzeros removed by a call are the differences of
+//   live_rows, live_cols and free_nnz(); what the start step fixes is in no statistics.
+// - Status: infeasible and unbounded_or_infeasible as the start step or a family reports them,
+//   with an empty result_t::reduced. limit when the time limit, tested before every call, ended
+//   the rounds; make_explicit, rebuild and extraction are still done. Otherwise unchanged when
+//   the reduced model equals the input in every array, reduced_to_empty when it has no row and
+//   no column, else reduced. Budgets and the limits on rounds and passes never give limit.
+// - phase_hash: one entry after the start step, three per round (after the cascade, parallel
+//   rows and doubleton equations, each after its compaction or rebuild, also when the family
+//   was not called) and one after the extraction. A presolve that ends inside a round has the
+//   entries up to there and, with status limit, the last one.
+// - result_t::hash is model_hash(result_t::reduced) for every status.
 result_t presolve(const model_t& model, const options_t& options);
 
 // Hash over sizes and the bit patterns of every array of the model.
+// The three hashes chain 64-bit words (an integer as its value, a double as its bit pattern, an
+// array as its length and its elements), so they are the same on every platform and depend on
+// no address.
 uint64_t model_hash(const model_t& model);
 
 // Hash over the bit patterns of bounds, sides, activities with their counters, live entries in
 // storage order, flags, locks, cost and offset of the state.
+// Added with the implementation: and over everything else a later step reads, which is the
+// layout of both stores (start, used, capacity and size of every line, tombstones by position),
+// row versions, recorded implied bounds, the counters, the tolerances and the lists in their
+// order. Not hashed: slot_visits, lane_scratch, value and twin of a tombstone.
 uint64_t state_hash(const state_t& st);
 
 // Hash over the records of the stack in order.
+// Added with the implementation: and over its sizes, column types, row_origin and col_origin.
 uint64_t postsolve_hash(const postsolve_t& ps);
 
 }  // namespace gprs
