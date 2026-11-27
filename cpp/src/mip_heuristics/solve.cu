@@ -734,9 +734,9 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
       // Dual reductions can remove feasible user assignments that callbacks may later inject.
       // Keep primal reductions so those assignments can be crushed into the presolved problem.
       presolver->set_dual_reductions(!has_set_solution_callback);
-      cuopt_expects(hp.presolve_gprs >= 0 && hp.presolve_gprs <= 2,
+      cuopt_expects(hp.presolve_gprs >= 0 && hp.presolve_gprs <= 3,
                     error_type_t::ValidationError,
-                    "mip_hyper_params.presolve_gprs must be 0, 1 or 2");
+                    "mip_hyper_params.presolve_gprs must be 0, 1, 2 or 3");
       presolver->set_gprs_presolve((mip::gprs_presolve_mode_t)hp.presolve_gprs);
       auto result = presolver->apply_presolve_from_op_problem(
         op_problem,

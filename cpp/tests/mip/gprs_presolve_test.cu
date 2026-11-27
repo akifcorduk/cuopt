@@ -11,8 +11,10 @@
 #include <cuopt/mathematical_optimization/io/mps_data_model.hpp>
 #include <cuopt/mathematical_optimization/io/parser.hpp>
 #include <cuopt/mathematical_optimization/solve.hpp>
+#include <linear_algebra/sort_csr.cuh>
 #include <mip_heuristics/problem/problem.cuh>
 #include <mip_heuristics/solution/solution.cuh>
+#include <presolve/presolve_budget_policy.hpp>
 #include <presolve/third_party_presolve.hpp>
 #include <utilities/common_utils.hpp>
 #include <utilities/copy_helpers.hpp>
@@ -21,6 +23,9 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <numeric>
 #include <string>
 #include <tuple>
@@ -103,7 +108,7 @@ INSTANTIATE_TEST_SUITE_P(gprs_presolve,
                                                               std::string("mip/fixed-problem.mps"),
                                                               std::string("mip/dominating_set.mps"),
                                                               std::string("mip/sample.mps")),
-                                            ::testing::Values(1, 2)));
+                                            ::testing::Values(1, 2, 3)));
 
 class gprs_presolve_infeasible_test : public ::testing::TestWithParam<int> {};
 
@@ -121,7 +126,7 @@ TEST_P(gprs_presolve_infeasible_test, infeasible_problem)
   EXPECT_EQ(solution.get_termination_status(), mip_termination_status_t::Infeasible);
 }
 
-INSTANTIATE_TEST_SUITE_P(gprs_presolve, gprs_presolve_infeasible_test, ::testing::Values(1, 2));
+INSTANTIATE_TEST_SUITE_P(gprs_presolve, gprs_presolve_infeasible_test, ::testing::Values(1, 2, 3));
 
 // mip_hyper_params.presolve_gprs, maximize, dual reductions.
 class gprs_presolve_undo_test : public ::testing::TestWithParam<std::tuple<int, bool, bool>> {};
@@ -204,8 +209,72 @@ TEST_P(gprs_presolve_undo_test, undo_gives_an_optimal_point_of_the_original_prob
 
 INSTANTIATE_TEST_SUITE_P(gprs_presolve,
                          gprs_presolve_undo_test,
-                         ::testing::Combine(::testing::Values(1, 2),
+                         ::testing::Combine(::testing::Values(1, 2, 3),
                                             ::testing::Bool(),
                                             ::testing::Bool()));
+
+// Not a test: prints what each presolve mode leaves of the instances listed in the file named by
+// GPRS_REDUCTIONS_LIST (one MPS path per line), without solving and without scaling, as the
+// solver would call the presolve. Modes: 0 the third-party presolve, 2 gprs alone, 3 gprs and
+// cuOpt's own reductions. GPRS_REDUCTIONS_THREADS is the thread count given to Papilo (4).
+// Run with --gtest_also_run_disabled_tests --gtest_filter='*reductions_report*'.
+TEST(gprs_presolve_report, DISABLED_reductions_report)
+{
+  const char* list = std::getenv("GPRS_REDUCTIONS_LIST");
+  ASSERT_NE(list, nullptr);
+  const char* threads_text = std::getenv("GPRS_REDUCTIONS_THREADS");
+  const int threads        = threads_text ? std::atoi(threads_text) : 4;
+  const raft::handle_t handle{};
+  std::ifstream in(list);
+  ASSERT_TRUE(in.good());
+  std::string path;
+  while (std::getline(in, path)) {
+    if (path.empty()) { continue; }
+    const auto model = io::read_mps<int, double>(path, false);
+    auto op_problem  = mps_data_model_to_optimization_problem(&handle, model);
+    sort_csr(op_problem);
+    handle.sync_stream();
+    mip_solver_settings_t<int, double> settings;
+    const auto& hp      = settings.mip_hyper_params;
+    const auto features = mip::papilo_presolve_features(op_problem);
+    const auto budget   = mip::evaluate_presolve_budget(hp, features);
+    for (int mode : {0, 2, 3}) {
+      mip::third_party_presolve_t<int, double> presolver;
+      presolver.set_indicator_strengthening(hp.presolve_indicator_strengthening);
+      presolver.set_dual_reductions(true);
+      presolver.set_gprs_presolve((mip::gprs_presolve_mode_t)mode);
+      const auto start = std::chrono::steady_clock::now();
+      const auto result =
+        presolver.apply_presolve_from_op_problem(op_problem,
+                                                 problem_category_t::MIP,
+                                                 presolver_t::Papilo,
+                                                 false,
+                                                 settings.tolerances.absolute_tolerance,
+                                                 settings.tolerances.relative_tolerance,
+                                                 600.,
+                                                 threads,
+                                                 budget.papilo_max_rounds,
+                                                 budget.papilo_max_badgesize);
+      const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      const bool has_model = result.status == mip::third_party_presolve_status_t::REDUCED ||
+                             result.status == mip::third_party_presolve_status_t::UNCHANGED;
+      printf(
+        "GPRS_REDUCTIONS path=%s mode=%d status=%d rows=%d cols=%d nnz=%d seconds=%.3f "
+        "rows0=%d cols0=%d nnz0=%d\n",
+        path.c_str(),
+        mode,
+        (int)result.status,
+        has_model ? result.reduced_problem.get_n_constraints() : 0,
+        has_model ? result.reduced_problem.get_n_variables() : 0,
+        has_model ? result.reduced_problem.get_nnz() : 0,
+        seconds,
+        op_problem.get_n_constraints(),
+        op_problem.get_n_variables(),
+        op_problem.get_nnz());
+      fflush(stdout);
+    }
+  }
+}
 
 }  // namespace cuopt::mathematical_optimization::test

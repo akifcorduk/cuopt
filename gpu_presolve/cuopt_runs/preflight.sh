@@ -34,7 +34,7 @@ run_one() {
 
 running=0
 for mps in "$@"; do
-  for mode in 0 1 2; do
+  for mode in 0 1 2 3; do
     run_one "$mps" "$mode" &
     running=$((running + 1))
     if [ "$running" -ge "$PARALLEL" ]; then
@@ -50,7 +50,7 @@ wait
     objective end
   for mps in "$@"; do
     name=$(basename "$mps" .mps)
-    for mode in 0 1 2; do
+    for mode in 0 1 2 3; do
       log=$OUT/$name.m$mode.log
       code=$(grep -a '^exit ' "$log" | tail -1 | cut -d' ' -f2)
       gprs=$(grep -a 'GPRS presolve' "$log" | head -1 |

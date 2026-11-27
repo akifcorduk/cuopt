@@ -40,8 +40,9 @@ struct mip_hyper_params_t {
   bool presolve_indicator_strengthening = true;
 
   // The gprs presolve (gpu_presolve/) on the main MIP: 0 off, 1 before Papilo, which then
-  // presolves the problem gprs reduced, 2 instead of Papilo. Only when presolve is enabled.
-  // Not registered as a parameter: the default here is the switch.
+  // presolves the problem gprs reduced, 2 instead of Papilo, 3 before cuOpt's own reductions
+  // alone (indicator strengthening, GF2, BHW, single-lock dual aggregation; no Papilo rule).
+  // Only when presolve is enabled. Not registered as a parameter: the default here is the switch.
   i_t presolve_gprs = 0;
 
   // ---------------------------------------------------------------------------------------------
