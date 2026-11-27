@@ -80,8 +80,8 @@ struct run_t {
   rng_t& rng;
   bool decimal;
   // Events the operation must raise, per row and column, on the rule lists.
-  std::vector<uint8_t> row_events;
-  std::vector<uint8_t> col_events;
+  std::vector<list_mask_t> row_events;
+  std::vector<list_mask_t> col_events;
   std::string failure;
 
   run_t(const model_t& m, const tolerances_t& tol, rng_t& generator, bool decimal_values)
@@ -137,7 +137,7 @@ struct run_t {
     return {};
   }
 
-  void expect_rows_of_col(int32_t col, uint8_t events)
+  void expect_rows_of_col(int32_t col, list_mask_t events)
   {
     for (int32_t i = 0; i < sh.nrows; ++i) {
       if (sh.row[i].count(col)) { row_events[i] |= events; }
@@ -397,6 +397,9 @@ struct run_t {
       if (integral && sh.live(entry.first) && std::round(v) == 0.) { return false; }
     }
     row_events[i] = row_event::entries;
+    for (const auto& entry : sh.row[i]) {
+      if (sh.live(entry.first)) { col_events[entry.first] = col_event::entries; }
+    }
     st.scale_row(i, factor, integral);
     sh.scale_row(i, factor, integral);
     return true;
@@ -580,7 +583,7 @@ struct run_t {
     if (!apply(kind)) { return false; }
     if (!failure.empty()) { return true; }
     for (int32_t i = 0; i < st.nrows; ++i) {
-      uint8_t rule_lists = row_event::entries | row_event::singleton;
+      list_mask_t rule_lists = row_event::entries | row_event::singleton;
       if ((st.row_frontier.pending[i] & rule_lists) != row_events[i]) {
         failure = "row " + std::to_string(i) + ": events " +
                   std::to_string(st.row_frontier.pending[i] & rule_lists) + ", expected " +

@@ -375,6 +375,7 @@ struct reference_t {
     result_t result;
     result.status                            = status;
     result.stats[rule::dual_fixing].findings = dual_fixings;
+    result.dual_findings                     = dual_fixings;
     if (status != status_t::reduced) { return result; }
     model_t& r = result.reduced;
     std::vector<int32_t> new_col(ncols, -1);

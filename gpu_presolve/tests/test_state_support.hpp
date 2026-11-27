@@ -511,11 +511,12 @@ inline bool same_model(const model_t& a, const model_t& b)
 inline void clear_rule_lists(state_t& st)
 {
   std::vector<int32_t> taken;
-  for (int32_t l = 0; l < row_list::compaction; ++l) {
-    st.row_frontier.take(l, taken);
+  for (int32_t l = 0; l < row_list::count; ++l) {
+    if (l != row_list::compaction) { st.row_frontier.take(l, taken); }
   }
-  st.row_frontier.take(row_list::singletons, taken);
-  st.col_frontier.take(col_list::dual_fixing, taken);
+  for (int32_t l = 0; l < col_list::count; ++l) {
+    if (l != col_list::compaction) { st.col_frontier.take(l, taken); }
+  }
 }
 
 }  // namespace state_test

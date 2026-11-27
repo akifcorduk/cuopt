@@ -14,10 +14,32 @@ namespace gprs {
 
 const char* rule_name(int32_t rule)
 {
-  static const char* const names[rule::count] = {
-    "row_rules", "propagation", "tightening", "doubleton", "parallel_rows", "dual_fixing"};
+  static const char* const names[rule::count] = {"row_rules",
+                                                 "propagation",
+                                                 "tightening",
+                                                 "doubleton",
+                                                 "parallel_rows",
+                                                 "dual_fixing",
+                                                 "simple_probing",
+                                                 "singleton_cols",
+                                                 "dual_cols",
+                                                 "parallel_cols"};
   gprs_assert(rule >= 0 && rule < rule::count);
   return names[rule];
+}
+
+const char* sub_rule_name(int32_t sub)
+{
+  static const char* const names[sub_rule::count] = {"free_singleton",
+                                                     "zero_cost_singleton",
+                                                     "forcing_column",
+                                                     "free_singleton_dual",
+                                                     "parallel_dominance",
+                                                     "dual_bound",
+                                                     "lock_alias",
+                                                     "parallel_merge"};
+  gprs_assert(sub >= 0 && sub < sub_rule::count);
+  return names[sub];
 }
 
 const char* status_name(status_t status)
@@ -127,6 +149,10 @@ struct engine_t {
   doubleton_t doubleton;
   parallel_rows_t parallel_rows;
   dual_fixing_t dual_fixing;
+  simple_probing_t simple_probing;
+  singleton_cols_t singleton_cols;
+  dual_cols_t dual_cols;
+  parallel_cols_t parallel_cols;
 
   rule_outcome_t outcome = rule_outcome_t::ok;
   bool out_of_time       = false;
@@ -155,10 +181,22 @@ struct engine_t {
     return opt.enabled[rule] && !(rule == rule::dual_fixing && opt.primal_only);
   }
 
+  // A list of the family holds a row or a column.
   bool pending(int32_t rule) const
   {
-    if (rule == rule::dual_fixing) { return !st.col_frontier.empty(col_list::dual_fixing); }
-    return !st.row_frontier.empty(rule);
+    const frontier_set_t& rows = st.row_frontier;
+    const frontier_set_t& cols = st.col_frontier;
+    switch (rule) {
+      case rule::dual_fixing: return !cols.empty(col_list::dual_fixing);
+      case rule::simple_probing: return !rows.empty(row_list::simple_probing);
+      case rule::singleton_cols:
+        return !cols.empty(col_list::singleton_cols) || !rows.empty(row_list::singleton_cols);
+      case rule::dual_cols:
+        return !cols.empty(col_list::dual_cols) || !rows.empty(row_list::dual_cols);
+      case rule::parallel_cols:
+        return !cols.empty(col_list::parallel_cols) || !rows.empty(row_list::parallel_cols);
+      default: return !rows.empty(rule);
+    }
   }
 
   // Books what a family did since `before`. False when its outcome ends the presolve.
@@ -171,6 +209,19 @@ struct engine_t {
     stats.findings += r.findings;
     stats.records += r.records;
     stats.seconds += seconds_since(begin);
+    gprs_assert(r.dual_findings <= r.findings && (r.dual_findings == 0 || !opt.primal_only));
+    result.dual_findings += r.dual_findings;
+    for (int32_t sub = 0; sub < sub_rule::count; ++sub) {
+      result.sub_findings[sub] += r.sub_findings[sub];
+    }
+    column_stats_t& columns = result.columns;
+    columns.cost_fill += r.columns.cost_fill;
+    columns.saved_entries += r.columns.saved_entries;
+    if (r.columns.max_growth > columns.max_growth) { columns.max_growth = r.columns.max_growth; }
+    if (r.columns.alias_depth > columns.alias_depth) {
+      columns.alias_depth = r.columns.alias_depth;
+    }
+    columns.free_singleton_rejected_explicit += r.columns.free_singleton_rejected_explicit;
     if (r.outcome != rule_outcome_t::ok) {
       outcome = r.outcome;
       return false;
@@ -206,6 +257,24 @@ struct engine_t {
 
   // The family is switched on and its list holds a row or a column.
   bool waiting(int32_t rule) const { return active(rule) && pending(rule); }
+
+  // A column family, which are the families behind dual fixing, is waiting.
+  bool column_rules_waiting() const
+  {
+    for (int32_t rule = rule::simple_probing; rule < rule::count; ++rule) {
+      if (waiting(rule)) { return true; }
+    }
+    return false;
+  }
+
+  // One column family as a phase of the round. False when the presolve ends here.
+  template <typename family_t>
+  bool column_phase(int32_t rule, family_t& family)
+  {
+    if (!call(rule, family)) { return false; }
+    end_phase();
+    return true;
+  }
 
   bool cascade_pending() const
   {
@@ -277,6 +346,12 @@ struct engine_t {
       end_phase();
       if (!call(rule::doubleton, doubleton)) { return; }
       end_phase();
+      if (!column_phase(rule::simple_probing, simple_probing) ||
+          !column_phase(rule::singleton_cols, singleton_cols) ||
+          !column_phase(rule::dual_cols, dual_cols) ||
+          !column_phase(rule::parallel_cols, parallel_cols)) {
+        return;
+      }
       if (round_findings == 0) {
         settled = served && !round_stopped;
         // A row that closed a cycle of doubleton equations is back on its list: the next batch
@@ -292,8 +367,13 @@ struct engine_t {
   // the term in the sides.
   bool fixed_terms_matter() const
   {
-    return st.fixed_nnz > 0 && (opt.enabled[rule::row_rules] || opt.enabled[rule::propagation] ||
-                                opt.enabled[rule::tightening] || opt.enabled[rule::parallel_rows]);
+    if (st.fixed_nnz == 0) { return false; }
+    for (int32_t rule = 0; rule < rule::count; ++rule) {
+      if (rule != rule::doubleton && rule != rule::dual_fixing && opt.enabled[rule]) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void absorb_fixed_terms()
@@ -351,11 +431,11 @@ struct engine_t {
         break;
       }
       absorb_fixed_terms();
-      renewed = cascade_pending() || waiting(rule::parallel_rows);
+      renewed = cascade_pending() || waiting(rule::parallel_rows) || column_rules_waiting();
     }
     result.seconds_explicit = seconds_since(explicit_begin);
     result.fixed_point      = settled && !limited && !out_of_time && !fixed_terms_matter() &&
-                         !cascade_pending() && !waiting(rule::doubleton);
+                         !cascade_pending() && !waiting(rule::doubleton) && !column_rules_waiting();
 
     if (opt.enabled[rule::row_rules]) {
       if (result.fixed_point) {

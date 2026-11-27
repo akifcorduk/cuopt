@@ -5,6 +5,8 @@
  */
 /* clang-format on */
 
+#include "implied.hpp"
+
 #include <gprs/assert.hpp>
 #include <gprs/presolve.hpp>
 #include <gprs/rules.hpp>
@@ -45,25 +47,14 @@ constexpr uint8_t upper_stale   = 8;
 // needs 3. A bound that has had its steps stays where it is, and the call reports limited.
 constexpr uint8_t max_explicit_steps = 16;
 
-// A candidate is rounded twice, in the residual and in the division, by up to this many rounding
-// units of its size in all.
-constexpr double candidate_rounding_units = 4.;
-
-inline double bound_rounding(double bound)
-{
-  return candidate_rounding_units * rounding_unit * std::fabs(bound);
-}
-
 // What a bound of a continuous column must improve on to count: implied_bound_step feasibility
 // tolerances, or as many times what a bound of its size loses when it is stored, and never less
-// than two candidates of one bound can differ by: each is moved outward by its rounding and by
-// the error bound of its activity, which the guard keeps below a share of the tolerance and
-// which is another one in every presolve.
+// than two candidates of one bound can differ by (implied_tolerance).
 inline double improvement_step(const tolerances_t& tol, double bound)
 {
   double step =
     tol.implied_bound_step * std::fmax(tol.feasibility, tol.side_error * std::fabs(bound));
-  return std::fmax(step, 2. * (bound_rounding(bound) + tol.activity_error_share * tol.feasibility));
+  return std::fmax(step, implied_tolerance(tol, bound));
 }
 
 struct context_t {
@@ -89,73 +80,14 @@ struct context_t {
   }
 };
 
-// The bound that one side of the row implies for the column of entry e: the upper side with
-// the minimum activity (upper_side) or the lower side with the maximum activity. That activity
-// has no infinite term, or its only one at e. It is the same for every entry of the row: a
-// candidate changes the bound of its column that this activity does not hold, and a column
-// fixed by its candidate is fixed at the bound that the activity holds.
-struct candidate_t {
-  double bound;
-  // What it was computed from: bound = dd_residual(side, rest) / a, with the error bound of rest.
-  double side;
-  dd_t rest;
-  double a;
-  double error;
-};
-
-bool candidate(context_t& c, int32_t row, int64_t e, bool upper_side, candidate_t& k)
-{
-  const state_t& st     = c.st;
-  const activity_t& act = upper_side ? st.min_act : st.max_act;
-  int32_t infinite      = act.inf_count[row];
-  gprs_assert(infinite == 0 || (infinite == 1 && act.inf_slot[row] == e));
-  int32_t col      = st.csr.index[e];
-  k.a              = st.csr.value[e];
-  k.side           = upper_side ? st.row_upper[row] : st.row_lower[row];
-  k.rest           = dd_t{act.hi[row], act.lo[row]};
-  uint32_t updates = act.updates[row];
-  if (infinite == 0) {
-    double own = upper_side ? min_activity_bound(k.a, st.col_lower[col], st.col_upper[col])
-                            : max_activity_bound(k.a, st.col_lower[col], st.col_upper[col]);
-    gprs_assert(!is_infinite_term(k.a, own, c.tol));
-    dd_sub_product(k.rest, k.a, own);
-    ++updates;
-  }
-  k.error = activity_error(updates, act.max_term[row]);
-  if (k.error > c.tol.activity_error_share * c.tol.feasibility * std::fabs(k.a)) {
-    c.guarded = true;
-    return false;
-  }
-  k.bound = dd_residual(k.side, k.rest) / k.a;
-  // An overflow of the division says nothing about the column.
-  return std::isfinite(k.bound);
-}
-
-// What the true quotient can lie beyond the candidate by: nothing when the residual and the
-// division are exact for the stored sum (a candidate of 8 is 8, whatever the history of the
-// sum), else their rounding and the error bound of the activity. A bound of a continuous column
-// is the candidate moved outward by it, so that the bound holds for every point of the row: a
-// bound that is a rounding step too tight cuts a point off, and a row with a large coefficient
-// of the column carries that on, multiplied (131072 twice turns one step into 4e-6).
-double candidate_slack(const candidate_t& k)
-{
-  // dd_residual(k.side, k.rest), with what its two additions round away.
-  double carry, tail_rounding, residual_rounding;
-  double difference = two_sum(k.side, -k.rest.hi, carry);
-  double tail       = two_sum(carry, -k.rest.lo, tail_rounding);
-  double residual   = two_sum(difference, tail, residual_rounding);
-  if (tail_rounding == 0. && residual_rounding == 0. && std::fma(k.bound, k.a, -residual) == 0.) {
-    return 0.;
-  }
-  return bound_rounding(k.bound) +
-         (k.error + std::fabs(tail_rounding) + std::fabs(residual_rounding)) / std::fabs(k.a);
-}
-
+// The activity that the side reads has no infinite term, or its only one at e.
 rule_outcome_t propagate_entry(context_t& c, int32_t row, int64_t e, bool upper_side)
 {
   state_t& st = c.st;
   candidate_t k;
-  if (!candidate(c, row, e, upper_side, k)) { return rule_outcome_t::ok; }
+  if (!candidate_of_finite_rest(st, c.tol, row, e, upper_side, k, c.guarded)) {
+    return rule_outcome_t::ok;
+  }
   int32_t col   = st.csr.index[e];
   bool is_upper = (st.csr.value[e] > 0) == upper_side;
   bool pending  = false;

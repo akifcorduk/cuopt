@@ -370,9 +370,19 @@ GPRS_TEST(state_build_lists)
     GPRS_CHECK(st.row_frontier.list[l] == all);
   }
   GPRS_CHECK(st.row_frontier.empty(row_list::compaction));
+  GPRS_CHECK(st.row_frontier.empty(row_list::singletons));
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == all);
   GPRS_CHECK(st.col_frontier.empty(col_list::compaction));
-  GPRS_CHECK_EQ(st.row_frontier.pending[3], row_event::entries);
+  // The column rules: every row on the list of simple probing, every column on the three
+  // column lists, and no row on the row lists that only lead to columns.
+  GPRS_CHECK(st.row_frontier.list[row_list::simple_probing] == all);
+  for (int32_t l : {row_list::singleton_cols, row_list::dual_cols, row_list::parallel_cols}) {
+    GPRS_CHECK(st.row_frontier.empty(l));
+  }
+  for (int32_t l : {col_list::singleton_cols, col_list::dual_cols, col_list::parallel_cols}) {
+    GPRS_CHECK(st.col_frontier.list[l] == all);
+  }
+  GPRS_CHECK_EQ(st.row_frontier.pending[3], row_event::construction);
   GPRS_CHECK_EQ(st.col_frontier.pending[3], col_event::locks);
 
   st.row_frontier.take(row_list::propagation, taken);
@@ -413,17 +423,88 @@ GPRS_TEST(state_build_lists)
   st.col_frontier.push(col_event::locks, 2);
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == std::vector<int32_t>({2}));
   GPRS_CHECK(st.col_frontier.list[col_list::compaction] == std::vector<int32_t>({2}));
+
+  // The row lists of the column rules get every activity, side and entries event, the one of
+  // an activity that propagation does not read included, and no singleton or sparse event.
+  for (int32_t l : {row_list::simple_probing,
+                    row_list::singleton_cols,
+                    row_list::dual_cols,
+                    row_list::parallel_cols}) {
+    st.row_frontier.take(l, taken);
+    st.row_frontier.push(row_event::singleton, 0);
+    st.row_frontier.push(row_event::sparse, 0);
+    GPRS_CHECK(st.row_frontier.empty(l));
+    st.row_frontier.push(row_event::activity_unread, 3);
+    st.row_frontier.push(row_event::activity, 1);
+    st.row_frontier.push(row_event::side, 3);
+    st.row_frontier.push(row_event::entries, 0);
+    GPRS_CHECK(st.row_frontier.list[l] == std::vector<int32_t>({3, 1, 0}));
+  }
+  // Their column lists get the events of locks and of entries; an entries event does not reach
+  // dual fixing, which reads no coefficient.
+  st.col_frontier.take(col_list::dual_fixing, taken);
+  for (int32_t l : {col_list::singleton_cols, col_list::dual_cols, col_list::parallel_cols}) {
+    st.col_frontier.take(l, taken);
+    GPRS_CHECK(taken == all);
+    st.col_frontier.push(col_event::sparse, 1);
+    GPRS_CHECK(st.col_frontier.empty(l));
+  }
+  st.col_frontier.push(col_event::entries, 4);
+  st.col_frontier.push(col_event::locks, 1);
+  for (int32_t l : {col_list::singleton_cols, col_list::dual_cols, col_list::parallel_cols}) {
+    GPRS_CHECK(st.col_frontier.list[l] == std::vector<int32_t>({4, 1}));
+  }
+  GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == std::vector<int32_t>({1}));
 }
 
 GPRS_TEST(state_build_event_masks)
 {
-  GPRS_CHECK_EQ(row_event::activity, 0x07);
-  GPRS_CHECK_EQ(row_event::side, 0x1f);
-  GPRS_CHECK_EQ(row_event::entries, 0x1f);
+  GPRS_CHECK_EQ(row_event::column_rules, 0x780);
+  GPRS_CHECK_EQ(row_event::activity, 0x787);
+  GPRS_CHECK_EQ(row_event::activity_unread, 0x785);
+  GPRS_CHECK_EQ(row_event::side, 0x79f);
+  GPRS_CHECK_EQ(row_event::entries, 0x79f);
   GPRS_CHECK_EQ(row_event::sparse, 0x20);
-  GPRS_CHECK_EQ(col_event::locks, 0x01);
+  GPRS_CHECK_EQ(row_event::singleton, 0x50);
+  GPRS_CHECK_EQ(row_event::construction, 0x9f);
+  GPRS_CHECK_EQ(col_event::column_rules, 0x1c);
+  GPRS_CHECK_EQ(col_event::locks, 0x1d);
+  GPRS_CHECK_EQ(col_event::entries, 0x1c);
   GPRS_CHECK_EQ(col_event::sparse, 0x02);
-  GPRS_CHECK(row_list::count <= 8 && col_list::count <= 8);
+  // Lists of later rules have a bit left in both masks.
+  GPRS_CHECK(row_list::count < 16 && col_list::count < 16);
+  GPRS_CHECK_EQ(sizeof(list_mask_t), (size_t)2);
+}
+
+// state_t::row_singletons at construction: the live columns with one entry, by the row of it.
+GPRS_TEST(state_build_singleton_counts)
+{
+  state_t st(hand_model(), tolerances_t());
+  GPRS_CHECK(st.row_singletons == std::vector<int32_t>(5, 0));
+
+  //   r0:  x0 + x1 + x2 <= 4
+  //   r1:  x0      + x3  = 1
+  //   r2:  (empty)
+  // x1, x2 and x3 have one entry each, x4 has none; x2 has lower == upper and counts until the
+  // start step of the engine fixes it.
+  model_t m;
+  m.nrows     = 3;
+  m.ncols     = 5;
+  m.row_start = {0, 3, 5, 5};
+  m.col_index = {0, 1, 2, 0, 3};
+  m.value     = {1., 1., 1., 1., 1.};
+  m.row_lower = {-inf, 1., 0.};
+  m.row_upper = {4., 1., 0.};
+  m.col_lower = {0., 0., 2., 0., 0.};
+  m.col_upper = {1., 1., 2., 1., 1.};
+  m.cost      = {0., 0., 0., 0., 0.};
+  m.col_type  = {0, 0, 0, 0, 0};
+  state_t singles(m, tolerances_t());
+  GPRS_CHECK(singles.row_singletons == std::vector<int32_t>({2, 1, 0}));
+  GPRS_CHECK_EQ(singles.consistency_error(), std::string());
+  singles.fix_col(2, 2.);
+  GPRS_CHECK(singles.row_singletons == std::vector<int32_t>({1, 1, 0}));
+  GPRS_CHECK_EQ(singles.consistency_error(), std::string());
 }
 
 // The stored activities follow the summation order of numerics.hpp bit for bit at every lane

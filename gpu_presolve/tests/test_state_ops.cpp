@@ -66,15 +66,17 @@ void check_side(const activity_t& act, int32_t row, const expected_side_t& expec
 
 using list_t = std::vector<int32_t>;
 
-// The five rule lists hold `rows` where `events` feeds them; `singleton` are the rows that got
-// row_event::singleton, before the rows of the operation (first) or after them.
+// The rule lists, those of the column rules included, hold `rows` where `events` feeds them;
+// `singleton` are the rows that got row_event::singleton, before the rows of the operation
+// (first) or after them.
 void check_rule_lists(const state_t& st,
-                      uint8_t events,
+                      list_mask_t events,
                       const list_t& rows,
                       const list_t& singleton = {},
                       bool first              = false)
 {
-  for (int32_t l = 0; l < row_list::compaction; ++l) {
+  for (int32_t l = 0; l < row_list::count; ++l) {
+    if (l == row_list::compaction || l == row_list::singletons) { continue; }
     list_t expected = (events >> l) & 1 ? rows : list_t();
     if (l == row_list::parallel_rows) {
       expected.insert(
@@ -89,11 +91,22 @@ void check_rule_lists(const state_t& st,
 // and on the propagation list those whose side reads that activity.
 void check_activity_lists(const state_t& st, const list_t& rows, const list_t& read)
 {
-  for (int32_t l = 0; l < row_list::compaction; ++l) {
+  for (int32_t l = 0; l < row_list::count; ++l) {
+    if (l == row_list::compaction || l == row_list::singletons) { continue; }
     bool listed = (row_event::activity >> l) & 1;
     GPRS_CHECK(st.row_frontier.list[l] == (!listed                      ? list_t()
                                            : l == row_list::propagation ? read
                                                                         : rows));
+  }
+}
+
+// The lists of the column rules hold `cols` where `events` feeds them, and so does the
+// dual-fixing list.
+void check_col_lists(const state_t& st, list_mask_t events, const list_t& cols)
+{
+  for (int32_t l = 0; l < col_list::count; ++l) {
+    if (l == col_list::compaction) { continue; }
+    GPRS_CHECK(st.col_frontier.list[l] == ((events >> l) & 1 ? cols : list_t()));
   }
 }
 
@@ -289,6 +302,51 @@ GPRS_TEST(state_ops_delete_row)
   check_consistent(st);
 }
 
+// row_singletons follows every operation that makes a live column a singleton column or ends
+// that: the row of its one entry counts it, and a deleted row counts nothing.
+GPRS_TEST(state_ops_singleton_counts)
+{
+  state_t st(hand_model(), tolerances_t());
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 0, 0, 0}));
+  clear_rule_lists(st);
+
+  // x3 is left with its entry in r2. Every live column of the deleted row is listed for the
+  // column rules, the one that became a singleton column among them.
+  st.delete_row(1);
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 1, 0, 0}));
+  check_col_lists(st, col_event::locks, {1, 3});
+  check_consistent(st);
+  // The only entry of x3 leaves.
+  st.delete_entry(st.find_entry(2, 3));
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 0, 0, 0}));
+  check_consistent(st);
+  // The entry of x4 in r2 becomes the first entry of x3, and x4 is left with its entry in r4.
+  st.move_entry(st.find_entry(2, 4), 3, 1.);
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 1, 0, 1}));
+  check_consistent(st);
+  // The entry of x0 in r0 becomes a second entry of x4: x0 is left with its entry in r4, where
+  // x4 stops being a singleton column.
+  st.move_entry(st.find_entry(0, 0), 4, 2.);
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 1, 0, 1}));
+  GPRS_CHECK_EQ(st.csc.size[0], 1);
+  GPRS_CHECK_EQ(st.csc.size[4], 2);
+  check_consistent(st);
+  // A fixed column is no singleton column, and a deleted row has none.
+  st.fix_col(0, 2.);
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 1, 0, 0}));
+  check_consistent(st);
+  st.delete_row(2);
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 0, 0, 0}));
+  check_consistent(st);
+  // The counts are those of the rebuilt state.
+  st.rebuild();
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 0, 0, 0}));
+  // x1, x2 and x4 have entries in r0 and r4 left; without r0 they are singleton columns of r4.
+  st.delete_row(0);
+  GPRS_CHECK(st.row_singletons == list_t({0, 0, 0, 0, 3}));
+  check_consistent(st);
+}
+
 GPRS_TEST(state_ops_row_sides)
 {
   state_t st(hand_model(), tolerances_t());
@@ -366,7 +424,7 @@ GPRS_TEST(state_ops_scale_row)
   GPRS_CHECK_EQ(st.coefficient_changes, 3);
   GPRS_CHECK_EQ(st.side_changes, 1);
   check_rule_lists(st, row_event::entries, {2});
-  GPRS_CHECK(st.col_frontier.empty(col_list::dual_fixing));
+  check_col_lists(st, col_event::entries, {2, 3, 4});
   GPRS_CHECK(st.up_locks == list_t({2, 2, 3, 2, 1}));
   check_consistent(st);
 

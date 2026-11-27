@@ -127,9 +127,6 @@ std::vector<profile_t> near_profiles()
   return list;
 }
 
-const char* const family_name[rule::count] = {
-  "row_rules", "propagation", "tightening", "doubleton", "parallel_rows", "dual_fixing"};
-
 std::string real(double v)
 {
   char text[40];
@@ -239,12 +236,12 @@ options_t without(int32_t family)
 
 void run_only(int32_t family)
 {
-  run_suite((std::string("only_") + family_name[family]).c_str(), only(family), 120);
+  run_suite((std::string("only_") + rule_name(family)).c_str(), only(family), 120);
 }
 
 void run_without(int32_t family)
 {
-  run_suite((std::string("without_") + family_name[family]).c_str(), without(family), 120);
+  run_suite((std::string("without_") + rule_name(family)).c_str(), without(family), 120);
 }
 
 bool same_model(const model_t& a, const model_t& b)
@@ -334,6 +331,10 @@ GPRS_TEST(e2e_only_tightening) { run_only(rule::tightening); }
 GPRS_TEST(e2e_only_doubleton) { run_only(rule::doubleton); }
 GPRS_TEST(e2e_only_parallel_rows) { run_only(rule::parallel_rows); }
 GPRS_TEST(e2e_only_dual_fixing) { run_only(rule::dual_fixing); }
+GPRS_TEST(e2e_only_simple_probing) { run_only(rule::simple_probing); }
+GPRS_TEST(e2e_only_singleton_cols) { run_only(rule::singleton_cols); }
+GPRS_TEST(e2e_only_dual_cols) { run_only(rule::dual_cols); }
+GPRS_TEST(e2e_only_parallel_cols) { run_only(rule::parallel_cols); }
 
 GPRS_TEST(e2e_without_row_rules) { run_without(rule::row_rules); }
 GPRS_TEST(e2e_without_propagation) { run_without(rule::propagation); }
@@ -341,6 +342,10 @@ GPRS_TEST(e2e_without_tightening) { run_without(rule::tightening); }
 GPRS_TEST(e2e_without_doubleton) { run_without(rule::doubleton); }
 GPRS_TEST(e2e_without_parallel_rows) { run_without(rule::parallel_rows); }
 GPRS_TEST(e2e_without_dual_fixing) { run_without(rule::dual_fixing); }
+GPRS_TEST(e2e_without_simple_probing) { run_without(rule::simple_probing); }
+GPRS_TEST(e2e_without_singleton_cols) { run_without(rule::singleton_cols); }
+GPRS_TEST(e2e_without_dual_cols) { run_without(rule::dual_cols); }
+GPRS_TEST(e2e_without_parallel_cols) { run_without(rule::parallel_cols); }
 
 // The start step alone.
 GPRS_TEST(e2e_no_rule)
@@ -824,7 +829,7 @@ GPRS_TEST(e2e_reduced_model_is_a_fixed_point)
             for (int32_t r = 0; r < rule::count; ++r) {
               if (second.stats[r].findings == 0) { continue; }
               problem +=
-                std::string(", ") + family_name[r] + " " + std::to_string(second.stats[r].findings);
+                std::string(", ") + rule_name(r) + " " + std::to_string(second.stats[r].findings);
             }
           }
         }

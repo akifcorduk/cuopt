@@ -58,10 +58,11 @@ rule_result_t dual_fixing_t::run(state_t& st,
     fix_column(st, ps, col, value);
     budget.found();
     ++result.findings;
+    ++result.dual_findings;
   }
   result.stopped = k < cols.size();
   for (; k < cols.size(); ++k) {
-    st.col_frontier.push(col_event::locks, cols[k]);
+    st.col_frontier.push(list_bit(col_list::dual_fixing), cols[k]);
   }
   return result;
 }

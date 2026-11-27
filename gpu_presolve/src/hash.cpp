@@ -149,6 +149,7 @@ uint64_t state_hash(const state_t& st)
   h.add(st.row_alive);
   h.add(st.row_free_size);
   h.add(st.row_version);
+  h.add(st.row_singletons);
   h.add(st.min_act);
   h.add(st.max_act);
   h.add(st.col_lower);
@@ -198,6 +199,7 @@ uint64_t postsolve_hash(const postsolve_t& ps)
     h.add(r.row);
     h.add(r.scale);
     h.add(r.offset);
+    h.add(r.origin);
   }
   h.add(ps.parallel_rows.size());
   for (const parallel_row_record_t& r : ps.parallel_rows) {

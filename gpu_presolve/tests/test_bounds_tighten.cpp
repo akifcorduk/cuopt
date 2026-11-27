@@ -73,7 +73,7 @@ void check_change(bound_change_t result, rule_outcome_t outcome, bool changed)
   GPRS_CHECK_EQ(result.changed, changed);
 }
 
-void check_rule_lists(const state_t& st, uint8_t events, const list_t& rows)
+void check_rule_lists(const state_t& st, list_mask_t events, const list_t& rows)
 {
   for (int32_t l = 0; l < row_list::compaction; ++l) {
     GPRS_CHECK(st.row_frontier.list[l] == ((events >> l) & 1 ? rows : list_t()));
@@ -629,9 +629,9 @@ std::string random_step(fixture_t& f, rng_t& rng, int32_t col, records_t& record
   // side that reads that activity is finite.
   int64_t row_visits = 0;
   for (int32_t i = 0; i < sh.nrows; ++i) {
-    auto entry    = sh.row[i].find(col);
-    bool has_col  = entry != sh.row[i].end();
-    uint8_t event = 0;
+    auto entry        = sh.row[i].find(col);
+    bool has_col      = entry != sh.row[i].end();
+    list_mask_t event = 0;
     if (has_col && e.changed && e.fixed) {
       event = row_event::entries;
     } else if (has_col && e.changed) {

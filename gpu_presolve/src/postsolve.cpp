@@ -39,8 +39,10 @@ bool stack_consistent(const postsolve_t& ps)
       ++n_removed;
     } else if (kind == record_kind_t::parallel_row) {
       ++parallel;
-    } else {
+    } else if (kind == record_kind_t::row_addition) {
       ++addition;
+    } else {
+      return false;
     }
   }
   if (fixed != ps.fixed_cols.size() || alias != ps.aliases.size() ||
@@ -104,16 +106,21 @@ void postsolve_t::push_fixed_col(int32_t col, double value)
   fixed_cols.push_back(fixed_col_record_t{col, value});
 }
 
-void postsolve_t::push_alias(int32_t col, int32_t rep, int32_t row, double scale, double offset)
+void postsolve_t::push_alias(
+  int32_t col, int32_t rep, int32_t row, double scale, double offset, alias_origin_t origin)
 {
   gprs_assert(col >= 0 && col < ncols && rep >= 0 && rep < ncols && col != rep);
-  gprs_assert(row >= 0 && row < nrows);
+  gprs_assert(origin == alias_origin_t::doubleton || origin == alias_origin_t::probing ||
+              origin == alias_origin_t::lock);
+  gprs_assert(row >= -1 && row < nrows);
+  gprs_assert(origin != alias_origin_t::doubleton || row >= 0);
+  gprs_assert(origin != alias_origin_t::lock || row == -1);
   gprs_assert(!col_removed[col] && !col_removed[rep]);
   gprs_assert(std::isfinite(scale) && scale != 0. && std::isfinite(offset));
   gprs_assert(!col_type[col] || (col_type[rep] && integral(scale) && integral(offset)));
   col_removed[col] = 1;
   order.push_back(record_kind_t::alias);
-  aliases.push_back(alias_record_t{col, rep, row, scale, offset});
+  aliases.push_back(alias_record_t{col, rep, row, scale, offset, origin});
 }
 
 void postsolve_t::push_parallel_row(int32_t removed_row, int32_t kept_row, double ratio)

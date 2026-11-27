@@ -9,6 +9,8 @@
 //               [--off <rule>]... [--exact-parallel-rows]
 // Reads a GPRSCSR1 dump, runs the presolve, prints sizes before and after, seconds and the
 // determinism hash of the reduced model, and writes the same as JSON.
+// --off takes the name of a rule family (rule_name) or of a reduction of the column rules
+// (sub_rule_name).
 // --exact-parallel-rows: only rows whose free entries are proportional are merged
 // (options_t::near_parallel_rows off).
 // Exit code 0 when the presolve ran, 1 when the dump cannot be read, 2 on a usage error.
@@ -81,6 +83,25 @@ void write_report(FILE* out,
                "  \"parallel_rows\": {\"merges\": %zu, \"subtractions\": %zu},\n",
                result.postsolve.parallel_rows.size(),
                result.postsolve.row_additions.size());
+  std::fprintf(out, "  \"dual_findings\": %lld,\n", (long long)result.dual_findings);
+  std::fprintf(out, "  \"sub_rules\": {");
+  for (int32_t s = 0; s < gprs::sub_rule::count; ++s) {
+    std::fprintf(out,
+                 "%s\"%s\": %lld",
+                 s > 0 ? ", " : "",
+                 gprs::sub_rule_name(s),
+                 (long long)result.sub_findings[s]);
+  }
+  std::fprintf(out, "},\n");
+  std::fprintf(out,
+               "  \"columns\": {\"cost_fill\": %lld, \"saved_entries\": %lld, "
+               "\"max_growth\": %.6g, \"alias_depth\": %d, "
+               "\"free_singleton_rejected_explicit\": %lld},\n",
+               (long long)result.columns.cost_fill,
+               (long long)result.columns.saved_entries,
+               result.columns.max_growth,
+               result.columns.alias_depth,
+               (long long)result.columns.free_singleton_rejected_explicit);
   std::fprintf(out, "  \"start\": ");
   write_stats(out, result.start);
   std::fprintf(out, ",\n  \"rules\": {\n");
@@ -117,13 +138,21 @@ int main(int argc, char** argv)
     } else if (arg == "--time-limit" && i + 1 < argc) {
       options.time_limit = std::atof(argv[++i]);
     } else if (arg == "--off" && i + 1 < argc) {
-      int32_t rule = 0;
+      int32_t rule = 0, sub = 0;
       ++i;
       while (rule < gprs::rule::count && std::strcmp(gprs::rule_name(rule), argv[i]) != 0) {
         ++rule;
       }
-      if (rule == gprs::rule::count) { return usage(); }
-      options.enabled[rule] = false;
+      while (sub < gprs::sub_rule::count && std::strcmp(gprs::sub_rule_name(sub), argv[i]) != 0) {
+        ++sub;
+      }
+      if (rule < gprs::rule::count) {
+        options.enabled[rule] = false;
+      } else if (sub < gprs::sub_rule::count) {
+        options.sub_enabled[sub] = false;
+      } else {
+        return usage();
+      }
     } else if (path.empty() && arg[0] != '-') {
       path = arg;
     } else {

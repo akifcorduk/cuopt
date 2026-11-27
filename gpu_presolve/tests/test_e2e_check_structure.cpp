@@ -91,7 +91,7 @@ bool silent(const structure_report_t& s)
 {
   return s.stack_error.empty() && s.lost_integers == 0 && s.bound_failures == 0 &&
          s.row_failures == 0 && s.kept_failures == 0 && s.added_failures == 0 &&
-         s.postsolve_failures == 0;
+         s.objective_failures == 0 && s.postsolve_failures == 0;
 }
 
 // Columns x, y, s, t in this order.
@@ -121,7 +121,7 @@ result_t pair_result(const model_t& m, double lower, double upper)
 GPRS_TEST(e2e_structure_reads_a_row_addition_record)
 {
   model_t m            = pair_model();
-  structure_report_t r = structure_check(m, pair_result(m, -inf, 2.));
+  structure_report_t r = structure_check(m, pair_result(m, -inf, 2.), false);
   GPRS_CHECK(r.composed && silent(r));
   GPRS_CHECK_EQ(r.added_rows, 1);
   GPRS_CHECK_EQ(r.added_tested, 1);
@@ -133,7 +133,7 @@ GPRS_TEST(e2e_structure_reads_a_row_addition_record)
   auto error = [&](int32_t row, int32_t equation_row, double factor) {
     result_t result                   = pair_result(m, -inf, 2.);
     result.postsolve.row_additions[0] = row_addition_record_t{row, equation_row, factor};
-    structure_report_t report         = structure_check(m, result);
+    structure_report_t report         = structure_check(m, result, false);
     GPRS_CHECK(!report.composed);
     return report.stack_error;
   };
@@ -147,10 +147,10 @@ GPRS_TEST(e2e_structure_reads_a_row_addition_record)
   // The order and the array of the records disagree.
   result_t result = pair_result(m, -inf, 2.);
   result.postsolve.row_additions.clear();
-  GPRS_CHECK_EQ(structure_check(m, result).stack_error, "row addition records missing at 0");
+  GPRS_CHECK_EQ(structure_check(m, result, false).stack_error, "row addition records missing at 0");
   result = pair_result(m, -inf, 2.);
   result.postsolve.order.clear();
-  GPRS_CHECK_EQ(structure_check(m, result).stack_error, "records outside the order 0");
+  GPRS_CHECK_EQ(structure_check(m, result, false).stack_error, "records outside the order 0");
 
   // A row that an earlier record took out of the model: the removed row of a parallel record,
   // the row of an alias.
@@ -158,36 +158,36 @@ GPRS_TEST(e2e_structure_reads_a_row_addition_record)
     result = reduced_to(m, {{{{s, 1.}}, -inf, 2.}, equation}, {0, 1});
     merge(result, equation_gone ? 1 : 0, equation_gone ? 0 : 1, 1.);
     add(result, 0, 1, 1.);
-    GPRS_CHECK_EQ(structure_check(m, result).stack_error, "rows of row addition record 1");
+    GPRS_CHECK_EQ(structure_check(m, result, false).stack_error, "rows of row addition record 1");
   }
   result = reduced_to(m, {{{{s, 1.}}, -inf, 2.}, equation}, {0, 1});
   result.reduced =
     build({{{{2, 1.}}, -inf, 2.}, {{{x, 1.}, {y, 1.}}, 3., 3.}}, {0., 0., 0.}, {3., 3., 4.});
   result.postsolve.col_origin = {x, y, s};
   result.postsolve.order.push_back(record_kind_t::alias);
-  result.postsolve.aliases.push_back(alias_record_t{t, s, 1, 1., 0.});
+  result.postsolve.aliases.push_back(alias_record_t{t, s, 1, 1., 0., alias_origin_t::doubleton});
   add(result, 0, 1, 1.);
-  GPRS_CHECK_EQ(structure_check(m, result).stack_error, "rows of row addition record 1");
+  GPRS_CHECK_EQ(structure_check(m, result, false).stack_error, "rows of row addition record 1");
   // The row may be merged afterwards.
   result = pair_result(m, -inf, 2.);
   merge(result, 0, 1, 1.);
-  GPRS_CHECK(structure_check(m, result).stack_error.empty());
+  GPRS_CHECK(structure_check(m, result, false).stack_error.empty());
 
   // The messages of the other kinds are those of before.
   result = pair_result(m, -inf, 2.);
   merge(result, 0, 1, 0.);
-  GPRS_CHECK_EQ(structure_check(m, result).stack_error, "parallel record 1");
+  GPRS_CHECK_EQ(structure_check(m, result, false).stack_error, "parallel record 1");
   result = pair_result(m, -inf, 2.);
   result.postsolve.order.push_back(record_kind_t::parallel_row);
-  GPRS_CHECK_EQ(structure_check(m, result).stack_error, "parallel records missing at 1");
+  GPRS_CHECK_EQ(structure_check(m, result, false).stack_error, "parallel records missing at 1");
 }
 
 GPRS_TEST(e2e_structure_proves_a_row_through_its_equation)
 {
   // x + y + s <= 5 is s <= 2 plus the equation; s <= 2.5 admits x + y + s = 5.5.
   model_t m = pair_model();
-  GPRS_CHECK(silent(structure_check(m, pair_result(m, -inf, 2.))));
-  structure_report_t r = structure_check(m, pair_result(m, -inf, 2.5));
+  GPRS_CHECK(silent(structure_check(m, pair_result(m, -inf, 2.), false)));
+  structure_report_t r = structure_check(m, pair_result(m, -inf, 2.5), false);
   GPRS_CHECK_EQ(r.added_failures, 1);
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.added_worst_row, 0);
@@ -195,24 +195,24 @@ GPRS_TEST(e2e_structure_proves_a_row_through_its_equation)
   GPRS_CHECK_EQ(r.added_worst, 0.5 / 5.5);
   GPRS_CHECK_EQ(r.kept_failures, 0);
   // A tighter row is a restriction, which this check does not see.
-  GPRS_CHECK(silent(structure_check(m, pair_result(m, -inf, 1.))));
+  GPRS_CHECK(silent(structure_check(m, pair_result(m, -inf, 1.), false)));
 
   // Both sides: 1 <= x + y + s <= 5 is -2 <= s <= 2.
   m = pair_model(1.);
-  GPRS_CHECK(silent(structure_check(m, pair_result(m, -2., 2.))));
-  GPRS_CHECK_EQ(structure_check(m, pair_result(m, -2.5, 2.)).added_failures, 1);
-  GPRS_CHECK_EQ(structure_check(m, pair_result(m, -inf, 2.)).added_failures, 1);
+  GPRS_CHECK(silent(structure_check(m, pair_result(m, -2., 2.), false)));
+  GPRS_CHECK_EQ(structure_check(m, pair_result(m, -2.5, 2.), false).added_failures, 1);
+  GPRS_CHECK_EQ(structure_check(m, pair_result(m, -inf, 2.), false).added_failures, 1);
 
   // The factor of the record is not read: the multiplier comes from the rows.
   result_t result                          = pair_result(m, -2., 2.);
   result.postsolve.row_additions[0].factor = -7.;
-  GPRS_CHECK(silent(structure_check(m, result)));
+  GPRS_CHECK(silent(structure_check(m, result, false)));
 
   // Without the record the row is tested against its own reduced row alone, and fails.
   result = pair_result(m, -2., 2.);
   result.postsolve.order.clear();
   result.postsolve.row_additions.clear();
-  r = structure_check(m, result);
+  r = structure_check(m, result, false);
   GPRS_CHECK_EQ(r.kept_failures, 1);
   GPRS_CHECK_EQ(r.added_rows, 0);
 
@@ -221,17 +221,17 @@ GPRS_TEST(e2e_structure_proves_a_row_through_its_equation)
   m      = pair_model();
   result = reduced_to(m, {{{{s, 4.}}, -inf, 8.}, {{{x, 0.25}, {y, 0.25}}, 0.75, 0.75}}, {0, 1});
   add(result, 0, 1, 1.);
-  r = structure_check(m, result);
+  r = structure_check(m, result, false);
   GPRS_CHECK(silent(r));
   GPRS_CHECK_EQ(r.added_multiplier, 4.);
   result.reduced.row_upper[0] = 8.5;
-  GPRS_CHECK_EQ(structure_check(m, result).added_failures, 1);
+  GPRS_CHECK_EQ(structure_check(m, result, false).added_failures, 1);
 
   // A column of the equation without bounds leaves the proof as it is.
   m.col_lower[x] = -inf;
   m.col_upper[x] = inf;
-  GPRS_CHECK(silent(structure_check(m, pair_result(m, -inf, 2.))));
-  GPRS_CHECK_EQ(structure_check(m, pair_result(m, -inf, 2.5)).added_failures, 1);
+  GPRS_CHECK(silent(structure_check(m, pair_result(m, -inf, 2.), false)));
+  GPRS_CHECK_EQ(structure_check(m, pair_result(m, -inf, 2.5), false).added_failures, 1);
 }
 
 GPRS_TEST(e2e_structure_proves_a_row_with_the_singleton_column_of_its_equation)
@@ -245,7 +245,7 @@ GPRS_TEST(e2e_structure_proves_a_row_with_the_singleton_column_of_its_equation)
     result_t result = reduced_to(
       m, {{{{s, scale}, {t, scale * entry}}, scale * lower, scale * upper}, with_single}, {0, 1});
     add(result, 0, 1, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_tested, 1);
     GPRS_CHECK_EQ(r.added_untested, 0);
@@ -277,14 +277,14 @@ GPRS_TEST(e2e_structure_proves_a_row_that_left_the_model_after_a_subtraction)
   m.col_upper[s]  = 2.;
   result_t result = reduced_to(m, {equation}, {1});
   add(result, 0, 1, 1.);
-  structure_report_t r = structure_check(m, result);
+  structure_report_t r = structure_check(m, result, false);
   GPRS_CHECK(silent(r));
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.rows_tested, 0);
   GPRS_CHECK_EQ(r.kept_tested, 1);
   // Over wider bounds it does not hold.
   result.reduced.col_upper[s] = 2.5;
-  r                           = structure_check(m, result);
+  r                           = structure_check(m, result, false);
   GPRS_CHECK_EQ(r.added_failures, 1);
   GPRS_CHECK_EQ(r.row_failures, 0);
   GPRS_CHECK_EQ(r.bound_failures, 1);
@@ -292,7 +292,7 @@ GPRS_TEST(e2e_structure_proves_a_row_that_left_the_model_after_a_subtraction)
   // model, and x + y ranges up to 6.
   result = reduced_to(m, {}, {});
   add(result, 0, 1, 1.);
-  r = structure_check(m, result);
+  r = structure_check(m, result, false);
   GPRS_CHECK_EQ(r.added_rows, 1);
   GPRS_CHECK_EQ(r.added_tested, 0);
   GPRS_CHECK_EQ(r.rows_tested, 2);
@@ -312,14 +312,14 @@ GPRS_TEST(e2e_structure_tests_a_row_whose_equation_left_the_model_as_before)
   add(result, 0, 1, 1.);
   result.postsolve.push_fixed_col(x, 1.);
   result.postsolve.push_fixed_col(y, 2.);
-  structure_report_t r = structure_check(m, result);
+  structure_report_t r = structure_check(m, result, false);
   GPRS_CHECK(silent(r));
   GPRS_CHECK_EQ(r.added_rows, 1);
   GPRS_CHECK_EQ(r.added_tested, 0);
   GPRS_CHECK_EQ(r.kept_tested, 1);
   GPRS_CHECK_EQ(r.rows_tested, 1);
   result.reduced.row_upper[0] = 2.5;
-  GPRS_CHECK_EQ(structure_check(m, result).kept_failures, 1);
+  GPRS_CHECK_EQ(structure_check(m, result, false).kept_failures, 1);
 }
 
 GPRS_TEST(e2e_structure_follows_the_merges_after_a_subtraction)
@@ -332,19 +332,19 @@ GPRS_TEST(e2e_structure_follows_the_merges_after_a_subtraction)
   result_t result = reduced_to(m, {twice, {{{s, 1.}}, -inf, 2.}}, {0, 2});
   add(result, 2, 1, 1.);
   merge(result, 1, 0, 0.5);
-  structure_report_t r = structure_check(m, result);
+  structure_report_t r = structure_check(m, result, false);
   GPRS_CHECK(silent(r));
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.kept_parallel, 1);
   GPRS_CHECK_EQ(r.added_multiplier, 0.5);
   result.reduced.row_upper[1] = 2.5;
-  GPRS_CHECK_EQ(structure_check(m, result).added_failures, 1);
+  GPRS_CHECK_EQ(structure_check(m, result, false).added_failures, 1);
   // The merged row lost its lower side: the row that needs it fails, and so does row 1.
   result                      = reduced_to(m, {twice, {{{s, 1.}}, -inf, 2.}}, {0, 2});
   result.reduced.row_lower[0] = -inf;
   add(result, 2, 1, -1.);
   merge(result, 1, 0, 0.5);
-  r = structure_check(m, result);
+  r = structure_check(m, result, false);
   GPRS_CHECK_EQ(r.added_failures, 0);
   GPRS_CHECK_EQ(r.kept_failures, 2);
 
@@ -358,7 +358,7 @@ GPRS_TEST(e2e_structure_follows_the_merges_after_a_subtraction)
     result = reduced_to(m, {{{{s, 2.}, {t, 2.}}, -inf, side}, equation}, {0, 2});
     add(result, 1, 2, 1.);
     merge(result, 1, 0, 0.5);
-    r = structure_check(m, result);
+    r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_tested, 1);
     GPRS_CHECK_EQ(r.kept_tested, 2);
@@ -380,7 +380,7 @@ GPRS_TEST(e2e_structure_proves_a_row_through_several_equations)
     result_t result = reduced_to(m, {{{{s, 1.}}, -inf, side}, equation, second}, {0, 1, 2});
     add(result, 0, 1, 1.);
     add(result, 0, 2, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_rows, 1);
     GPRS_CHECK_EQ(r.added_tested, 1);
@@ -389,7 +389,7 @@ GPRS_TEST(e2e_structure_proves_a_row_through_several_equations)
   // One of the two records is missing: the row cannot be proved.
   result_t result = reduced_to(m, {{{{s, 1.}}, -inf, 2.}, equation, second}, {0, 1, 2});
   add(result, 0, 2, 1.);
-  GPRS_CHECK_EQ(structure_check(m, result).added_failures, 1);
+  GPRS_CHECK_EQ(structure_check(m, result, false).added_failures, 1);
 
   // Equations that share a column. Columns x, y, s, t, z. Row 0: x + y + z + s <= 9, row 1:
   // x + y = 3, row 2: y + z = 4. Row 0 less both is s - y <= 2.
@@ -401,7 +401,7 @@ GPRS_TEST(e2e_structure_proves_a_row_through_several_equations)
     result = reduced_to(m, {{{{s, 1.}, {y, -1.}}, -inf, side}, equation, sharing}, {0, 1, 2});
     add(result, 0, 1, 1.);
     add(result, 0, 2, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_rows, 1);
     GPRS_CHECK_EQ(r.added_tested, 1);
@@ -423,7 +423,7 @@ GPRS_TEST(e2e_structure_proves_a_row_through_several_equations)
       {0, 1, 2});
     add(result, 0, 1, 1.);
     add(result, 1, 2, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_rows, 2);
     GPRS_CHECK_EQ(r.added_tested, 2);
@@ -438,7 +438,7 @@ GPRS_TEST(e2e_structure_proves_a_row_through_several_equations)
                {0, 1, 2});
   add(result, 1, 2, 1.);
   add(result, 0, 1, 1.);
-  GPRS_CHECK_EQ(structure_check(m, result).added_failures, 1);
+  GPRS_CHECK_EQ(structure_check(m, result, false).added_failures, 1);
 }
 
 GPRS_TEST(e2e_structure_counts_a_row_it_cannot_decide_as_not_tested)
@@ -465,7 +465,7 @@ GPRS_TEST(e2e_structure_counts_a_row_it_cannot_decide_as_not_tested)
     for (int32_t j = 0; j < count; ++j) {
       add(result, 0, 1 + j, 1.);
     }
-    structure_report_t r = structure_check(many, result);
+    structure_report_t r = structure_check(many, result, false);
     GPRS_CHECK(silent(r));
     bool tested = count == 8;
     GPRS_CHECK_EQ(r.added_tested, tested ? 1 : 0);
@@ -479,7 +479,7 @@ GPRS_TEST(e2e_structure_counts_a_row_it_cannot_decide_as_not_tested)
   for (double side : {-2., 2.}) {
     result_t result = reduced_to(m, {{{{s, 1.}}, -inf, side}, unmet}, {0, 1});
     add(result, 0, 1, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK_EQ(r.added_failures, 0);
     GPRS_CHECK_EQ(r.added_tested, side == -2. ? 1 : 0);
     GPRS_CHECK_EQ(r.added_untested, side == -2. ? 0 : 1);
@@ -503,7 +503,7 @@ GPRS_TEST(e2e_structure_counts_a_row_it_cannot_decide_as_not_tested)
     add(result, 0, 1, 1.);
     result.postsolve.push_fixed_col(x, 0.5);
     result.postsolve.push_fixed_col(y, 0.5);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_rows, 1);
     GPRS_CHECK_EQ(r.added_tested, value == 2. ? 0 : 1);
@@ -851,13 +851,13 @@ GPRS_TEST(e2e_structure_rejects_a_row_that_is_no_equation_as_the_equation)
       build({{{{x, 1.}, {y, 1.}, {s, 1.}}, lower, 5.}, below}, {0., 0., 0., 0.}, {3., 3., 4., 1.});
     result_t result = reduced_to(m, {{{{s, 1.}}, lower - 3., 2.}, below}, {0, 1});
     add(result, 0, 1, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK_EQ(r.added_tested, 1);
     GPRS_CHECK_EQ(r.added_failures, lower == 1. ? 1 : 0);
     // Subtracted the other way round, x + y >= 3 gives the lower side and not the upper one.
     result = reduced_to(m, {{{{s, 1.}}, lower - 3., 2.}, {{{x, 1.}, {y, 1.}}, 3., inf}}, {0, 1});
     add(result, 0, 1, 1.);
-    r = structure_check(m, result);
+    r = structure_check(m, result, false);
     GPRS_CHECK_EQ(r.added_failures, 1);
     GPRS_CHECK_EQ(r.kept_failures, 1);
   }
@@ -879,14 +879,14 @@ GPRS_TEST(e2e_structure_takes_no_point_from_hyperplanes_that_do_not_meet)
     result_t result = reduced_to(m, {first, second}, {1, 2});
     add(result, 0, 1, 1.);
     add(result, 0, 2, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_tested, 1);
     GPRS_CHECK_EQ(r.added_failures, 1);
     GPRS_CHECK(r.added_worst > 0.49);
     // With the side that the equations give, the row passes.
     m.row_upper[0] = 1.;
-    GPRS_CHECK(silent(structure_check(m, result)));
+    GPRS_CHECK(silent(structure_check(m, result, false)));
   }
 
   // A generated result (rfuzz, seed 345082). Row 2 less 0.6 times row 0 and 3 / 7 times row 1
@@ -912,7 +912,7 @@ GPRS_TEST(e2e_structure_takes_no_point_from_hyperplanes_that_do_not_meet)
                {0, 1, 2});
   add(result, 2, 0, 0.59999999999999998);
   add(result, 2, 1, 0.42857142857142855);
-  structure_report_t r = structure_check(m, result);
+  structure_report_t r = structure_check(m, result, false);
   GPRS_CHECK(r.composed);
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.added_failures, 1);
@@ -920,7 +920,7 @@ GPRS_TEST(e2e_structure_takes_no_point_from_hyperplanes_that_do_not_meet)
   // With row 0 as the model has it, row 2 holds.
   result.reduced.row_lower[0] = 0.25;
   result.reduced.row_upper[0] = 0.25;
-  GPRS_CHECK(silent(structure_check(m, result)));
+  GPRS_CHECK(silent(structure_check(m, result, false)));
 }
 
 GPRS_TEST(e2e_structure_keeps_a_coefficient_below_the_terms_of_large_multipliers)
@@ -938,14 +938,14 @@ GPRS_TEST(e2e_structure_keeps_a_coefficient_below_the_terms_of_large_multipliers
   result_t result = reduced_to(m, {first, second}, {1, 2});
   add(result, 0, 1, 1.);
   add(result, 0, 2, 1.);
-  structure_report_t r = structure_check(m, result);
+  structure_report_t r = structure_check(m, result, false);
   GPRS_CHECK(r.composed);
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.added_failures, 1);
   // With x within [-20, 20] the row holds.
   result.reduced.col_lower[x] = -20.;
   result.reduced.col_upper[x] = 20.;
-  r                           = structure_check(m, result);
+  r                           = structure_check(m, result, false);
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.added_failures, 0);
 }
@@ -968,7 +968,7 @@ GPRS_TEST(e2e_structure_scales_a_violation_by_the_row_and_not_by_the_sides_of_th
     result_t result =
       reduced_to(m, {{{{s, 1.}, {t, -1.}}, -inf, side - huge}, with_huge(huge)}, {0, 1});
     add(result, 0, 1, 1.);
-    structure_report_t r = structure_check(m, result);
+    structure_report_t r = structure_check(m, result, false);
     GPRS_CHECK(r.composed);
     GPRS_CHECK_EQ(r.added_tested, 1);
     GPRS_CHECK_EQ(r.kept_failures, 0);
@@ -992,9 +992,9 @@ GPRS_TEST(e2e_structure_scales_a_violation_by_the_row_and_not_by_the_sides_of_th
   m.col_upper[s]  = 1.;
   result_t result = reduced_to(m, {with_huge(1e7)}, {1});
   add(result, 0, 1, 1.);
-  GPRS_CHECK(silent(structure_check(m, result)));
+  GPRS_CHECK(silent(structure_check(m, result, false)));
   result.reduced.col_upper[s] = 51.;
-  r                           = structure_check(m, result);
+  r                           = structure_check(m, result, false);
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.added_failures, 1);
   GPRS_CHECK_EQ(r.added_worst, 50. / 55.);
@@ -1016,14 +1016,14 @@ GPRS_TEST(e2e_structure_passes_the_subtractions_of_the_engine)
   result_t result     = presolve(m, options);
   GPRS_REQUIRE(result.status == status_t::reduced);
   GPRS_CHECK_EQ(result.postsolve.row_additions.size(), 1u);
-  structure_report_t r = structure_check(m, result);
+  structure_report_t r = structure_check(m, result, false);
   GPRS_CHECK(r.composed && silent(r));
   GPRS_CHECK_EQ(r.added_rows, 1);
   GPRS_CHECK_EQ(r.added_tested, 1);
   // The same result with the bound that the subtraction gave relaxed.
   GPRS_REQUIRE(result.reduced.ncols == 4 && result.reduced.col_upper[s] == 2.);
   result.reduced.col_upper[s] = 3.;
-  r                           = structure_check(m, result);
+  r                           = structure_check(m, result, false);
   GPRS_CHECK_EQ(r.added_failures, 1);
 
   // Generated models with rows that are parallel up to singleton columns.
@@ -1041,7 +1041,7 @@ GPRS_TEST(e2e_structure_passes_the_subtractions_of_the_engine)
       options.primal_only = primal_only;
       result              = presolve(c.model, options);
       if (!gprs_check::carries_model(result.status)) { continue; }
-      r = structure_check(c.model, result);
+      r = structure_check(c.model, result, primal_only);
       subtracted += !result.postsolve.row_additions.empty();
       tested += r.added_tested;
       untested += r.added_untested;

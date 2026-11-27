@@ -659,7 +659,7 @@ std::string check_frontier(const frontier_set_t& frontier,
     frontier.pending.size() == (size_t)n && frontier.list.size() == (size_t)lists,
     "%s: wrong number of lists or pending flags",
     name);
-  std::vector<uint8_t> listed(n, 0);
+  std::vector<list_mask_t> listed(n, 0);
   for (int32_t l = 0; l < lists; ++l) {
     for (int32_t i : frontier.list[l]) {
       GPRS_STATE_INVARIANT(i >= 0 && i < n, "%s list %d: index %d is out of range", name, l, i);
@@ -772,8 +772,8 @@ std::string state_t::consistency_error()
   GPRS_STATE_INVARIANT(nrows >= 0 && ncols >= 0, "negative number of rows or columns");
   GPRS_STATE_INVARIANT(
     row_lower.size() == rows && row_upper.size() == rows && row_alive.size() == rows &&
-      row_free_size.size() == rows && row_version.size() == rows && min_act.hi.size() == rows &&
-      min_act.lo.size() == rows && min_act.inf_count.size() == rows &&
+      row_free_size.size() == rows && row_version.size() == rows && row_singletons.size() == rows &&
+      min_act.hi.size() == rows && min_act.lo.size() == rows && min_act.inf_count.size() == rows &&
       min_act.inf_slot.size() == rows && min_act.max_term.size() == rows &&
       min_act.updates.size() == rows && max_act.hi.size() == rows && max_act.lo.size() == rows &&
       max_act.inf_count.size() == rows && max_act.inf_slot.size() == rows &&
@@ -871,7 +871,7 @@ std::string state_t::consistency_error()
                        (long long)fixed_nnz,
                        (long long)count_fixed_nnz);
 
-  // Rows: flags, free sizes, locks, duplicate entries and activities.
+  // Rows: flags, free sizes, singleton columns, locks, duplicate entries and activities.
   std::vector<int32_t> count_down(ncols, 0), count_up(ncols, 0), last_row(ncols, -1);
   int32_t count_live_rows = 0;
   int64_t count_row_nnz   = 0;
@@ -884,11 +884,12 @@ std::string state_t::consistency_error()
                          row_upper[i]);
     count_row_nnz += csr.size[i];
     if (!row_alive[i]) {
-      GPRS_STATE_INVARIANT(csr.size[i] == 0 && row_free_size[i] == 0,
-                           "deleted row %d: %d live entries, free size %d",
+      GPRS_STATE_INVARIANT(csr.size[i] == 0 && row_free_size[i] == 0 && row_singletons[i] == 0,
+                           "deleted row %d: %d live entries, free size %d, singleton columns %d",
                            i,
                            csr.size[i],
-                           row_free_size[i]);
+                           row_free_size[i],
+                           row_singletons[i]);
       GPRS_STATE_INVARIANT(activity_empty(min_act, i) && activity_empty(max_act, i),
                            "deleted row %d: its activities are not those of an empty row",
                            i);
@@ -904,12 +905,14 @@ std::string state_t::consistency_error()
     int32_t lower_finite = row_lower[i] > -inf;
     int32_t upper_finite = row_upper[i] < inf;
     int32_t free_size    = 0;
+    int32_t singletons   = 0;
     for (int64_t e = csr.begin(i); e < csr.end(i); ++e) {
       if (!csr.live(e)) { continue; }
       int32_t j = csr.index[e];
       GPRS_STATE_INVARIANT(last_row[j] != i, "row %d: two live entries in column %d", i, j);
       last_row[j] = i;
       free_size += is_live(j);
+      singletons += is_live(j) && csc.size[j] == 1;
       if (csr.value[e] > 0) {
         count_up[j] += upper_finite;
         count_down[j] += lower_finite;
@@ -923,6 +926,11 @@ std::string state_t::consistency_error()
                          i,
                          row_free_size[i],
                          free_size);
+    GPRS_STATE_INVARIANT(singletons == row_singletons[i],
+                         "row %d: row_singletons %d, live columns with this one live entry %d",
+                         i,
+                         row_singletons[i],
+                         singletons);
     side_sum_t fresh_min, fresh_max;
     fold_row_activity(i, fresh_min, fresh_max);
     error = check_activity(*this, min_act, fresh_min, i, "minimum");

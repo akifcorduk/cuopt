@@ -63,5 +63,10 @@ grep -h "^structure " "$out"/part.*.txt |
                   "| results with a subtraction", d, "rows made of equations", q,
                   "tested with an equation", t, "not tested", n,
                   "largest multiplier of an equation", m + 0}'
-grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED" "$out"/part.*.txt | cut -c1-200 | head -20
+grep -h "^crush " "$out"/part.*.txt |
+  awk '{r += $3; d += $5; p += $7; s += $9; f += $11; n += $13; c += $15}
+       END {print "crush test: results", r, "of them with a dual finding", d,
+                  "points crushed", p, "points left out", s, "dual findings", f,
+                  "| second presolves of a fixed point", n, "changed", c}'
+grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND" "$out"/part.*.txt | cut -c1-200 | head -20
 exit $bad
