@@ -83,11 +83,15 @@ dumps() {
   if [ -f "$DEPS/results/stage1/host_runs/dumps_dev.done" ]; then
     return 0
   fi
+  mkdir -p "$DUMPS_DEV"
   for set in dev status; do
     python3 gpu_presolve/baseline/run_baseline.py --set "$set" --variant dumps --tool "$STOCK" \
       --jobs 8 --stats-only --dump-csr-dir "$DUMPS_DEV" \
-      --out "$DEPS/results/stage1/dumps_dev_stats" --skip-done | tail -2 || return 1
+      --out "$DEPS/results/stage1/dumps_dev_stats" --skip-done | tail -2
   done
+  count=$(find "$DUMPS_DEV" -name '*.csr' | wc -l)
+  echo "$count dumps in $DUMPS_DEV"
+  [ "$count" -ge 35 ] || return 1
   touch "$DEPS/results/stage1/host_runs/dumps_dev.done"
 }
 

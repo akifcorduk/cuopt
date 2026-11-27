@@ -72,7 +72,9 @@ def run_one(args, entry, rep, out):
     name = entry["name"]
     record_path = out / ("%s.rep%d.run.json" % (name, rep))
     if args.skip_done and record_path.is_file():
-        return
+        with open(record_path) as f:
+            if "report" in json.load(f):
+                return
     dump = find_dump(name, args.dumps)
     record = {"name": name, "rep": rep}
     if dump is None:
