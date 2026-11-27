@@ -10,14 +10,19 @@
 // The structure check: what one presolve result must satisfy whatever point is postsolved. It
 // reads the postsolve stack, the origin maps and the reduced model, needs no solver and no
 // solution file, and costs O(columns + records + nonzeros) (a row whose coefficients were
-// edited one by one costs its length times the number of its different coefficient ratios).
+// edited one by one costs its length times the number of its different coefficient ratios; a
+// row that had equations subtracted costs the entries of its reduced row and of theirs times
+// the points that its search visits, see added_rows).
 // It sees what the crush check cannot: a reduction that relaxes.
 //
 //   stack      The stack and the maps keep the contract of postsolve.hpp: every column is left
 //              in the reduced model or removed by exactly one record and named by no later
 //              record; a fixed value is finite, and integral for an integer column; an alias
 //              has a finite scale other than zero and a finite offset, and an integer column an
-//              integer rep with an integral scale and offset; a ratio is finite and not zero.
+//              integer rep with an integral scale and offset; a ratio is finite and not zero; a
+//              row addition has a finite factor other than zero and names two different rows,
+//              neither of which an earlier record took out of the model (the removed row of a
+//              parallel record, the row of an alias).
 //   types      A column that is integer in the original model is integer in the reduced model.
 //   bounds     With the records composed, every original column is a constant or
 //              scale * (one reduced column) + offset. Over the bounds of that reduced column it
@@ -35,23 +40,79 @@
 //              The maximum is the smallest of the bounds  lambda * (u or l) + max over the
 //              bounds of (g - lambda * c) * r,  which is reached at lambda = 0 or at a ratio
 //              g[k] / c[k].
+//   added_rows A row that had an equation subtracted (a row_addition record) is no multiple of
+//              its reduced row: it is that row plus multiples of the equations. It holds at the
+//              postsolve of every point within the bounds that meets its reduced row, if it has
+//              one, and the reduced rows of those equations (row_equations_t): the maximum of g
+//              over { bounds, l <= c * r <= u, le <= e * r <= ue for each equation e } is not
+//              above its upper side, and the minimum not below its lower side.
+//              The maximum is bounded by weak duality: for any multipliers lambda and mu_e,
+//                lambda * (u or l) + sum of mu_e * (ue or le)
+//                  + max over the bounds of (g - lambda * c - sum of mu_e * e) * r,
+//              each multiplier with the side of its sign. A pass is therefore a proof whatever
+//              the multipliers are, and they are read from the data alone: the factor of a
+//              record counts the rows as they were when it was pushed, before and after other
+//              rules scaled them, and is not used. The bound is linear in the multipliers
+//              between the hyperplanes where one of its terms changes its sign (a multiplier
+//              is 0; the coefficient g[k] - lambda * c[k] - sum of mu_e * e[k] of a column is
+//              0), so its smallest value, which is that maximum when a point meets the rows,
+//              is taken where as many of them meet as there are multipliers. The search visits
+//              all those points, and a row fails when the smallest bound is above its side.
+//              A bound is a proof only as it is computed. Hyperplanes that are parallel, or
+//              nearly so, meet in the rounding of their system or far out: the multipliers of
+//              such a point are huge and cancel each other, a coefficient of the size of the
+//              row's own vanishes in their sum, and the bound that is left can lie far below
+//              the maximum. The search therefore takes no point from a system with a pivot
+//              below singular_pivot, and a coefficient counts as zero only as a cancellation
+//              of the row itself or as the rounding of the terms that make it
+//              (combined_bound).
+//              Not tested, and never failed or passed, is a row that does not pass while no
+//              point within the bounds meets the reduced rows together: the bounds then have
+//              no smallest one, which the same search finds as a negative bound of the
+//              function zero (no_common_point).
+//              The reduced row of an equation is its own, or that of the row it was merged
+//              into as a parallel row. An equation without one (deleted, turned into a bound,
+//              substituted) gets no multiplier: its part of g is then tested over the bounds
+//              like the rest. A row all of whose equations are without one is tested as a row
+//              that left the model or as a kept row.
 //   postsolve  postsolve_t::postsolve of one point within the bounds of the reduced model gives
 //              what the composed records give.
 //
-// Why bounds, rows and kept_rows hold for the Stage 1 rules, in both modes. No rule relaxes a
-// bound, and the bounds of a substituted column are transferred to its root. A row leaves the
-// model because its sides hold over the bounds of its columns (redundant, empty), because its
-// bound went to its only column (singleton), because all its columns were fixed (forcing), or
-// because it defines a substituted column (doubleton equation, whose g is then a constant); and
-// bounds only tighten afterwards. Every edit of a row that stays gives a row that implies the
-// row before the edit over the bounds, for real points as well: scaling and substitution keep
-// it, a rounded or intersected side is tighter, and a strengthened coefficient a -> d with the
-// side moved by (a - d) * bound differs from the old row by (a - d) * (bound - x) >= 0. Like
-// the crush check, this has to be reread when a rule is added that relaxes a bound, deletes a
-// row for another reason or combines rows (Stage 3: free column substitution, dominated
-// columns, sparsification).
+// Why bounds, rows, kept_rows and added_rows hold for the Stage 1 rules, in both modes. No rule
+// relaxes a bound, and the bounds of a substituted column are transferred to its root. A row
+// leaves the model because its sides hold over the bounds of its columns (redundant, empty),
+// because its bound went to its only column (singleton), because all its columns were fixed
+// (forcing), or because it defines a substituted column (doubleton equation, whose g is then a
+// constant); and bounds only tighten afterwards. Every edit of one row that stays gives a row
+// that implies the row before the edit over the bounds, for real points as well: scaling and
+// substitution keep it, a rounded or intersected side is tighter, and a strengthened
+// coefficient a -> d with the side moved by (a - d) * bound differs from the old row by
+// (a - d) * (bound - x) >= 0. The one edit that combines rows is the subtraction of an equation
+// from a row that is parallel to it up to singleton columns (rules.hpp (e)): the row before is
+// the row after plus the factor times the equation, entry by entry and in the sides, so it
+// holds wherever the row after and the equation hold; and an equation stays one, since sides
+// only tighten. By induction over the records an original row is implied, over the bounds, by
+// the rows it is made of. The proof that the induction gives has the multipliers of the
+// subtractions on the equations, in the units of the rows as they are now. Where the bounds
+// have a smallest one, the search finds it, and it is not above the bound of that proof. They
+// have none only when no point within the bounds meets the rows the row is made of, and the
+// row is then counted as not tested unless the search proves it.
+// Like the crush check, this has to be reread when a rule is added that relaxes a bound,
+// deletes a row for another reason or combines rows in another way (Stage 3: free column
+// substitution, dominated columns, sparsification).
 // The tolerance is wider than that of a tested point: a row can use the tolerance of its
-// deletion and that of a rounded bound together.
+// deletion and that of a rounded bound together. A row that is made of equations uses theirs
+// as well: an equation holds within the tolerance of the rule that last moved its side (a
+// rounded side, a side taken from a parallel row), and that reaches the row times the
+// multiplier of the equation. A violation of such a row is therefore relative to the largest
+// of: its bound, the terms of its own coefficients at the bounds that the bound uses, and the
+// multiplier of each equation, in the units of the row per unit of the reduced equation; the
+// largest multiplier of a tested row is reported (added_multiplier). The sides of the reduced
+// rows and the terms of columns that only they hold are not the row's: the side of a row
+// after a subtraction holds the right-hand side of the equation and the side of the equation
+// gives it back, so they cancel in the bound whatever their size is. They count with the
+// share that their rounding can reach (rounding_share), and a violation of 50 by a row with
+// terms of 50 fails next to an equation with a side of 1e7.
 
 #include "crush_check.hpp"
 
@@ -72,10 +133,24 @@ constexpr double composed_zero = 1e-7;
 constexpr double same_ratio = 1e-9;
 // postsolve() and the composed records agree within this, relative to the size of their terms.
 constexpr double composed_tolerance = 1e-9;
-// A kept row costs its length times its number of different ratios. One above the first limit
-// is not tested, and none once the rows together are above the second.
+// A kept row costs its length times its number of different ratios, a row that is made of
+// equations the entries of its reduced rows times the points that its search visits. One above
+// the first limit is not tested, and none once the rows together are above the second.
 constexpr double max_kept_row_work = 5e7;
 constexpr double max_kept_work     = 2e10;
+// Equations a row can be made of and still be tested. The points of a search multiply with
+// every reduced row that shares no column with the others, so the work limit ends it earlier.
+constexpr size_t max_row_equations = 16;
+// Hyperplanes meet in a point of a search when their system, with every column and then every
+// row scaled to a largest entry of 1, has no pivot below this. A smaller one is the rounding of
+// a zero, or gives multipliers that much larger than the coefficients they balance.
+constexpr double singular_pivot = 1e-6;
+// What the terms of several reduced rows leave of a coefficient is their rounding below this
+// share of their sum.
+constexpr double rounding_zero = 1e-12;
+// The share of a term of a bound that its rounding can reach, in units of structure_tolerance:
+// a side or a bound of the reduced model is stored with a relative error far below 1e-14.
+constexpr double rounding_share = 1e-9;
 
 // x[original column] = scale * x_reduced[root] + offset; root -1 for a constant.
 struct column_map_t {
@@ -114,6 +189,20 @@ struct structure_report_t {
   int64_t kept_failures  = 0;
   double kept_worst      = 0.;
   int32_t kept_worst_row = -1;
+
+  // Rows that are made of equations as well (row_equations_t), whether these still have a
+  // reduced row or not, and of them the rows tested against the reduced row of such an
+  // equation: they count here and not above. Not tested: a row that does not pass while no
+  // point within the bounds meets the reduced rows together, and a row above the work limits
+  // or with more than max_row_equations equations.
+  int64_t added_rows      = 0;
+  int64_t added_tested    = 0;
+  int64_t added_untested  = 0;
+  int64_t added_failures  = 0;
+  double added_worst      = 0.;
+  int32_t added_worst_row = -1;
+  // Largest multiplier of an equation in the bound that a tested row passed or failed with.
+  double added_multiplier = 0.;
 
   int64_t postsolve_failures  = 0;
   double postsolve_worst      = 0.;  // relative to max(1, largest term)
@@ -159,7 +248,9 @@ inline bool compose_records(const gprs::model_t& model,
   auto column_ok = [&](int32_t col) { return col >= 0 && col < model.ncols; };
   auto row_ok    = [&](int32_t row) { return row >= 0 && row < model.nrows; };
   std::vector<uint8_t> removed(model.ncols, 0);
-  size_t fixed = 0, alias = 0, parallel = 0;
+  // Rows that a record took out of the model.
+  std::vector<uint8_t> row_gone(model.nrows, 0);
+  size_t fixed = 0, alias = 0, parallel = 0, addition = 0;
   int64_t left = model.ncols - reduced.ncols;
   for (size_t k = 0; k < ps.order.size(); ++k) {
     if (ps.order[k] == gprs::record_kind_t::fixed_col) {
@@ -187,19 +278,33 @@ inline bool compose_records(const gprs::model_t& model,
           !(model.col_type[r.rep] && is_integral(r.scale) && is_integral(r.offset))) {
         return fail("integer column of alias record", k);
       }
-      removed[r.col] = 1;
+      removed[r.col]  = 1;
+      row_gone[r.row] = 1;
       --left;
-    } else {
+    } else if (ps.order[k] == gprs::record_kind_t::parallel_row) {
       if (parallel == ps.parallel_rows.size()) { return fail("parallel records missing at", k); }
       const gprs::parallel_row_record_t& r = ps.parallel_rows[parallel++];
       if (!row_ok(r.removed_row) || !row_ok(r.kept_row) || r.removed_row == r.kept_row ||
           !std::isfinite(r.ratio) || r.ratio == 0.) {
         return fail("parallel record", k);
       }
+      row_gone[r.removed_row] = 1;
+    } else {
+      if (addition == ps.row_additions.size()) {
+        return fail("row addition records missing at", k);
+      }
+      const gprs::row_addition_record_t& r = ps.row_additions[addition++];
+      if (!row_ok(r.row) || !row_ok(r.equation_row) || r.row == r.equation_row ||
+          !std::isfinite(r.factor) || r.factor == 0.) {
+        return fail("row addition record", k);
+      }
+      if (row_gone[r.row] || row_gone[r.equation_row]) {
+        return fail("rows of row addition record", k);
+      }
     }
   }
   if (fixed != ps.fixed_cols.size() || alias != ps.aliases.size() ||
-      parallel != ps.parallel_rows.size()) {
+      parallel != ps.parallel_rows.size() || addition != ps.row_additions.size()) {
     return fail("records outside the order", 0);
   }
   if (left != 0) { return fail("columns neither left nor removed:", left); }
@@ -279,6 +384,370 @@ inline double implied_maximum(const std::vector<row_term_t>& terms,
   return best;
 }
 
+// The equations that the rows are made of, by original index. The row before a record
+// row <- row - factor * equation_row is the row after it plus the factor times the equation as
+// it is then, and that equation is in turn made of what is subtracted from it later; a row
+// removed as a parallel row is, from then on, made of what its kept row is made of. Read from
+// the records in reverse, each record therefore gives the row it names what the other row has
+// collected so far. A row is not its own equation: that part is a multiple of its reduced row.
+struct row_equations_t {
+  // The list of a row in `lists`, -1 for a row that is made of itself alone.
+  std::vector<int32_t> list;
+  std::vector<std::vector<int32_t>> lists;
+
+  // A list longer than max_row_equations is not completed: its row is not tested.
+  void add(int32_t row, int32_t equation)
+  {
+    if (equation == row) { return; }
+    if (list[row] < 0) {
+      list[row] = lists.size();
+      lists.emplace_back();
+    }
+    std::vector<int32_t>& of = lists[list[row]];
+    if (of.size() > max_row_equations || std::find(of.begin(), of.end(), equation) != of.end()) {
+      return;
+    }
+    of.push_back(equation);
+  }
+
+  void add_all(int32_t row, int32_t from)
+  {
+    if (list[from] < 0) { return; }
+    for (size_t k = 0; k < lists[list[from]].size(); ++k) {
+      add(row, lists[list[from]][k]);
+    }
+  }
+
+  // The stack keeps its contract (compose_records).
+  explicit row_equations_t(const gprs::postsolve_t& ps) : list(ps.nrows, -1)
+  {
+    size_t parallel = ps.parallel_rows.size(), addition = ps.row_additions.size();
+    for (size_t k = ps.order.size(); k-- > 0;) {
+      if (ps.order[k] == gprs::record_kind_t::parallel_row) {
+        const gprs::parallel_row_record_t& r = ps.parallel_rows[--parallel];
+        add_all(r.removed_row, r.kept_row);
+      } else if (ps.order[k] == gprs::record_kind_t::row_addition) {
+        const gprs::row_addition_record_t& r = ps.row_additions[--addition];
+        add(r.row, r.equation_row);
+        add_all(r.row, r.equation_row);
+      }
+    }
+  }
+};
+
+// The test of a row against several reduced rows together: its own, if it has one, as row 0,
+// and those of its equations. A point v holds one multiplier per row.
+struct combined_t {
+  struct column_t {
+    double g;      // coefficient in the original row, composed
+    double parts;  // sum of the absolute values g was composed of
+    double lower;
+    double upper;
+  };
+  bool own     = false;
+  int32_t rows = 0;
+  std::vector<double> low;
+  std::vector<double> high;
+  std::vector<column_t> columns;
+  // Coefficient of column k in row i at k * rows + i.
+  std::vector<double> a;
+};
+
+inline void sort_different(std::vector<double>& values)
+{
+  std::sort(values.begin(), values.end());
+  size_t kept = 0;
+  for (double a : values) {
+    if (kept > 0 && std::fabs(a - values[kept - 1]) <=
+                      same_ratio * std::fmax(std::fabs(a), std::fabs(values[kept - 1]))) {
+      continue;
+    }
+    values[kept++] = a;
+  }
+  values.resize(kept);
+}
+
+// The Lagrangian bound of the largest value of sign * g * r over the bounds and the rows of p,
+// for the multipliers m = sign * v:
+//   sum of m[i] * (high[i] or low[i]) + max over the bounds of (sign * g - sum of m[i] * a[i]) * r
+// with the side of the sign of each multiplier; infinity when a side or a bound it needs is.
+// A coefficient of that maximum counts as zero when it is a cancellation of the row itself
+// (composed_zero of its parts) or the rounding of the terms of the reduced rows (rounding_zero
+// of their sum). No larger share of those terms: multipliers that cancel each other make the
+// sum as large as they are, and a coefficient of the size of the row's own would vanish in it.
+// `largest` gets the largest term of the bound, the term of an equation counted as at least its
+// multiplier, and `multiplier` the largest multiplier of an equation.
+// `size` gets what a violation of the row is relative to: the bound itself, the row's own
+// coefficients times the bounds that the bound uses, and the multiplier of an equation. The
+// sides of the reduced rows and the columns that only they hold count with rounding_share:
+// their terms cancel in the bound (the side of the row after a subtraction holds the
+// right-hand side of the equation, the side of the equation gives it back), so a huge one says
+// what its rounding can do to the row and no more.
+inline double combined_bound(const combined_t& p,
+                             double sign,
+                             const double* v,
+                             double& size,
+                             double& largest,
+                             double& multiplier)
+{
+  sum_t bound;
+  size       = 1.;
+  largest    = 1.;
+  multiplier = 0.;
+  for (int32_t i = 0; i < p.rows; ++i) {
+    double m = sign * v[i];
+    if (m == 0.) { continue; }
+    double side = m > 0 ? p.high[i] : p.low[i];
+    if (!std::isfinite(side)) { return gprs::inf; }
+    bound.add(m, side);
+    largest = std::fmax(largest, std::fabs(m * side));
+    if (!(p.own && i == 0)) {
+      size       = std::fmax(size, std::fabs(m));
+      largest    = std::fmax(largest, std::fabs(m));
+      multiplier = std::fmax(multiplier, std::fabs(m));
+    }
+  }
+  for (size_t k = 0; k < p.columns.size(); ++k) {
+    const combined_t::column_t& c = p.columns[k];
+    double w = sign * c.g, moved = 0.;
+    for (int32_t i = 0; i < p.rows; ++i) {
+      double term = sign * v[i] * p.a[k * p.rows + i];
+      w -= term;
+      moved += std::fabs(term);
+    }
+    if (std::fabs(w) <= std::fmax(composed_zero * std::fmax(1., c.parts), rounding_zero * moved)) {
+      continue;
+    }
+    double at = w > 0 ? c.upper : c.lower;
+    if (!std::isfinite(at)) { return gprs::inf; }
+    bound.add(w, at);
+    largest = std::fmax(largest, std::fabs(w * at));
+    size    = std::fmax(size, std::fabs(c.g * at));
+  }
+  size = std::fmax(size, std::fmax(std::fabs(bound.value()), rounding_share * largest));
+  return bound.value();
+}
+
+// The bound is linear in v between the hyperplanes where one of its terms changes its sign:
+// v[i] = 0 for a row, and a[k] * v = g[k] for a column. Where it has a smallest value, it has
+// it at a point where as many of them meet as there are rows. A column of one row gives a
+// hyperplane v[i] = g[k] / a[k][i]: axis[i] holds the different values of that kind, with 0;
+// `general` holds the columns of two rows or more.
+struct hyperplanes_t {
+  std::vector<std::vector<double>> axis;
+  std::vector<int32_t> general;
+  // Right-hand side of the hyperplane of each column of `general`.
+  std::vector<double> rhs;
+
+  explicit hyperplanes_t(const combined_t& p) : axis(p.rows)
+  {
+    for (size_t k = 0; k < p.columns.size(); ++k) {
+      int32_t held = 0, row = 0;
+      for (int32_t i = 0; i < p.rows; ++i) {
+        if (p.a[k * p.rows + i] != 0.) {
+          ++held;
+          row = i;
+        }
+      }
+      if (held == 1) { axis[row].push_back(p.columns[k].g / p.a[k * p.rows + row]); }
+      if (held > 1) {
+        general.push_back(k);
+        rhs.push_back(p.columns[k].g);
+      }
+    }
+    for (std::vector<double>& values : axis) {
+      values.push_back(0.);
+      sort_different(values);
+    }
+  }
+
+  // The number of points that visit_vertices tries: every choice of the rows that take a value
+  // of their axis, a value for each, and as many columns of `general` as rows are left.
+  double count() const
+  {
+    // chosen[j]: the choices of j rows with a value each.
+    std::vector<double> chosen(axis.size() + 1, 0.);
+    chosen[0] = 1.;
+    for (size_t i = 0; i < axis.size(); ++i) {
+      for (size_t j = i + 1; j-- > 0;) {
+        chosen[j + 1] += chosen[j] * (double)axis[i].size();
+      }
+    }
+    double total = 0., subsets = 1.;
+    for (size_t m = 0; m <= axis.size() && m <= general.size(); ++m) {
+      total += subsets * chosen[axis.size() - m];
+      subsets *= (double)(general.size() - m) / (double)(m + 1);
+    }
+    return total;
+  }
+};
+
+// Calls visit(v) for every point v where p.rows of the hyperplanes meet in one point (no pivot
+// of their system below singular_pivot); the rows of `fixed` (a bit per row) always take a
+// value of their axis.
+template <typename visit_t>
+void visit_vertices(const combined_t& p, const hyperplanes_t& h, uint32_t fixed, visit_t visit)
+{
+  int32_t d = p.rows, planes = h.general.size();
+  std::vector<double> v(d), matrix, scale, scaled;
+  std::vector<int32_t> free_rows, fixed_rows, value, chosen;
+  uint32_t masks = planes == 0 ? 1 : (uint32_t)1 << d;
+  for (uint32_t free_mask = 0; free_mask < masks; ++free_mask) {
+    if (free_mask & fixed) { continue; }
+    free_rows.clear();
+    fixed_rows.clear();
+    for (int32_t i = 0; i < d; ++i) {
+      ((free_mask >> i) & 1 ? free_rows : fixed_rows).push_back(i);
+    }
+    int32_t m = free_rows.size();
+    if (m > planes) { continue; }
+    value.assign(fixed_rows.size(), 0);
+    for (bool more_values = true; more_values;) {
+      for (size_t n = 0; n < fixed_rows.size(); ++n) {
+        v[fixed_rows[n]] = h.axis[fixed_rows[n]][value[n]];
+      }
+      chosen.resize(m);
+      for (int32_t n = 0; n < m; ++n) {
+        chosen[n] = n;
+      }
+      for (bool more_planes = true; more_planes;) {
+        // The free rows from the chosen hyperplanes: the system with every column and then
+        // every row scaled to a largest entry of 1, elimination with row pivoting, back
+        // substitution. A system with a pivot below singular_pivot gives no point: hyperplanes
+        // that are parallel on the free rows leave a pivot that is the rounding of zero, and
+        // its multipliers, as large as that rounding is small, would cancel each other in every
+        // coefficient that the hyperplanes share and stand for a bound that is none.
+        matrix.assign(m * (m + 1), 0.);
+        for (int32_t r = 0; r < m; ++r) {
+          int32_t k        = h.general[chosen[r]];
+          double remainder = h.rhs[chosen[r]];
+          for (int32_t i : fixed_rows) {
+            remainder -= p.a[k * d + i] * v[i];
+          }
+          for (int32_t n = 0; n < m; ++n) {
+            matrix[r * (m + 1) + n] = p.a[k * d + free_rows[n]];
+          }
+          matrix[r * (m + 1) + m] = remainder;
+        }
+        bool regular = true;
+        scale.assign(m, 0.);
+        scaled.assign(m, 0.);
+        for (int32_t n = 0; n < m && regular; ++n) {
+          for (int32_t r = 0; r < m; ++r) {
+            scale[n] = std::fmax(scale[n], std::fabs(matrix[r * (m + 1) + n]));
+          }
+          regular = scale[n] > 0.;
+        }
+        for (int32_t r = 0; r < m && regular; ++r) {
+          double most = 0.;
+          for (int32_t n = 0; n < m; ++n) {
+            matrix[r * (m + 1) + n] /= scale[n];
+            most = std::fmax(most, std::fabs(matrix[r * (m + 1) + n]));
+          }
+          regular = most > 0.;
+          if (!regular) { break; }
+          for (int32_t c = 0; c <= m; ++c) {
+            matrix[r * (m + 1) + c] /= most;
+          }
+        }
+        for (int32_t n = 0; n < m && regular; ++n) {
+          int32_t pivot = n;
+          for (int32_t r = n + 1; r < m; ++r) {
+            if (std::fabs(matrix[r * (m + 1) + n]) > std::fabs(matrix[pivot * (m + 1) + n])) {
+              pivot = r;
+            }
+          }
+          regular = std::fabs(matrix[pivot * (m + 1) + n]) >= singular_pivot;
+          if (!regular) { break; }
+          for (int32_t c = 0; c <= m; ++c) {
+            std::swap(matrix[n * (m + 1) + c], matrix[pivot * (m + 1) + c]);
+          }
+          for (int32_t r = n + 1; r < m; ++r) {
+            double factor = matrix[r * (m + 1) + n] / matrix[n * (m + 1) + n];
+            for (int32_t c = n; c <= m; ++c) {
+              matrix[r * (m + 1) + c] -= factor * matrix[n * (m + 1) + c];
+            }
+          }
+        }
+        for (int32_t n = m; regular && n-- > 0;) {
+          double rest = matrix[n * (m + 1) + m];
+          for (int32_t c = n + 1; c < m; ++c) {
+            rest -= matrix[n * (m + 1) + c] * scaled[c];
+          }
+          scaled[n]       = rest / matrix[n * (m + 1) + n];
+          v[free_rows[n]] = scaled[n] / scale[n];
+          regular         = std::isfinite(v[free_rows[n]]);
+        }
+        if (regular) { visit(v.data()); }
+        // The next choice of m of the columns.
+        int32_t n = m - 1;
+        while (n >= 0 && chosen[n] == planes - m + n) {
+          --n;
+        }
+        more_planes = n >= 0;
+        if (more_planes) {
+          ++chosen[n];
+          for (int32_t r = n + 1; r < m; ++r) {
+            chosen[r] = chosen[r - 1] + 1;
+          }
+        }
+      }
+      // The next choice of a value for each fixed row.
+      size_t n = 0;
+      while (n < fixed_rows.size() && value[n] + 1 == (int32_t)h.axis[fixed_rows[n]].size()) {
+        value[n++] = 0;
+      }
+      more_values = n < fixed_rows.size();
+      if (more_values) { ++value[n]; }
+    }
+  }
+}
+
+// The smallest bound that a search has visited, with what a violation is relative to and its
+// largest multiplier of an equation (combined_bound); infinity before the first finite one.
+struct smallest_bound_t {
+  double value      = gprs::inf;
+  double size       = 1.;
+  double multiplier = 0.;
+
+  void visit(const combined_t& p, double sign, const double* v)
+  {
+    double bound_size, largest, most;
+    double bound = combined_bound(p, sign, v, bound_size, largest, most);
+    if (bound < value) {
+      value      = bound;
+      size       = bound_size;
+      multiplier = most;
+    }
+  }
+};
+
+// No point within the bounds meets the rows of p together: the bound of the function zero is
+// then negative for some multipliers, and a search for a row has no smallest bound. That bound
+// is linear on every cone between the hyperplanes through the origin, a[k] * v = 0 and
+// v[i] = 0, so it is negative somewhere when it is on a line where all but one of them meet:
+// at a point with one multiplier 1 or -1 where as many of the others meet as there are other
+// rows.
+inline bool no_common_point(combined_t p)
+{
+  for (combined_t::column_t& c : p.columns) {
+    c.g     = 0.;
+    c.parts = 0.;
+  }
+  hyperplanes_t h(p);
+  bool negative = false;
+  for (int32_t unit = 0; unit < p.rows && !negative; ++unit) {
+    h.axis[unit] = {-1., 1.};
+    visit_vertices(p, h, (uint32_t)1 << unit, [&](const double* v) {
+      double size, largest, most;
+      negative =
+        negative || combined_bound(p, 1., v, size, largest, most) < -check_tolerance * largest;
+    });
+    h.axis[unit] = {0.};
+  }
+  return negative;
+}
+
 inline structure_report_t structure_check(const gprs::model_t& model, const gprs::result_t& result)
 {
   structure_report_t s;
@@ -325,19 +794,29 @@ inline structure_report_t structure_check(const gprs::model_t& model, const gprs
   for (const gprs::parallel_row_record_t& r : ps.parallel_rows) {
     kept_row[r.removed_row] = r.kept_row;
   }
+  auto final_row = [&](int32_t row) {
+    for (size_t hops = 0;
+         reduced_row[row] < 0 && kept_row[row] >= 0 && hops <= ps.parallel_rows.size();
+         ++hops) {
+      row = kept_row[row];
+    }
+    return row;
+  };
+  row_equations_t equations(ps);
   std::vector<double> g(reduced.ncols, 0.), parts(reduced.ncols, 0.), c(reduced.ncols, 0.);
   std::vector<int32_t> touched;
   std::vector<row_term_t> terms;
   std::vector<double> multipliers;
+  // For a row that is made of equations: their reduced rows, the columns of the test with the
+  // place of each in it, and the entries of the rows of the test, up to entry_end for each row.
+  std::vector<int32_t> equation_rows, cols, slot(reduced.ncols, -1), entry_col;
+  std::vector<double> entry_value;
+  std::vector<size_t> entry_end(max_row_equations + 1);
+  combined_t p;
   double kept_work = 0.;
   for (int32_t i = 0; i < model.nrows; ++i) {
-    int32_t against = i;
-    for (size_t hops = 0;
-         reduced_row[against] < 0 && kept_row[against] >= 0 && hops <= ps.parallel_rows.size();
-         ++hops) {
-      against = kept_row[against];
-    }
-    int32_t k = reduced_row[against];
+    int32_t against = final_row(i);
+    int32_t k       = reduced_row[against];
 
     sum_t constant;
     double largest = 1.;
@@ -353,6 +832,106 @@ inline structure_report_t structure_check(const gprs::model_t& model, const gprs
     }
     double lower = model.row_lower[i], upper = model.row_upper[i];
     double below = -gprs::inf, above = -gprs::inf;
+
+    equation_rows.clear();
+    bool too_many = false;
+    if (equations.list[i] >= 0) {
+      ++s.added_rows;
+      const std::vector<int32_t>& of = equations.lists[equations.list[i]];
+      too_many                       = of.size() > max_row_equations;
+      for (int32_t equation : of) {
+        int32_t e = reduced_row[final_row(equation)];
+        if (e >= 0 && e != k &&
+            std::find(equation_rows.begin(), equation_rows.end(), e) == equation_rows.end()) {
+          equation_rows.push_back(e);
+        }
+      }
+    }
+    if (too_many) {
+      for (int32_t col : touched) {
+        g[col]     = 0.;
+        parts[col] = 0.;
+      }
+      touched.clear();
+      ++s.added_untested;
+      continue;
+    }
+    if (!equation_rows.empty()) {
+      p.own  = k >= 0;
+      p.rows = p.own + equation_rows.size();
+      p.low.clear();
+      p.high.clear();
+      p.columns.clear();
+      cols.clear();
+      entry_col.clear();
+      entry_value.clear();
+      for (int32_t col : touched) {
+        slot[col] = p.columns.size();
+        cols.push_back(col);
+        p.columns.push_back(
+          combined_t::column_t{g[col], parts[col], reduced.col_lower[col], reduced.col_upper[col]});
+        g[col]     = 0.;
+        parts[col] = 0.;
+      }
+      touched.clear();
+      // The entries of the rows, row after row; a column that only they have gets g = 0.
+      for (int32_t n = 0; n < p.rows; ++n) {
+        int32_t row = p.own ? (n == 0 ? k : equation_rows[n - 1]) : equation_rows[n];
+        p.low.push_back(reduced.row_lower[row]);
+        p.high.push_back(reduced.row_upper[row]);
+        for (int64_t e = reduced.row_start[row]; e < reduced.row_start[row + 1]; ++e) {
+          int32_t col = reduced.col_index[e];
+          if (slot[col] < 0) {
+            slot[col] = p.columns.size();
+            cols.push_back(col);
+            p.columns.push_back(
+              combined_t::column_t{0., 0., reduced.col_lower[col], reduced.col_upper[col]});
+          }
+          entry_col.push_back(slot[col]);
+          entry_value.push_back(reduced.value[e]);
+        }
+        entry_end[n] = entry_col.size();
+      }
+      for (int32_t col : cols) {
+        slot[col] = -1;
+      }
+      p.a.assign(p.columns.size() * p.rows, 0.);
+      for (size_t e = 0, n = 0; e < entry_col.size(); ++e) {
+        while (e == entry_end[n]) {
+          ++n;
+        }
+        p.a[entry_col[e] * p.rows + n] = entry_value[e];
+      }
+      hyperplanes_t h(p);
+      double work = h.count() * (double)p.a.size();
+      if (work > max_kept_row_work || kept_work + work > max_kept_work) {
+        ++s.added_untested;
+        continue;
+      }
+      kept_work += work;
+      smallest_bound_t most, least;
+      visit_vertices(p, h, 0, [&](const double* v) {
+        if (upper < gprs::inf) { most.visit(p, 1., v); }
+        if (lower > -gprs::inf) { least.visit(p, -1., v); }
+      });
+      if (upper < gprs::inf) { above = constant.value() + most.value - upper; }
+      if (lower > -gprs::inf) { below = lower - constant.value() + least.value; }
+      double violation = !(below <= above) ? below : above;
+      double scaled    = violation / std::fmax(largest, below > above ? least.size : most.size);
+      // A bound that proves the row does so whether a point meets the reduced rows or not; a
+      // search that finds none says nothing when no point meets them.
+      if (violation > 0. && !(scaled <= structure_tolerance) && no_common_point(p)) {
+        ++s.added_untested;
+        continue;
+      }
+      ++s.added_tested;
+      raise_to(s.added_multiplier, std::fmax(most.multiplier, least.multiplier));
+      if (violation <= 0.) { continue; }
+      if (!(scaled <= s.added_worst)) { s.added_worst_row = i; }
+      raise_to(s.added_worst, scaled);
+      s.added_failures += !(scaled <= structure_tolerance);
+      continue;
+    }
 
     if (k < 0) {
       // Each end has its own size: a huge bound at one end says nothing about the other.

@@ -322,13 +322,17 @@ GPRS_TEST(parallel_duplicates)
   GPRS_CHECK_EQ(f.ps.order.size(), 2u);
   check_record(f.ps, 0, 2, 0, 1.);
   check_record(f.ps, 1, 3, 0, 1.);
-  // A changed side is an event for the other families, not for this one.
+  // A changed side is an event for the other families, not for this one. Row 0 is listed all
+  // the same: x0 has no other entry left and has become a singleton column of it.
   GPRS_CHECK(on_list(f.st, row_list::row_rules, 0) && on_list(f.st, row_list::doubleton, 0));
-  GPRS_CHECK(f.st.row_frontier.empty(row_list::parallel_rows));
+  GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{0}));
+  GPRS_CHECK(f.st.row_frontier.list[row_list::singletons] == (list_t{0}));
   // Locks of the kept row follow its new lower side.
   GPRS_CHECK_EQ(f.st.down_locks[0], 1);
   GPRS_CHECK_EQ(f.st.up_locks[0], 1);
   GPRS_CHECK_EQ(f.run().findings, 0);
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::parallel_rows));
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::singletons));
   model_t reduced = f.reduced();
   GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
 }
@@ -594,7 +598,8 @@ GPRS_TEST(parallel_storage_order)
   GPRS_CHECK_EQ(f.run().findings, 0);
   f.st.move_entry(f.st.find_entry(1, 3), 0, 2.);
   GPRS_CHECK_EQ(f.st.csr.index[f.st.csr.begin(1)], 1);
-  GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{1}));
+  // Row 2 is listed as well: x3 has its only entry there now.
+  GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{2, 1}));
   GPRS_CHECK_EQ(f.run().findings, 1);
   GPRS_CHECK(alive_rows(f.st) == (list_t{0, 2}));
   GPRS_CHECK_EQ(f.st.row_upper[0], 4.);
@@ -800,10 +805,11 @@ GPRS_TEST(parallel_budget)
   GPRS_CHECK_EQ(f.st.row_upper[2], 9.);
 }
 
-// Random models with duplicated and scaled rows: the rule removes exactly the rows that a
-// pairwise comparison of the model finds, keeps the smallest row of each class with the
-// intersection of the sides, reports infeasible exactly when a class has crossing sides, and
-// leaves the feasible set as it was.
+// Random models with duplicated and scaled rows, rows that are parallel up to singleton columns
+// left alone (near_parallel_rows off): the rule removes exactly the rows that a pairwise
+// comparison of the model finds, keeps the smallest row of each class with the intersection of
+// the sides, reports infeasible exactly when a class has crossing sides, and leaves the
+// feasible set as it was.
 GPRS_TEST(parallel_random_models)
 {
   tolerances_t tol;
@@ -813,8 +819,9 @@ GPRS_TEST(parallel_random_models)
     model_t m     = random_model(rng);
     naive_t naive = naive_parallel(m, tol);
     fixture_t f(m);
-    int32_t failures     = gprs::test::failure_count();
-    rule_result_t result = f.run();
+    f.opt.near_parallel_rows = false;
+    int32_t failures         = gprs::test::failure_count();
+    rule_result_t result     = f.run();
     GPRS_CHECK_EQ(result.outcome == infeasible, naive.infeasible);
     if (result.outcome == ok && !naive.infeasible) {
       GPRS_CHECK(!result.stopped);
@@ -869,7 +876,8 @@ GPRS_TEST(parallel_random_incremental)
     naive_t naive = naive_parallel(m, tol);
     if (naive.infeasible) { continue; }
     fixture_t f(m);
-    int32_t failures = gprs::test::failure_count();
+    f.opt.near_parallel_rows = false;
+    int32_t failures         = gprs::test::failure_count();
     GPRS_CHECK_EQ(f.run().outcome, ok);
     if (rng.chance(0.5)) { f.st.rebuild(); }
     list_t live;
@@ -1021,36 +1029,76 @@ GPRS_TEST(parallel_many_rows)
 namespace {
 
 // The rule as rules.hpp (e) states it, one call at a time and without the changes of the
-// state: which row a call removes into which, in which order, the work it spends and the rows
-// it gives back. Buckets are keyed by the rounded normalised entries themselves, not by a hash
-// of them.
+// state: which rows a call merges or subtracts, in which order, the work it spends and the rows
+// that are listed afterwards. Buckets are keyed by the rounded normalised core entries
+// themselves, not by a hash of them. Sides and fixed terms are followed in plain arithmetic,
+// which is exact on the models of the tests that use it.
 struct reference_t {
   using key_t = std::vector<std::tuple<int32_t, int64_t, int>>;  // column, mantissa, exponent
   struct row_t {
     key_t key;
+    // Free size and version of the last reading; read is false for a row to read again.
+    int32_t free     = 0;
     uint32_t version = 0;
+    bool read        = false;
     bool keyed       = false;
   };
+  struct reduction_t {
+    bool addition;
+    int32_t changed;  // the removed row of a merge, the target of an addition
+    int32_t other;    // the kept row, the equation
+  };
   struct call_t {
-    std::vector<std::pair<int32_t, int32_t>> merges;  // removed, kept
+    std::vector<reduction_t> reductions;
     int64_t work        = 0;
     int64_t comparisons = 0;
     bool stopped        = false;
-    list_t given_back;
+    bool infeasible     = false;
+    bool limited        = false;
+    list_t listed;      // row_list::parallel_rows after the call, ascending
+    list_t singletons;  // row_list::singletons after the call, ascending
+  };
+  // The free entries of a row: its core and its entries in singleton columns.
+  struct view_t {
+    entries_t core;
+    int32_t singles     = 0;
+    int32_t single_col  = -1;
+    double single_value = 0.;
+    double fixed        = 0.;
+    // Smallest and largest |a| over the free entries, and over those in singleton columns.
+    double smallest = inf, largest = 0.;
+    double single_smallest = inf, single_largest = 0.;
   };
 
+  bool near = true;
   std::vector<row_t> rows;
   std::map<key_t, std::set<int32_t>> buckets;
 
-  static entries_t free_entries(const state_t& st, int32_t row)
+  // size holds the live entries of every column.
+  view_t view(const state_t& st, int32_t row, const std::vector<int32_t>& size) const
   {
-    entries_t entries;
+    view_t v;
     for (int64_t e = st.csr.begin(row); e < st.csr.end(row); ++e) {
-      if (st.csr.live(e) && st.is_live(st.csr.index[e])) {
-        entries[st.csr.index[e]] = st.csr.value[e];
+      if (!st.csr.live(e)) { continue; }
+      int32_t col  = st.csr.index[e];
+      double value = st.csr.value[e];
+      if (!st.is_live(col)) {
+        v.fixed += value * st.col_lower[col];
+        continue;
+      }
+      v.smallest = std::fmin(v.smallest, std::fabs(value));
+      v.largest  = std::fmax(v.largest, std::fabs(value));
+      if (near && size[col] == 1) {
+        ++v.singles;
+        v.single_col      = col;
+        v.single_value    = value;
+        v.single_smallest = std::fmin(v.single_smallest, std::fabs(value));
+        v.single_largest  = std::fmax(v.single_largest, std::fabs(value));
+      } else {
+        v.core[col] = value;
       }
     }
-    return entries;
+    return v;
   }
 
   static key_t key_of(const entries_t& entries)
@@ -1085,100 +1133,233 @@ struct reference_t {
     return true;
   }
 
+  static bool holds(double size)
+  {
+    tolerances_t tol;
+    return size * tol.side_error <= tol.feasibility;
+  }
+
   void unkey(int32_t row)
   {
     buckets[rows[row].key].erase(row);
     rows[row].keyed = false;
   }
 
-  call_t run(const state_t& st, list_t listed, work_budget_t budget, int32_t limit)
+  // listed and changed are row_list::parallel_rows and row_list::singletons before the call.
+  call_t run(
+    const state_t& st, list_t listed, const list_t& changed, work_budget_t budget, int32_t limit)
   {
     call_t call;
     rows.resize(st.nrows);
-    std::sort(listed.begin(), listed.end());
+    std::vector<int32_t> size(st.csc.size.begin(), st.csc.size.end());
+    dense_t lower = st.row_lower, upper = st.row_upper;
     std::vector<uint8_t> removed(st.nrows, 0);
-    auto alive = [&](int32_t row) { return st.row_alive[row] && !removed[row]; };
-    auto stop  = [&](size_t from) {
-      call.stopped = true;
-      for (size_t k = from; k < listed.size(); ++k) {
-        if (alive(listed[k])) { call.given_back.push_back(listed[k]); }
+    // A row that an entry or a side has changed in since the model was read.
+    std::vector<uint8_t> touched(st.nrows, 0);
+    for (int32_t row = 0; row < st.nrows; ++row) {
+      touched[row] = st.row_version[row] != 0;
+    }
+    // Rows that an event of this call puts on the two lists.
+    std::set<int32_t> pushed, events;
+    if (near) {
+      for (int32_t row : changed) {
+        if (rows[row].keyed) { unkey(row); }
+        rows[row].read = false;
       }
+    }
+    std::sort(listed.begin(), listed.end());
+    auto alive  = [&](int32_t row) { return st.row_alive[row] && !removed[row]; };
+    auto finish = [&](size_t given_back_from) {
+      for (size_t k = given_back_from; k < listed.size(); ++k) {
+        if (alive(listed[k])) { pushed.insert(listed[k]); }
+      }
+      call.listed.assign(pushed.begin(), pushed.end());
+      call.singletons.assign(events.begin(), events.end());
       call.work = budget.used;
     };
+
     for (int32_t row : listed) {
       if (budget.stop()) {
-        stop(0);
+        call.stopped = true;
+        finish(0);
         return call;
       }
-      size_t length = st.row_alive[row] && st.row_free_size[row] >= 2 ? st.row_free_size[row] : 0;
-      if (rows[row].keyed) {
-        if (rows[row].key.size() == length && rows[row].version == st.row_version[row]) {
-          continue;
-        }
-        unkey(row);
-      }
-      if (length == 0) { continue; }
+      int32_t free = st.row_alive[row] && st.row_free_size[row] >= 2 ? st.row_free_size[row] : 0;
+      row_t& r     = rows[row];
+      if (free != 0 && r.read && r.free == free && r.version == st.row_version[row]) { continue; }
+      if (r.keyed) { unkey(row); }
+      r.read = false;
+      if (free == 0) { continue; }
       budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[row]);
-      rows[row].key     = key_of(free_entries(st, row));
-      rows[row].version = st.row_version[row];
-      rows[row].keyed   = true;
-      buckets[rows[row].key].insert(row);
+      entries_t core = view(st, row, size).core;
+      r.read         = true;
+      r.free         = free;
+      r.version      = st.row_version[row];
+      if (core.size() < 2) { continue; }
+      r.key   = key_of(core);
+      r.keyed = true;
+      buckets[r.key].insert(row);
     }
+
     for (size_t k = 0; k < listed.size(); ++k) {
       if (budget.stop()) {
-        stop(k);
+        call.stopped = true;
+        finish(k);
         return call;
       }
       int32_t row = listed[k];
       if (!rows[row].keyed) { continue; }
       budget.spend(line_visit_work + st.csr.used[row]);
       std::set<int32_t>& bucket = buckets[rows[row].key];
-      entries_t mine            = free_entries(st, row);
-      int32_t unlike            = 0;
-      for (auto it = bucket.upper_bound(row); it != bucket.end() && unlike < limit;) {
+      view_t mine               = view(st, row, size);
+
+      // The reduction of the pair, if it has one.
+      auto reduce = [&](int32_t other, const view_t& theirs) {
+        if (mine.singles == 0 && theirs.singles == 0) {
+          int32_t kept = std::min(row, other), gone = std::max(row, other);
+          const view_t& kept_view = kept == row ? mine : theirs;
+          const view_t& gone_view = kept == row ? theirs : mine;
+          if (!holds(std::fabs(kept_view.fixed))) { return false; }
+          double ratio = gone_view.core.begin()->second / kept_view.core.begin()->second;
+          double low   = (lower[gone] - gone_view.fixed) / ratio + kept_view.fixed;
+          double high  = (upper[gone] - gone_view.fixed) / ratio + kept_view.fixed;
+          if (ratio < 0) { std::swap(low, high); }
+          // A side that changes lists the kept row.
+          if (low > lower[kept] || high < upper[kept]) {
+            touched[kept] = 1;
+            pushed.insert(kept);
+          }
+          lower[kept] = std::fmax(lower[kept], low);
+          upper[kept] = std::fmin(upper[kept], high);
+          if (lower[kept] > upper[kept]) { call.infeasible = true; }
+          call.reductions.push_back({false, gone, kept});
+          removed[gone] = 1;
+          unkey(gone);
+          bool event = false;
+          for (const auto& entry : gone_view.core) {
+            event = --size[entry.first] == 1 || event;
+          }
+          if (event) {
+            events.insert(kept);
+            pushed.insert(kept);
+            if (near) { unkey(kept); }
+          }
+          return true;
+        }
+        auto may = [&](int32_t equation, const view_t& of, const view_t& target) {
+          return lower[equation] == upper[equation] &&
+                 (of.singles == 0 || (of.singles == 1 && target.singles <= 1));
+        };
+        bool mine_may = may(row, mine, theirs), theirs_may = may(other, theirs, mine);
+        if (!mine_may && !theirs_may) { return false; }
+        bool mine_is_equation = mine_may && (!theirs_may || mine.singles < theirs.singles ||
+                                             (mine.singles == theirs.singles && row < other));
+        int32_t equation      = mine_is_equation ? row : other;
+        int32_t target        = mine_is_equation ? other : row;
+        const view_t& ev      = mine_is_equation ? mine : theirs;
+        const view_t& tv      = mine_is_equation ? theirs : mine;
+        double factor         = tv.core.begin()->second / ev.core.begin()->second;
+        if (!std::isfinite(factor) || factor == 0.) { return false; }
+        double scale = std::fabs(factor);
+        if (scale > 1. || (ev.singles == 1 && scale != 1.)) { return false; }
+        double grow_equation = std::fmax(1., scale / tv.single_smallest);
+        double grow_target   = 1.;
+        if (ev.singles == 1) { grow_target = std::fmax(1., 1. / std::fabs(ev.single_value)); }
+        if (!(grow_equation <= 1e3 && grow_target <= 1e3)) { return false; }
+        double rhs = upper[equation] - ev.fixed;
+        if (!holds(std::fabs(upper[equation]) * grow_equation) ||
+            !holds(std::fabs(ev.fixed) * grow_equation) || !holds(std::fabs(factor * rhs)) ||
+            (lower[target] > -inf && !holds(std::fabs(lower[target]) * grow_target)) ||
+            (upper[target] < inf && !holds(std::fabs(upper[target]) * grow_target)) ||
+            (grow_target > 1. && !holds(std::fabs(tv.fixed) * grow_target))) {
+          return false;
+        }
+        double value = -factor * ev.single_value;
+        if (ev.singles == 1 && (!std::isfinite(value) || value == 0.)) { return false; }
+        if ((grow_equation > 1. && touched[equation]) || (grow_target > 1. && touched[target])) {
+          call.limited = true;
+          return false;
+        }
+        budget.spend(st.csr.used[target]);
+        double smallest = tv.single_smallest, largest = tv.single_largest;
+        if (ev.singles == 1) {
+          smallest = std::fmin(smallest, std::fabs(value));
+          largest  = std::fmax(largest, std::fabs(value));
+        }
+        if (largest / smallest > std::fmax(tv.largest / tv.smallest, 1e6)) { return false; }
+        call.reductions.push_back({true, target, equation});
+        touched[target] = 1;
+        lower[target] -= factor * rhs;
+        upper[target] -= factor * rhs;
+        unkey(target);
+        pushed.insert(target);
+        bool event = ev.singles == 1;
+        for (const auto& entry : tv.core) {
+          event = --size[entry.first] == 1 || event;
+        }
+        if (ev.singles == 1) { ++size[ev.single_col]; }
+        if (event) {
+          events.insert(equation);
+          pushed.insert(equation);
+          unkey(equation);
+        }
+        return true;
+      };
+      // One neighbour of the listed row. False when it counts as not parallel.
+      auto visit = [&](int32_t other) {
+        budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
+        ++call.comparisons;
+        view_t theirs = view(st, other, size);
+        bool is_parallel =
+          row < other ? parallel(mine.core, theirs.core) : parallel(theirs.core, mine.core);
+        if (!is_parallel || !reduce(other, theirs)) { return false; }
+        budget.found();
+        return true;
+      };
+
+      // A scan that ends on the limit with a live row of the bucket left in its direction
+      // leaves pairs of the listed row uncompared.
+      int32_t unlike = 0, last = row;
+      while (rows[row].keyed && unlike < limit) {
+        auto it = bucket.upper_bound(last);
+        if (it == bucket.end()) { break; }
         int32_t other = *it;
         if (!alive(other)) {
           rows[other].keyed = false;
-          it                = bucket.erase(it);
+          bucket.erase(it);
           continue;
         }
-        budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
-        ++call.comparisons;
-        if (!parallel(mine, free_entries(st, other))) {
-          ++unlike;
-          ++it;
-          continue;
-        }
-        call.merges.emplace_back(other, row);
-        removed[other]    = 1;
-        rows[other].keyed = false;
-        it                = bucket.erase(it);
-        budget.found();
+        last = other;
+        unlike += !visit(other);
       }
-      unlike = 0;
-      for (auto at = bucket.find(row); at != bucket.begin() && unlike < limit;) {
-        auto below    = std::prev(at);
-        int32_t other = *below;
+      if (rows[row].keyed && unlike >= limit) {
+        for (auto it = bucket.upper_bound(last); it != bucket.end(); ++it) {
+          call.limited = call.limited || alive(*it);
+        }
+      }
+      unlike     = 0;
+      int32_t at = row;
+      while (rows[row].keyed && unlike < limit) {
+        auto it = bucket.lower_bound(at);
+        if (it == bucket.begin()) { break; }
+        int32_t other = *std::prev(it);
         if (!alive(other)) {
           rows[other].keyed = false;
-          bucket.erase(below);
+          bucket.erase(std::prev(it));
           continue;
         }
-        budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
-        ++call.comparisons;
-        if (!parallel(free_entries(st, other), mine)) {
+        if (!visit(other)) {
           ++unlike;
-          at = below;
-          continue;
+          at = other;
         }
-        call.merges.emplace_back(row, other);
-        removed[row] = 1;
-        unkey(row);
-        budget.found();
-        break;
+      }
+      if (rows[row].keyed && unlike >= limit) {
+        for (auto it = bucket.begin(); it != bucket.end() && *it < at; ++it) {
+          call.limited = call.limited || alive(*it);
+        }
       }
     }
-    call.work = budget.used;
+    finish(listed.size());
     return call;
   }
 };
@@ -1218,39 +1399,124 @@ model_t bucket_model(rng_t& rng, int32_t nrows, int32_t ncols)
   return make_model(rows, dense_t(nrows, -inf), dense_t(nrows, 1e9), col_lower, col_upper);
 }
 
-// One call of the rule on the list as it is, checked against the reference.
+// The same patterns over the first `shared` columns, and behind them columns of their own for
+// some rows: none, one or two per row, so that rows are parallel up to singleton columns. Some
+// rows are equations with the right-hand side 0, the others have sides around 0 that hold the
+// tolerance, and every column has the lower bound 0, where the tests fix it: the fixed terms
+// are 0, every equation keeps the right-hand side 0 and no merge makes sides cross.
+model_t near_model(rng_t& rng, int32_t nrows, int32_t shared)
+{
+  static const double factor[] = {1., 1., 1., -1., 2., -2., 0.5, -0.5, 3., 1.5, 4., 0.25};
+  constexpr double wide        = 1e7;
+  int32_t npatterns            = rng.in(1, 5);
+  double p_exact = rng.in(5, 10) / 10., p_single = rng.in(1, 8) / 10.,
+         p_equation = rng.in(1, 7) / 10.;
+  std::vector<dense_t> pattern(npatterns, dense_t(shared, 0.));
+  for (dense_t& p : pattern) {
+    for (int32_t k = rng.in(2, 4); k > 0; --k) {
+      p[rng.in(0, shared - 1)] = rng.coefficient();
+    }
+  }
+  std::vector<int32_t> own(nrows, 0);
+  int32_t ncols = shared;
+  for (int32_t& n : own) {
+    n = rng.chance(p_single) ? (rng.chance(0.8) ? 1 : 2) : 0;
+    ncols += n;
+  }
+  std::vector<dense_t> rows(nrows, dense_t(ncols, 0.));
+  dense_t row_lower(nrows), row_upper(nrows);
+  int32_t next = shared;
+  for (int32_t i = 0; i < nrows; ++i) {
+    const dense_t& p = pattern[rng.in(0, npatterns - 1)];
+    double f         = factor[rng.in(0, 11)];
+    for (int32_t j = 0; j < shared; ++j) {
+      rows[i][j] = f * p[j];
+    }
+    if (!rng.chance(p_exact)) { rows[i][rng.in(0, shared - 1)] *= 1. + 1e-8 * rng.in(1, 4); }
+    for (int32_t k = 0; k < own[i]; ++k) {
+      rows[i][next++] = rng.coefficient();
+    }
+    int32_t kind = rng.chance(p_equation) ? 0 : rng.in(1, 3);
+    row_lower[i] = kind == 0 ? 0. : kind == 1 ? -inf : -wide;
+    row_upper[i] = kind == 0 ? 0. : kind == 2 ? inf : wide;
+  }
+  dense_t col_lower(ncols, 0.), col_upper(ncols);
+  for (int32_t j = 0; j < ncols; ++j) {
+    col_upper[j] = j < shared && rng.chance(0.1) ? 0 : rng.in(1, 3);
+  }
+  return make_model(rows, row_lower, row_upper, col_lower, col_upper);
+}
+
+// One call of the rule on the lists as they are, checked against the reference.
 reference_t::call_t checked_call(fixture_t& f, reference_t& reference, work_budget_t budget)
 {
-  const list_t& listed         = f.st.row_frontier.list[row_list::parallel_rows];
-  reference_t::call_t expected = reference.run(f.st, listed, budget, f.opt.parallel_bucket_limit);
-  size_t records               = f.ps.parallel_rows.size();
-  rule_result_t result         = f.rule.run(f.st, budget, f.ps, f.opt);
+  reference.near               = f.opt.near_parallel_rows;
+  reference_t::call_t expected = reference.run(f.st,
+                                               f.st.row_frontier.list[row_list::parallel_rows],
+                                               f.st.row_frontier.list[row_list::singletons],
+                                               budget,
+                                               f.opt.parallel_bucket_limit);
+  GPRS_CHECK(!expected.infeasible);
+  size_t records = f.ps.order.size(), merges = f.ps.parallel_rows.size();
+  size_t additions     = f.ps.row_additions.size();
+  rule_result_t result = f.rule.run(f.st, budget, f.ps, f.opt);
   GPRS_CHECK_EQ(result.outcome, ok);
-  GPRS_CHECK_EQ(result.findings, (int64_t)expected.merges.size());
+  GPRS_CHECK_EQ(result.findings, (int64_t)expected.reductions.size());
   GPRS_CHECK_EQ(result.stopped, expected.stopped);
+  GPRS_CHECK_EQ(result.limited, expected.limited);
   GPRS_CHECK_EQ(budget.used, expected.work);
-  GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == expected.given_back);
-  GPRS_CHECK_EQ(f.ps.parallel_rows.size(), records + expected.merges.size());
-  for (size_t k = 0; k < expected.merges.size() && records + k < f.ps.parallel_rows.size(); ++k) {
-    GPRS_CHECK_EQ(f.ps.parallel_rows[records + k].removed_row, expected.merges[k].first);
-    GPRS_CHECK_EQ(f.ps.parallel_rows[records + k].kept_row, expected.merges[k].second);
+  list_t listed = f.st.row_frontier.list[row_list::parallel_rows];
+  std::sort(listed.begin(), listed.end());
+  GPRS_CHECK(listed == expected.listed);
+  if (f.opt.near_parallel_rows) {
+    list_t singletons = f.st.row_frontier.list[row_list::singletons];
+    std::sort(singletons.begin(), singletons.end());
+    GPRS_CHECK(singletons == expected.singletons);
+  }
+  GPRS_CHECK_EQ(f.ps.order.size(), records + expected.reductions.size());
+  for (size_t k = 0; k < expected.reductions.size() && records + k < f.ps.order.size(); ++k) {
+    const reference_t::reduction_t& r = expected.reductions[k];
+    if (f.ps.order[records + k] == record_kind_t::parallel_row) {
+      GPRS_CHECK(!r.addition);
+      GPRS_CHECK_EQ(f.ps.parallel_rows[merges].removed_row, r.changed);
+      GPRS_CHECK_EQ(f.ps.parallel_rows[merges].kept_row, r.other);
+      ++merges;
+    } else {
+      GPRS_CHECK(r.addition);
+      GPRS_CHECK_EQ(f.ps.row_additions[additions].row, r.changed);
+      GPRS_CHECK_EQ(f.ps.row_additions[additions].equation_row, r.other);
+      ++additions;
+    }
   }
   return expected;
 }
 
 }  // namespace
 
+namespace {
+
+struct sequence_counts_t {
+  int64_t calls     = 0;
+  int64_t merges    = 0;
+  int64_t additions = 0;
+  int64_t stops     = 0;
+  int64_t listed    = 0;  // rows that a call left on row_list::singletons
+};
+
 // Calls on one row, on a few rows and on all of them, with and without a budget, between
-// changed entries, fixed columns, deleted rows and rebuilds: every call removes the rows that
-// the definition removes, into the same rows and in the same order, spends the same work and
-// gives the same rows back.
-GPRS_TEST(parallel_random_sequences)
+// changed, moved and deleted entries, fixed columns, deleted rows and rebuilds: every call
+// makes the reductions that the definition makes, on the same rows and in the same order,
+// spends the same work and leaves the same rows on the two lists.
+sequence_counts_t run_sequences(bool singleton_columns, bool near, uint64_t seeds)
 {
-  int64_t calls = 0, merges = 0, stops = 0;
-  for (uint64_t seed = 1; seed <= 250; ++seed) {
+  sequence_counts_t counts;
+  for (uint64_t seed = 1; seed <= seeds; ++seed) {
     rng_t rng(seed);
-    int32_t nrows = rng.in(1, seed % 5 == 0 ? 40 : 400), ncols = rng.in(2, 12);
-    fixture_t f(bucket_model(rng, nrows, ncols));
+    int32_t nrows = rng.in(1, seed % 5 == 0 ? 40 : 400), shared = rng.in(2, 12);
+    fixture_t f(singleton_columns ? near_model(rng, nrows, shared)
+                                  : bucket_model(rng, nrows, shared));
+    f.opt.near_parallel_rows = near;
+    int32_t ncols            = f.st.ncols;
     reference_t reference;
     static const int32_t limits[] = {1, 2, 4, 4, 8};
     f.opt.parallel_bucket_limit   = limits[rng.in(0, 4)];
@@ -1261,17 +1527,22 @@ GPRS_TEST(parallel_random_sequences)
       budget.stall_limit           = rng.chance(0.7) ? budget.limit : rng.in(1, 30 * nrows);
       reference_t::call_t expected = checked_call(f, reference, budget);
       GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
-      ++calls;
-      merges += expected.merges.size();
-      stops += expected.stopped;
+      ++counts.calls;
+      for (const reference_t::reduction_t& r : expected.reductions) {
+        ++(r.addition ? counts.additions : counts.merges);
+      }
+      counts.stops += expected.stopped;
+      counts.listed += expected.singletons.size();
       if (gprs::test::failure_count() != failures) {
         std::printf("    seed %llu\n", (unsigned long long)seed);
-        return;
+        return counts;
       }
       // One row changes, or a few, or many.
       int32_t changes = rng.chance(0.3) ? rng.in(4, 40) : rng.in(0, 3);
       for (; changes > 0; --changes) {
-        int32_t row = rng.in(0, nrows - 1), col = rng.in(0, ncols - 1), kind = rng.in(0, 9);
+        int32_t row  = rng.in(0, nrows - 1);
+        int32_t col  = rng.chance(0.7) ? rng.in(0, shared - 1) : rng.in(0, ncols - 1);
+        int32_t kind = rng.in(0, singleton_columns ? 12 : 9);
         if (kind == 0) {
           if (f.st.is_live(col)) { fix_column(f.st, f.ps, col, f.st.col_lower[col]); }
         } else if (kind == 1) {
@@ -1281,17 +1552,60 @@ GPRS_TEST(parallel_random_sequences)
         } else if (f.st.row_alive[row] && f.st.is_live(col)) {
           int64_t e = f.st.find_entry(row, col);
           if (e < 0) { continue; }
-          double old   = f.st.csr.value[e];
-          double value = kind < 6 ? rng.coefficient() : old * (1. + 1e-8 * rng.in(1, 3));
-          if (value != old) { f.st.set_coefficient(e, value); }
+          double old = f.st.csr.value[e];
+          if (kind == 10) {
+            f.st.delete_entry(e);
+          } else if (kind > 10) {
+            // Often into a column behind the shared ones, which then has a second entry.
+            int32_t target = rng.chance(0.5) ? rng.in(shared, ncols - 1) : rng.in(0, ncols - 1);
+            if (!f.st.is_live(target) || f.st.find_entry(row, target) >= 0) { continue; }
+            f.st.move_entry(e, target, rng.coefficient());
+          } else {
+            double value = kind < 6 ? rng.coefficient() : old * (1. + 1e-8 * rng.in(1, 3));
+            if (value != old) { f.st.set_coefficient(e, value); }
+          }
         }
       }
     }
   }
+  return counts;
+}
+
+}  // namespace
+
+// Rows without singleton columns to begin with, and the rule as it was before rows parallel up
+// to singleton columns: every reduction is a merge.
+GPRS_TEST(parallel_random_sequences)
+{
+  sequence_counts_t counts = run_sequences(false, false, 250);
   // The test is not vacuous.
-  GPRS_CHECK(calls > 1500);
-  GPRS_CHECK(merges > 15000);
-  GPRS_CHECK(stops > 120);
+  GPRS_CHECK(counts.calls > 1500);
+  GPRS_CHECK(counts.merges > 15000);
+  GPRS_CHECK_EQ(counts.additions, 0);
+  GPRS_CHECK(counts.stops > 120);
+}
+
+// The same models with the cores as keys: columns become singleton columns as rows go, which
+// lists the rows that hold them. No row is an equation, so every reduction is still a merge.
+GPRS_TEST(parallel_random_sequences_on_cores)
+{
+  sequence_counts_t counts = run_sequences(false, true, 250);
+  GPRS_CHECK(counts.calls > 1500);
+  GPRS_CHECK(counts.merges > 15000);
+  GPRS_CHECK_EQ(counts.additions, 0);
+  GPRS_CHECK(counts.stops > 120);
+  GPRS_CHECK(counts.listed > 10);
+}
+
+// Rows parallel up to singleton columns, equations among them: merges and subtractions.
+GPRS_TEST(near_random_sequences)
+{
+  sequence_counts_t counts = run_sequences(true, true, 300);
+  GPRS_CHECK(counts.calls > 1800);
+  GPRS_CHECK(counts.merges > 10000);
+  GPRS_CHECK(counts.additions > 7000);
+  GPRS_CHECK(counts.stops > 120);
+  GPRS_CHECK(counts.listed > 800);
 }
 
 // 2,000 rows x0 + v xj over 8 columns j, each alone in its bucket at first. Then one to three
@@ -1323,7 +1637,7 @@ GPRS_TEST(parallel_few_rows_among_many)
     work_budget_t budget;
     budget.limit = budget.stall_limit = rng.chance(0.9) ? no_limit : rng.in(1, 200);
     reference_t::call_t expected      = checked_call(f, reference, budget);
-    merges += expected.merges.size();
+    merges += expected.reductions.size();
     stops += expected.stopped;
     comparisons += expected.comparisons;
     if (step % 150 == 149) {
@@ -1400,4 +1714,905 @@ GPRS_TEST(parallel_bucket_left_after_many_rows_changed)
   GPRS_CHECK_EQ(call(), 2);
   GPRS_CHECK_EQ(f.st.live_rows, nrows);
   GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
+}
+
+// ---- Rows parallel up to singleton columns (opt.near_parallel_rows) ----
+
+namespace {
+
+void check_addition(const postsolve_t& ps, size_t k, int32_t row, int32_t equation, double factor)
+{
+  GPRS_REQUIRE(k < ps.row_additions.size());
+  GPRS_CHECK_EQ(ps.row_additions[k].row, row);
+  GPRS_CHECK_EQ(ps.row_additions[k].equation_row, equation);
+  GPRS_CHECK_EQ(ps.row_additions[k].factor, factor);
+}
+
+// Findings of the same model with the option off.
+int64_t findings_without(const model_t& m)
+{
+  fixture_t f(m);
+  f.opt.near_parallel_rows = false;
+  return f.run().findings;
+}
+
+}  // namespace
+
+// A set-packing row and the equation that defines the sum of its columns as a column of its
+// own (brazil3): the equation is subtracted and the row is left as a bound of that column.
+GPRS_TEST(near_inequality_and_equation_with_a_singleton_column)
+{
+  // Row 0: x0 + x1 + x2 <= 1. Row 1: x0 + x1 + x2 - y = 0.
+  model_t m = make_model(
+    {{1., 1., 1., 0.}, {1., 1., 1., -1.}}, {-inf, 0.}, {1., 0.}, dense_t(4, 0.), dense_t(4, 1.));
+  GPRS_CHECK_EQ(findings_without(m), 0);
+  fixture_t f(m);
+  int64_t nnz          = f.st.live_nnz;
+  rule_result_t result = f.run();
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK_EQ(result.findings, 1);
+  GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
+  GPRS_CHECK(row_entries(f.st, 0) == (entries_t{{3, 1.}}));
+  GPRS_CHECK_EQ(f.st.row_lower[0], -inf);
+  GPRS_CHECK_EQ(f.st.row_upper[0], 1.);
+  GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{0, 1.}, {1, 1.}, {2, 1.}, {3, -1.}}));
+  GPRS_CHECK_EQ(f.st.row_upper[1], 0.);
+  GPRS_CHECK_EQ(f.st.live_nnz, nnz - 2);
+  GPRS_CHECK_EQ(f.ps.order.size(), 1u);
+  GPRS_CHECK(f.ps.parallel_rows.empty());
+  check_addition(f.ps, 0, 0, 1, 1.);
+  // Row 0 is left to the row rules as a singleton row. The equation is listed again with the
+  // entries it had: y has a second entry and x0, x1 and x2 have one each.
+  GPRS_CHECK_EQ(f.st.row_version[1], 0u);
+  GPRS_CHECK(f.st.row_frontier.list[row_list::singletons] == (list_t{1}));
+  GPRS_CHECK(on_list(f.st, row_list::parallel_rows, 0) &&
+             on_list(f.st, row_list::parallel_rows, 1));
+  GPRS_CHECK_EQ(f.run().findings, 0);
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::parallel_rows));
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::singletons));
+  model_t reduced = f.reduced();
+  GPRS_CHECK_EQ(reduced.nnz(), 5);
+  GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
+}
+
+// Two equations, one with a singleton column (piperout-d27): the one without it is subtracted,
+// whatever the order of the rows, and the other is left as a singleton row that fixes the column.
+GPRS_TEST(near_two_equations_one_singleton_column)
+{
+  for (bool swapped : {false, true}) {
+    // x0 + x1 + x2 = 1 and y - x0 - x1 - x2 = 0.
+    dense_t plain = {1., 1., 1., 0.}, with_y = {-1., -1., -1., 1.};
+    model_t m        = swapped
+                         ? make_model({with_y, plain}, {0., 1.}, {0., 1.}, dense_t(4, 0.), dense_t(4, 1.))
+                         : make_model({plain, with_y}, {1., 0.}, {1., 0.}, dense_t(4, 0.), dense_t(4, 1.));
+    int32_t equation = swapped ? 1 : 0, target = swapped ? 0 : 1;
+    GPRS_CHECK_EQ(findings_without(m), 0);
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, target) == (entries_t{{3, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_lower[target], 1.);
+    GPRS_CHECK_EQ(f.st.row_upper[target], 1.);
+    GPRS_CHECK(row_entries(f.st, equation) == (entries_t{{0, 1.}, {1, 1.}, {2, 1.}}));
+    check_addition(f.ps, 0, target, equation, -1.);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 3);
+  }
+}
+
+// Two equations with a singleton column each (t11nonreg): the smaller index is subtracted and
+// the other row is left as a doubleton equation in the two columns.
+GPRS_TEST(near_two_equations_a_singleton_column_each)
+{
+  // Row 0: x0 + x1 + s0 = 2. Row 1: -x0 - x1 + s1 = 1.
+  model_t m = make_model(
+    {{1., 1., 1., 0.}, {-1., -1., 0., 1.}}, {2., 1.}, {2., 1.}, dense_t(4, 0.), dense_t(4, 3.));
+  GPRS_CHECK_EQ(findings_without(m), 0);
+  fixture_t f(m);
+  GPRS_CHECK_EQ(f.run().findings, 1);
+  GPRS_CHECK(row_entries(f.st, 0) == (entries_t{{0, 1.}, {1, 1.}, {2, 1.}}));
+  GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}, {3, 1.}}));
+  GPRS_CHECK_EQ(f.st.row_lower[1], 3.);
+  GPRS_CHECK_EQ(f.st.row_upper[1], 3.);
+  check_addition(f.ps, 0, 1, 0, -1.);
+  GPRS_CHECK(on_list(f.st, row_list::doubleton, 1));
+  GPRS_CHECK_EQ(f.run().findings, 0);
+  GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+}
+
+// The equation with three singleton columns is the target of the one without: one step, after
+// which neither row has a core. Subtracting the first from the second and back would never end.
+GPRS_TEST(near_equation_with_several_singleton_columns)
+{
+  // Row 0: x0 + x1 + x2 = 1. Row 1: x0 + x1 + x2 + s0 + s1 + s2 = 4.
+  for (bool swapped : {false, true}) {
+    dense_t plain = {1., 1., 1., 0., 0., 0.}, wide = {1., 1., 1., 1., 1., 1.};
+    model_t m        = swapped
+                         ? make_model({wide, plain}, {4., 1.}, {4., 1.}, dense_t(6, 0.), dense_t(6, 2.))
+                         : make_model({plain, wide}, {1., 4.}, {1., 4.}, dense_t(6, 0.), dense_t(6, 2.));
+    int32_t equation = swapped ? 1 : 0, target = swapped ? 0 : 1;
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, target) == (entries_t{{3, 1.}, {4, 1.}, {5, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_lower[target], 3.);
+    GPRS_CHECK_EQ(f.st.row_upper[target], 3.);
+    GPRS_CHECK(row_entries(f.st, equation) == (entries_t{{0, 1.}, {1, 1.}, {2, 1.}}));
+    check_addition(f.ps, 0, target, equation, 1.);
+    for (int32_t call = 0; call < 5; ++call) {
+      GPRS_CHECK_EQ(f.run().findings, 0);
+    }
+    GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+  }
+  {
+    // The row without singleton columns is no equation: nothing to subtract from the other.
+    model_t m = make_model({{1., 1., 1., 0., 0., 0.}, {1., 1., 1., 1., 1., 1.}},
+                           {-inf, 4.},
+                           {1., 4.},
+                           dense_t(6, 0.),
+                           dense_t(6, 2.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK_EQ(f.st.live_nnz, 9);
+  }
+  {
+    // An equation with one singleton column and a row with two: left alone, either way round.
+    model_t m = make_model({{1., 1., 1., 0., 0.}, {1., 1., 0., 1., 1.}},
+                           {2., -inf},
+                           {2., 5.},
+                           dense_t(5, 0.),
+                           dense_t(5, 2.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    model_t both      = m;
+    both.row_lower[1] = 5.;
+    fixture_t g(both);
+    GPRS_CHECK_EQ(g.run().findings, 0);
+  }
+}
+
+// One equation and two rows with its core. Without a singleton column the equation serves both
+// in one call. With one it serves one row per call: its column has a second entry then, until
+// the row rules have removed the first row.
+GPRS_TEST(near_one_equation_and_two_rows)
+{
+  {
+    // Row 0: 2 x0 + 2 x1 = 2. Row 1: 2 x0 + 2 x1 + s <= 4. Row 2: x0 + x1 - t >= 0.
+    model_t m = make_model({{2., 2., 0., 0.}, {2., 2., 1., 0.}, {1., 1., 0., -1.}},
+                           {2., -inf, 0.},
+                           {2., 4., inf},
+                           dense_t(4, 0.),
+                           dense_t(4, 3.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 2);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 2.);
+    GPRS_CHECK(row_entries(f.st, 2) == (entries_t{{3, -1.}}));
+    GPRS_CHECK_EQ(f.st.row_lower[2], -1.);
+    GPRS_CHECK_EQ(f.st.row_upper[2], inf);
+    check_addition(f.ps, 0, 1, 0, 1.);
+    check_addition(f.ps, 1, 2, 0, 0.5);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+  }
+  {
+    // Row 0: x0 + x1 - y = 0. Row 1: x0 + x1 <= 1. Row 2: x0 + x1 + t <= 3.
+    model_t m = make_model({{1., 1., -1., 0.}, {1., 1., 0., 0.}, {1., 1., 0., 1.}},
+                           {0., -inf, -inf},
+                           {0., 1., 3.},
+                           dense_t(4, 0.),
+                           dense_t(4, 2.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 1.);
+    GPRS_CHECK(row_entries(f.st, 2) == (entries_t{{0, 1.}, {1, 1.}, {3, 1.}}));
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    // What the row rules do with y <= 1: the bound, and the row goes. y has one entry again,
+    // which lists the equation without an event of its own.
+    f.st.set_col_upper(2, 1.);
+    f.st.delete_row(1);
+    GPRS_CHECK(f.st.row_frontier.list[row_list::singletons] == (list_t{0}));
+    GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{0}));
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 2) == (entries_t{{2, 1.}, {3, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[2], 3.);
+    check_addition(f.ps, 1, 2, 0, 1.);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+  }
+}
+
+// The target as a ranged row, as an inequality of either kind and as a row without sides, with
+// a negative factor: both finite sides move by the same amount and keep their places.
+GPRS_TEST(near_sides_of_the_target)
+{
+  struct sides_t {
+    double lower, upper, new_lower, new_upper;
+  };
+  // Row 0: x0 - x1 + s = 2. Row 1: -x0 + x1, which is s - 2.
+  for (sides_t sides : {sides_t{-4., 6., -2., 8.},
+                        sides_t{-inf, 6., -inf, 8.},
+                        sides_t{-4., inf, -2., inf},
+                        sides_t{-inf, inf, -inf, inf}}) {
+    model_t m = make_model({{1., -1., 1.}, {-1., 1., 0.}},
+                           {2., sides.lower},
+                           {2., sides.upper},
+                           dense_t(3, 0.),
+                           dense_t(3, 4.));
+    fixture_t f(m);
+    int64_t side_changes = f.st.side_changes;
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_lower[1], sides.new_lower);
+    GPRS_CHECK_EQ(f.st.row_upper[1], sides.new_upper);
+    GPRS_CHECK_EQ(f.st.side_changes - side_changes,
+                  (sides.lower > -inf ? 1 : 0) + (sides.upper < inf ? 1 : 0));
+    check_addition(f.ps, 0, 1, 0, -1.);
+    GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+  }
+  {
+    // A right-hand side of 0 moves no side.
+    model_t m = make_model(
+      {{1., -1., 1.}, {-1., 1., 0.}}, {0., -4.}, {0., 6.}, dense_t(3, 0.), dense_t(3, 4.));
+    fixture_t f(m);
+    int64_t side_changes = f.st.side_changes;
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK_EQ(f.st.side_changes, side_changes);
+    GPRS_CHECK_EQ(f.st.row_lower[1], -4.);
+    GPRS_CHECK_EQ(f.st.row_upper[1], 6.);
+  }
+  {
+    // With row 1 an equation as well, it is the one without a singleton column and row 0 is
+    // the target: s = 1 + 2 / 2.
+    model_t m = make_model(
+      {{1., -1., 1.}, {-2., 2., 0.}}, {1., 2.}, {1., 2.}, dense_t(3, 0.), dense_t(3, 4.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 0) == (entries_t{{2, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_lower[0], 2.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 2.);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{0, -2.}, {1, 2.}}));
+    check_addition(f.ps, 0, 0, 1, -0.5);
+    GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+  }
+}
+
+// The rule does not read the type of a column: an integer and a continuous singleton column
+// give the same row, in the equation and in the target.
+GPRS_TEST(near_integer_and_continuous_singleton_columns)
+{
+  for (int32_t continuous = 0; continuous < 4; ++continuous) {
+    // Row 0: 4 x0 + 8 x1 + 2 s = 12. Row 1: 4 x0 + 8 x1 + t <= 20, which is t - 2 s <= 8.
+    model_t m     = make_model({{4., 8., 2., 0.}, {4., 8., 0., 1.}},
+                               {12., -inf},
+                               {12., 20.},
+                           dense_t(4, 0.),
+                               {2., 2., 6., 5.});
+    m.col_type[2] = continuous & 1 ? 0 : 1;
+    m.col_type[3] = continuous & 2 ? 0 : 1;
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, -2.}, {3, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 8.);
+    check_addition(f.ps, 0, 1, 0, 1.);
+    GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+  }
+}
+
+// The terms of fixed columns are constants of their rows: those of the equation go into the
+// shift, those of the target stay in the target.
+GPRS_TEST(near_fixed_columns_in_both_rows)
+{
+  // Row 0: x0 + x1 + y + 2 z = 5 with z fixed at 1. Row 1: x0 + x1 + 3 w <= 7 with w fixed at 2.
+  model_t m = make_model({{1., 1., 1., 2., 0.}, {1., 1., 0., 0., 3.}},
+                         {5., -inf},
+                         {5., 7.},
+                         {0., 0., 0., 1., 2.},
+                         {2., 2., 4., 1., 2.});
+  fixture_t f(m);
+  GPRS_CHECK_EQ(f.st.row_free_size[0], 3);
+  GPRS_CHECK_EQ(f.run().findings, 1);
+  // The target: -y + 3 w <= 7 - (5 - 2).
+  GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, -1.}, {4, 3.}}));
+  GPRS_CHECK_EQ(f.st.row_upper[1], 4.);
+  GPRS_CHECK(row_entries(f.st, 0) == (entries_t{{0, 1.}, {1, 1.}, {2, 1.}, {3, 2.}}));
+  check_addition(f.ps, 0, 1, 0, 1.);
+  model_t reduced = f.reduced();
+  GPRS_REQUIRE(reduced.nrows == 2 && reduced.nnz() == 4);
+  GPRS_CHECK_EQ(reduced.row_upper[1], -2.);
+  GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
+}
+
+// The shift is the right-hand side of the equation less its fixed terms, times the factor, and
+// goes into a side of the target: a pair is left alone when one of them is too large to hold
+// the tolerance next to the others. A fixed term of the target is not read and may be huge.
+GPRS_TEST(near_huge_fixed_terms_and_sides)
+{
+  {
+    // The equation holds 2 z with z fixed at 1e20: its right-hand side less that term would
+    // lose the 3, and with it the side of the target.
+    model_t m = make_model({{1., 1., 1., 2.}, {1., 1., 0., 0.}},
+                           {3., -inf},
+                           {3., 5.},
+                           {0., 0., -1e21, 1e20},
+                           {3., 3., 1e21, 1e20});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{0, 1.}, {1, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 5.);
+    GPRS_CHECK(f.ps.row_additions.empty());
+  }
+  {
+    // The target holds that term: its stored side moves by 3 and the term stays an entry.
+    model_t m = make_model({{1., 1., 1., 0.}, {1., 1., 0., 2.}},
+                           {3., -inf},
+                           {3., 5.},
+                           {0., 0., 0., -2e20},
+                           {3., 3., 3., -2e20});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, -1.}, {3, 2.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 2.);
+    GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+  }
+  // The limit is |value| * tol.side_error <= tol.feasibility, 1e8 with the default tolerances.
+  for (double value : {5e7, 2e8}) {
+    bool taken = value == 5e7;
+    {
+      // The right-hand side of the equation. x0 + x1 + y = value, x0 + x1 <= 5.
+      model_t m = make_model({{1., 1., 1.}, {1., 1., 0.}},
+                             {value, -inf},
+                             {value, 5.},
+                             {0., 0., value - 6.},
+                             {3., 3., value});
+      fixture_t f(m);
+      GPRS_CHECK_EQ(f.run().findings, taken ? 1 : 0);
+      if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], 5. - value); }
+    }
+    {
+      // The fixed terms of the equation, next to a small right-hand side less them.
+      model_t m = make_model({{1., 1., 1., 1.}, {1., 1., 0., 0.}},
+                             {value + 3., -inf},
+                             {value + 3., 5.},
+                             {0., 0., 0., value},
+                             {3., 3., 3., value});
+      fixture_t f(m);
+      GPRS_CHECK_EQ(f.run().findings, taken ? 1 : 0);
+      if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], 2.); }
+    }
+    {
+      // A side of the target.
+      model_t m = make_model(
+        {{1., 1., 1.}, {1., 1., 0.}}, {3., -inf}, {3., value}, dense_t(3, 0.), {3., 3., 3.});
+      fixture_t f(m);
+      GPRS_CHECK_EQ(f.run().findings, taken ? 1 : 0);
+      if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], value - 3.); }
+    }
+  }
+  // The shift itself: the right-hand side of the equation less its fixed terms can be twice as
+  // large as each of them. x0 + x1 + y + w = half with w fixed at -half, x0 + x1 <= 5.
+  for (double half : {4e7, 6e7}) {
+    model_t m = make_model({{1., 1., 1., 1.}, {1., 1., 0., 0.}},
+                           {half, -inf},
+                           {half, 5.},
+                           {0., 0., 2. * half - 6., -half},
+                           {3., 3., 2. * half, -half});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, half == 4e7 ? 1 : 0);
+    if (half == 4e7) {
+      GPRS_CHECK_EQ(f.st.row_upper[1], 5. - 2. * half);
+      GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, -1.}}));
+    }
+  }
+}
+
+// Tiny and huge coefficients: a factor that is not finite and a target whose coefficients
+// would spread further than before and than 1e6 leave the pair alone.
+GPRS_TEST(near_coefficient_guards)
+{
+  {
+    // Row 1 = 2^-1070 * row 0 on the core, a ratio that a double holds; the factor of the
+    // other direction, 2^1070, is not finite.
+    double large = std::ldexp(1., 600), small = std::ldexp(1., -470);
+    model_t m = make_model({{large, large, 0.}, {small, small, 1.}},
+                           {-inf, 1.},
+                           {1., 1.},
+                           dense_t(3, 0.),
+                           dense_t(3, 1.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK_EQ(f.st.live_nnz, 5);
+  }
+  for (double large : {1e2, 1e4}) {
+    // Row 0: x0 + x1 + s / 512 = 1. Row 1: x0 + x1 + large * t <= 3, which would be
+    // large * t - s / 512 <= 2.
+    double tiny = 1. / 512.;
+    model_t m   = make_model({{1., 1., tiny, 0.}, {1., 1., 0., large}},
+                             {1., -inf},
+                             {1., 3.},
+                           dense_t(4, 0.),
+                           dense_t(4, 2.));
+    fixture_t f(m);
+    bool taken = large == 1e2;
+    GPRS_CHECK_EQ(f.run().findings, taken ? 1 : 0);
+    if (taken) { GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, -tiny}, {3, large}})); }
+  }
+  {
+    // Row 1: (x0 + x1) / 1024 + 4096 t + u / 8192 <= 3 spreads over 3e7 already, and
+    // 4096 t + u / 8192 is no worse.
+    double c = 1. / 1024., d = 1. / 8192.;
+    model_t m = make_model(
+      {{1., 1., 0., 0.}, {c, c, 4096., d}}, {1., -inf}, {1., 3.}, dense_t(4, 0.), dense_t(4, 2.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 4096.}, {3, d}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 3. - c);
+  }
+}
+
+// The step multiplies the error of the equation by |f| / |c| and that of the target by 1 / |a|
+// (c a coefficient of a singleton column of the target, a that of the equation): above 1000
+// the pair is left alone, whatever the size of its constants, and a presolve of the same rows
+// leaves it too.
+GPRS_TEST(near_growth_limit)
+{
+  for (double growth : {512., 1024., 4096.}) {
+    bool taken = growth <= 1000.;
+    {
+      // Row 0: x0 + x1 = 1. Row 1: x0 + x1 + y / growth <= 3.
+      model_t m = make_model({{1., 1., 0.}, {1., 1., 1. / growth}},
+                             {1., -inf},
+                             {1., 3.},
+                             dense_t(3, 0.),
+                             dense_t(3, 2.));
+      fixture_t f(m);
+      rule_result_t result = f.run();
+      GPRS_CHECK_EQ(result.findings, taken ? 1 : 0);
+      GPRS_CHECK(!result.limited);
+      if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], 2.); }
+    }
+    {
+      // Row 0: x0 + x1 + s / growth = 1. Row 1: x0 + x1 + y <= 3.
+      model_t m = make_model({{1., 1., 1. / growth, 0.}, {1., 1., 0., 1.}},
+                             {1., -inf},
+                             {1., 3.},
+                             dense_t(4, 0.),
+                             dense_t(4, 2.));
+      fixture_t f(m);
+      rule_result_t result = f.run();
+      GPRS_CHECK_EQ(result.findings, taken ? 1 : 0);
+      GPRS_CHECK(!result.limited);
+      if (taken) { GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, -1. / growth}, {3, 1.}})); }
+    }
+  }
+}
+
+// The factor f of the target over the equation. What is done to the equation later reaches
+// the old target row times |f|, and what is done to the target reaches the equation divided by
+// |f| once the singleton column of the equation has gone through the target: the subtraction is
+// made with |f| <= 1, and with |f| = 1 when the equation has a singleton column.
+GPRS_TEST(near_factor)
+{
+  struct pair_t {
+    double equation, target;  // coefficients of the cores
+    double a;                 // of the singleton column of the equation, 0 without one
+    bool taken;
+  };
+  for (pair_t p : {pair_t{1., 1., 1., true},
+                   pair_t{1., -1., 1., true},
+                   pair_t{-2., 2., 0., true},
+                   pair_t{1., 4., 1., false},
+                   pair_t{1., 4., 0., false},
+                   pair_t{4., 1., 1., false},
+                   pair_t{4., 1., 0., true},
+                   pair_t{1024., -1., 0., true},
+                   pair_t{1., 1. + 0x1p-52, 0., false},
+                   pair_t{1., 1. - 0x1p-53, 1., false},
+                   pair_t{1., 1. - 0x1p-53, 0., true}}) {
+    double factor = p.target / p.equation;
+    // Row 0: e (x0 + x1) + a s = 2 e. Row 1: t (x0 + x1) + y <= 9, which is
+    // y - f a s <= 9 - 2 t.
+    model_t m = make_model({{p.equation, p.equation, p.a, 0.}, {p.target, p.target, 0., 1.}},
+                           {2. * p.equation, -inf},
+                           {2. * p.equation, 9.},
+                           dense_t(4, 0.),
+                           dense_t(4, 3.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, p.taken ? 1 : 0);
+    if (p.taken) {
+      entries_t left = {{3, 1.}};
+      if (p.a != 0.) { left[2] = -factor * p.a; }
+      GPRS_CHECK(row_entries(f.st, 1) == left);
+      GPRS_CHECK_EQ(f.st.row_upper[1], 9. - factor * (2. * p.equation));
+      check_addition(f.ps, 0, 1, 0, factor);
+    } else {
+      GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{0, p.target}, {1, p.target}, {3, 1.}}));
+      GPRS_CHECK_EQ(f.st.row_upper[1], 9.);
+      GPRS_CHECK(f.ps.order.empty());
+    }
+  }
+}
+
+// The errors with which the constants of the two rows are stored reach the singleton columns:
+// that of the equation a singleton column of the target with the coefficient c, times
+// |f| / |c|, and that of the target the singleton column of the equation, with the coefficient
+// a there, divided by |a|. A row whose error would grow must be as the model gave it, and its
+// constants must hold the tolerance times that growth.
+GPRS_TEST(near_rows_that_the_presolve_changed)
+{
+  // What an edit does to the version of a row, with the row as it was.
+  auto change = [](fixture_t& f, int32_t row) { f.st.scale_row(row, 1., false); };
+  struct pair_t {
+    double equation, target;  // coefficients of the cores
+    double a, c;              // of the singleton column of the equation (0: none), of the target
+    bool grows_equation, grows_target;
+  };
+  for (pair_t p : {pair_t{1., -1., 1., 1., false, false},
+                   pair_t{1., 1., 1., 0.25, true, false},  // |f| / |c| = 4
+                   pair_t{1., 1., 0.25, 1., false, true},  // 1 / |a| = 4
+                   pair_t{1., 1., 4., 4., false, false},
+                   pair_t{4., 1., 0., 1., false, false},    // |f| / |c| = 1 / 4
+                   pair_t{4., 1., 0., 0.125, true, false},  // |f| / |c| = 2
+                   pair_t{1., 1., 0.25, 0.25, true, true}}) {
+    double factor = p.target / p.equation;
+    for (int32_t changed = 0; changed < 4; ++changed) {
+      // Row 0: e (x0 + x1) + a s = 2 e. Row 1: t (x0 + x1) + c y <= 9, which is
+      // c y - f a s <= 9 - 2 t.
+      model_t m = make_model({{p.equation, p.equation, p.a, 0.}, {p.target, p.target, 0., p.c}},
+                             {2. * p.equation, -inf},
+                             {2. * p.equation, 9.},
+                             dense_t(4, 0.),
+                             dense_t(4, 3.));
+      fixture_t f(m);
+      if (changed & 1) { change(f, 0); }
+      if (changed & 2) { change(f, 1); }
+      bool taken = !(p.grows_equation && (changed & 1)) && !(p.grows_target && (changed & 2));
+      rule_result_t result = f.run();
+      GPRS_CHECK_EQ(result.findings, taken ? 1 : 0);
+      // A pair that only the history of a row holds back: the same rows, as a model, are
+      // subtracted.
+      GPRS_CHECK_EQ(result.limited, !taken);
+      if (taken) {
+        entries_t left = {{3, p.c}};
+        if (p.a != 0.) { left[2] = -factor * p.a; }
+        GPRS_CHECK(row_entries(f.st, 1) == left);
+        GPRS_CHECK_EQ(f.st.row_upper[1], 9. - 2. * p.target);
+        check_addition(f.ps, 0, 1, 0, factor);
+        GPRS_CHECK(check_same_feasible_set(m, f.reduced(), f.ps) > 0);
+      } else {
+        GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{0, p.target}, {1, p.target}, {3, p.c}}));
+        GPRS_CHECK_EQ(f.st.row_upper[1], 9.);
+        GPRS_CHECK(f.ps.order.empty());
+      }
+    }
+  }
+  // Rows as the model gave them: the limit of 1e8 is on the size of a constant times the
+  // growth of its error.
+  for (double value : {5e4, 2e5}) {
+    bool taken = value == 5e4;
+    {
+      // The right-hand side and the fixed terms of the equation, |f| / |c| = 512.
+      // Row 0: x0 + x1 + s + w = value + 3 with w fixed at value. Row 1:
+      // x0 + x1 + y / 512 <= 5.
+      model_t m = make_model({{1., 1., 1., 0., 1.}, {1., 1., 0., 1. / 512., 0.}},
+                             {value + 3., -inf},
+                             {value + 3., 5.},
+                             {0., 0., 0., 0., value},
+                             {3., 3., 3., 3., value});
+      fixture_t f(m);
+      rule_result_t result = f.run();
+      GPRS_CHECK_EQ(result.findings, taken ? 1 : 0);
+      // The size of a constant is read from the rows as they are: no reduction is left that
+      // another presolve of them would make.
+      GPRS_CHECK(!result.limited);
+      if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], 2.); }
+    }
+    for (double a : {1. / 512., 0.}) {
+      {
+        // A side of the target, 1 / |a| = 512, and no growth without a singleton column of
+        // the equation. Row 0: x0 + x1 + a s = 1. Row 1: x0 + x1 + y <= value.
+        model_t m = make_model({{1., 1., a, 0.}, {1., 1., 0., 1.}},
+                               {1., -inf},
+                               {1., value},
+                               dense_t(4, 0.),
+                               dense_t(4, 3.));
+        fixture_t f(m);
+        GPRS_CHECK_EQ(f.run().findings, taken || a == 0. ? 1 : 0);
+        if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], value - 1.); }
+      }
+      {
+        // The fixed terms of the target. Row 1: x0 + x1 + y + w <= 5 with w fixed at value.
+        model_t m = make_model({{1., 1., a, 0., 0.}, {1., 1., 0., 1., 1.}},
+                               {1., -inf},
+                               {1., 5.},
+                               {0., 0., 0., 0., value},
+                               {3., 3., 3., 3., value});
+        fixture_t f(m);
+        GPRS_CHECK_EQ(f.run().findings, taken || a == 0. ? 1 : 0);
+        if (taken) { GPRS_CHECK_EQ(f.st.row_upper[1], 4.); }
+      }
+    }
+  }
+}
+
+// A row is found parallel up to a singleton column when the column becomes one between two
+// calls, and no longer when the column gets a second entry: the rows themselves do not change.
+GPRS_TEST(near_columns_that_change_between_calls)
+{
+  // Row 0: x0 + x1 - y = 0. Row 1: x0 + x1 <= 1. Row 2: y + z <= 3.
+  model_t m = make_model({{1., 1., -1., 0.}, {1., 1., 0., 0.}, {0., 0., 1., 1.}},
+                         {0., -inf, -inf},
+                         {0., 1., 3.},
+                         dense_t(4, 0.),
+                         dense_t(4, 2.));
+  {
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK(f.st.row_frontier.empty(row_list::parallel_rows));
+    uint32_t version = f.st.row_version[0];
+    f.st.delete_row(2);
+    GPRS_CHECK_EQ(f.st.row_version[0], version);
+    GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{0}));
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}}));
+    check_addition(f.ps, 0, 1, 0, 1.);
+  }
+  {
+    // The other way round. Without row 2, y is a singleton column of row 0, which a call would
+    // subtract from row 1. Before that call the entry of x0 in row 1 becomes an entry of y:
+    // row 0 has the core x1, y and the singleton column x0, row 1 is x1 + y.
+    fixture_t f(m);
+    f.st.delete_row(2);
+    f.st.move_entry(f.st.find_entry(1, 0), 2, 1.);
+    GPRS_CHECK(f.st.row_frontier.list[row_list::singletons] == (list_t{0}));
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK_EQ(f.st.live_nnz, 5);
+    GPRS_CHECK(f.ps.order.empty());
+  }
+}
+
+// The sides decide what is done with a pair, so a row is listed when one of them changes: a
+// row that becomes an equation between two calls is subtracted from the row it was left alone
+// with, and a row whose side a merge has changed is compared again.
+GPRS_TEST(near_sides_that_change_between_calls)
+{
+  {
+    // Row 0: x0 + x1 <= 1. Row 1: x0 + x1 + y <= 3.
+    model_t m = make_model(
+      {{1., 1., 0.}, {1., 1., 1.}}, {-inf, -inf}, {1., 3.}, dense_t(3, 0.), dense_t(3, 2.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK(f.st.row_frontier.empty(row_list::parallel_rows));
+    f.st.set_row_lower(0, 1.);
+    GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{0}));
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, 1);
+    GPRS_CHECK(!result.limited);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 2.);
+    check_addition(f.ps, 0, 1, 0, 1.);
+  }
+  {
+    // Row 0: x0 + x1 >= 1. Row 1: x0 + x1 + y <= 3. Row 2: x0 + 2 x1 <= 1, which a change of
+    // its coefficient makes x0 + x1 <= 1. Only row 2 is listed then: it is compared with row 1
+    // first, which is left alone, and then merged into row 0, which becomes an equation. Row 0
+    // is listed for its side, and the next call subtracts it from row 1.
+    model_t m = make_model({{1., 1., 0.}, {1., 1., 1.}, {1., 2., 0.}},
+                           {1., -inf, -inf},
+                           {inf, 3., 1.},
+                           dense_t(3, 0.),
+                           dense_t(3, 2.));
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    f.st.set_coefficient(f.st.find_entry(2, 1), 1.);
+    GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{2}));
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
+    GPRS_CHECK_EQ(f.st.row_lower[0], 1.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 1.);
+    GPRS_CHECK(f.ps.row_additions.empty());
+    GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{0}));
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}}));
+    GPRS_CHECK_EQ(f.st.row_upper[1], 2.);
+    check_addition(f.ps, 0, 1, 0, 1.);
+  }
+}
+
+// A row is compared with the rows of its bucket until it has been left alone with
+// opt.parallel_bucket_limit of them. A scan that ends so with rows of the bucket left reports
+// limited: a pair of the row was not compared, and it stays so only while the rows between the
+// two stay where they are.
+GPRS_TEST(near_scan_that_ends_on_the_bucket_limit)
+{
+  // Rows 0 and 3: x0 + x1 <= 5 and <= 4. Rows 1 and 2: x0 + x1 + y <= 7, x0 + x1 + z <= 8,
+  // which no row of the bucket is subtracted from.
+  model_t m = make_model({{1., 1., 0., 0.}, {1., 1., 1., 0.}, {1., 1., 0., 1.}, {1., 1., 0., 0.}},
+                         dense_t(4, -inf),
+                         {5., 7., 8., 4.},
+                         dense_t(4, 0.),
+                         dense_t(4, 9.));
+  {
+    fixture_t f(m);
+    f.opt.parallel_bucket_limit = 2;
+    rule_result_t result        = f.run();
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK(result.limited);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1, 2, 3}));
+    // With row 1 gone, the two rows are within reach, and nothing lists them.
+    f.st.delete_row(1);
+    GPRS_CHECK(f.st.row_frontier.empty(row_list::parallel_rows));
+  }
+  {
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, 1);
+    GPRS_CHECK(!result.limited);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1, 2}));
+    GPRS_CHECK_EQ(f.st.row_upper[0], 4.);
+  }
+  {
+    // The scan reaches the limit at the last row of the bucket: every pair was compared.
+    fixture_t f(m);
+    f.opt.parallel_bucket_limit = 2;
+    f.st.delete_row(3);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK(!result.limited);
+  }
+}
+
+// A stop on the budget gives the rows that were not compared back; the calls that follow end
+// in the state of one call without a limit.
+GPRS_TEST(near_budget)
+{
+  // Three groups of three rows, each an equation with a singleton column, the inequality on
+  // its core and a row of its own.
+  std::vector<dense_t> rows;
+  dense_t row_lower, row_upper;
+  for (int32_t g = 0; g < 3; ++g) {
+    dense_t equation(9, 0.), packing(9, 0.), other(9, 0.);
+    equation[3 * g] = packing[3 * g] = 1.;
+    equation[3 * g + 1] = packing[3 * g + 1] = 2. + g;
+    equation[3 * g + 2]                      = -1.;
+    other[3 * g]                             = 1.;
+    other[3 * g + 1]                         = 5.;
+    rows.insert(rows.end(), {g == 1 ? packing : equation, g == 1 ? equation : packing, other});
+    row_lower.insert(row_lower.end(), {g == 1 ? -inf : 0., g == 1 ? 0. : -inf, -inf});
+    row_upper.insert(row_upper.end(), {g == 1 ? 3. : 0., g == 1 ? 0. : 3., 9.});
+  }
+  model_t m = make_model(rows, row_lower, row_upper, dense_t(9, 0.), dense_t(9, 2.));
+  fixture_t whole(m);
+  GPRS_CHECK_EQ(whole.run().findings, 3);
+  GPRS_CHECK_EQ(whole.run().findings, 0);
+
+  fixture_t f(m);
+  rule_result_t first = f.run(1);
+  GPRS_CHECK(first.stopped);
+  GPRS_CHECK_EQ(first.findings, 0);
+  GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] ==
+             (list_t{0, 1, 2, 3, 4, 5, 6, 7, 8}));
+  int64_t findings = 0;
+  int32_t calls    = 1;
+  while (!f.st.row_frontier.empty(row_list::parallel_rows) && calls < 200) {
+    rule_result_t result = f.run(1);
+    GPRS_CHECK_EQ(result.outcome, ok);
+    findings += result.findings;
+    ++calls;
+  }
+  GPRS_CHECK(calls > 9 && calls < 200);
+  GPRS_CHECK_EQ(findings, 3);
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::singletons));
+  for (int32_t row = 0; row < 9; ++row) {
+    GPRS_CHECK(row_entries(f.st, row) == row_entries(whole.st, row));
+    GPRS_CHECK_EQ(f.st.row_lower[row], whole.st.row_lower[row]);
+    GPRS_CHECK_EQ(f.st.row_upper[row], whole.st.row_upper[row]);
+  }
+  GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{2, 1.}}));
+  GPRS_CHECK(row_entries(f.st, 3) == (entries_t{{5, 1.}}));
+  GPRS_CHECK(postsolve_hash(f.ps) == postsolve_hash(whole.ps));
+}
+
+namespace {
+
+// Integer models around a planted point: rows that are multiples of a few patterns over the
+// shared columns, each with none, one or two columns of its own behind them; equations,
+// inequalities and ranged rows that the planted point meets; some columns fixed.
+model_t near_random_model(rng_t& rng)
+{
+  static const double factor[] = {1., 1., -1., 2., -2., 3., 0.5, -0.5};
+  int32_t shared = rng.in(2, 4), nrows = rng.in(2, 7), npatterns = rng.in(1, 2);
+  std::vector<dense_t> pattern(npatterns, dense_t(shared, 0.));
+  for (dense_t& p : pattern) {
+    for (int32_t j = 0; j < shared; ++j) {
+      if (rng.chance(0.75)) { p[j] = 2. * rng.coefficient(); }
+    }
+  }
+  std::vector<int32_t> own(nrows, 0);
+  int32_t ncols = shared;
+  for (int32_t& n : own) {
+    n =
+      ncols < shared + 4 && rng.chance(0.55) ? (ncols < shared + 3 && rng.chance(0.2) ? 2 : 1) : 0;
+    ncols += n;
+  }
+  dense_t col_lower(ncols), col_upper(ncols), planted(ncols);
+  for (int32_t j = 0; j < ncols; ++j) {
+    col_lower[j] = rng.in(-1, 1);
+    col_upper[j] = col_lower[j] + rng.in(1, j < shared ? 3 : 2);
+    planted[j]   = rng.in(col_lower[j], col_upper[j]);
+    if (rng.chance(0.1)) { col_lower[j] = col_upper[j] = planted[j]; }
+  }
+  std::vector<dense_t> rows(nrows, dense_t(ncols, 0.));
+  dense_t row_lower(nrows), row_upper(nrows);
+  int32_t next = shared;
+  for (int32_t i = 0; i < nrows; ++i) {
+    const dense_t& p = pattern[rng.in(0, npatterns - 1)];
+    double f         = factor[rng.in(0, 7)];
+    double activity  = 0.;
+    for (int32_t j = 0; j < shared; ++j) {
+      rows[i][j] = f * p[j];
+    }
+    for (int32_t k = 0; k < own[i]; ++k) {
+      rows[i][next++] = rng.coefficient();
+    }
+    for (int32_t j = 0; j < ncols; ++j) {
+      activity += rows[i][j] * planted[j];
+    }
+    int32_t kind = rng.chance(0.45) ? 0 : rng.in(1, 3);
+    row_lower[i] = kind == 1 ? -inf : activity - (kind == 0 ? 0 : rng.in(0, 3));
+    row_upper[i] = kind == 2 ? inf : activity + (kind == 0 ? 0 : rng.in(0, 3));
+  }
+  return make_model(rows, row_lower, row_upper, col_lower, col_upper);
+}
+
+}  // namespace
+
+// Random models with rows parallel up to singleton columns: the calls end, every state is
+// consistent, and the model after them has the feasible points of the model before, whatever
+// the budget of a call.
+GPRS_TEST(near_random_models)
+{
+  int64_t additions = 0, merges = 0, nonempty = 0, with_fixed = 0, stops = 0, models = 0;
+  int64_t two_entries = 0, ranged = 0;
+  for (uint64_t seed = 1; seed <= 3000; ++seed) {
+    rng_t rng(seed);
+    model_t m = near_random_model(rng);
+    if (feasible_points(m) == 0) { continue; }
+    ++models;
+    fixture_t f(m);
+    int32_t failures = gprs::test::failure_count();
+    int64_t limit    = seed % 3 == 0 ? rng.in(1, 60) : no_limit;
+    int32_t calls    = 0;
+    while (!f.st.row_frontier.empty(row_list::parallel_rows) && calls < 400) {
+      rule_result_t result = f.run(limit);
+      GPRS_CHECK_EQ(result.outcome, ok);
+      stops += result.stopped;
+      ++calls;
+    }
+    GPRS_CHECK(calls < 400);
+    GPRS_CHECK(f.st.row_frontier.empty(row_list::singletons));
+    additions += f.ps.row_additions.size();
+    merges += f.ps.parallel_rows.size();
+    with_fixed += !f.ps.row_additions.empty() && f.st.fixed_nnz > 0;
+    for (const row_addition_record_t& record : f.ps.row_additions) {
+      two_entries += f.st.row_alive[record.row] && f.st.row_free_size[record.row] == 2;
+      ranged += m.row_lower[record.row] > -inf && m.row_upper[record.row] < inf &&
+                m.row_lower[record.row] < m.row_upper[record.row];
+    }
+    model_t reduced = f.reduced();
+    GPRS_CHECK(reduced.nnz() + (int64_t)f.ps.row_additions.size() <= m.nnz());
+    nonempty += check_same_feasible_set(m, reduced, f.ps) > 0;
+    if (gprs::test::failure_count() != failures) {
+      std::printf("    seed %llu\n", (unsigned long long)seed);
+      return;
+    }
+  }
+  // The test is not vacuous.
+  GPRS_CHECK(models > 2500);
+  GPRS_CHECK(additions > 1500);
+  GPRS_CHECK(merges > 500);
+  GPRS_CHECK(nonempty == models);
+  GPRS_CHECK(with_fixed > 200);
+  GPRS_CHECK(stops > 2000);
+  GPRS_CHECK(two_entries > 200);
+  GPRS_CHECK(ranged > 100);
 }

@@ -21,7 +21,7 @@ bool integral(double value) { return value == std::round(value); }
 // the reduced model or removed by one record. O(columns + records).
 bool stack_consistent(const postsolve_t& ps)
 {
-  size_t fixed = 0, alias = 0, parallel = 0;
+  size_t fixed = 0, alias = 0, parallel = 0, addition = 0;
   std::vector<uint8_t> removed(ps.ncols, 0);
   size_t n_removed = 0;
   for (record_kind_t kind : ps.order) {
@@ -37,12 +37,14 @@ bool stack_consistent(const postsolve_t& ps)
       if (removed[record.col] || removed[record.rep]) { return false; }
       removed[record.col] = 1;
       ++n_removed;
-    } else {
+    } else if (kind == record_kind_t::parallel_row) {
       ++parallel;
+    } else {
+      ++addition;
     }
   }
   if (fixed != ps.fixed_cols.size() || alias != ps.aliases.size() ||
-      parallel != ps.parallel_rows.size()) {
+      parallel != ps.parallel_rows.size() || addition != ps.row_additions.size()) {
     return false;
   }
   if (removed != ps.col_removed) { return false; }
@@ -87,6 +89,7 @@ void postsolve_t::init(const model_t& original)
   fixed_cols.clear();
   aliases.clear();
   parallel_rows.clear();
+  row_additions.clear();
   col_removed.assign(ncols, 0);
 }
 
@@ -120,6 +123,15 @@ void postsolve_t::push_parallel_row(int32_t removed_row, int32_t kept_row, doubl
   gprs_assert(std::isfinite(ratio) && ratio != 0.);
   order.push_back(record_kind_t::parallel_row);
   parallel_rows.push_back(parallel_row_record_t{removed_row, kept_row, ratio});
+}
+
+void postsolve_t::push_row_addition(int32_t row, int32_t equation_row, double factor)
+{
+  gprs_assert(row >= 0 && row < nrows && equation_row >= 0 && equation_row < nrows);
+  gprs_assert(row != equation_row);
+  gprs_assert(std::isfinite(factor) && factor != 0.);
+  order.push_back(record_kind_t::row_addition);
+  row_additions.push_back(row_addition_record_t{row, equation_row, factor});
 }
 
 void postsolve_t::postsolve(const std::vector<double>& x_reduced,

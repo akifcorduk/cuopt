@@ -24,18 +24,19 @@
 // recorded implied bounds, bounds from a doubleton equation) hold at every feasible point, so a
 // column they fix has its fixed value at p_t; row edits (redundancy, integral scaling, side
 // rounding, coefficient strengthening, parallel rows) keep the integer-feasible set of the row
-// under the explicit bounds; a doubleton substitution removes a column whose value the equation
-// gives. The exception is dual fixing by locks, which fixes column j at a bound although
-// p_t[j] may lie elsewhere. Dropping j from p_t is the same as moving it to that bound, and no
-// live row of M_t objects to the move (no lock in that direction) and the objective of M_t
-// does not rise with it. So p_(t+1) is feasible in M_(t+1) and its objective there is not above
-// that of p_t; a bound fact of M_t stays true on the smaller feasible set. By induction crush(x) is
-// feasible in the reduced model with a reduced objective not above objective(x), and 3 and the
-// first half of 4 are the contract of the postsolve. What is lost in default mode is equality:
-// z differs from x in the columns dual fixing moved and in their aliases. This argument needs
-// dual fixing to be the only rule that uses a lock or dual argument and to fix at a finite
-// bound; it has to be reread when a Stage 3 rule (dominated or free columns, stuffing, fixing
-// at infinity) is added.
+// under the explicit bounds; an equation subtracted from a row that is parallel to it up to
+// singleton columns leaves the points that meet both rows as they are; a doubleton substitution
+// removes a column whose value the equation gives. The exception is dual fixing by locks, which
+// fixes column j at a bound although p_t[j] may lie elsewhere. Dropping j from p_t is the same as
+// moving it to that bound, and no live row of M_t objects to the move (no lock in that direction)
+// and the objective of M_t does not rise with it. So p_(t+1) is feasible in M_(t+1) and its
+// objective there is not above that of p_t; a bound fact of M_t stays true on the smaller feasible
+// set. By induction crush(x) is feasible in the reduced model with a reduced objective not above
+// objective(x), and 3 and the first half of 4 are the contract of the postsolve. What is lost in
+// default mode is equality: z differs from x in the columns dual fixing moved and in their aliases.
+// This argument needs dual fixing to be the only rule that uses a lock or dual argument and to fix
+// at a finite bound; it has to be reread when a Stage 3 rule (dominated or free columns, stuffing,
+// fixing at infinity) is added.
 //
 // With an optimal x the check proves that the optimum is not cut off. It sees no relaxation
 // (a row deleted that is not redundant) unless that makes a later lock argument move a column

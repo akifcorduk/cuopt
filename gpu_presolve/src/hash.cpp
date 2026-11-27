@@ -205,6 +205,12 @@ uint64_t postsolve_hash(const postsolve_t& ps)
     h.add(r.kept_row);
     h.add(r.ratio);
   }
+  h.add(ps.row_additions.size());
+  for (const row_addition_record_t& r : ps.row_additions) {
+    h.add(r.row);
+    h.add(r.equation_row);
+    h.add(r.factor);
+  }
   return h.h;
 }
 

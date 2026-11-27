@@ -8,6 +8,7 @@
 #include "harness.hpp"
 #include "test_state_support.hpp"
 
+#include <gprs/presolve.hpp>
 #include <gprs/state.hpp>
 
 #include <cmath>
@@ -65,10 +66,34 @@ void check_side(const activity_t& act, int32_t row, const expected_side_t& expec
 
 using list_t = std::vector<int32_t>;
 
-void check_rule_lists(const state_t& st, uint8_t events, const list_t& rows)
+// The five rule lists hold `rows` where `events` feeds them; `singleton` are the rows that got
+// row_event::singleton, before the rows of the operation (first) or after them.
+void check_rule_lists(const state_t& st,
+                      uint8_t events,
+                      const list_t& rows,
+                      const list_t& singleton = {},
+                      bool first              = false)
 {
   for (int32_t l = 0; l < row_list::compaction; ++l) {
-    GPRS_CHECK(st.row_frontier.list[l] == ((events >> l) & 1 ? rows : list_t()));
+    list_t expected = (events >> l) & 1 ? rows : list_t();
+    if (l == row_list::parallel_rows) {
+      expected.insert(
+        first ? expected.begin() : expected.end(), singleton.begin(), singleton.end());
+    }
+    GPRS_CHECK(st.row_frontier.list[l] == expected);
+  }
+  GPRS_CHECK(st.row_frontier.list[row_list::singletons] == singleton);
+}
+
+// The lists after a bound change: every row of the column on the lists of a changed activity,
+// and on the propagation list those whose side reads that activity.
+void check_activity_lists(const state_t& st, const list_t& rows, const list_t& read)
+{
+  for (int32_t l = 0; l < row_list::compaction; ++l) {
+    bool listed = (row_event::activity >> l) & 1;
+    GPRS_CHECK(st.row_frontier.list[l] == (!listed                      ? list_t()
+                                           : l == row_list::propagation ? read
+                                                                        : rows));
   }
 }
 
@@ -93,15 +118,22 @@ GPRS_TEST(state_ops_col_bounds)
   check_side(st.min_act, 1, {-2., 0., 1, 4, 2., 1});
   GPRS_CHECK_EQ(st.col_upper[2], 6.);
   GPRS_CHECK_EQ(st.bound_changes, 1);
-  check_rule_lists(st, row_event::activity, {0, 2, 4});
+  // The bound is in the maximum activity of r0 and r4 and in the minimum activity of r2. Bound
+  // propagation reads them with the lower side, which r0 does not have, and with the upper
+  // side, which r2 does not have.
+  check_activity_lists(st, {0, 2, 4}, {4});
   GPRS_CHECK(st.col_frontier.empty(col_list::dual_fixing));
   GPRS_CHECK(st.row_version == std::vector<uint32_t>(5, 0));
   check_consistent(st);
 
+  // The lower bound is in the minimum activity of r0 and r4, which have an upper side, and in
+  // the maximum activity of r2, which has a lower side.
+  clear_rule_lists(st);
   st.set_col_lower(2, -inf);
   check_side(st.min_act, 0, {-9., 0., 1, 2, 9., 4});
   check_side(st.max_act, 2, {0., 0., 3, 18, 0., 2});
   check_side(st.min_act, 4, {-1., 0., 1, 10, 2., 5});
+  check_activity_lists(st, {0, 2, 4}, {0, 2, 4});
   check_consistent(st);
 
   st.set_col_lower(2, 2.);
@@ -230,9 +262,10 @@ GPRS_TEST(state_ops_delete_row)
   GPRS_CHECK(st.down_locks == list_t({0, 2, 0, 1, 1}));
   check_side(st.min_act, 4, {0., 0., 0, 0, 0., 0});
   check_side(st.max_act, 4, {0., 0., 0, 0, 0., 0});
-  // Events for the live columns only, and no row event.
+  // Events for the live columns only. x0 is left with its entry in r0 and x4 with its entry in
+  // r2: both are singleton columns now. x1 has one entry left as well, but it is fixed.
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == list_t({0, 2, 4}));
-  check_rule_lists(st, 0, {});
+  check_rule_lists(st, 0, {}, {0, 2});
   GPRS_CHECK(st.col_frontier.empty(col_list::compaction));
   GPRS_CHECK_EQ(st.find_entry(4, 0), -1);
   GPRS_CHECK_EQ(st.dead_fraction(), 4. / 12.);
@@ -413,7 +446,8 @@ GPRS_TEST(state_ops_delete_entry)
   GPRS_CHECK_EQ(st.row_version[2], 1u);
   GPRS_CHECK_EQ(st.find_entry(2, 3), -1);
   GPRS_CHECK_EQ(st.find_entry(2, 4), 7);
-  check_rule_lists(st, row_event::entries, {2});
+  // x3 is left with its entry in r1.
+  check_rule_lists(st, row_event::entries, {2}, {1});
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == list_t({3}));
   GPRS_CHECK(st.row_frontier.empty(row_list::compaction));
   GPRS_CHECK(st.col_frontier.empty(col_list::compaction));
@@ -476,7 +510,8 @@ GPRS_TEST(state_ops_move_entry)
   GPRS_CHECK_EQ(st.find_entry(1, 0), 4);
   GPRS_CHECK_EQ(st.find_entry(1, 3), -1);
   GPRS_CHECK_EQ(st.dead_fraction(), 4. / 16.);
-  check_rule_lists(st, row_event::entries, {1});
+  // x3 is left with its entry in r2.
+  check_rule_lists(st, row_event::entries, {1}, {2}, true);
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == list_t({3, 0}));
   check_consistent(st);
 
@@ -650,4 +685,75 @@ GPRS_TEST(state_ops_resummation_rule)
   check_side(plain.min_act, 0, {-5., 0., 0, 0, 9., 7});
   check_side(plain.min_act, 4, {1., 0., 0, 0, 2., 8});
   check_consistent(plain);
+}
+
+// absorb_fixed_terms: the terms of the fixed columns leave their rows as in rebuild(), with the
+// same sides bit for bit. Only those rows are compacted; the stores keep their size.
+GPRS_TEST(state_ops_absorb_fixed_terms)
+{
+  state_t st(hand_model(), tolerances_t());
+  st.fix_col(1, 1.5);
+  st.fix_col(3, 2.);
+  st.record_implied_lower(2, 0.5, 0);
+  clear_rule_lists(st);
+  std::vector<uint32_t> versions = st.row_version;
+  GPRS_CHECK_EQ(st.fixed_nnz, 5);
+  std::vector<int32_t> row_origin, col_origin;
+  model_t before  = reduced_model(st, row_origin, col_origin);
+  state_t rebuilt = st;
+  rebuilt.rebuild();
+
+  int64_t slots = st.csr.slots();
+  st.absorb_fixed_terms();
+  check_consistent(st);
+  GPRS_CHECK_EQ(st.fixed_nnz, 0);
+  GPRS_CHECK_EQ(st.live_nnz, 7);
+  GPRS_CHECK_EQ(st.csr.slots(), slots);
+  GPRS_CHECK(st.csr.size == list_t({2, 0, 2, 0, 3}));
+  GPRS_CHECK(st.row_free_size == st.csr.size);
+  GPRS_CHECK(st.csc.size == list_t({2, 0, 3, 0, 2}));
+  // r0: -3 * 1.5; r1: 1.5 + 2; r2: -2 * 2; r4: 1.5.
+  GPRS_CHECK(st.row_lower == std::vector<double>({-inf, 1.5, 5., -1., 0.5}));
+  GPRS_CHECK(st.row_upper == std::vector<double>({14.5, 1.5, inf, 1., 6.5}));
+  GPRS_CHECK(st.row_lower == rebuilt.row_lower);
+  GPRS_CHECK(st.row_upper == rebuilt.row_upper);
+  // The columns stay fixed, without entries and without locks; a rebuild removes them.
+  GPRS_CHECK_EQ(st.col_status[1], col_status_t::fixed);
+  GPRS_CHECK_EQ(st.col_status[3], col_status_t::fixed);
+  GPRS_CHECK_EQ(st.up_locks[1] + st.down_locks[1] + st.up_locks[3] + st.down_locks[3], 0);
+  GPRS_CHECK(st.up_locks == rebuilt.up_locks);
+  GPRS_CHECK(st.down_locks == rebuilt.down_locks);
+  GPRS_CHECK_EQ(st.live_rows, 5);
+  GPRS_CHECK_EQ(st.live_cols, 3);
+  // The activities are those of the rows without the terms.
+  check_side(st.min_act, 0, {0., 0., 0, 0, 0., 2});
+  check_side(st.max_act, 0, {8., 0., 1, 1, 8., 1});
+  check_side(st.min_act, 1, {0., 0., 0, 0, 0., 0});
+  check_side(st.max_act, 4, {4., 0., 2, 19, 4., 1});
+  GPRS_CHECK(st.csr.used == st.csr.size);
+
+  // Versions and implied bounds are kept. No row is listed: every term leaves its row plainly
+  // (multiples of 1/2 that are not within the tolerance of an integer, or integers). The rows
+  // that are listed are in state_storage_fixed_terms_leave_plainly.
+  check_rule_lists(st, 0, {});
+  GPRS_CHECK(st.col_frontier.empty(col_list::dual_fixing));
+  GPRS_CHECK(st.row_version == versions);
+  GPRS_CHECK(st.implied_lower_valid(2));
+
+  // The model of the state is the same as before, and as that of the rebuilt state.
+  model_t after = reduced_model(st, row_origin, col_origin);
+  GPRS_CHECK(after.row_lower == before.row_lower && after.row_upper == before.row_upper);
+  GPRS_CHECK(after.value == before.value && after.col_index == before.col_index);
+  GPRS_CHECK(after.row_start == before.row_start);
+
+  // Nothing left to do.
+  clear_rule_lists(st);
+  int64_t visits = st.slot_visits;
+  st.absorb_fixed_terms();
+  GPRS_CHECK_EQ(st.slot_visits, visits);
+  check_rule_lists(st, 0, {});
+  st.rebuild();
+  check_consistent(st);
+  GPRS_CHECK_EQ(st.col_status[1], col_status_t::removed);
+  check_rule_lists(st, 0, {});
 }

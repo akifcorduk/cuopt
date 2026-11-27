@@ -52,9 +52,16 @@ grep -h "^models " "$out"/part.*.txt |
        END {print "models", m, "reduced", r, "oracle failures", f,
                   "reduced outside the oracle class", o, "base outside", b}'
 grep -h "^structure " "$out"/part.*.txt |
-  awk '{c += $3; f += $5; a += $7; s += $9; x += $11; if ($13 + 0 > w) w = $13 + 0}
+  awk '{c += $3; f += $5; a += $7; s += $9; x += $11; if ($13 + 0 > w) w = $13 + 0;
+        r += $19; k += $21; u += $25; d += $27; q += $29; t += $31; n += $33;
+        if ($35 + 0 > m) m = $35 + 0; v += $37}
        END {print "structure check: results with a reduced model", c, "failed", f,
                   "failed alone", a, "missed with a reduced model", s,
-                  "missed without one", x, "largest passing violation", w}'
+                  "of them relaxed", v, "missed without one", x,
+                  "largest passing violation", w;
+            print "rows: left the model", r, "kept", k, "kept and not tested", u,
+                  "| results with a subtraction", d, "rows made of equations", q,
+                  "tested with an equation", t, "not tested", n,
+                  "largest multiplier of an equation", m + 0}'
 grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED" "$out"/part.*.txt | cut -c1-200 | head -20
 exit $bad

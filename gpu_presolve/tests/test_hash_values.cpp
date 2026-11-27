@@ -307,7 +307,7 @@ GPRS_TEST(hash_state_depends_on_every_array)
   for (int32_t l = 0; l < col_list::count; ++l) {
     changes.push_back({"column list", [l](state_t& st) { st.col_frontier.list[l].push_back(1); }});
   }
-  GPRS_CHECK_EQ(changes.size(), (size_t)(41 + 2 * 8 + 2 * 6 + 6 + 2));
+  GPRS_CHECK_EQ(changes.size(), (size_t)(41 + 2 * 8 + 2 * 6 + 7 + 2));
   check_changes<state_t>(base, hash_of_state, changes);
 }
 
@@ -400,6 +400,21 @@ GPRS_TEST(hash_postsolve_depends_on_the_records_and_their_order)
      change{"parallel, kept row", [](postsolve_t& ps) { ps.push_parallel_row(2, 1, 0.5); }},
      change{"parallel, removed row", [](postsolve_t& ps) { ps.push_parallel_row(1, 0, 0.5); }},
      change{"parallel, ratio", [](postsolve_t& ps) { ps.push_parallel_row(2, 0, -0.5); }},
+     change{"addition", [](postsolve_t& ps) { ps.push_row_addition(2, 0, 0.5); }},
+     change{"addition, rows swapped", [](postsolve_t& ps) { ps.push_row_addition(0, 2, 0.5); }},
+     change{"addition, equation", [](postsolve_t& ps) { ps.push_row_addition(2, 1, 0.5); }},
+     change{"addition, row", [](postsolve_t& ps) { ps.push_row_addition(1, 0, 0.5); }},
+     change{"addition, factor", [](postsolve_t& ps) { ps.push_row_addition(2, 0, -0.5); }},
+     change{"parallel, addition",
+            [](postsolve_t& ps) {
+              ps.push_parallel_row(2, 0, 0.5);
+              ps.push_row_addition(2, 0, 0.5);
+            }},
+     change{"addition, parallel",
+            [](postsolve_t& ps) {
+              ps.push_row_addition(2, 0, 0.5);
+              ps.push_parallel_row(2, 0, 0.5);
+            }},
      // The same records per kind, interleaved differently.
      change{"fixed, parallel, fixed",
             [](postsolve_t& ps) {

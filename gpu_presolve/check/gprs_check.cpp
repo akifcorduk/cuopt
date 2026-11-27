@@ -14,8 +14,10 @@
 //   Presolve status. A status without a reduced model fails when the instance has a known
 //     objective value or a usable point of a solution file; limit and failed always fail.
 //   Structure check (structure_check.hpp), in default and in primal-only mode: the postsolve
-//     stack, the column types, the bounds, and every original row against the bounds or
-//     against its row of the reduced model. It needs neither a point nor a solver.
+//     stack, the column types, the bounds, and every original row against the bounds,
+//     against its row of the reduced model or, when an equation was subtracted from it,
+//     against that row and the reduced rows of the equations. It needs neither a point nor a
+//     solver.
 //   Crush check (crush_check.hpp), in default and in primal-only mode, with every usable point
 //     of the solution files (solution_file.hpp) and up to --push-points (at most 4) points
 //     made from each by moving its columns to where bounds and rows stop them.
@@ -338,6 +340,16 @@ void put_structure(FILE* out, const char* name, const structure_report_t& s, boo
                s.kept_worst_row,
                (long long)s.kept_failures);
   std::fprintf(out,
+               "      \"added_rows\": {\"rows\": %lld, \"tested\": %lld, \"not_tested\": %lld, "
+               "\"multiplier\": %s, \"worst\": %s, \"row\": %d, \"failed\": %lld},\n",
+               (long long)s.added_rows,
+               (long long)s.added_tested,
+               (long long)s.added_untested,
+               number(s.added_multiplier, "%.3g").c_str(),
+               number(s.added_worst, "%.3g").c_str(),
+               s.added_worst_row,
+               (long long)s.added_failures);
+  std::fprintf(out,
                "      \"postsolve\": {\"worst\": %s, \"column\": %d, \"failed\": %lld}}%s\n",
                number(s.postsolve_worst, "%.3g").c_str(),
                s.postsolve_worst_col,
@@ -390,6 +402,7 @@ void mode_verdicts(const mode_report_t& r, bool primal_only, std::vector<named_v
   out.push_back({"structure_" + mode + "bounds", verdict(composed, s.bound_failures == 0)});
   out.push_back({"structure_" + mode + "rows", verdict(composed, s.row_failures == 0)});
   out.push_back({"structure_" + mode + "kept_rows", verdict(composed, s.kept_failures == 0)});
+  out.push_back({"structure_" + mode + "added_rows", verdict(composed, s.added_failures == 0)});
   out.push_back({"structure_" + mode + "postsolve", verdict(composed, s.postsolve_failures == 0)});
   const crush_report_t& c = r.crush;
   bool crushed            = c.ran && c.has_reduced;

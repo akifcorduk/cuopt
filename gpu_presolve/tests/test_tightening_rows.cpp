@@ -451,3 +451,23 @@ GPRS_TEST(tightening_property_feasible_set)
   GPRS_CHECK(sides > 1500);
   GPRS_CHECK(coefficients > 2000);
 }
+
+// 5 z + w <= 6 with a binary z and w <= 2: the maximum activity is 7, so the 5 becomes 1 and
+// the side 2. w had the upper bound 1e19; the size of that term was still in the error bound of
+// the activity, which is added to the new coefficient: 1.0000000000005 here, and 1 in a
+// presolve that starts from these bounds.
+GPRS_TEST(tightening_strengthening_after_a_huge_term_left)
+{
+  std::vector<col_t> cols = {{0., 1., true}, {0., 1e19, false}};
+  fixture_t f(cols, {{{{0, 5.}, {1, 1.}}, -inf, 6.}});
+  f.st.set_col_upper(1, 2.);
+  GPRS_CHECK(f.st.max_activity_error(0) > 1e-13);
+  state_t before       = f.st;
+  rule_result_t result = run_tightening(f);
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK_EQ(result.findings, 2);
+  GPRS_CHECK_EQ(coefficient(f.st, 0, 0), 1.);
+  GPRS_CHECK_EQ(f.st.row_upper[0], 2.);
+  GPRS_CHECK_EQ(f.st.max_act.max_term[0], 5.);
+  check_same_set(before, f.st, result.outcome);
+}

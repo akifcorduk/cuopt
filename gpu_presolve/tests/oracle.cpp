@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <sstream>
 
 namespace gprs {
@@ -112,8 +113,12 @@ struct draft_row_t {
   bool has_line   = false;
   std::vector<int32_t> col;
   std::vector<double> value;
-  double lower = -inf;
-  double upper = inf;
+  // The entry in a column of the row's own, behind every other column; -1 without one. A copy
+  // of the row does not get it.
+  int32_t own_col  = -1;
+  double own_value = 0.;
+  double lower     = -inf;
+  double upper     = inf;
 };
 
 void sort_entries(draft_row_t& row)
@@ -135,6 +140,16 @@ void sort_entries(draft_row_t& row)
 bool is_integer(double v) { return v == std::floor(v); }
 
 bool on_half_grid(double v) { return 2. * v == std::floor(2. * v); }
+
+// A coefficient that was read as an integer or scaled by a power of two has few significant
+// bits; one that a division or a product has left has all of them.
+bool few_bits(double v)
+{
+  constexpr int32_t bits = 30;
+  int exponent           = 0;
+  double scaled          = std::ldexp(std::frexp(v, &exponent), bits);
+  return scaled == std::floor(scaled);
+}
 
 // First and last integer of [lower, upper]; a bound off the half grid gets the tolerance.
 double first_integer(double lower)
@@ -290,15 +305,45 @@ case_t generate(uint64_t seed, const generator_options_t& o)
     } else {
       sort_entries(row);
     }
+    std::vector<int32_t> cols  = row.col;
+    std::vector<double> values = row.value;
+    if (o.p_singleton_col > 0. && !row.col.empty() && base.ncols - ncols < o.max_singleton_cols &&
+        rng.chance(o.p_singleton_col)) {
+      bool has_line = false;
+      for (int32_t j : row.col) {
+        has_line = has_line || line[j];
+      }
+      bool is_line = !has_line && rng.chance(o.p_singleton_line);
+      double lower = 0., upper = 0.;
+      uint8_t type = 1;
+      if (is_line) {
+        type = rng.chance(o.p_continuous) ? 0 : 1;
+        draw_line_bounds(rng, o, type == 1, false, lower, upper);
+      } else {
+        int32_t width = std::min(1, o.max_width);
+        lower         = enumerated_lower(rng, o, width);
+        upper         = lower + width;
+      }
+      double cost   = rng.chance(o.p_zero_cost) ? 0. : nonzero(rng, o.max_coefficient);
+      row.own_col   = base.ncols++;
+      row.own_value = nonzero(rng, o.max_coefficient);
+      base.col_type.push_back(type);
+      base.col_lower.push_back(lower);
+      base.col_upper.push_back(upper);
+      base.cost.push_back(cost);
+      line.push_back(is_line);
+      cols.push_back(row.own_col);
+      values.push_back(row.own_value);
+    }
     if (!own_sides) { continue; }
 
     // Activity range over the small bounds. An end that an infinite or huge bound leaves open
     // is put four from the other end, so that the sides stay where the row can be met.
     double act_min = 0., act_max = 0.;
     bool min_open = false, max_open = false;
-    for (size_t k = 0; k < row.col.size(); ++k) {
-      int32_t j    = row.col[k];
-      double a     = row.value[k];
+    for (size_t k = 0; k < cols.size(); ++k) {
+      int32_t j    = cols[k];
+      double a     = values[k];
       double first = std::ceil(base.col_lower[j]), last = std::floor(base.col_upper[j]);
       double low = a > 0 ? first : last, high = a > 0 ? last : first;
       if (std::fabs(low) <= o.max_side + 1) {
@@ -353,6 +398,10 @@ case_t generate(uint64_t seed, const generator_options_t& o)
   for (const draft_row_t& row : rows) {
     base.col_index.insert(base.col_index.end(), row.col.begin(), row.col.end());
     base.value.insert(base.value.end(), row.value.begin(), row.value.end());
+    if (row.own_col >= 0) {
+      base.col_index.push_back(row.own_col);
+      base.value.push_back(row.own_value);
+    }
     base.row_start.push_back(base.value.size());
     base.row_lower.push_back(row.lower);
     base.row_upper.push_back(row.upper);
@@ -372,12 +421,12 @@ case_t generate(uint64_t seed, const generator_options_t& o)
     }
   }
 
-  std::vector<double> row_scale(nrows, 1.), col_scale(ncols, 1.);
+  std::vector<double> row_scale(nrows, 1.), col_scale(base.ncols, 1.);
   if (rng.chance(o.p_scaled)) {
     for (int32_t i = 0; i < nrows; ++i) {
       row_scale[i] = std::ldexp(1., rng.uniform(-o.max_scale_exp2, o.max_scale_exp2));
     }
-    for (int32_t j = 0; j < ncols; ++j) {
+    for (int32_t j = 0; j < base.ncols; ++j) {
       if (base.col_type[j] == 1) { continue; }
       col_scale[j] = std::ldexp(1., rng.uniform(-o.max_scale_exp2, o.max_scale_exp2));
     }
@@ -519,7 +568,10 @@ double assignments(const model_t& model, const std::vector<uint8_t>& line_col)
   return count;
 }
 
-bool classify_widest(const model_t& model, double max_assignments, std::vector<uint8_t>& line_col)
+namespace {
+
+// The values of max_width at which the line columns of the model change, ascending.
+std::vector<int32_t> width_limits(const model_t& model)
 {
   // Below every width: no column is enumerated.
   std::vector<int32_t> limits = {std::numeric_limits<int32_t>::min()};
@@ -531,10 +583,117 @@ bool classify_widest(const model_t& model, double max_assignments, std::vector<u
   }
   std::sort(limits.begin(), limits.end());
   limits.erase(std::unique(limits.begin(), limits.end()), limits.end());
+  return limits;
+}
+
+// The model with every row of several line columns reduced to one of them by equations, as
+// into_class() states it. False when a row is left with two.
+bool reduce_line_columns(const model_t& model, const std::vector<uint8_t>& line_col, model_t& out)
+{
+  constexpr double cancellation = 1e-12;
+  std::vector<std::map<int32_t, double>> rows(model.nrows);
+  for (int32_t i = 0; i < model.nrows; ++i) {
+    for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
+      rows[i][model.col_index[e]] = model.value[e];
+    }
+  }
+  std::vector<double> lower = model.row_lower, upper = model.row_upper;
+  auto lines = [&](int32_t i) {
+    std::vector<int32_t> cols;
+    for (const auto& entry : rows[i]) {
+      if (line_col[entry.first]) { cols.push_back(entry.first); }
+    }
+    return cols;
+  };
+  // An equation other than row i that holds j as its only line column, or -1.
+  auto equation_of = [&](int32_t i, int32_t j) {
+    for (int32_t k = 0; k < model.nrows; ++k) {
+      if (k != i && lower[k] == upper[k] && std::isfinite(upper[k]) && rows[k].count(j) &&
+          lines(k).size() == 1) {
+        return k;
+      }
+    }
+    return -1;
+  };
+  // Every step takes a line column from a row and gives it none, so the steps end.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (int32_t i = 0; i < model.nrows && !changed; ++i) {
+      std::vector<int32_t> cols = lines(i);
+      if (cols.size() < 2) { continue; }
+      for (int32_t j : cols) {
+        int32_t k = equation_of(i, j);
+        if (k < 0) { continue; }
+        double multiple = rows[i][j] / rows[k][j];
+        for (const auto& entry : rows[k]) {
+          if (entry.first == j) { continue; }
+          double moved = multiple * entry.second;
+          auto mine    = rows[i].find(entry.first);
+          double old   = mine == rows[i].end() ? 0. : mine->second;
+          double sum   = old - moved;
+          if (std::fabs(sum) <= cancellation * (std::fabs(old) + std::fabs(moved))) {
+            if (mine != rows[i].end()) { rows[i].erase(mine); }
+          } else {
+            rows[i][entry.first] = sum;
+          }
+        }
+        rows[i].erase(j);
+        if (std::isfinite(lower[i])) { lower[i] -= multiple * upper[k]; }
+        if (std::isfinite(upper[i])) { upper[i] -= multiple * upper[k]; }
+        changed = true;
+        break;
+      }
+    }
+  }
+  out = model;
+  out.row_start.assign(1, 0);
+  out.col_index.clear();
+  out.value.clear();
+  for (int32_t i = 0; i < model.nrows; ++i) {
+    if (lines(i).size() > 1) { return false; }
+    for (const auto& entry : rows[i]) {
+      if (!std::isfinite(entry.second)) { return false; }
+      out.col_index.push_back(entry.first);
+      out.value.push_back(entry.second);
+    }
+    out.row_start.push_back(out.value.size());
+  }
+  out.row_lower = lower;
+  out.row_upper = upper;
+  return well_formed(out);
+}
+
+}  // namespace
+
+bool classify_widest(const model_t& model, double max_assignments, std::vector<uint8_t>& line_col)
+{
   bool found = false;
   std::vector<uint8_t> trial;
-  for (int32_t limit : limits) {
+  for (int32_t limit : width_limits(model)) {
     if (!classify(model, limit, trial) || assignments(model, trial) > max_assignments) { continue; }
+    line_col = trial;
+    found    = true;
+  }
+  return found;
+}
+
+bool into_class(const model_t& model,
+                double max_assignments,
+                model_t& in_class,
+                std::vector<uint8_t>& line_col)
+{
+  if (classify_widest(model, max_assignments, line_col)) {
+    in_class = model;
+    return true;
+  }
+  bool found = false;
+  std::vector<uint8_t> trial;
+  model_t reduced;
+  for (int32_t limit : width_limits(model)) {
+    classify(model, limit, trial);
+    if (assignments(model, trial) > max_assignments) { continue; }
+    if (!reduce_line_columns(model, trial, reduced)) { continue; }
+    in_class = reduced;
     line_col = trial;
     found    = true;
   }
@@ -572,9 +731,12 @@ solution_t solve(const model_t& model, const std::vector<uint8_t>& line_col, int
         row_line_value[i] = model.value[e];
       }
       // An end of an integer line column is rounded inwards, so its coefficient counts as well.
-      if ((!line_col[j] || model.col_type[j] == 1) && !is_integer(model.value[e])) {
-        row_exact[i] = 0;
-      }
+      // An end of a continuous one is a side divided by its coefficient: with a coefficient
+      // that a division left (5 / 3 as a double), it lies one rounding step off the end that an
+      // integer row gives the same column.
+      bool exact = !line_col[j] || model.col_type[j] == 1 ? is_integer(model.value[e])
+                                                          : few_bits(model.value[e]);
+      if (!exact) { row_exact[i] = 0; }
     }
   }
 
@@ -798,10 +960,11 @@ verdict_t check_result(const case_t& c, const options_t& options, const result_t
       "per row / column of the reduced model");
   }
   std::vector<uint8_t> reduced_line;
-  if (!classify_widest(reduced, check_max_assignments, reduced_line)) {
+  model_t reduced_in_class;
+  if (!into_class(reduced, check_max_assignments, reduced_in_class, reduced_line)) {
     return failure("the reduced model is outside the oracle class");
   }
-  solution_t red = solve(reduced, reduced_line, keep);
+  solution_t red = solve(reduced_in_class, reduced_line, keep);
   if (red.outcome != base.outcome) {
     return failure(std::string("the reduced model is ") + outcome_name(red.outcome) +
                    ", the base model is " + outcome_name(base.outcome));

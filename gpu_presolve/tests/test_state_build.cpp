@@ -390,8 +390,9 @@ GPRS_TEST(state_build_lists)
 
   st.row_frontier.take(row_list::parallel_rows, taken);
   st.row_frontier.push(row_event::activity, 2);
-  st.row_frontier.push(row_event::side, 2);
   GPRS_CHECK(st.row_frontier.empty(row_list::parallel_rows));
+  // A side is read by the parallel rows as well.
+  st.row_frontier.push(row_event::side, 2);
   st.row_frontier.push(row_event::entries, 2);
   st.row_frontier.push(row_event::sparse, 4);
   st.row_frontier.push(row_event::sparse, 4);
@@ -417,7 +418,7 @@ GPRS_TEST(state_build_lists)
 GPRS_TEST(state_build_event_masks)
 {
   GPRS_CHECK_EQ(row_event::activity, 0x07);
-  GPRS_CHECK_EQ(row_event::side, 0x0f);
+  GPRS_CHECK_EQ(row_event::side, 0x1f);
   GPRS_CHECK_EQ(row_event::entries, 0x1f);
   GPRS_CHECK_EQ(row_event::sparse, 0x20);
   GPRS_CHECK_EQ(col_event::locks, 0x01);

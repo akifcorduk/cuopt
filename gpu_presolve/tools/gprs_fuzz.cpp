@@ -12,10 +12,17 @@
 //   oracle     tests/oracle.hpp, exact by enumeration: status, optimal value, postsolved points.
 //   structure  check/structure_check.hpp on a result that carries a reduced model. It is the
 //              check that runs on real instances without a solver, and it sees relaxations only.
+//              Its summary line ends with the results that have a row addition record
+//              (subtracted), the rows that are made of equations as well (added), those tested
+//              against the reduced row of such an equation and those not tested, and the
+//              largest multiplier of an equation in those tests.
 // With the engine as it is, both must be silent. A structure failure that the oracle does not
 // share is a false alarm of the structure check (or a relaxation without effect on the optimum);
 // an oracle failure that the structure check does not share is, on a result with a reduced model,
-// a restriction or an objective error, which the structure check cannot see by design.
+// a restriction or an objective error, which the structure check cannot see by design, or a
+// relaxation that it missed. The two are told apart on the feasible points of the reduced
+// model, all that the solver of the oracle lists and not the sample that the oracle takes: a
+// result is relaxed when one of them postsolves to a point that the model rejects.
 // --singletons adds columns with one entry to the generated model (rows parallel up to singleton
 // columns). GPRS_FUZZ_SHOW=<n> prints the first n models of each kind of disagreement.
 // The profiles are those of tests/test_e2e_presolve.cpp and four more.
@@ -246,6 +253,29 @@ options_t variant(uint64_t seed)
   return o;
 }
 
+// A feasible point of the reduced model, or its far point, postsolves to a point that the model
+// rejects. The stack keeps its contract. False for a reduced model outside the oracle class.
+bool relaxed(const case_t& c, const options_t& options, const result_t& result)
+{
+  std::vector<uint8_t> line;
+  model_t in_class;
+  if (!well_formed(result.reduced) ||
+      !oracle::into_class(result.reduced, oracle::check_max_assignments, in_class, line)) {
+    return false;
+  }
+  oracle::solution_t red = oracle::solve(in_class, line, (int32_t)oracle::check_max_assignments);
+  std::vector<double> x;
+  auto rejected = [&](const std::vector<double>& point) {
+    result.postsolve.postsolve(point, x);
+    return !point_feasible(check_point(c.model, x), options.tol);
+  };
+  if (red.outcome == oracle::outcome_t::optimal && rejected(red.x)) { return true; }
+  for (size_t k = 0; k < red.feasible.size(); ++k) {
+    if (rejected(red.feasible[k]) || rejected(red.far[k])) { return true; }
+  }
+  return false;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -268,9 +298,10 @@ int main(int argc, char** argv)
   int64_t models = 0, outside = 0, base_outside = 0, failures = 0, reduced = 0, mutated = 0;
   int64_t findings[rule::count] = {0, 0, 0, 0, 0, 0};
   int64_t o_only_carried = 0, carried = 0, s_fail = 0, s_only = 0, s_outside = 0, both = 0,
-          o_only      = 0;
+          o_only = 0, missed_relaxed = 0;
   int64_t rows_tested = 0, kept_tested = 0, kept_parallel = 0, kept_untested = 0;
-  double worst = 0.;
+  int64_t subtracted = 0, added_rows = 0, added_tested = 0, added_untested = 0;
+  double worst = 0., multiplier = 0.;
   std::map<std::string, int64_t> parts;
   int64_t show_missed =
     std::getenv("GPRS_FUZZ_SHOW") ? std::atoll(std::getenv("GPRS_FUZZ_SHOW")) : 0;
@@ -296,14 +327,21 @@ int main(int argc, char** argv)
         kept_tested += s.kept_tested;
         kept_parallel += s.kept_parallel;
         kept_untested += s.kept_untested;
+        subtracted += !result.postsolve.row_additions.empty();
+        added_rows += s.added_rows;
+        added_tested += s.added_tested;
+        added_untested += s.added_untested;
+        if (s.added_multiplier > multiplier) { multiplier = s.added_multiplier; }
         if (!s.stack_error.empty()) { part += " stack"; }
         if (s.lost_integers) { part += " types"; }
         if (s.bound_failures) { part += " bounds"; }
         if (s.row_failures) { part += " rows"; }
         if (s.kept_failures) { part += " kept_rows"; }
+        if (s.added_failures) { part += " added_rows"; }
         if (s.postsolve_failures) { part += " postsolve"; }
-        s_bad    = !part.empty();
-        double w = std::fmax(std::fmax(s.bound_worst, s.row_worst), s.kept_worst);
+        s_bad = !part.empty();
+        double w =
+          std::fmax(std::fmax(s.bound_worst, s.row_worst), std::fmax(s.kept_worst, s.added_worst));
         if (!s_bad && w > worst) { worst = w; }
         if (s_bad) {
           ++s_fail;
@@ -316,7 +354,7 @@ int main(int argc, char** argv)
             if (++s_only <= show_missed) {
               std::printf(
                 "STRUCTURE-ONLY profile %s seed %llu variant %llu:%s | %s | bound %g col %d "
-                "row %g row %d kept %g row %d post %g col %d\n%s\n",
+                "row %g row %d kept %g row %d added %g row %d post %g col %d\n%s\n",
                 profile.name,
                 (unsigned long long)seed,
                 (unsigned long long)(seed % 10),
@@ -328,6 +366,8 @@ int main(int argc, char** argv)
                 s.row_worst_row,
                 s.kept_worst,
                 s.kept_worst_row,
+                s.added_worst,
+                s.added_worst_row,
                 s.postsolve_worst,
                 s.postsolve_worst_col,
                 oracle::to_code(c).c_str());
@@ -339,8 +379,11 @@ int main(int argc, char** argv)
         ++o_only;
         if (gprs_check::carries_model(result.status)) {
           ++o_only_carried;
-          if (o_only_carried <= show_missed) {
-            std::printf("MISSED profile %s seed %llu variant %llu status %s: %s\n%s\n",
+          bool is_relaxed = relaxed(c, options, result);
+          missed_relaxed += is_relaxed;
+          if (is_relaxed ? missed_relaxed <= show_missed : o_only_carried <= show_missed) {
+            std::printf("%s profile %s seed %llu variant %llu status %s: %s\n%s\n",
+                        is_relaxed ? "MISSED-RELAXED" : "MISSED",
                         profile.name,
                         (unsigned long long)seed,
                         (unsigned long long)(seed % 10),
@@ -390,10 +433,13 @@ int main(int argc, char** argv)
   std::printf("\n");
   // carried: results with a reduced model; alone: failed while the oracle passed; missed: the
   // oracle failed and the structure check passed, with and without a reduced model; worst: the
-  // largest violation that passed; undecided: failed on a model the oracle cannot decide.
+  // largest violation that passed; undecided: failed on a model the oracle cannot decide;
+  // missed_relaxed: of the missed with a reduced model, the relaxed ones.
   std::printf(
     "structure carried %lld failed %lld alone %lld missed %lld missed_no_model %lld "
-    "worst %g both %lld undecided %lld rows %lld kept %lld parallel %lld untested %lld\n",
+    "worst %g both %lld undecided %lld rows %lld kept %lld parallel %lld untested %lld "
+    "subtracted %lld added %lld added_tested %lld added_untested %lld multiplier %g "
+    "missed_relaxed %lld\n",
     (long long)carried,
     (long long)s_fail,
     (long long)s_only,
@@ -405,7 +451,13 @@ int main(int argc, char** argv)
     (long long)rows_tested,
     (long long)kept_tested,
     (long long)kept_parallel,
-    (long long)kept_untested);
+    (long long)kept_untested,
+    (long long)subtracted,
+    (long long)added_rows,
+    (long long)added_tested,
+    (long long)added_untested,
+    multiplier,
+    (long long)missed_relaxed);
   for (const auto& t : parts) {
     std::printf("  part %lld x%s\n", (long long)t.second, t.first.c_str());
   }

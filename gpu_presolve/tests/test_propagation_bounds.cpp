@@ -28,11 +28,14 @@ rule_result_t run_propagation(fixture_t& f)
   return rule.run(f.st, f.budget, f.ps, f.opt);
 }
 
-rule_result_t make_explicit(fixture_t& f)
-{
+// One rule object over a fixture: the marks of run() are what make_explicit works on.
+struct propagation_t {
+  fixture_t& f;
   bound_propagation_t rule;
-  return rule.make_explicit(f.st, f.ps, f.opt);
-}
+
+  rule_result_t run() { return rule.run(f.st, f.budget, f.ps, f.opt); }
+  rule_result_t make_explicit() { return rule.make_explicit(f.st, f.ps, f.opt); }
+};
 
 void check_bounds(const state_t& st, int32_t col, double lower, double upper)
 {
@@ -147,7 +150,9 @@ GPRS_TEST(propagation_fixed_columns_and_free_column)
     fix_column(f.st, f.ps, 1, 3.);
     rule_result_t result = run_propagation(f);
     GPRS_CHECK_EQ(result.outcome, ok);
-    GPRS_CHECK_EQ(result.findings, 1);
+    // An explicit bound is a finding, a recorded one a record.
+    GPRS_CHECK_EQ(result.findings, integer ? 1 : 0);
+    GPRS_CHECK_EQ(result.records, integer ? 0 : 1);
     if (integer) {
       check_bounds(f.st, 2, -inf, 5.);
     } else {
@@ -174,8 +179,10 @@ GPRS_TEST(propagation_infinite_terms)
     check_bounds(f.st, 0, -inf, 9.);
     check_bounds(f.st, 1, 0., 20.);
     check_bounds(f.st, 2, 1., 20.);
-    // The row is read at one slot: the work is the row visits and the column of the new bound.
-    GPRS_CHECK_EQ(f.budget.used, 2 * (line_visit_work + 1) + 1);
+    // The row is read at one slot: the work is the row visit and the column of the new bound.
+    // The row is not visited again: the new bound is in its maximum activity, which no side
+    // reads.
+    GPRS_CHECK_EQ(f.budget.used, line_visit_work + 1 + 1);
     GPRS_CHECK_EQ(f.st.slot_visits - visits, 1);
   }
   {
@@ -235,13 +242,23 @@ GPRS_TEST(propagation_infeasible)
 
   // Continuous columns only get the records; making them explicit finds the crossing.
   fixture_t g({{0., 3., false}, {0., 4., false}}, {{{{0, 1.}, {1, 1.}}, 9., inf}});
-  rule_result_t result = run_propagation(g);
+  propagation_t p{g, {}};
+  rule_result_t result = p.run();
   GPRS_CHECK_EQ(result.outcome, ok);
-  GPRS_CHECK_EQ(result.findings, 2);
+  GPRS_CHECK_EQ(result.findings, 0);
+  GPRS_CHECK_EQ(result.records, 2);
   GPRS_CHECK_EQ(g.st.implied_lower[0], 5.);
   GPRS_CHECK_EQ(g.st.implied_lower[1], 6.);
   GPRS_CHECK_EQ(g.st.bound_changes, 0);
-  GPRS_CHECK_EQ(make_explicit(g).outcome, infeasible);
+  GPRS_CHECK_EQ(p.make_explicit().outcome, infeasible);
+
+  // After make_explicit the visit of the row finds it.
+  fixture_t h({{0., 3., false}, {0., 4., false}}, {{{{0, 1.}, {1, 1.}}, -inf, 20.}});
+  propagation_t q{h, {}};
+  GPRS_CHECK_EQ(q.run().records, 2);
+  GPRS_CHECK_EQ(q.make_explicit().findings, 0);
+  h.st.set_row_lower(0, 9.);
+  GPRS_CHECK_EQ(q.run().outcome, infeasible);
 }
 
 // A continuous column gets a record and keeps its explicit bound; a record is replaced when
@@ -254,7 +271,8 @@ GPRS_TEST(propagation_continuous_records)
   GPRS_CHECK_EQ(result.outcome, ok);
   // Row 0: x0 <= 8 (weaker than the explicit 5, recorded all the same) and x1 <= 8.
   // Row 1: x0 >= 1 + 0; x1 <= 5 - 1 replaces the record of row 0.
-  GPRS_CHECK_EQ(result.findings, 4);
+  GPRS_CHECK_EQ(result.records, 4);
+  GPRS_CHECK_EQ(result.findings, 0);
   GPRS_CHECK_EQ(f.st.bound_changes, 0);
   check_bounds(f.st, 0, 0., 5.);
   check_bounds(f.st, 1, 0., 10.);
@@ -272,13 +290,13 @@ GPRS_TEST(propagation_continuous_records)
   // x1 >= 0.0005 improves the bounds of x0 by half the step: no new record.
   f.st.set_col_lower(1, 0.0005);
   result = run_propagation(f);
-  GPRS_CHECK_EQ(result.findings, 0);
+  GPRS_CHECK_EQ(result.records, 0);
   GPRS_CHECK_EQ(f.st.implied_upper[0], 8.);
   GPRS_CHECK_EQ(f.st.implied_lower[0], 1.);
   // By twice the step.
   f.st.set_col_lower(1, 0.002);
   result = run_propagation(f);
-  GPRS_CHECK_EQ(result.findings, 2);
+  GPRS_CHECK_EQ(result.records, 2);
   GPRS_CHECK(std::fabs(f.st.implied_upper[0] - 7.998) < 1e-12);
   GPRS_CHECK(std::fabs(f.st.implied_lower[0] - 1.002) < 1e-12);
   GPRS_CHECK_EQ(f.st.bound_changes, 2);
@@ -287,7 +305,8 @@ GPRS_TEST(propagation_continuous_records)
   f.st.set_row_upper(0, 9.);
   GPRS_CHECK(!f.st.implied_upper_valid(0));
   result = run_propagation(f);
-  GPRS_CHECK_EQ(result.findings, 1);
+  GPRS_CHECK_EQ(result.records, 1);
+  GPRS_CHECK_EQ(result.findings, 0);
   GPRS_CHECK(f.st.implied_upper_valid(0));
   GPRS_CHECK(std::fabs(f.st.implied_upper[0] - 8.998) < 1e-12);
   // x1 keeps the record of row 1, which is better than the 9 of row 0.
@@ -389,33 +408,289 @@ GPRS_TEST(propagation_make_explicit)
     {0., 100., false}, {0., 10., false}, {0., 10., true}, {0., 100., false}, {0., 5., false}};
   std::vector<row_t> rows = {
     {{{0, 1.}, {1, 1.}}, -inf, 8.}, {{{2, 1.}, {3, 1.}}, 15., inf}, {{{1, 1.}, {4, 1.}}, -inf, 9.}};
+  fixture_t f(cols, rows);
+  propagation_t p{f, {}};
+  GPRS_CHECK_EQ(p.run().outcome, ok);
+  GPRS_CHECK_EQ(f.st.bound_changes, 0);
+  f.only(row_list::row_rules, {});
+  state_t before       = f.st;
+  rule_result_t result = p.make_explicit();
+  GPRS_CHECK_EQ(result.outcome, ok);
+  // x0 <= 8 and x1 <= 8 from row 0, x3 >= 5 from row 1; x4 <= 9 of row 2 is weaker than 5.
+  GPRS_CHECK_EQ(result.findings, 3);
+  GPRS_CHECK_EQ(result.records, 0);
+  check_bounds(f.st, 0, 0., 8.);
+  check_bounds(f.st, 1, 0., 8.);
+  check_bounds(f.st, 2, 0., 10.);
+  check_bounds(f.st, 3, 5., 100.);
+  check_bounds(f.st, 4, 0., 5.);
+  check_same_set(before, f.st, result.outcome);
+  // No record of these columns was ever void: only the rows that a new bound reaches are
+  // listed. x0 <= 8 and x1 <= 8 are in the maximum activity of rows 0 and 2, which have no
+  // lower side; x3 >= 5 is in the minimum activity of row 1, which has no upper side.
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::propagation));
+  GPRS_CHECK(f.st.row_frontier.list[row_list::row_rules] == std::vector<int32_t>({0, 2, 1}));
+
+  // A second call has no mark left.
+  result = p.make_explicit();
+  GPRS_CHECK_EQ(result.findings, 0);
+  GPRS_CHECK_EQ(f.st.bound_changes, 3);
+}
+
+// After make_explicit a continuous column gets its bounds as an integer one does, so that one
+// call follows a chain of bounds: x1 <= x0 + 1, x2 <= x1 + 1, x3 <= x2 + 1 with x0 <= 5.
+GPRS_TEST(propagation_explicit_chain)
+{
+  std::vector<col_t> cols = {{0., 5., false}, {0., inf, false}, {0., inf, false}, {0., inf, false}};
+  std::vector<row_t> rows = {{{{2, -1.}, {3, 1.}}, -inf, 1.},
+                             {{{1, -1.}, {2, 1.}}, -inf, 1.},
+                             {{{0, -1.}, {1, 1.}}, -inf, 1.}};
+  fixture_t f(cols, rows);
+  propagation_t p{f, {}};
+  rule_result_t result = p.run();
+  GPRS_CHECK_EQ(result.outcome, ok);
+  // Only x1 <= 6 can be derived while the bounds of x1 and x2 are infinite.
+  GPRS_CHECK_EQ(result.findings, 0);
+  GPRS_CHECK_EQ(f.st.bound_changes, 0);
+  GPRS_CHECK_EQ(f.st.implied_upper[1], 6.);
+  GPRS_CHECK(!f.st.implied_upper_valid(2));
+
+  state_t before = f.st;
+  result         = p.make_explicit();
+  GPRS_CHECK_EQ(result.findings, 1);
+  check_bounds(f.st, 1, 0., 6.);
+  check_bounds(f.st, 2, 0., inf);
+  // Row 1 reads the new bound of x1 with its upper side.
+  GPRS_CHECK(f.st.row_frontier.list[row_list::propagation] == std::vector<int32_t>({1}));
+
+  result = p.run();
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK_EQ(result.findings, 2);
+  check_bounds(f.st, 2, 0., 7.);
+  check_bounds(f.st, 3, 0., 8.);
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::propagation));
+  check_same_set(before, f.st, result.outcome);
+  // The bounds are recorded with their rows as well.
+  GPRS_CHECK_EQ(f.st.implied_upper[3], 8.);
+  GPRS_CHECK_EQ(f.st.implied_upper_row[3], 0);
+}
+
+// An explicit bound is the candidate of a row as the row is when the bound is written. A record
+// whose row was deleted or changed is not used, whatever it says.
+GPRS_TEST(propagation_explicit_bound_after_the_source_row_changed)
+{
+  std::vector<col_t> cols = {{0., 100., false}, {0., 10., false}, {0., 100., false}};
+  std::vector<row_t> rows = {{{{0, 1.}, {1, 1.}}, -inf, 8.}, {{{1, 1.}, {2, 1.}}, -inf, 30.}};
   {
+    // The source row gets a weaker side: x0 <= 20, not the recorded 8.
     fixture_t f(cols, rows);
-    GPRS_CHECK_EQ(run_propagation(f).outcome, ok);
-    GPRS_CHECK_EQ(f.st.bound_changes, 0);
+    propagation_t p{f, {}};
+    GPRS_CHECK_EQ(p.run().records, 3);
+    GPRS_CHECK_EQ(f.st.implied_upper[0], 8.);
+    f.st.set_row_upper(0, 20.);
+    GPRS_CHECK(!f.st.implied_upper_valid(0));
     state_t before       = f.st;
-    rule_result_t result = make_explicit(f);
+    rule_result_t result = p.make_explicit();
     GPRS_CHECK_EQ(result.outcome, ok);
-    // x0 <= 8 and x1 <= 8 from row 0, x3 >= 5 from row 1; x4 <= 9 of row 2 is weaker than 5.
-    GPRS_CHECK_EQ(result.findings, 3);
-    check_bounds(f.st, 0, 0., 8.);
-    check_bounds(f.st, 1, 0., 8.);
-    check_bounds(f.st, 2, 0., 10.);
-    check_bounds(f.st, 3, 5., 100.);
-    check_bounds(f.st, 4, 0., 5.);
+    // x2 <= 30 of the unchanged row 1 is taken; x0 waits for the visit of its row.
+    GPRS_CHECK_EQ(result.findings, 1);
+    check_bounds(f.st, 0, 0., 100.);
+    check_bounds(f.st, 2, 0., 30.);
+    result = p.run();
+    GPRS_CHECK_EQ(result.outcome, ok);
+    check_bounds(f.st, 0, 0., 20.);
+    check_bounds(f.st, 1, 0., 10.);
     check_same_set(before, f.st, result.outcome);
   }
   {
-    // Void records stay out: row 1 deleted, row 0 with a new side.
+    // The source row is deleted and no other row implies the bound: x0 keeps its bound.
     fixture_t f(cols, rows);
-    GPRS_CHECK_EQ(run_propagation(f).outcome, ok);
-    f.st.delete_row(1);
-    f.st.set_row_upper(0, 7.);
-    rule_result_t result = make_explicit(f);
+    propagation_t p{f, {}};
+    GPRS_CHECK_EQ(p.run().records, 3);
+    f.st.delete_row(0);
+    state_t before       = f.st;
+    rule_result_t result = p.make_explicit();
+    GPRS_CHECK_EQ(result.findings, 1);
+    result = p.run();
     GPRS_CHECK_EQ(result.outcome, ok);
     GPRS_CHECK_EQ(result.findings, 0);
-    GPRS_CHECK_EQ(f.st.bound_changes, 0);
+    check_bounds(f.st, 0, 0., 100.);
+    check_bounds(f.st, 1, 0., 10.);
+    check_bounds(f.st, 2, 0., 30.);
+    check_same_set(before, f.st, result.outcome);
   }
+  {
+    // The source row is scaled: the same constraint, and the bound comes from the scaled row.
+    fixture_t f(cols, rows);
+    propagation_t p{f, {}};
+    GPRS_CHECK_EQ(p.run().records, 3);
+    f.st.scale_row(0, 4., false);
+    GPRS_CHECK(!f.st.implied_upper_valid(0));
+    state_t before = f.st;
+    GPRS_CHECK_EQ(p.make_explicit().findings, 1);
+    rule_result_t result = p.run();
+    GPRS_CHECK_EQ(result.outcome, ok);
+    check_bounds(f.st, 0, 0., 8.);
+    check_bounds(f.st, 1, 0., 8.);
+    check_same_set(before, f.st, result.outcome);
+  }
+}
+
+// A record that was lost and replaced by a weaker one: row 0 gave x0 <= 8, row 1 gives 8.0005,
+// which is not recorded next to it. Row 0 is deleted and the visit of row 2 records x0 <= 50.
+// make_explicit takes the 50 and lists the rows of x0, because a visit found the record void:
+// row 1 then gives its bound.
+GPRS_TEST(propagation_explicit_bound_after_a_lost_record)
+{
+  std::vector<col_t> cols = {{0., 100., false}, {0., 10., false}, {0., 10., true}};
+  std::vector<row_t> rows = {{{{0, 1.}, {1, 1.}}, -inf, 8.},
+                             {{{0, 1.}, {1, 1.}}, -inf, 8.0005},
+                             {{{0, 1.}, {2, 1.}}, -inf, 50.}};
+  fixture_t f(cols, rows);
+  propagation_t p{f, {}};
+  GPRS_CHECK_EQ(p.run().outcome, ok);
+  GPRS_CHECK_EQ(f.st.implied_upper[0], 8.);
+  GPRS_CHECK_EQ(f.st.implied_upper_row[0], 0);
+  f.st.delete_row(0);
+  f.only(row_list::propagation, {2});
+  GPRS_CHECK_EQ(p.run().records, 1);
+  GPRS_CHECK_EQ(f.st.implied_upper[0], 50.);
+
+  state_t before       = f.st;
+  rule_result_t result = p.make_explicit();
+  GPRS_CHECK_EQ(result.findings, 1);
+  check_bounds(f.st, 0, 0., 50.);
+  GPRS_CHECK(f.st.row_frontier.list[row_list::propagation] == std::vector<int32_t>({1, 2}));
+  result = p.run();
+  GPRS_CHECK_EQ(result.outcome, ok);
+  check_bounds(f.st, 0, 0., 8.0005);
+  check_same_set(before, f.st, result.outcome);
+}
+
+// The step: a bound of a continuous column is improved by more than 1000 feasibility
+// tolerances, or by more than as many times what a bound of its size loses when it is stored.
+GPRS_TEST(propagation_explicit_step)
+{
+  {
+    std::vector<col_t> cols = {{0., 5., false}, {0., 5., false}};
+    fixture_t f(cols, {{{{0, 1.}}, -inf, 4.9995}, {{{1, 1.}}, -inf, 4.998}});
+    propagation_t p{f, {}};
+    GPRS_CHECK_EQ(p.run().records, 2);
+    GPRS_CHECK_EQ(p.make_explicit().findings, 1);
+    check_bounds(f.st, 0, 0., 5.);
+    check_bounds(f.st, 1, 0., 4.998);
+  }
+  {
+    // 1e-11 of 4e15 is 4e4: 30000 below the bound does not count, 50000 does. The candidate is
+    // an exact quotient and becomes the bound as it is.
+    double big              = 4e15;
+    double a                = 0x1p-30;
+    std::vector<col_t> cols = {{0., big, false}, {0., big, false}};
+    fixture_t f(cols, {{{{0, a}}, -inf, a * (big - 30000.)}, {{{1, a}}, -inf, a * (big - 50000.)}});
+    propagation_t p{f, {}};
+    GPRS_CHECK_EQ(p.run().outcome, ok);
+    GPRS_CHECK_EQ(f.st.implied_upper[1], big - 50000.);
+    GPRS_CHECK_EQ(p.make_explicit().findings, 1);
+    check_bounds(f.st, 0, 0., big);
+    check_bounds(f.st, 1, 0., big - 50000.);
+  }
+}
+
+// A candidate that is not an exact quotient is a bound of a continuous column only when moved
+// outward by its rounding: the record and the explicit bound lie at or above the true quotient,
+// by no more than a few rounding units of its size, before and after make_explicit.
+GPRS_TEST(propagation_continuous_bound_is_moved_outward)
+{
+  // 3 x <= 3 * (4e15 - 50000) + 2, scaled by 2^-30 so that the side is small: the quotient is
+  // 4e15 - 50000 + 2/3, between two doubles.
+  double big              = 4e15;
+  double quotient         = big - 50000.;
+  double scale            = 0x1p-30;
+  std::vector<col_t> cols = {{0., big, false}};
+  fixture_t f(cols, {{{{0, 3. * scale}}, -inf, (3. * quotient + 2.) * scale}});
+  propagation_t p{f, {}};
+  GPRS_CHECK_EQ(p.run().records, 1);
+  GPRS_CHECK(f.st.implied_upper[0] >= quotient + 1.);
+  GPRS_CHECK(f.st.implied_upper[0] <= quotient + 3.);
+  GPRS_CHECK_EQ(p.make_explicit().findings, 1);
+  GPRS_CHECK_EQ(f.st.col_upper[0], f.st.implied_upper[0]);
+
+  // 2.9 x0 + 1.3 x1 <= 7.18 with x1 >= 2.4 in doubles: the largest x0 of the row is the double
+  // above 1.4, and the candidate is the double below it. The same after the switch.
+  double side  = 7.1800000000000015;
+  double point = 1.4000000000000001;
+  for (bool after_switch : {false, true}) {
+    std::vector<col_t> two = {{-inf, inf, false}, {2.4000000000000004, 7.4000000000000004, false}};
+    fixture_t g(two, {{{{0, 2.9000000000000004}, {1, 1.3}}, -inf, side}});
+    GPRS_CHECK(upper_excess(g.st, 0, {point, 2.4000000000000004}) <= 0.);
+    propagation_t q{g, {}};
+    if (after_switch) {
+      GPRS_CHECK_EQ(q.make_explicit().findings, 0);
+      GPRS_CHECK_EQ(q.run().findings, 1);
+    } else {
+      GPRS_CHECK_EQ(q.run().findings, 0);
+      GPRS_CHECK_EQ(q.make_explicit().findings, 1);
+    }
+    GPRS_CHECK(g.st.col_upper[0] >= point);
+    GPRS_CHECK(g.st.col_upper[0] <= point + 1e-14);
+  }
+}
+
+// Two bounds that depend on each other with a factor below 1 improve in ever smaller steps:
+// x <= 0.999 y + 1 and y <= 0.999 x + 1 from 1e6 down to 1000. Each bound gets its steps and
+// stays; the call reports it.
+GPRS_TEST(propagation_explicit_steps_are_limited)
+{
+  std::vector<col_t> cols = {{0., 1e6, false}, {0., 1e6, false}};
+  std::vector<row_t> rows = {{{{0, 1.}, {1, -0.999}}, -inf, 1.},
+                             {{{0, -0.999}, {1, 1.}}, -inf, 1.}};
+  fixture_t f(cols, rows);
+  propagation_t p{f, {}};
+  GPRS_CHECK_EQ(p.run().outcome, ok);
+  state_t before       = f.st;
+  rule_result_t result = p.make_explicit();
+  GPRS_CHECK(!result.limited);
+  result = p.run();
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK(result.limited);
+  GPRS_CHECK(!result.stopped);
+  // One step from the record and sixteen from the visits, per bound.
+  GPRS_CHECK_EQ(result.findings, 32);
+  GPRS_CHECK_EQ(f.st.bound_changes, 34);
+  GPRS_CHECK(f.st.row_frontier.empty(row_list::propagation));
+  GPRS_CHECK(f.st.col_upper[0] > 9.6e5 && f.st.col_upper[0] < 9.7e5);
+  check_same_set(before, f.st, result.outcome);
+  // A further call has nothing listed and reports nothing.
+  result = p.run();
+  GPRS_CHECK(!result.limited);
+  GPRS_CHECK_EQ(result.findings, 0);
+}
+
+// The error bound of an activity counts the largest term the sum ever held. x1 had the upper
+// bound 1.024e25, a term of 7.8e19 in the maximum activity; with the bound at 0 that term is
+// gone, but its size still made the error guard drop the candidate of x1, whose coefficient is
+// small. The activity is summed again and the row gives x1 >= -0.046875 / 7.62939453125e-06.
+GPRS_TEST(propagation_error_guard_after_a_huge_term_left)
+{
+  double a                = 7.62939453125e-06;
+  std::vector<col_t> cols = {
+    {0., 2., true}, {-inf, 1.024e25, false}, {0., 3., true}, {0., 1., true}};
+  fixture_t f(cols, {{{{0, 0.01171875}, {1, a}, {2, 0.00390625}, {3, 0.01171875}}, 0., inf}});
+  GPRS_CHECK_EQ(f.st.max_act.inf_count[0], 0);
+  GPRS_CHECK(f.st.max_act.max_term[0] > 7e19);
+  f.st.set_col_upper(1, 0.);
+  GPRS_CHECK(f.st.max_act.max_term[0] > 7e19);
+  GPRS_CHECK(!activity_fresh(f.st, f.st.max_act, 0));
+  GPRS_CHECK(f.st.max_activity_error(0) > 0.1 * 1e-6 * a);
+
+  rule_result_t result = run_propagation(f);
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK_EQ(result.records, 1);
+  GPRS_CHECK(activity_fresh(f.st, f.st.max_act, 0));
+  GPRS_CHECK(f.st.max_act.max_term[0] < 1.);
+  GPRS_CHECK(f.st.implied_lower_valid(1));
+  GPRS_CHECK_EQ(f.st.implied_lower[1], -0.046875 / a);
+  f.check_consistent();
 }
 
 GPRS_TEST(propagation_budget_stop)
@@ -441,6 +716,7 @@ GPRS_TEST(propagation_budget_stop)
 GPRS_TEST(propagation_property_feasible_set)
 {
   int64_t findings = 0, infeasible_models = 0, compared = 0, records = 0, made_explicit = 0;
+  int64_t explicit_findings = 0;
   std::vector<col_t> cols;
   std::vector<row_t> rows;
   for (uint64_t seed = 1; seed <= 1000; ++seed) {
@@ -452,10 +728,11 @@ GPRS_TEST(propagation_property_feasible_set)
     for (int32_t j = 0; j < f.st.ncols; ++j) {
       if (cols[j].lower > -inf && rng.chance(0.15)) { fix_column(f.st, f.ps, j, cols[j].lower); }
     }
-    f.budget.limit       = 2000000;
+    f.budget.limit = 2000000;
+    propagation_t p{f, {}};
     state_t before       = f.st;
     naive_t naive        = naive_propagation(before, f.opt.tol.feasibility);
-    rule_result_t result = run_propagation(f);
+    rule_result_t result = p.run();
     check_same_set(before, f.st, result.outcome);
     bool comparable = (naive.converged || naive.infeasible) && naive.small();
     if (comparable) {
@@ -473,9 +750,10 @@ GPRS_TEST(propagation_property_feasible_set)
       GPRS_CHECK(f.st.row_frontier.empty(row_list::propagation));
     }
     findings += result.findings;
+    records += result.records;
 
     // Every valid record holds at every feasible point.
-    int64_t broken = 0;
+    int64_t broken = 0, valid = 0;
     for_each_point(make_grid(f.st), [&](const std::vector<double>& x) {
       if (!feasible(f.st, x)) { return; }
       for (int32_t j = 0; j < f.st.ncols; ++j) {
@@ -485,19 +763,34 @@ GPRS_TEST(propagation_property_feasible_set)
     });
     GPRS_CHECK_EQ(broken, 0);
     for (int32_t j = 0; j < f.st.ncols; ++j) {
-      records += f.st.implied_lower_valid(j) + f.st.implied_upper_valid(j);
+      valid += f.st.implied_lower_valid(j) + f.st.implied_upper_valid(j);
       GPRS_CHECK(!f.st.is_integer(j) || f.st.implied_lower_row[j] < 0);
       GPRS_CHECK(!f.st.is_integer(j) || f.st.implied_upper_row[j] < 0);
     }
+    GPRS_CHECK(valid <= result.records);
 
+    // The bounds become explicit, and the call after it keeps the feasible set as well.
     state_t recorded   = f.st;
-    rule_result_t made = make_explicit(f);
+    rule_result_t made = p.make_explicit();
     made_explicit += made.outcome == ok ? made.findings : 0;
     check_same_set(recorded, f.st, made.outcome);
+    if (made.outcome != ok) { continue; }
+    rule_result_t after = p.run();
+    check_same_set(recorded, f.st, after.outcome);
+    explicit_findings += after.outcome == ok ? after.findings : 0;
+    if (after.outcome != ok || after.stopped || after.limited) { continue; }
+    // No row has a bound left to give: a second call, on every row, finds nothing.
+    for (int32_t i = 0; i < f.st.nrows; ++i) {
+      if (f.st.row_alive[i]) { f.st.row_frontier.push(list_bit(row_list::propagation), i); }
+    }
+    int64_t changes = f.st.bound_changes;
+    GPRS_CHECK_EQ(p.run().findings, 0);
+    GPRS_CHECK_EQ(f.st.bound_changes, changes);
   }
-  GPRS_CHECK(findings > 1000);
+  GPRS_CHECK(findings > 500);
   GPRS_CHECK(infeasible_models > 100);
   GPRS_CHECK(compared > 900);
   GPRS_CHECK(records > 400);
   GPRS_CHECK(made_explicit > 150);
+  GPRS_CHECK(explicit_findings > 20);
 }
