@@ -544,6 +544,53 @@ GPRS_TEST(engine_fixed_point_after_a_merge_made_an_equation)
   check_fixed_point(result, options);
 }
 
+// The two ends of the presolve together, with every family on. w >= z + v, w <= 100 z + v,
+// w <= u and w - z - v + s <= 3 with binaries z, v and u and continuous w and s. Row 2 implies
+// w <= 1, which is a record until the bounds become explicit. In the rounds after that the 100
+// of row 1 is strengthened to 1, row 1 is merged into row 0, which becomes the equation
+// w = z + v, and the equation is subtracted from row 3, which is parallel to it up to the
+// singleton column s and is left as s <= 3, a singleton row for the row rules.
+GPRS_TEST(engine_subtraction_after_the_bounds_became_explicit)
+{
+  std::vector<col_t> cols = {
+    {0., inf, false}, {0., 1., true}, {0., 1., true}, {0., 1., true}, {0., 10., false}};
+  std::vector<row_t> rows   = {{{{0, 1.}, {1, -1.}, {2, -1.}}, 0., inf},
+                               {{{0, 1.}, {1, -100.}, {2, -1.}}, -inf, 0.},
+                               {{{0, 1.}, {3, -1.}}, -inf, 0.},
+                               {{{0, 1.}, {1, -1.}, {2, -1.}, {4, 1.}}, -inf, 3.}};
+  model_t m                 = with_cost(make_model(cols, rows), {-1., 1., 1., 1., -1.});
+  std::vector<double> point = {1., 1., 0., 1., 3.};
+  GPRS_REQUIRE(point_feasible(check_point(m, point), tolerances_t()));
+  for (bool primal_only : {true, false}) {
+    options_t options;
+    options.primal_only = primal_only;
+    result_t result     = presolve(m, options);
+    GPRS_REQUIRE(result.status == status_t::reduced);
+    GPRS_CHECK(result.explicit_rounds >= 2);
+    GPRS_REQUIRE(result.postsolve.row_additions.size() == 1);
+    GPRS_CHECK_EQ(result.postsolve.row_additions[0].row, 3);
+    GPRS_CHECK_EQ(result.postsolve.row_additions[0].equation_row, 0);
+    GPRS_CHECK_EQ(result.postsolve.parallel_rows.size(), 1u);
+    GPRS_CHECK(result.stats[rule::tightening].findings >= 1);
+    // Row 1 has gone with the merge and row 3 with the bound of s.
+    GPRS_CHECK(result.postsolve.row_origin == std::vector<int32_t>({0, 2}));
+    GPRS_CHECK_EQ(result.reduced.row_lower[0], 0.);
+    GPRS_CHECK_EQ(result.reduced.row_upper[0], 0.);
+    GPRS_CHECK_EQ(result.reduced.nnz(), 5);
+    check_fixed_point(result, options);
+    if (!primal_only) { continue; }
+    std::vector<double> crushed, back;
+    result.postsolve.crush(point, crushed);
+    point_check_t in = check_point(result.reduced, crushed);
+    GPRS_CHECK(point_feasible(in, options.tol));
+    result.postsolve.postsolve(crushed, back);
+    point_check_t out = check_point(m, back);
+    GPRS_CHECK(point_feasible(out, options.tol));
+    GPRS_CHECK_EQ(out.objective, in.objective);
+    GPRS_CHECK_EQ(out.objective, check_point(m, point).objective);
+  }
+}
+
 // Six rows over the core x0 - x1 - x2, each a multiple of it, four of them with a singleton
 // column. Row 0 is compared with rows 1 to 4, is left alone with each (a factor above 1, or
 // not 1 next to its own singleton column) and stops there, at opt.parallel_bucket_limit: row 5,
