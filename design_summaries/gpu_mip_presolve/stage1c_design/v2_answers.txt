@@ -1,0 +1,138 @@
+ANSWERS OF VERSION 2 TO THE DEFECTS OF THE TWO CRITIQUES
+
+- [1]
+  defect: Validity, blocking: the structure-check extension is specified against the older check file; a row proved through an equation or a kept row loses the tie to a column that a singleton-column rule removed (E: x1+x2+x3 = 3, T: x1+x2+x3+s <= 5).
+  verdict: accepted
+  change: Checked in G/check/structure_check.hpp: 1062 lines; row_addition records are read (compose_records :292-304, row_equations_t :393-436, the added_rows path :859-934); the row of every alias is marked gone (:282); the else at :292 reads every kind that is not fixed_col, alias or parallel_row as a row addition. On the critic's model T gets no equation row (E has no reduced row, :843), has no reduced row of its own, and is tested over the bounds (:936-973): 8 or 11 against 5 on a correct result. Version 2: a column removed by a col_from_rows record is a check variable with the box of its record; a saved row is an anchor; reduced_row and final_row (:790-804, :843) become next_anchor(row, position); the three proof paths stay. T is proved with the first snapshot of E after the subtraction (multiplier 1, bound 3 + 2 = 5). The model is test 1 of the check, with a too wide side as its failing twin. 'Merge the row_addition extension' is dropped from the groundwork (done, HISTORY Entry 31 and 34); 'an unknown record kind is an error' stays.
+- [2]
+  defect: Validity, serious: R6 fixes the dominated column at any finite bound; a huge bound makes the compensation lose the row (x_q in [-1e12, 10], equation with side 3.7).
+  verdict: accepted
+  change: Recomputed: 3.7 + 1e12 is stored as 1000000000003.69995 (spacing 1.2e-4), so every postsolved point misses the equation by 4.9e-5; at 1e22 the spacing is 2.1e6. R6 now fixes only at a value v with |v| * tol.side_error <= tol.feasibility and with no term a * v of the column counted as infinite (G/include/gprs/numerics.hpp:105-108); otherwise the pair is left and marked, which is a function of the state and not 'limited'. The merge refuses the same pair through its own side guard. The model is a fixed test; wrong engine pd_huge drops the guard; the generator draws a continuous twin with one huge bound.
+- [3]
+  defect: Validity, serious: R7 requires locks in both directions and the driver puts R8 behind the same gate; columns with cost > 0 that only rows lock down are skipped (min x; x + y >= 3 and min x; x - 5p >= 0).
+  verdict: accepted
+  change: Checked: the lock rule acts only when the missing lock is in the cost direction (G/src/rules_dual_fixing.cpp:39-41), and HiGHS counts the cost as a lock (H/HPresolve.cpp:3773-3785, called at H/HPresolveDualFixing.cpp:276), so such a column reaches its substitution and bound strengthening (:300-357). R7: direction down needs cost >= 0 and down_locks >= 1, direction up cost <= 0 and up_locks >= 1, nothing about the other direction. R8 has its own conditions and no shared gate. Both models are unit tests and cases of the knob p_single_lock.
+- [4]
+  defect: Validity, serious: the twin split of the oracle solver is not exact when one twin is an integer line column (x_p in [0,2] continuous, x_q integer in [0,10], x_p + 2 x_q = 5).
+  verdict: accepted
+  change: Checked by enumeration: the only point is x_q = 2, x_p = 1, and the four cases of the split give 2.5, 1.5, 5 and -15, all infeasible. The generator draws line twins as two continuous columns only, one of them with two finite bounds and at most one huge bound in the pair; integer copies are drawn of enumerated columns only, which need no split. into_class accepts a pair only when both columns are continuous and proportional in every row. The solver works in the merged column t = x_p + s * x_q with the cost difference D = c_q - s * c_p, so a huge bound does not round the small part of the objective. The model is a fixed test of the classifier (it must be rejected, not solved).
+- [5]
+  defect: Validity, minor: three wrong engines cannot be caught by the check named for them (fs_int, sp_cont, pd_prop) and the fixed case 2x + 2y = 3 is decided by row tightening first.
+  verdict: accepted
+  change: fs_int is assigned to the integral test of the structure check and to the oracle (model 2 x_k + y = 4). sp_cont gets the critic's fixed oracle case. pd_prop is replaced by pd_row (one row of the pair is not compared). 2x + 2y = 3 runs with the tightening family switched off. Found on the way: zs_side as the first design defined it (minimum and maximum exchanged in the new sides) gives tighter sides, a restriction, so the structure check cannot catch it; it is assigned to crush clause 2 and the oracle, and zs_wide (sides one unit too wide) is the relaxation that the structure check must catch.
+- [6]
+  defect: Validity, minor: pivot_ratio_limit bounds one substitution of R2 or R5; ratios of a chain multiply (x1 + 1000 x2 = 0, x2 + 1000 x3 = 0).
+  verdict: accepted
+  change: The singleton family keeps a factor per column, growth, 0 at the start. A substitution of k with pivot entries a_i needs g * max|a_i| / |a| <= pivot_growth_limit = 1000 with g = max(growth[k], 1 if k has a finite bound, else 0), and then sets growth[i] = max(growth[i], g * |a_i| / |a|) for every saved column. In the critic's model the second substitution is refused (1e6). A refusal that the single ratio alone would not have caused depends on history and reports limited. The undo never clamps: the row stays exact and the bound is passed by at most the composed factor times what the reduced point is off. The largest composed factor per instance is reported at M1. Not covered: an alias that later replaces a saved column (stated as a risk).
+- [7]
+  defect: Validity, minor: R8 pushes an alias with row = r although r stays; the check marks the row of an alias as gone and rejects a later row addition on it.
+  verdict: accepted
+  change: Checked at structure_check.hpp:282 and :301 and at G/src/postsolve.cpp:110 (push_alias asserts a valid row). An alias of origin lock has row = -1; push_alias, stack_consistent and postsolve_hash accept that for this origin only; compose_records marks a row gone only for the origins doubleton and probing. Test: a lock row that later has an equation subtracted.
+- [8]
+  defect: Validity, minor: the undo of a merge is defined only for z inside the merged bounds (two columns in [0,1], z = 2 + 5e-7).
+  verdict: accepted
+  change: When the admissible interval of the removed column is empty, the removed column takes the point of its own bounds nearest to that interval and the kept column takes z - scale * x_removed, so the excess goes to the kept column. Test in test_postsolve_records.cpp with the critic's value and with an integer pair one step outside.
+- [9]
+  defect: Validity, minor: clause 5 of the crush check (z equals x in primal-only mode) fails on a correct R2 result, because the undo divides the row residual of the point by the pivot.
+  verdict: accepted
+  change: Checked at G/check/crush_check.hpp:425-442 with the critic's row (x_k + 1000 y1 - 1000 y2 = 0): the point is usable (scaled residual 1e-10) and z_k differs by 1e-5. From M1 on a column removed by a defined record is compared with x up to check_tolerance * max(1, |x|) plus the residual of x in the saved row divided by |a|. Columns of an interval or forcing record and merged pairs are exempt from 'z equals x' (the pair's sum must be equal).
+- [10]
+  defect: Validity, missing: a size rule for the value R6 fixes at, and what R6 does with a bound whose term counts as infinite.
+  verdict: accepted
+  change: Part of the R6 condition (see the second answer); an infinite term counts as an infinite bound for the absorb test as well.
+- [11]
+  defect: Validity, missing: how the added_rows test and the parallel-row test read a snapshot and a virtual column.
+  verdict: accepted
+  change: Checks, structure check: the equation of a row_addition record at position q is represented by next_anchor(equation, q), the kept row of a parallel record at position p by next_anchor(kept row, p); a snapshot enters the search (combined_t, structure_check.hpp:440-454) as a row whose columns include the record's own column with its box.
+- [12]
+  defect: Validity, missing: after a merge, later records that name the kept index are in units of z (two binaries merged, then fixed at 2).
+  verdict: accepted
+  change: The reverse pass of compose_records composes every record with the maps as they are at its position, so a record after the merge reads the kept index as z. At a merge record the map of the kept index is stored as after[m] and replaced by a variable V (the kept column before the merge, with its recorded box); the removed column is a variable rho. The bounds test compares the original kept column with the box of V, and the range of after[m] with the merged range of the record. Fixed test: two binaries merged, z forced to 2.
+- [13]
+  defect: Validity, missing: a verdict instead of the count merge_unproven; no wrong engine for a merge of columns that differ in one live row.
+  verdict: accepted
+  change: A pair whose coefficients are proportional with the recorded scale is lifted to after[m] (the row then reads z); a pair that is not stays as two variables with their recorded boxes, which is sound because the split keeps both inside, and the identity V + scale * rho = after[m] is offered as one more row to a proof that also uses an anchor after the merge. A merge of columns that differ in a live row then fails the kept-rows or the added-rows test. Wrong engine pm_row. The count is gone.
+- [14]
+  defect: Validity, missing: which types and scales the generator draws for line twins, and what into_class does with a twin pair in a reduced model.
+  verdict: accepted
+  change: See the fourth answer; scales 1, -1, 2, -2; written into the header of G/tests/oracle.hpp with the reason (a point with neither twin at a finite bound can be moved along the line of constant sum until one is, and the twin with two finite bounds stops the move).
+- [15]
+  defect: Validity, missing: a bound on chains of R2 and R5 and the undo policy beyond the tolerance; the undo of a merge outside its bounds; the meaning of alias.row for origin lock; the tolerance of clause 5.
+  verdict: accepted
+  change: The sixth to ninth answers.
+- [16]
+  defect: Validity, missing: columns with a lock missing against the cost direction in p_single_lock and in the tests of R7 and R8.
+  verdict: accepted
+  change: p_single_lock draws the cost sign independently of the locks, and half its columns have no lock in the other direction; models A and B of the critic are fixed unit tests of the dual family.
+- [17]
+  defect: Validity, not verified by the critic: PaPILO statements, the event and fixed-point claims of the driver, the predicted gate values.
+  verdict: accepted in part
+  change: I checked the event sites (G/src/state_ops.cpp:210, 229, 303, 325, 363, 394, 407, 427, 457, 477-478, 500-501, 522, 539, 544): scale_row pushes a row event only (:457), every other premise of the rules has an event. The predicted gate values are recomputed and replaced. PaPILO was not read by me either; its statements stay marked as the first design's.
+- [18]
+  defect: Worth, serious: the predicted gate values credit 21% of the gap to milestones that no measurement ties it to.
+  verdict: accepted
+  change: Recomputed (scripts a2.py, a3.py): summed log gap in nonzeros 10.60 over 237 instances, single-rule losses 8.88, 2.23 without attribution (neos-3402294-bobin 1.660, neos-2746589-doon 0.195, neos-827175 0.088, unitcal_7 0.075, n5-3 0.071). The critic's values reproduce exactly: 0.9661, 0.9827, 0.9913, 0.9973, 0.9988 with bobin and 0.9918 at the end without. Version 2 gives the table in three measures and in the new order, marks each figure, lists the instances that stay below 0.95, and asks for the cumulative HiGHS runs whose sizes replace the model as acceptance values.
+- [19]
+  defect: Worth, serious: the bobin chain (R3 and R4, then the lock rule) is not established by any stored run, and its forcing-column half is contradicted.
+  verdict: accepted
+  change: Checked: bobin has 381,000 nonzeros in all fifteen ablation files, the two new ones included; off_rule23.csv equals off_rule7.csv on all 240 instances and neos-3402454-bohle loses exactly 132 columns and 132 rows there while bobin loses nothing. H/HPresolve.cpp:3701 nests the forcing column inside the weakly dominated test, so bit 7 cannot be on with bits 5 or 23 off. Stated as a hypothesis (R3, then the lock rule); R4 is out of it. The deciding run: HiGHS presolve only on bobin and bohle with the Stage 1 switch set and presolve_rule_off 8913312 (bit 18 cleared from 9175456). It is the first item of M0.
+- [20]
+  defect: Worth, serious: the gate decides on nonzeros only; twelve instances are below 0.95 in rows or columns and above it in nonzeros.
+  verdict: accepted
+  change: Recomputed (a1.py): 0.9563 nonzeros with 39 instances below 0.95, 0.9653 rows with 19, 0.9424 columns with 32. The gate is the same pair of numbers on each of the three measures; matrix nonzeros plus objective nonzeros are reported next to it. The plan already says that rows and columns are measured (P/DESIGN.md:124); the thresholds are in the decision list.
+- [21]
+  defect: Worth, serious: R8 scans its lock row once for every column locked by it, on a budget it shares with the O(1) singleton rules (1000 binaries, one knapsack and one cover row).
+  verdict: accepted
+  change: Checked the budget arithmetic (G/include/gprs/presolve.hpp:69-76: stall limit 100,000 + 4 * 10,016 = 140,064) and that a round without a finding ends the rounds (G/src/presolve.cpp:280-284). The fix goes further than the critic's list: both tests of R8 are lower limits on the coefficient of the binary and do not depend on the column apart from its tolerance, so the only binary that can pass is the one with the largest coefficient in the row. R8 is evaluated per lock row: one scan finds that binary and the next, each column of the row then costs O(1), and all columns of one side that pass are aliased in one transaction. The singleton rules are a family of their own with their own list and budget.
+- [22]
+  defect: Worth, serious: a chain of singleton columns costs one round per link against max_rounds = 20.
+  verdict: accepted
+  change: The singleton family serves its lists until they stay empty or the budget stops it, as the row rules do (G/src/rules_rows.cpp:247-263); delete_row pushes the column event for the columns of the deleted row (G/src/state_ops.cpp:363), so a column that the call makes a singleton is visited in the same call. The critic's chain of 30 equations is a unit test (one call, fixed point). Acceptance: no instance ends on max_rounds (today none, the largest is 13 rounds; script a8.py).
+- [23]
+  defect: Worth, serious: the left-out dominated-column test and single-equation extension are priced from runs in which they replace each other.
+  verdict: accepted in part
+  change: Two combined runs written after the critique measure the rest of the left-out set: all of it off together gives 1.0006 nonzeros, 1.0015 rows, 1.0006 columns over 237 instances, 19 instances change (B/cheap_ablation/off_leftout.csv; this run also loses the forcing column, which we build); stuffing, implied equations and implied-integer conversion off together give 1.00045, 1.00095, 1.00038 (off_leftout_minor.csv). The single-equation extension has no switch and is on in both, so the critic's point stands for it: 13,017 fixings on 11 instances (savsched1 11,615, neos-827175 732, irish-electricity 630). M0 splits the switch dual_fixing_substitution into its three parts and runs the left-out set with the single-equation part off. Until then the unmeasured part is bounded by the engine's distance that no single switch explains, bobin apart: 0.57 summed log in nonzeros (0.0024 in the mean), 0.20 in rows, 0.87 in columns.
+- [24]
+  defect: Worth, minor: the work bound of R1 and R8 ('a column is substituted once') is wrong; a binary inherits entries and can be substituted again.
+  verdict: accepted
+  change: R1 collects the aliases of the rows of a call in the alias forest that the doubleton family uses (G/src/rules_doubleton.cpp:191-243), composes them and substitutes every column once into its final root. R8 never aliases a column that became the target of an alias in the same call. Within a call an entry moves at most once; over the presolve the bound is nonzeros times the number of calls, and the alias depth is reported at M2 on highschool1-aigio, brazil3 and neos-1445765.
+- [25]
+  defect: Worth, minor: the milestone order puts the largest and least certain milestone second, behind a groundwork step that holds work only later milestones need.
+  verdict: accepted
+  change: The reference runs come first and need no engine code. The singleton columns are M1, simple probing is M2. M0 keeps the lists and events, the check changes that the first new record and the first new dual rule need, and nothing of the crush replay, the twin split or the parallel-column knobs, which move to M3.
+- [26]
+  defect: Worth, minor: R8 is in the required set although its separable worth is small and half of it is on an instance where the rule hurts once later stages exist.
+  verdict: accepted in part
+  change: Recomputed (a9.py): where only the substitution fires the loss is 0.288 summed log on 18 instances (0.0012 in the mean); where only bound fixings or bound changes fire 0.621 (0.0026); where both fire 0.570 (the radiation instances). M4 builds and measures R7 first, then R8 as a second step with its own switch. R8 stays in the required set because the plan's A8 names it and it is also the port of cuOpt's single-lock rule (A6); moving it out is put to the owner.
+- [27]
+  defect: Worth, missing: cumulative reference runs with exactly the rules of each milestone switched on.
+  verdict: accepted
+  change: M0 lists the switch sets. The last step exists already in two forms (off_leftout.csv, off_leftout_minor.csv).
+- [28]
+  defect: Worth, missing: a HiGHS counter that splits free column substitutions by pivot kind; a switch that freezes the implied row-dual bounds; a split of the switch dual_fixing_substitution.
+  verdict: accepted in part
+  change: The split of the switch is required in M0, because it prices decision 1 and gives R7 and R8 their own reference. The pivot-kind counter and the frozen row-dual switch are second priority in M0: the engine's own run of M1 with R5 switched alone measures the same from our side, and the gate does not need them.
+- [29]
+  defect: Worth, missing: the testbed half of the gate has no reference, no ablation and no prediction.
+  verdict: accepted
+  change: Stated in Reference and gate: every figure is for the 240 benchmark instances; the 40 testbed instances get their reference in M0 and no prediction before.
+- [30]
+  defect: Worth, missing: an owner decision on gating rows and columns.
+  verdict: accepted
+  change: Decision 3, with the consequence that the rows gate fails without bobin.
+- [31]
+  defect: Worth, missing: a work gate in deterministic units, and acceptance numbers for rounds and for the fixed-point flag.
+  verdict: accepted
+  change: From the stored engine runs (a8.py): total work today has a median of 5.1 passes of the input model, 8.3 at the 90% quantile, 23.8 at most; rounds at most 13; the fixed-point flag is set on 234 of 240. Proposed ceilings: the four new families together at most 2 passes in the median and 6 at the 90% quantile, every instance above 10 named; no instance on max_rounds; no instance that has the flag today loses it without a named cause, and at most 5 lose it in all. The first measurement replaces the proposed numbers.
+- [32]
+  defect: Worth, missing: the effect of the make_explicit order on R2 and R5.
+  verdict: accepted
+  change: The families run in the rounds before make_explicit, where a continuous column still has its input bounds (G/include/gprs/presolve.hpp:205-212), so the loss is limited to columns that become singletons after the switch. M1 counts singleton columns that fail the implied test in rounds after the switch (statistic free_singleton_rejected_explicit).
+- [33]
+  defect: Worth, missing: the interplay of R9 with R1 and R8, which both need a binary.
+  verdict: accepted
+  change: With the recommended setting two integers are merged only when the merged column gets the range of the kept one back in the same step, so a binary stays a binary. With the setting 'always' M5 reports how many findings of R1 and R8 change, by the engine's own switch.
+- [34]
+  defect: Worth, not checked by the critic: whether the predicted values carry over to the engine's weaker forms.
+  verdict: accepted
+  change: Stated per rule under Worth as unknown, and listed as a risk; each milestone compares the engine's findings per sub-rule with HiGHS's counters on the instances its rule names.

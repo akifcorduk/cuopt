@@ -1,0 +1,121 @@
+STAGE 1c DESIGN, VERSION 2: BINDING AMENDMENTS (2026-11-27)
+
+Read together with v2_design.txt (the design), v2_answers.txt (what version 2 changed against
+the first design and why) and v2_reviews.txt (the two reviews of version 2, with a why and a
+fix for every open point). Where this file and v2_design.txt disagree, this file holds.
+
+A. Scope (owner's decision, HISTORY Entry 38: "Build them too")
+1. All of HiGHS's cheap rules are required. The five that version 2 calls optional (dominated
+   and weakly dominated column by the bound on the reduced cost, implied equations, column
+   stuffing, implied-integer conversion, the single-equation extension of dual fixing) are built
+   after R1 to R9, in the order of worth. They have their own design (the low-worth round,
+   lowworth_*.txt in this directory once it is back). Decision 1 of version 2 is withdrawn and
+   milestone M6 is not optional.
+2. "No dual state" in State and driver item 1 holds for R1 to R9 only: bounds on the row duals
+   arrive with the five rules. The groundwork of M0 must leave room for them: more families and
+   rule indices than the four of R1 to R9, more record kinds, more list and event bits, a third
+   column type later. Do not build any of it now; do not close the door either (no enum or mask
+   that is full after the four families).
+3. The Stage 1c gate (0.99 in nonzeros, rows and columns against HiGHS with all cheap rules on,
+   on the 40 testbed and the 240 benchmark instances) is measured after the five rules. The run
+   at the end of M5 is a measurement of the nine rules.
+4. Order of the milestones as in version 2: singleton columns (M1) before simple probing (M2),
+   the merge (M5) after the dual rules (M4).
+
+B. The bobin test of M0 (measured, HiGHS diag2, presolve only, 2 instances)
+With the Stage 1 switch set and presolve_rule_off 8913312 (zero-cost singleton rule on, lock
+rule only, no dominated tests, no extensions): neos-3402294-bobin ends at 32,932 rows, 792
+columns, 381,000 nonzeros, which is its size with all cheap rules on. The hypothesis of version
+2 holds: R3 followed by the lock rule reaches bobin. M1 therefore has bobin as an acceptance
+instance: at or above 0.95 of these three numbers, or traced before M2.
+neos-3402454-bohle in the same run: 2,881,360 rows, 2,640 columns, 8,917,440 nonzeros (all
+cheap rules: 2,881,228 / 2,508 / 8,915,592; the rest is the forcing column).
+
+C. References
+1. Acceptance reference of M1 to M3: the ladder with rule bits 5, 7, 19, 23 off
+   (presolve_rule_off 8913056), steps m1_a, m2_a, m3_a in
+   gpu_presolve/results/bench240/stage1c_refs/<step>/summary.csv and summary.json (240 benchmark
+   instances). It has no forcing column, so the engine may be ahead where R4 fires (doon, kumeu,
+   bohle); the gate is a lower bound only. The ladder with only bit 19 off (m1_b, m2_b, m3_b) is
+   reported next to it as what the dominated tests add. The step after m3 is
+   results/bench240/cheap_ablation/off_leftout.csv (ladder a) and off_leftout_minor.csv (b).
+2. Testbed: all cheap rules on, gpu_presolve/results/stage1c/refs/cheap_dev and cheap_large.
+3. These runs are made by gpu_presolve/baseline/stage1c_reference_runs.sh on the node; they are
+   size and counter runs, not timing runs.
+
+D. Fixes from the reviews of version 2 (v2_reviews.txt has the model and the fix for each)
+Validity review, in the order of its list of open defects:
+ 1. (before the check part of M1) The postsolve test of the structure check, D(3): the check's
+    own implementation of each undo is compared value by value with postsolve() at every test
+    point; "the saved row holds" is required only where the rest of the point lies inside the
+    range recomputed from the record; one extra point per interval record that needs a move.
+    zs_undo is assigned to crush clause 3 and the oracle.
+ 2. (before M3) The oracle with a huge twin bound: the points of the twin solver are specified,
+    a reduced point is postsolved only when check_point accepts it, skipped points are counted.
+ 3. (before M5) The objective test is one forward pass over the stack: lift the pair at a merge
+    record, eliminate the variable at a defined record.
+ 4. (before the check part of M1) Clause 5 of the crush check: the allowance includes what the
+    saved columns differ by between the postsolved and the base point, times |a_i| / |a|.
+ 5. (before M2) An alias of origin probing carries its row only when the row is deleted in that
+    batch, else row = -1.
+ 6. (before the second step of M4) R8's force test for a continuous column uses the form of the
+    forcing rule (rounding size), not the feasibility tolerance.
+ 7. (before the second step of M4) R8: one transaction per binary; the candidate that is the
+    binary itself is tested afterwards on the new state.
+ 8. (M0) The wrong engine r_prop_inf is rewritten so that it also removes the new early return
+    of candidate(); (M2) the six doubleton wrong engines follow the code that moves.
+ 9. (M1) R2 and R5: both ends of the implied range are written with the row side and the stored
+    activity less the term of the column, as candidate() does; R4 undo: one rule, the minimum
+    over the rows and the bound, written into the contract of the forcing record.
+Worth-and-cost review:
+ 1. Scope: see A.
+ 2. The gate table gets the two lines "range_kept without bobin" and "lead counted as zero";
+    the nine instances where the engine is ahead today are named in the M1 report first.
+ 3. Work: a count per row of its live singleton columns and of marked columns, so that a listed
+    row without one costs one visit; ceilings are stated per family and in two parts (first
+    call, later calls) and are reports only until M1 has measured them.
+ 4. Bobin fallback: settled by B.
+ 5. M0's time criterion is decided on the minimum of three alternating passes of the binary
+    before and after on one machine, or in work units, not against a stored sum of seconds.
+ 6. Acceptance reference: see C.
+ 7. The price of the low-worth rules is stated net and gross; it decides their order only.
+
+E. Decisions of version 2's list, taken as recommended until the owner says otherwise
+ 2. Merge of two integer columns: the three settings are built; the default is range_kept
+    (an integer pair is merged only when the merged column gets the kept column's range back in
+    the same step). Continuous pairs are always merged.
+ 3. The gate has the same two numbers in each of the three measures.
+ 4. R3 and R4 stay off in primal-only mode until the owner decides.
+ 5. R8 stays in the required set, as the second step of M4, with its own switch.
+ 6. Work ceilings and rounds: reports only until measured; max_rounds is not raised.
+
+F. Changes that the design of the five further rules asks of R1 to R9 (lowworth_v2_design.txt,
+   section CHANGES TO THE NINE-RULE DESIGN, which has the model for each; added 2026-11-27)
+ 1. (M0) Nothing to build. To confirm when M0 lands: the list masks are uint16_t (the five
+    rules end at 13 row lists and 8 column lists), the option draw of gprs_fuzz and the other
+    places that enumerate rules follow rule::count, an unknown record kind is an error.
+ 2. (M1) R2 and R5 for an integer column: the integrality predicate gets the drift guard of
+    row tightening (src/rules_tightening.cpp:126-145) and lives in one internal function
+    integral_for in src/integral.hpp, which the later rules call too. The drift is measured on
+    the row divided by the coefficient of the column, as the cited code does for its scale.
+    Model: x - 1.0000000005 y = 0, x an integer singleton column, y integer in [0, 2000000].
+ 3. (M1 and M5) Every undo, crush step, push assertion and check clause that depends on a
+    column type reads it through postsolve_t::integer_at(col, position) (integer_now for a
+    push). Until a conversion exists it returns the input type, so no result changes.
+ 4. (M1, structure check) next_anchor finds saved rows through the col_from_rows records, not
+    by walking the saved-row pool: later records put rows into the same pool that must never
+    be offered as anchors.
+ 5. (M3) R6's absorb test uses the shared implied test in its rounding-only form, not
+    implied_tolerance: R6 keeps the absorber's bound and its row. R2 and R5 may keep
+    implied_tolerance, their column leaves the model. Model: 10 p + 10 q - w = 0, p in
+    [0, 0.5 - 1.5e-7], q in [0, 1] continuous with cost -1 each, w integer in [0, 5] with cost
+    0.05 (the optimum goes from -0.25 to -0.2 with the tolerance band).
+ 6. (M4) R8 collects its rows after the column pass of the dual column family and reads "the
+    row is no equation" and the lock counts at application.
+ 7. (M1 to M5) No family keeps a fact that depends on a column type across calls unless it
+    follows the events of a type change. This includes the per-row counts of D (worth review
+    item 3) if they count continuous singleton columns.
+ 8. Named so that it is not found late, not required: R3 could take an integer singleton
+    column whose row is integral for it.
+Also found there in existing Stage 1 code, to be repaired with M1's integral_for: the alias
+forest's edge test (src/alias_forest.cpp:44-57) has no drift guard either.

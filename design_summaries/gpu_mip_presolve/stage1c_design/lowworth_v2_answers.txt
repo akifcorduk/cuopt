@@ -1,0 +1,146 @@
+ANSWERS OF VERSION 2 TO THE DEFECTS OF THE TWO CRITIQUES
+
+- [1]
+  defect: Validity 1 (serious): the bound counts as implied when the candidate lies within implied_tolerance (about 2e-7, column units); the design keeps that bound and makes the row an equation (rule 2) or fixes k next to it (rule 1)
+  verdict: accepted
+  change: Reproduced (S/models.py V1): the candidate of r1 is 0, the bound 1.5e-7, the old test passes, the equation gives p >= 1.5e-6, G/include/gprs/numerics.hpp:129-132 rounds that to 1, and the optimum goes from -0.99999985 to -0.95. New shared test implied_by_row in src/implied.hpp: the bound is infinite, or the candidate of the lock side (G/src/rules_propagation.cpp:106-132), on an activity that is summed from scratch first when it is not fresh, moved inward by its own candidate_slack (:140-152), still reaches the bound (lower bound: c + s >= bound; upper bound: c - s <= bound). The excess is then at most 2 s, which on a fresh activity is the rounding of the candidate; no share of the feasibility tolerance enters. A bound that make_explicit wrote is a candidate moved outward, so it still passes before and after the switch and in a second presolve (derived, state_and_driver item 5). Rules A and D call it. Fixed tests T1 (the critic's model) and T1b (mine, a locked compensator: S/models2.py, -2.96 to -2.95), wrong engines ie_tol and cf_tol. Decision 2 is reworded. The same band is in R6 of the nine-rule design, see the changes list.
+- [2]
+  defect: Validity 2 (serious): one scan gives the marks and, from the same scan, rule 2 then rule 5; a row that rule 2 has just turned into an equation goes to rule 5 with marks read before the conversion; a scan asked for inside a walk of rule 1 can apply rule 2
+  verdict: accepted
+  change: Reproduced (models.py V2: -30 to -14 with k fixed at 3). In version 2 the implied equation is a sub-rule of dual_cols_t and the single-equation rule a sub-rule of exchange_t, which runs later in the round, so the two never share a scan. No rule of exchange_t changes a side or a lock (its rules only fix columns, and state_t::fix_col changes no lock count, G/src/state_ops.cpp:278-311); the family asserts that with a counter state_t::lock_changes read at the start and the end of every pass. Marks are computed in the scan that applies the rule. A scan asked for by the dominated-column test computes prices only. The critic's model is fixed test F5; the wrong engine se_mark (lock count tested as >= 1) must fail it.
+- [3]
+  defect: Validity 3 (serious): the integrality predicate of rule 4 (ratios integral within tol.zero) without the drift guard that row tightening has; the equation test is on in primal-only mode
+  verdict: accepted
+  change: Reproduced (models.py V3: the test passes with |ratio - round| = 5e-10, the drift over y in [0, 2e6] is 1e-3 against 1e-7). One internal function integral_for(row, slot, side) in src/integral.hpp, shared with row tightening: every other free column integer, n_k = round(a_k / a) with |a_k / a - n_k| <= tol.zero, delta_k = |a n_k - a_k|, a column with delta_k != 0 needs two finite bounds, the sum of delta_k * max(|l_k|, |u_k|) plus |a round(side / a) - side| at most coefficient_rounding_share * tol.feasibility (G/src/rules_tightening.cpp:35, 126-145). Used by the equation test, the weak test, the scaling and an integer source of rule A. Fixed test T3 in default and primal-only mode, wrong engine ii_drift. The same predicate without the guard is in R2 and R5 of the nine-rule design (changes list) and in the alias forest (risks).
+- [4]
+  defect: Validity 4 (serious): the undo of the nine-rule records (merge, col_from_rows) reads input types after a conversion
+  verdict: accepted
+  change: Checked by hand (models2.py: admissible x_j in [3/2, 2], 3/2 with the input type, 2 with the type at the record). postsolve_t gets conversion[col] (the position of the column's implied_integer record in order, or -1) and two readers: integer_at(col, position) = integer in the input, or converted before that position; integer_now(col). Every undo, crush step, push assertion and check clause that depends on a type reads one of them. For a column that its record removes the type at the record is its last type; for the kept column of a merge it is not, which is the critic's second case. Needs towards M1 and M5 are in the changes list. Test: the critic's chain in tests/test_postsolve_records.cpp; wrong engine ii_type (a merge undone with input types).
+- [5]
+  defect: Validity 5 (minor): after set_col_integer the helper calls tighten_lower / tighten_upper with the present bounds, which do not round a bound within the tolerance inside an integer and can fix at an unrounded bound
+  verdict: accepted
+  change: Reproduced (models.py V5: [0, 0.3/0.1] keeps 2.9999999999999996; [0.2, 0.9999995] is fixed at 0.9999995 by G/src/rules_bounds.cpp:25-26). convert_to_integer now: a finite bound whose rounded value (round_lower_integer / round_upper_integer) would be wider than the stored bound refuses the conversion (a function of the state, statistic ii_refused_bound); otherwise both bounds are set to the rounded values in the three steps of start_step (G/src/presolve.cpp:85-92, shared code), infeasible when they cross by more than the tolerance, fix_column when they meet. The weak modes require exactly integral or infinite bounds, so nothing is rounded there. A scaling snaps a scaled bound to an integer only within 4 rounding units of its size. New invariant in consistency_error: a live integer column has integral bounds (G/src/state_storage.cpp:800-860 has none today). Unit tests with the four cases.
+- [6]
+  defect: Validity 6 (minor): crush of implied_integer snaps within tol.integrality in column units; a point admitted with a row error of 1e-7 times its largest term is off by more when the coefficient is small
+  verdict: accepted
+  change: Reproduced (models.py V6: x = 6999.9999 is admitted, is 1e-4 from its integer, the floor breaks the row by 0.01). The record names its rows in the saved-row pool: the equation for mode equation, all rows of the column for the weak modes. Replay: mode equation computes v = (b' - saved entries at w) / a and sets w[col] = round(v) when |v - round(v)| * |a| <= tol.feasibility * max(1, largest |term|), else leaves w[col], so a wrong conversion shows as an integrality violation; the weak modes compute the interval [lo, hi] that the saved rows give at w and take max(floor(w), ceil(lo - eps)) for weak_down, min(ceil(w), floor(hi + eps)) for weak_up, eps being the tolerance of the binding row divided by |a|. A row is saved at most once per conversion of its only continuous column, so these saved entries are bounded by one copy of the rows that hold exactly one continuous column. Unit tests of crush with the critic's two rows.
+- [7]
+  defect: Validity 7 (minor): the structure check composes a col_scale as 'scale times scale, offset unchanged'
+  verdict: accepted
+  change: The reverse pass of compose_records, at a col_scale record, replaces the map s * var + o of the column by (sigma s) * var + sigma o (models.py V7: 1.5, not 3). Because saved rows are composed when the pass reaches their record (D2 Checks B(3)), a record before the scaling reads the column in the old units and a record after it in the new ones without any other rule. Tests: a col_scale followed by a fixing and by an alias with offset, in tests/test_postsolve_records.cpp and test_e2e_check_structure.cpp.
+- [8]
+  defect: Validity 8 (minor): fixed cases that never reach the rule they are listed for (R5, R6, parallel rows or R2 of the nine rules, or rule 2, take them first)
+  verdict: accepted
+  change: Every fixed case of version 2 names the sub-rule counter that must move (or stay zero) and asserts it, so a case that another rule takes fails. The five cases the critic names are replaced: a source with a second row that does not lock it (F1), a compensator that is no singleton (F9), an equation whose excess two absorbers with finite, not implied bounds cover only together (F6), a weak-test column with two down-locking rows (F3), and the circular pair is kept only as a unit test of the compensator predicate, not as an engine case. I checked T1 and T1b by hand against the text of R2, R5, R6, R7, R8 of D2; the counters are the guard for the rest.
+- [9]
+  defect: Validity, missing: fixed tests at the size of the tolerances; the generator draws integers up to 3 and powers of two, so a wrong tolerance passes the oracle, the structure check and usually the crush check
+  verdict: accepted
+  change: tests/test_lowworth_tolerance.cpp holds T1, T1b, T3, T5 (bounds), T6 (crush rows), T7 (scaling then fixing). T1 and T1b are inside the oracle class and are run through oracle::check_presolve as well as through their counters; T3 cannot be decided by the oracle (its row tolerance, solve_tolerance times the terms, G/tests/oracle.hpp:34-36 and 59, is of the size of the drift), so it asserts the counters only. The checks section names, per wrong engine, which of these catches it.
+- [10]
+  defect: Validity, missing: the type of a column at a record's position as a notion of the stack
+  verdict: accepted
+  change: See validity 4: integer_at and integer_now, read by every undo, crush step and check clause that depends on a type; the structure check computes the same in its own forward pass.
+- [11]
+  defect: Validity, missing: the order of operations inside a pass of the exchange family
+  verdict: accepted
+  change: See validity 2 and state_and_driver item 7: sources, then listed rows, then row scans with the single-equation rule, then candidates of the dominated column; a scan asked for in the last phase applies no rule; every premise of a fixing is read between the last state change and the fixing (asserted).
+- [12]
+  defect: Validity, missing: the drift guard in the integrality predicate of rule 4
+  verdict: accepted
+  change: See validity 3.
+- [13]
+  defect: Validity, missing: an invariant 'integer column has integral bounds' and the rounding of both bounds at a conversion as in start_step
+  verdict: accepted
+  change: See validity 5.
+- [14]
+  defect: Validity, missing: how the entries that tight_row puts into the shared saved-row pool are kept out of the snapshot chain of the nine rules in the structure check
+  verdict: accepted
+  change: A saved row is owned by its record. next_anchor (D2 Checks B(4)) enumerates the saved rows of col_from_rows records only; the rows of tight_row and implied_integer records are never anchors. That is one sentence to honour in M1 (changes list). For an implied_integer record of mode equation the check does more: it recomputes the integrality proof on the saved row with the types at the record's position, and proves the saved row from the next anchor of its row when the two are proportional (counted as untested otherwise).
+- [15]
+  defect: Validity, missing: 'a row is converted at most once in a presolve' does not hold next to R3
+  verdict: accepted
+  change: The sentence is dropped. R3 (D2 R3) widens an equation to a ranged row, which rule A can convert again. The saved entries of tight_row records are bounded by options_t::saved_row_factor alone; at that limit the conversion is refused and the family reports limited.
+- [16]
+  defect: Validity, missing: what the structure check does with a comp_fix, a row_exchange target or a merge range when the column was scaled before or after the record
+  verdict: accepted
+  change: With the map rule of validity 7 a comp_fix or fixed_col after a scaling is a constant that the reverse pass multiplies by sigma when it reaches the col_scale, and a merge or saved row before the scaling is composed after the col_scale has been undone. The contract of row_exchange no longer compares targets with original bounds (that would need units per position): fixed entries are followed by fixed_col records, which the bounds test covers through the maps, and absorber targets are used by crush only and tested by crush clause 2.
+- [17]
+  defect: Validity, missing: the tolerance R >= -tol.cancellation * (...) of rule 1 lets the objective rise by that share times the distance moved, which is not bounded
+  verdict: accepted in part
+  change: The absolute rise is unbounded, as the critic says. It is bounded relative to the cost terms the exchange moves: at most 1e-12 of |c_k| + sum |p_i a_ik|, times the distance. Clause 4 of the crush check allows identity_tolerance (1e-9) times the sum of |cost * value| of the postsolved and the crushed point (G/check/crush_check.hpp:407-412), and that sum holds the compensators' terms, which are of the size |c_k| * distance when R is near zero; so the allowance is about 1000 times the rise. I keep tol.cancellation because R6 of the nine rules uses the same form for equal costs and because costs that a substitution produced are equal only to rounding. Added: a planted case with a distance of 1e9 (other bound infinite) in the tests of rule D.
+- [18]
+  defect: Validity, missing (not verified by the critic): PaPILO, HighsPostsolveStack, the event and fixed-point claims of the dual-state items, the worth figures, the scratch test of the dual_state designer
+  verdict: accepted in part
+  change: Verified by me: every push site of a column or row event in G/src/state_ops.cpp (lines 210, 229, 303, 325, 363, 394, 407, 427, 457, 477-478, 500-501, 522, 539, 544), on which the event argument of state_and_driver item 9 rests; the worth figures (S/worth240.py, pairs240.py, counters.py, testbed.py); the rule conditions in exact arithmetic by a test of my own (S/exact.py), not by the designer's script. Not verified: PaPILO (no remote) and HighsPostsolveStack; no statement of version 2 rests on either.
+- [19]
+  defect: Worth 1 (blocks): a cached price that fails its check at use ends the test of the candidate, and neither the row nor the candidate is taken up again; the fixed-point flag is then true although a second presolve reduces the model
+  verdict: accepted
+  change: The cause in the critic's model is a conversion by rule 2 inside the pass. In version 2 rule A runs in dual_cols_t before exchange_t is called, and exchange_t changes no lock; its only state changes are fixings. Prices are kept for one pass; a fixing of column c clears the cached scan of every row of c (one walk of c, the cost fix_col has anyway), so a cached price is always the price of the state of now and no check at use can fail. The assertion build compares every used price with a fresh scan. The critic's model in both row orders is fixed test F10 and a second-presolve test: after the conversion of row 1 the only raiser of row 0 is j2, R = 3 - 2 = 1, k is fixed at 0 in either order.
+- [20]
+  defect: Worth 2 (serious): convert_to_integer leaves a bound within the tolerance of an integer that is not one (x in [1e-7, 6])
+  verdict: accepted
+  change: Reproduced (models.py V5: the rounded lower bound 0 is wider than 1e-7). I take the critic's second option: the conversion is refused while a finite bound lies within the feasibility tolerance inside an integer without being equal to it. No bound ever widens (except by the rounding of a scaling's division), so 'explicit bounds only tighten' (G/include/gprs/rules.hpp:140-145) stays true and no row version has to move. See validity 5.
+- [21]
+  defect: Worth 3 (serious): both families scan every row at their first call and exchange_t scans every row with an activity event afterwards, on every instance; the 3% time rule of L0 cannot be met; four prices per scanned row
+  verdict: accepted
+  change: Recomputed: 18.23 s for the engine on the 240 benchmark instances, 7.10 s in the families, propagation 2.25 s at 6.81 ns per unit, one scan of every row 2.6e8 units; 89 of the 240 have integer columns only and hold 59.8% of the nonzeros and 20.9% of the rows. Version 2: state_t::live_cont_cols makes implied_integer_t and exchange_t inactive in O(1) on those 89; state_t::row_cont_size lets a listed row without exactly one continuous column cost one visit; exchange_t scans a row only when a mark says that a continuous column with at most one lock in a direction points at it; prices exist only for rows scanned in the pass. Rule A adds O(1) per column that R7 visits anyway. Time and work targets are per family and are reports until measured (AM E.6).
+- [22]
+  defect: Worth 4 (serious): a column that prices rows is listed again by every lock event, and all its rows are rescanned and all their columns retested although no premise changed
+  verdict: accepted
+  change: New column event col_event::few_locks, pushed by the state only when a lock count changed and is now 0 or 1 (change_locks and change_side_locks know the new count, G/src/state_ops.cpp:88-99, 218-232), by set_cost, by move_entry for the target column when a count is at most 1, by set_col_integer and scale_col, and by a bound setter whose new value is infinite. It is a function of the operation. The makespan column of the critic's model (no up lock, m down locks) gets no such event when one of its rows is deleted. Candidates of rule D still need the general lock event (a column becomes fixable when a locking row without a price is deleted), but a candidate costs one walk that ends at its first locking row without a mark. Statistic: rows scanned without a finding.
+- [23]
+  defect: Worth 5 (serious): the statements that the worth of rules 1 and 5 together is in no stored run, that 1.0006 is a lower bound, and that neos-827175, irish-electricity and most of savsched1 depend on one of the two
+  verdict: accepted
+  change: Recomputed (S/pairs240.py, targets.py, 237 of the 240 benchmark instances). m3_a has the dominated tests, stuffing, implied equations, the conversion and the whole dual-fixing switch off (G/baseline/stage1c_reference_runs.sh:42-56) and equals all cheap rules on neos-827175 (14,039 / 31,598 / 101,260) and irish-electricity (70,646 / 40,633 / 409,523). The single-equation part is bounded by m3_a against off_leftout.csv on its instances: 77 rows, 84 columns, 188 nonzeros on savsched1, kumeu, physiciansched3-3, icir97_tension and huahum. mushroom-best is taken out of the implied-equation list (0 conversions, 48 free column substitutions). Both instances are out of every gate; the targets are those of the worth section.
+- [24]
+  defect: Worth 6 (serious): implied equations and the conversion are worth their figures only together on three instances; the scaling is built last and a converted column is taken away as a source
+  verdict: accepted in part
+  change: The figures are right: without the conversion implied equations are worth 8 rows, 5 columns, 21 nonzeros on physiciansched3-3 and nothing on savsched1 and physiciansched6-2; with implied equations off the conversion costs 173 and 24 rows. Accepted: L1's acceptance uses the conversion-off figures; the scaling is built in the milestone of the conversion; an integer column may be the source of rule A when its lock row is integral for it (a switch, on by default). Not accepted as stated: that the 201 rows are carried by converted sources or by the scaling. HiGHS's implied-equation switch also turns off isImpliedIntegral, the proof HiGHS needs to substitute a converted column (G/baseline/HIGHS_DIAG.md:457-460; H/HPresolveImpliedInts.cpp:13-48), and physiciansched3-3 has 194 free column substitutions; so 'conversion on, switch off' leaves converted columns that cannot be substituted. In the engine that proof is the integer case of R2 and R5 (D2 R2), which does not depend on rule A. This is an inference from the source and the counters; L2 measures it and names physiciansched3-3 and savsched1 one by one.
+- [25]
+  defect: Worth 7 (serious): the milestone order is not the order of worth, and L0 builds state and test machinery long before the rule that reads it
+  verdict: accepted in part
+  change: Order of version 2: implied equations; implied integers with the scaling; stuffing; single equation; dominated column. L0 holds only the analysis script and the reference runs that wait for the node. The one difference to the critic's order is stuffing before the single equation: stuffing alone reaches seymour1's 32 rows in HiGHS (off_rule5.csv equals all cheap rules there), it is the cheapest of the three to build (a step of an existing row visit), and it brings the record row_exchange and the oracle's group rows that the single-equation rule needs.
+- [26]
+  defect: Worth 8 (minor): stuffing candidates sorted by cost over coefficient compared by cross-multiplication, which is no strict weak order in floating point
+  verdict: accepted
+  change: Reproduced (models.py W8: 1 and 2 equal, 2 and 3 equal, 1 before 3; 41,224 of 200,000 draws with equal exact ratios). One key per candidate, cost / coefficient rounded once, then the column index; the sort is over that pair, as HiGHS sorts by one quotient (H/HPresolveColStuffing.cpp:34-39).
+- [27]
+  defect: Worth, missing: a fixed case and a campaign knob for the chain rule 2 then rule 1 against the cost (a covering row x + s >= 1 whose source costs at least as much as x), and what rule 1 loses when implied equations are off or refused
+  verdict: accepted
+  change: Fixed test F9: min x + s1 + s2, rows x + s1 >= 1, x + s2 >= 1, s1 + s2 <= 10 (so that the sources are no singleton columns and R5 does not take them), x binary: rule A makes both covering rows equations, rule D fixes x at 1 with R = -1 + 2 = 1; asserted counters implied_equations 2, dominated_fixings 1. Knob p_cover_source. Stated in rule D: with implied_equations off, or a conversion refused by its side guard or the saved-row limit, rule D loses fixings against the cost, because the covering rows then do not lock x upwards; HiGHS keeps them because its dual bounds do not depend on that switch. The extension that removes the dependence (a compensation with a negative price in a row that does not lock the candidate) is valid by the same exchange and is not built; seymour1 is also reached by stuffing.
+- [28]
+  defect: Worth, missing: a statement of which forms b1c1s1 needs
+  verdict: accepted in part
+  change: Read from HiGHS's counters (S/counters.py run on b1c1s1, 240 run): 2 dominated columns with 8 entries, 2 weakly dominated singleton columns, 4 redundant rows and 4 fixed columns, then 2 single-equation fixings and 2 more doubleton equations; 288 of its 3,872 columns are integer, no column is converted, no implied equation fires; with the dominated tests off the lock rule takes none of them. So b1c1s1 needs compensators that are continuous in the input, candidates with one lock (the singleton columns) and with up to four entries. Which rows lock the two 4-entry columns is unknown without the model, which is not on this machine. Rule D is designed in the general form (any number of locking rows), so the form does not hinge on it; L5 compares a trace when the node is back.
+- [29]
+  defect: Worth, missing: a time or work target per new family and a report of rows scanned and columns walked per finding
+  verdict: accepted
+  change: Per family and sub-rule: rows scanned, rows scanned without a finding, columns walked, findings, work in passes of the input model, reported per instance at every milestone. Targets (predicted, reports until measured): zero work for exchange_t and implied_integer_t on the 89 instances without continuous columns; the first call of implied_integer_t one visit per row plus the rows with exactly one continuous column; rule A no row scan without a conversion.
+- [30]
+  defect: Worth, missing: a bound on the memory of the pass cache and its place in the reported peak
+  verdict: accepted
+  change: exchange_t: 1 byte and one 4-byte stamp per row, one stamp per column, and 64 bytes per row scanned in the pass, freed at the end of the call. implied_integer_t: 13 bytes per row, allocated at its first call and only when the state has a continuous column. State: 4 bytes per row for row_cont_size. All of it is inside the peak that the tools report; on neos-3402454-bohle (2,881,360 rows) that is at most 11.5 MB of state, 14 MB of marks and 37 MB of row cache.
+- [31]
+  defect: Worth, missing: the source types of the implied equations on physiciansched3-3, savsched1 and physiciansched6-2, which decides whether the continuous-only guard reaches HiGHS there
+  verdict: accepted in part
+  change: Unknown: the stored counters do not have it and the node is down. The consequence for the form is drawn now instead of being deferred: rule A takes an integer source when its lock row is integral for it (the same proof R5 of the nine rules asks of an integer singleton), so a column that the conversion made integer keeps the role wherever the proof holds. L0 adds the counter (source continuous, implied integer, singleton) to the reference run when the node is back; L2 reports the switch on and off.
+- [32]
+  defect: Worth, missing: a gate entry for seymour1 at the milestone of rule 1
+  verdict: accepted
+  change: seymour1 (4,776 rows, 1,143 columns, 32,911 nonzeros with all cheap rules; 4,808 / 1,153 / 33,047 without the five) is an acceptance instance of L3 (stuffing) and again of L5 with stuffing switched off, where rules A and D together must reach it.
+- [33]
+  defect: Worth, missing (not checked by the critic): PaPILO, the proofs of the exchanges, the oracle extension, the wrong engines, version 2 of the nine-rule design
+  verdict: accepted in part
+  change: This design is written against D2 and AM. The exchange proofs of rules A, D and E were rerun in exact arithmetic (S/exact.py). Stuffing, the weak test and the scaling were not rerun; the validity critic confirmed the first two by reading. The oracle extension and the wrong engines are designs, not code. PaPILO was not read.
+- [34]
+  defect: Smallest design (1): implied equations as a column test inside the dual column family of the nine rules, with no family, list or price cache
+  verdict: accepted
+  change: Adopted as rule A. Validity: every premise is read at application on the state of now, in a family call that holds no other rule of the five. Fixed-point flag: its premises are the events that dual_cols_t already takes (cost, locks, entries of the column; sides, entries and activities of its rows). Work: O(1) per column that R7 visits, one walk of the column when it has a cost and a single lock in its cost direction, the row once when it fires.
+- [35]
+  defect: Smallest design (2): implied integers by the equation and the weak test together with the scaling, started from the continuous columns, the row cache filled on demand; a converted column stays a source where its lock row is integral for it
+  verdict: accepted in part
+  change: Adopted, with two changes. The start is a count per row of live continuous columns kept by the state (row_cont_size), so that a listed row costs O(1) unless it holds exactly one such column; without it every row of a continuous column would be scanned once. And a converted column is an integer for every rule; what the critic asks is reached by letting any integer column be the source of rule A when its lock row is integral for it, tested at application (a row can change after the conversion; HiGHS does not re-test). Validity: the moved value is an integer by the proof; exact test, 2,895 applications. Compensators of rule D and absorbers of rule E stay continuous, as in HiGHS.
+- [36]
+  defect: Smallest design (3): single equation, dominated column and stuffing from the columns with at most one lock in a direction, listed by an event that fires only when a lock count reaches 1 or 0 or the cost changes; prices computed at the moment of the test and not kept
+  verdict: accepted in part
+  change: Adopted for the single equation and the dominated column (family exchange_t, event col_event::few_locks). Three differences. Stuffing is a step of the singleton-column row visit, which already has the singleton columns of the row in hand. Prices are kept for one pass with exact invalidation at a fixing, not recomputed per candidate: without that a row with many candidates is scanned once per candidate. And the candidates of rule D are also listed by the general lock event: a column becomes fixable when a locking row without a price is deleted, which changes no few-lock column; without that list the fixed-point flag would be wrong. Validity is unchanged by any of the three; the flag argument is state_and_driver item 9; the work is bounded by the marks.

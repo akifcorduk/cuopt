@@ -1,0 +1,51 @@
+STAGE 1c, THE FIVE FURTHER RULES, VERSION 2: BINDING AMENDMENTS (2026-11-27)
+
+Read together with lowworth_v2_design.txt (the design: rules A implied equation, B implied
+integer by the equation and the weak test, C column scaling, S column stuffing, E
+single-equation extension of dual fixing, D dominated and weakly dominated column; milestones
+L0 to L5), lowworth_v2_answers.txt and lowworth_v2_reviews.txt (the two reviews of version 2,
+with a model and a fix for every open point). Both reviewers say implementation can start from
+version 2 once R1 to R9 are built. Where this file and the design disagree, this file holds.
+
+A. Fixes from the validity review, in the order of its list
+ 1. (serious; before integral_for is written in M1, binding for L2) The drift guard is measured
+    in the units of the candidate column: delta on the row divided by its coefficient, and
+    drift <= coefficient_rounding_share * tol.feasibility * min(1, |a|). Row units stay enough
+    where the column leaves the model (R2, R5, the integer source of rule A).
+ 2. (before L2's acceptance run) The implied_integer record stores the column's two bounds at
+    the conversion, and the weak crush intersects its interval with them before it rounds.
+ 3. (L1, L3, L4) The rounding-only allowances get the absolute cap of the forcing row:
+    |a_j| times the excess allowed is at most tol.feasibility * min|a_k| / max(1, max|a_k|).
+ 4. (L2) Rule C: the dry run of integral_for uses exactly the numbers scale_col will store.
+ 5. (L1) Every fixed case is written with all costs, bounds and types.
+ 6. (L5) Rule D fixes with a negative rate only when the other bound is finite and the rise is
+    within the identity tolerance of the checks; the planted case has costs that differ in the
+    13th digit.
+
+B. Fixes from the worth, cost and state review
+ 1. (serious; before L2) The weak test has a premise over all rows of its column, so
+    implied_integer_t gets a column list fed by lock events, read for live continuous columns;
+    with a fixed-point test and a wrong engine that drops the feed.
+ 2. (serious; before L1) Rule A runs its O(1) implied test before the integrality proof of an
+    integer source; one proof per row, coefficient size and call.
+ 3. (serious; before L3 to L5) Worth attributions corrected by the runs that arrived after the
+    design: the single-equation part is measured (it changes huahum, icir97_tension and, after
+    rule D, b1c1s1; nothing on the 240 in the geometric mean); seymour1 is an instance of rule
+    A and of L5, not of stuffing; csched007 and roi5alpha10n8 are reached by R5 of the nine
+    rules.
+ 4. (serious; before L2 and L4) The two families are seeded with the continuous columns only
+    and allocate their row arrays at the first call that stores something.
+ 5. (L4, L5) Until L5 a marked row is scheduled only if it is an equation; a fixing clears a
+    cached scan only when it touches a cached compensator.
+ 6. Order: kept as designed (A, B with C, S, E, D), which is the order of build cost; the gate
+    does not depend on it. By worth D would follow B.
+ 7. (L0) The unknown list and the L0 runs are updated: L0 keeps the counters by source type,
+    the traces of supportcase42, seymour1 and physiciansched3-3.
+ 8. Both families are inactive when all their sub-rules are off.
+
+C. What the stored runs say these rules are worth (HiGHS, all cheap rules over the nine rules)
+240 benchmark instances (237): 0.9994 in nonzeros, 0.9985 in rows, 0.9993 in columns; 21
+instances differ (ns1208400, which the engine already reaches; kumeu; doon and bohle through
+the forcing column, which is R4 of the nine; csched007 in rows, reached by R5; snowy; map10;
+map16715-04; seymour1). 40 testbed instances: 0.9974 / 0.9998 / 0.9972; two instances differ
+(ns1208400, supportcase42). No instance needs one of the five rules for the 0.95 bound.
