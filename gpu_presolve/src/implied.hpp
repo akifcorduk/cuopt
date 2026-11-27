@@ -61,12 +61,21 @@ struct candidate_t {
   double error;
 };
 
-// The candidate of a finite side of the row for the column of its live entry e, for a caller
-// that knows the rest of that activity to be finite (rest_finite): bound propagation, which
-// reads the infinite terms of a row before it visits an entry. False without a candidate: the
-// error bound of the rest exceeds tol.activity_error_share * tol.feasibility * |a|, which sets
-// `guarded` (a caller whose activity is not fresh sums it from scratch and asks again); or the
-// division overflows, which says nothing about the column. O(1).
+// A side that a bound is derived from: finite, and of a size whose rounding stays below the
+// feasibility tolerance (tolerances_t::side_error). A side beyond it holds little or nothing of
+// a small term: 3 next to the term of a column that was fixed at 1e20 and absorbed.
+inline bool side_readable(const tolerances_t& tol, double side)
+{
+  return !std::isinf(side) && std::fabs(side) * tol.side_error <= tol.feasibility;
+}
+
+// The candidate of a side of the row for the column of its live entry e, for a caller that
+// knows the side to be readable (side_readable) and the rest of that activity to be finite
+// (rest_finite): bound propagation, which tests the side and reads the infinite terms of a row
+// before it visits an entry. False without a candidate: the error bound of the rest exceeds
+// tol.activity_error_share * tol.feasibility * |a|, which sets `guarded` (a caller whose
+// activity is not fresh sums it from scratch and asks again); or the division overflows, which
+// says nothing about the column. O(1).
 // The innermost step of bound propagation. It is written out, and takes the tolerances of its
 // caller, because composed of row_rest and with the test of candidate() it made that family 4%
 // slower on the largest local instance.
@@ -80,10 +89,12 @@ inline bool candidate_of_finite_rest(const state_t& st,
 {
   const activity_t& act = upper_side ? st.min_act : st.max_act;
   int32_t infinite      = act.inf_count[row];
+  gprs_assert(st.csr.live(e));
   gprs_assert(infinite == 0 || (infinite == 1 && act.inf_slot[row] == e));
-  int32_t col      = st.csr.index[e];
-  k.a              = st.csr.value[e];
-  k.side           = upper_side ? st.row_upper[row] : st.row_lower[row];
+  int32_t col = st.csr.index[e];
+  k.a         = st.csr.value[e];
+  k.side      = upper_side ? st.row_upper[row] : st.row_lower[row];
+  gprs_assert(side_readable(tol, k.side));
   k.rest           = dd_t{act.hi[row], act.lo[row]};
   uint32_t updates = act.updates[row];
   if (infinite == 0) {
@@ -102,9 +113,10 @@ inline bool candidate_of_finite_rest(const state_t& st,
   return std::isfinite(k.bound);
 }
 
-// The candidate of a finite side of the row for the column of any live entry e: false as well
-// when the rest of the activity holds an infinite term. For the column rules, which ask of one
-// row whether it implies a bound of one column. O(1).
+// The candidate of a side of the row for the column of any live entry e: false as well when
+// the side is not readable (infinite, or beyond the size guard) and when the rest of the
+// activity holds an infinite term. For the column rules, which ask of one row whether it
+// implies a bound of one column. O(1).
 inline bool candidate(const state_t& st,
                       const tolerances_t& tol,
                       int32_t row,
@@ -113,6 +125,7 @@ inline bool candidate(const state_t& st,
                       candidate_t& k,
                       bool& guarded)
 {
+  if (!side_readable(tol, upper_side ? st.row_upper[row] : st.row_lower[row])) { return false; }
   if (!rest_finite(upper_side ? st.min_act : st.max_act, row, e)) { return false; }
   return candidate_of_finite_rest(st, tol, row, e, upper_side, k, guarded);
 }

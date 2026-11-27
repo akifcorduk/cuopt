@@ -132,6 +132,33 @@ GPRS_TEST(columns_candidate_guard)
   GPRS_CHECK_EQ(k.bound, -5. - 1e-12);
 }
 
+// No bound is derived from a side b with |b| * tol.side_error > tol.feasibility
+// (tolerances_t::side_error): the side itself is rounded by more than a bound may be off. Bound
+// propagation tests that once per row before it asks for a candidate; candidate() answers a
+// column rule for one entry and tests it itself.
+GPRS_TEST(columns_candidate_leaves_a_side_beyond_the_size_guard)
+{
+  tolerances_t tol;
+  double limit = tol.feasibility / tol.side_error;
+  for (double size : {0.5 * limit, 2. * limit, 1e19}) {
+    //   x0 + x1 <= size   and   x0 + x1 >= -size, x1 in [0, 1].
+    model_t m = make_model(
+      {{1., 1.}, {1., 1.}}, {-inf, -size}, {size, inf}, {-inf, 0.}, {inf, 1.}, {0., 0.}, {0, 0});
+    state_t st(m, tol);
+    candidate_t k;
+    bool guarded  = false;
+    bool readable = size <= limit;
+    GPRS_CHECK_EQ(candidate(st, tol, 0, 0, true, k, guarded), readable);
+    if (readable) { GPRS_CHECK_EQ(k.bound, size); }
+    GPRS_CHECK_EQ(candidate(st, tol, 1, st.csr.begin(1), false, k, guarded), readable);
+    if (readable) { GPRS_CHECK_EQ(k.bound, -size - 1.); }
+    GPRS_CHECK(!guarded);
+    // The sides that are infinite give none either.
+    GPRS_CHECK(!candidate(st, tol, 0, 0, false, k, guarded));
+    GPRS_CHECK(!candidate(st, tol, 1, st.csr.begin(1), true, k, guarded));
+  }
+}
+
 // Where the rest of an activity is finite, candidate() is candidate_of_finite_rest(), which
 // bound propagation calls, and both compute on the rest and the error bound of row_rest().
 GPRS_TEST(columns_candidate_agrees_with_row_rest)
