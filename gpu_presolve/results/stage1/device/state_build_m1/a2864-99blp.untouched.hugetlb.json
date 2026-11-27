@@ -1,0 +1,31 @@
+{
+  "tool": "state_build_bench",
+  "instance": "a2864-99blp",
+  "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/a2864-99blp.csr",
+  "rows": 22117,
+  "cols": 200787,
+  "nnz": 20078717,
+  "mode": "timing",
+  "wide_positions": false,
+  "untouched_destination": true,
+  "system": {"gpu": "NVIDIA H200", "gpu_memory_bytes": 150156607488, "cuda_runtime": 12090, "cusparse": 12510, "cub": 300600, "loadavg_start": "27.00 22.99 25.26 19/10412 45455", "loadavg_end": "26.16 23.07 25.24 16/10395 45470", "transparent_hugepage": "always [madvise] never", "glibc_tunables": "glibc.malloc.hugetlb=1"},
+  "once": {"cuda_context_seconds": 0.594042, "cusparse_create_seconds": 0.003193, "pinned_seconds": 0.000000, "pinned_bytes": 0, "pinned_chunks_seconds": 0.000000, "pinned_chunks_bytes": 0},
+  "transfer_bytes": {"upload": 241475420, "download": 566219816},
+  "run_columns": ["alloc_seconds", "upload_seconds", "device_seconds", "download_seconds", "download_resize_seconds", "free_seconds", "total_seconds"],
+  "host": {"repetitions": 3, "state_build_seconds": 1.386677, "fold_all_rows_seconds": 0.103316, "build_without_fold_seconds": 1.283361, "checksum": 20078717, "derived_arrays_equal_state": true, "state_build_runs": [1.408581, 1.399783, 1.386677], "fold_all_rows_runs": [0.105862, 0.103316, 0.103414], "derived_arrays_seconds": 1.209721, "derived_arrays_runs": [1.216309, 1.230458, 1.209721]},
+  "variants": [
+    {"transpose": "cusparse", "transfer": "pageable", "position_bits": 32, "repetitions": 5, "best": [0.001247, 0.024631, 0.003031, 0.140377, 0.000000, 0.001061, 0.170347],
+     "runs": [[0.001247, 0.024631, 0.003031, 0.140377, 0.000000, 0.001061, 0.170347], [0.000972, 0.024703, 0.003087, 0.141266, 0.000000, 0.001057, 0.171085], [0.000951, 0.024853, 0.039803, 0.141692, 0.000000, 0.001060, 0.208359], [0.000995, 0.025882, 0.003059, 0.141198, 0.000000, 0.001051, 0.172185], [0.008251, 0.024699, 0.003118, 0.141436, 0.000000, 0.001048, 0.178551]],
+     "device_bytes_allocated_peak": 1132201668, "device_bytes_sampled_peak": 1145044992, "memory_samples": 1881, "library_buffer_bytes": 323592679, "untimed_run_seconds": 0.326146,
+     "runs_checked": 6, "runs_equal": 6, "bit_equal": true, "arrays_different": {}},
+    {"transpose": "radix_sort", "transfer": "pageable", "position_bits": 32, "repetitions": 5, "best": [0.000961, 0.024453, 0.003445, 0.141321, 0.000000, 0.001076, 0.171255],
+     "runs": [[0.000961, 0.024453, 0.003445, 0.141321, 0.000000, 0.001076, 0.171255], [0.000926, 0.024831, 0.003420, 0.141290, 0.000000, 0.001074, 0.171540], [0.000965, 0.024927, 0.003468, 0.141097, 0.000000, 0.001092, 0.171549], [0.000969, 0.024852, 0.004186, 0.142587, 0.000000, 0.001090, 0.173683], [0.001007, 0.024728, 0.003467, 0.141970, 0.000000, 0.029359, 0.200531]],
+     "device_bytes_allocated_peak": 1292767939, "device_bytes_sampled_peak": 1310720000, "memory_samples": 1731, "library_buffer_bytes": 163786239, "untimed_run_seconds": 0.314994,
+     "runs_checked": 6, "runs_equal": 6, "bit_equal": true, "arrays_different": {}},
+    {"transpose": "scatter_sort", "transfer": "pageable", "position_bits": 32, "repetitions": 5, "best": [0.000974, 0.024806, 0.003509, 0.141168, 0.000000, 0.001060, 0.171518],
+     "runs": [[0.000974, 0.024806, 0.003509, 0.141168, 0.000000, 0.001060, 0.171518], [0.001012, 0.026919, 0.003521, 0.146096, 0.000000, 0.001082, 0.178630], [0.000977, 0.024630, 0.003492, 0.142135, 0.000000, 0.001076, 0.172310], [0.012424, 0.024969, 0.003486, 0.141987, 0.000000, 0.001071, 0.183937], [0.000964, 0.024585, 0.003491, 0.141687, 0.000000, 0.001039, 0.171768]],
+     "device_bytes_allocated_peak": 1132195175, "device_bytes_sampled_peak": 1147142144, "memory_samples": 1806, "library_buffer_bytes": 81922047, "untimed_run_seconds": 0.314172,
+     "runs_checked": 6, "runs_equal": 6, "bit_equal": true, "arrays_different": {}}
+  ],
+  "every_run_bit_equal": true
+}
