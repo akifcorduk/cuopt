@@ -58,6 +58,14 @@
 //              0), so its smallest value, which is that maximum when a point meets the rows,
 //              is taken where as many of them meet as there are multipliers. The search visits
 //              all those points, and a row fails when the smallest bound is above its side.
+//              A bound is a proof only as it is computed. Hyperplanes that are parallel, or
+//              nearly so, meet in the rounding of their system or far out: the multipliers of
+//              such a point are huge and cancel each other, a coefficient of the size of the
+//              row's own vanishes in their sum, and the bound that is left can lie far below
+//              the maximum. The search therefore takes no point from a system with a pivot
+//              below singular_pivot, and a coefficient counts as zero only as a cancellation
+//              of the row itself or as the rounding of the terms that make it
+//              (combined_bound).
 //              Not tested, and never failed or passed, is a row that does not pass while no
 //              point within the bounds meets the reduced rows together: the bounds then have
 //              no smallest one, which the same search finds as a negative bound of the
@@ -97,9 +105,14 @@
 // as well: an equation holds within the tolerance of the rule that last moved its side (a
 // rounded side, a side taken from a parallel row), and that reaches the row times the
 // multiplier of the equation. A violation of such a row is therefore relative to the largest
-// term of its bound with the term of an equation counted as at least its multiplier, in the
-// units of the row per unit of the reduced equation; the largest multiplier of a tested row is
-// reported (added_multiplier).
+// of: its bound, the terms of its own coefficients at the bounds that the bound uses, and the
+// multiplier of each equation, in the units of the row per unit of the reduced equation; the
+// largest multiplier of a tested row is reported (added_multiplier). The sides of the reduced
+// rows and the terms of columns that only they hold are not the row's: the side of a row
+// after a subtraction holds the right-hand side of the equation and the side of the equation
+// gives it back, so they cancel in the bound whatever their size is. They count with the
+// share that their rounding can reach (rounding_share), and a violation of 50 by a row with
+// terms of 50 fails next to an equation with a side of 1e7.
 
 #include "crush_check.hpp"
 
@@ -128,6 +141,16 @@ constexpr double max_kept_work     = 2e10;
 // Equations a row can be made of and still be tested. The points of a search multiply with
 // every reduced row that shares no column with the others, so the work limit ends it earlier.
 constexpr size_t max_row_equations = 16;
+// Hyperplanes meet in a point of a search when their system, with every column and then every
+// row scaled to a largest entry of 1, has no pivot below this. A smaller one is the rounding of
+// a zero, or gives multipliers that much larger than the coefficients they balance.
+constexpr double singular_pivot = 1e-6;
+// What the terms of several reduced rows leave of a coefficient is their rounding below this
+// share of their sum.
+constexpr double rounding_zero = 1e-12;
+// The share of a term of a bound that its rounding can reach, in units of structure_tolerance:
+// a side or a bound of the reduced model is stored with a relative error far below 1e-14.
+constexpr double rounding_share = 1e-9;
 
 // x[original column] = scale * x_reduced[root] + offset; root -1 for a constant.
 struct column_map_t {
@@ -448,13 +471,28 @@ inline void sort_different(std::vector<double>& values)
 // for the multipliers m = sign * v:
 //   sum of m[i] * (high[i] or low[i]) + max over the bounds of (sign * g - sum of m[i] * a[i]) * r
 // with the side of the sign of each multiplier; infinity when a side or a bound it needs is.
-// `size` gets its largest term, the term of an equation counted as at least its multiplier, and
-// `multiplier` the largest multiplier of an equation.
-inline double combined_bound(
-  const combined_t& p, double sign, const double* v, double& size, double& multiplier)
+// A coefficient of that maximum counts as zero when it is a cancellation of the row itself
+// (composed_zero of its parts) or the rounding of the terms of the reduced rows (rounding_zero
+// of their sum). No larger share of those terms: multipliers that cancel each other make the
+// sum as large as they are, and a coefficient of the size of the row's own would vanish in it.
+// `largest` gets the largest term of the bound, the term of an equation counted as at least its
+// multiplier, and `multiplier` the largest multiplier of an equation.
+// `size` gets what a violation of the row is relative to: the bound itself, the row's own
+// coefficients times the bounds that the bound uses, and the multiplier of an equation. The
+// sides of the reduced rows and the columns that only they hold count with rounding_share:
+// their terms cancel in the bound (the side of the row after a subtraction holds the
+// right-hand side of the equation, the side of the equation gives it back), so a huge one says
+// what its rounding can do to the row and no more.
+inline double combined_bound(const combined_t& p,
+                             double sign,
+                             const double* v,
+                             double& size,
+                             double& largest,
+                             double& multiplier)
 {
   sum_t bound;
   size       = 1.;
+  largest    = 1.;
   multiplier = 0.;
   for (int32_t i = 0; i < p.rows; ++i) {
     double m = sign * v[i];
@@ -462,10 +500,10 @@ inline double combined_bound(
     double side = m > 0 ? p.high[i] : p.low[i];
     if (!std::isfinite(side)) { return gprs::inf; }
     bound.add(m, side);
-    if (p.own && i == 0) {
-      size = std::fmax(size, std::fabs(m * side));
-    } else {
-      size       = std::fmax(size, std::fabs(m) * std::fmax(1., std::fabs(side)));
+    largest = std::fmax(largest, std::fabs(m * side));
+    if (!(p.own && i == 0)) {
+      size       = std::fmax(size, std::fabs(m));
+      largest    = std::fmax(largest, std::fabs(m));
       multiplier = std::fmax(multiplier, std::fabs(m));
     }
   }
@@ -477,12 +515,16 @@ inline double combined_bound(
       w -= term;
       moved += std::fabs(term);
     }
-    if (std::fabs(w) <= composed_zero * std::fmax(std::fmax(1., c.parts), moved)) { continue; }
+    if (std::fabs(w) <= std::fmax(composed_zero * std::fmax(1., c.parts), rounding_zero * moved)) {
+      continue;
+    }
     double at = w > 0 ? c.upper : c.lower;
     if (!std::isfinite(at)) { return gprs::inf; }
     bound.add(w, at);
-    size = std::fmax(size, std::fabs(w * at));
+    largest = std::fmax(largest, std::fabs(w * at));
+    size    = std::fmax(size, std::fabs(c.g * at));
   }
+  size = std::fmax(size, std::fmax(std::fabs(bound.value()), rounding_share * largest));
   return bound.value();
 }
 
@@ -540,13 +582,14 @@ struct hyperplanes_t {
   }
 };
 
-// Calls visit(v) for every point v where p.rows of the hyperplanes meet; the rows of `fixed`
-// (a bit per row) always take a value of their axis.
+// Calls visit(v) for every point v where p.rows of the hyperplanes meet in one point (no pivot
+// of their system below singular_pivot); the rows of `fixed` (a bit per row) always take a
+// value of their axis.
 template <typename visit_t>
 void visit_vertices(const combined_t& p, const hyperplanes_t& h, uint32_t fixed, visit_t visit)
 {
   int32_t d = p.rows, planes = h.general.size();
-  std::vector<double> v(d), matrix;
+  std::vector<double> v(d), matrix, scale, scaled;
   std::vector<int32_t> free_rows, fixed_rows, value, chosen;
   uint32_t masks = planes == 0 ? 1 : (uint32_t)1 << d;
   for (uint32_t free_mask = 0; free_mask < masks; ++free_mask) {
@@ -568,7 +611,12 @@ void visit_vertices(const combined_t& p, const hyperplanes_t& h, uint32_t fixed,
         chosen[n] = n;
       }
       for (bool more_planes = true; more_planes;) {
-        // The free rows from the chosen hyperplanes, by elimination with row pivoting.
+        // The free rows from the chosen hyperplanes: the system with every column and then
+        // every row scaled to a largest entry of 1, elimination with row pivoting, back
+        // substitution. A system with a pivot below singular_pivot gives no point: hyperplanes
+        // that are parallel on the free rows leave a pivot that is the rounding of zero, and
+        // its multipliers, as large as that rounding is small, would cancel each other in every
+        // coefficient that the hyperplanes share and stand for a bound that is none.
         matrix.assign(m * (m + 1), 0.);
         for (int32_t r = 0; r < m; ++r) {
           int32_t k        = h.general[chosen[r]];
@@ -582,6 +630,26 @@ void visit_vertices(const combined_t& p, const hyperplanes_t& h, uint32_t fixed,
           matrix[r * (m + 1) + m] = remainder;
         }
         bool regular = true;
+        scale.assign(m, 0.);
+        scaled.assign(m, 0.);
+        for (int32_t n = 0; n < m && regular; ++n) {
+          for (int32_t r = 0; r < m; ++r) {
+            scale[n] = std::fmax(scale[n], std::fabs(matrix[r * (m + 1) + n]));
+          }
+          regular = scale[n] > 0.;
+        }
+        for (int32_t r = 0; r < m && regular; ++r) {
+          double most = 0.;
+          for (int32_t n = 0; n < m; ++n) {
+            matrix[r * (m + 1) + n] /= scale[n];
+            most = std::fmax(most, std::fabs(matrix[r * (m + 1) + n]));
+          }
+          regular = most > 0.;
+          if (!regular) { break; }
+          for (int32_t c = 0; c <= m; ++c) {
+            matrix[r * (m + 1) + c] /= most;
+          }
+        }
         for (int32_t n = 0; n < m && regular; ++n) {
           int32_t pivot = n;
           for (int32_t r = n + 1; r < m; ++r) {
@@ -589,21 +657,25 @@ void visit_vertices(const combined_t& p, const hyperplanes_t& h, uint32_t fixed,
               pivot = r;
             }
           }
-          regular = matrix[pivot * (m + 1) + n] != 0.;
+          regular = std::fabs(matrix[pivot * (m + 1) + n]) >= singular_pivot;
           if (!regular) { break; }
           for (int32_t c = 0; c <= m; ++c) {
             std::swap(matrix[n * (m + 1) + c], matrix[pivot * (m + 1) + c]);
           }
-          for (int32_t r = 0; r < m; ++r) {
-            if (r == n) { continue; }
+          for (int32_t r = n + 1; r < m; ++r) {
             double factor = matrix[r * (m + 1) + n] / matrix[n * (m + 1) + n];
             for (int32_t c = n; c <= m; ++c) {
               matrix[r * (m + 1) + c] -= factor * matrix[n * (m + 1) + c];
             }
           }
         }
-        for (int32_t n = 0; n < m && regular; ++n) {
-          v[free_rows[n]] = matrix[n * (m + 1) + m] / matrix[n * (m + 1) + n];
+        for (int32_t n = m; regular && n-- > 0;) {
+          double rest = matrix[n * (m + 1) + m];
+          for (int32_t c = n + 1; c < m; ++c) {
+            rest -= matrix[n * (m + 1) + c] * scaled[c];
+          }
+          scaled[n]       = rest / matrix[n * (m + 1) + n];
+          v[free_rows[n]] = scaled[n] / scale[n];
           regular         = std::isfinite(v[free_rows[n]]);
         }
         if (regular) { visit(v.data()); }
@@ -631,8 +703,8 @@ void visit_vertices(const combined_t& p, const hyperplanes_t& h, uint32_t fixed,
   }
 }
 
-// The smallest bound that a search has visited, with its largest term and its largest multiplier
-// of an equation (combined_bound); infinity before the first finite one.
+// The smallest bound that a search has visited, with what a violation is relative to and its
+// largest multiplier of an equation (combined_bound); infinity before the first finite one.
 struct smallest_bound_t {
   double value      = gprs::inf;
   double size       = 1.;
@@ -640,8 +712,8 @@ struct smallest_bound_t {
 
   void visit(const combined_t& p, double sign, const double* v)
   {
-    double bound_size, most;
-    double bound = combined_bound(p, sign, v, bound_size, most);
+    double bound_size, largest, most;
+    double bound = combined_bound(p, sign, v, bound_size, largest, most);
     if (bound < value) {
       value      = bound;
       size       = bound_size;
@@ -667,8 +739,9 @@ inline bool no_common_point(combined_t p)
   for (int32_t unit = 0; unit < p.rows && !negative; ++unit) {
     h.axis[unit] = {-1., 1.};
     visit_vertices(p, h, (uint32_t)1 << unit, [&](const double* v) {
-      double size, most;
-      negative = negative || combined_bound(p, 1., v, size, most) < -check_tolerance * size;
+      double size, largest, most;
+      negative =
+        negative || combined_bound(p, 1., v, size, largest, most) < -check_tolerance * largest;
     });
     h.axis[unit] = {0.};
   }

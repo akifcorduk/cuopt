@@ -46,6 +46,7 @@ int32_t down_count = 0, up_count = 0;
     bool to_upper = cost <= 0 && up_count == 0;"""
 FORCING_TEST = "  if (!(std::fabs(gap) + error <= %s)) { return false; }"
 SUBTRACT_SHIFT = "st.shift_row_sides(target.row, factor, rhs);"
+SUBTRACT_RECORD = "  ps.push_row_addition(target.row, equation.row, factor);\n"
 EXPLICIT_BOUND = "    bound        = is_upper ? bound + slack : bound - slack;"
 EXPLICIT_SLACK = "    double slack = candidate_slack(k);\n" + EXPLICIT_BOUND
 
@@ -386,8 +387,44 @@ MUTANTS = {
     # from its own reduced row.
     "a_sub_record": (
         "rules_parallel_rows.cpp",
-        "  ps.push_row_addition(target.row, equation.row, factor);\n",
+        SUBTRACT_RECORD,
         "  (void)ps;\n",
+    ),
+    # The record names the two rows the other way round. As a_sub_record
+    # for the row; the equation is tested with the row as its equation.
+    "a_sub_swap": (
+        "rules_parallel_rows.cpp",
+        SUBTRACT_RECORD,
+        "  ps.push_row_addition(equation.row, target.row, factor);\n",
+    ),
+    # The sides of the row are off by the factor, whatever the right-hand
+    # side is: an error that does not grow with the sides of the equation,
+    # for the scaling of a violation (a huge side must not forgive it).
+    "a_sub_unit": (
+        "rules_parallel_rows.cpp",
+        SUBTRACT_SHIFT,
+        "st.shift_row_sides(target.row, factor, rhs - 1.);",
+    ),
+    # ... off by a thousandth of the factor: 100 times the tolerance of the
+    # structure check on a row with terms of size 1.
+    "a_sub_small": (
+        "rules_parallel_rows.cpp",
+        SUBTRACT_SHIFT,
+        "st.shift_row_sides(target.row, factor, rhs - 1e-3);",
+    ),
+    # The last entry that the two rows share stays in the row.
+    "a_sub_keep": (
+        "rules_parallel_rows.cpp",
+        "  for (; k < slots.size(); ++k) {\n    st.delete_entry(slots[k]);",
+        "  for (; k + 1 < slots.size(); ++k) {\n"
+        "    st.delete_entry(slots[k]);",
+    ),
+    # The entry of the equation's singleton column enters the row with
+    # half its value.
+    "a_sub_half": (
+        "rules_parallel_rows.cpp",
+        "equation.singles == 1 ? -factor * equation.single_value : 0.;",
+        "equation.singles == 1 ? -0.5 * factor * equation.single_value : 0.;",
     ),
     # Then the rounds on explicit bounds. Both restrict: a bound of the
     # reduced model that is tighter than the rows allow cuts feasible

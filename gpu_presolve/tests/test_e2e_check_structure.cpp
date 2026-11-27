@@ -191,7 +191,8 @@ GPRS_TEST(e2e_structure_proves_a_row_through_its_equation)
   GPRS_CHECK_EQ(r.added_failures, 1);
   GPRS_CHECK_EQ(r.added_tested, 1);
   GPRS_CHECK_EQ(r.added_worst_row, 0);
-  GPRS_CHECK_EQ(r.added_worst, 0.5 / 3.);
+  // Relative to the bound of the row, 2.5 + 3.
+  GPRS_CHECK_EQ(r.added_worst, 0.5 / 5.5);
   GPRS_CHECK_EQ(r.kept_failures, 0);
   // A tighter row is a restriction, which this check does not see.
   GPRS_CHECK(silent(structure_check(m, pair_result(m, -inf, 1.))));
@@ -736,6 +737,110 @@ GPRS_TEST(e2e_structure_search_finds_the_smallest_bound)
   GPRS_CHECK(compared > 2000 && without_point > 200 && with_shared > 1500);
 }
 
+GPRS_TEST(e2e_structure_search_stays_above_the_largest_value)
+{
+  // Rows that make systems of the search singular, or singular up to their rounding:
+  // coefficients that are no dyadic numbers, and rows that are multiples of each other on a
+  // part of their columns, as a row is of its equation once that was subtracted from another
+  // row. Whatever the search visits, its smallest bound is not below the largest value over
+  // the points that meet the rows, and it finds a point where there is one.
+  using gprs_check::combined_t;
+  static const double values[] = {
+    1., 2., 3., 0.1, 0.3, 0.7, 1. / 3., 5., 1. / 7., 1. / 9., 7., 0.5, 1.5, 11.};
+  oracle::rng_t rng(20261128);
+  int64_t compared = 0, multiples = 0, below = 0, without_point = 0;
+  for (int32_t trial = 0; trial < 12000; ++trial) {
+    int32_t n  = rng.uniform(3, 5);
+    auto value = [&]() {
+      double v = values[rng.uniform(0, 13)];
+      return rng.chance(0.5) ? v : -v;
+    };
+    std::vector<double> g(n, 0.), lower(n), upper(n), point(n);
+    for (int32_t j = 0; j < n; ++j) {
+      lower[j] = rng.uniform(-2, 1);
+      upper[j] = lower[j] + rng.uniform(1, 3);
+      point[j] = lower[j] + rng.uniform(0, 2) * (upper[j] - lower[j]) / 2;
+    }
+    std::vector<lp_row_t> rows;
+    int32_t count = rng.uniform(2, 3);
+    for (int32_t e = 0; e < count; ++e) {
+      lp_row_t row{std::vector<double>(n, 0.), -inf, inf};
+      if (e > 0 && rng.chance(0.6)) {
+        const lp_row_t& from = rows[rng.uniform(0, e - 1)];
+        double ratio         = value();
+        for (int32_t j = 0; j < n; ++j) {
+          if (rng.chance(0.8)) { row.a[j] = ratio * from.a[j]; }
+        }
+        if (rng.chance(0.5)) { row.a[rng.uniform(0, n - 1)] = value(); }
+        ++multiples;
+      } else {
+        for (int32_t j = 0; j < n; ++j) {
+          if (rng.chance(0.6)) { row.a[j] = value(); }
+        }
+      }
+      // Sides that `point` meets.
+      double activity = 0.;
+      for (int32_t j = 0; j < n; ++j) {
+        activity += row.a[j] * point[j];
+      }
+      bool equation = rng.chance(0.7);
+      if (equation || rng.chance(0.6)) { row.low = activity - (equation ? 0 : rng.uniform(0, 2)); }
+      if (equation || rng.chance(0.6)) { row.high = activity + (equation ? 0 : rng.uniform(0, 2)); }
+      rows.push_back(row);
+    }
+    // The function is a combination of the rows with entries of its own.
+    for (const lp_row_t& row : rows) {
+      if (!rng.chance(0.8)) { continue; }
+      double multiplier = value();
+      for (int32_t j = 0; j < n; ++j) {
+        g[j] += multiplier * row.a[j];
+      }
+    }
+    for (int32_t j = 0; j < n; ++j) {
+      if (rng.chance(0.3)) { g[j] += value(); }
+    }
+    combined_t p;
+    p.own  = rng.chance(0.5);
+    p.rows = rows.size();
+    for (int32_t j = 0; j < n; ++j) {
+      p.columns.push_back(combined_t::column_t{g[j], std::fabs(g[j]), lower[j], upper[j]});
+      for (const lp_row_t& row : rows) {
+        p.a.push_back(row.a[j]);
+      }
+    }
+    for (const lp_row_t& row : rows) {
+      p.low.push_back(row.low);
+      p.high.push_back(row.high);
+    }
+    gprs_check::hyperplanes_t h(p);
+    gprs_check::smallest_bound_t most, least;
+    gprs_check::visit_vertices(p, h, 0, [&](const double* v) {
+      most.visit(p, 1., v);
+      least.visit(p, -1., v);
+    });
+    without_point += gprs_check::no_common_point(p);
+    double largest = 0., smallest = 0.;
+    bool found = brute_maximum(g, lower, upper, rows, largest);
+    for (double& v : g) {
+      v = -v;
+    }
+    if (!found || !brute_maximum(g, lower, upper, rows, smallest)) { continue; }
+    ++compared;
+    bool low = most.value < largest - 1e-6 * std::max(1., std::fabs(largest)) ||
+               least.value < smallest - 1e-6 * std::max(1., std::fabs(smallest));
+    if (low && ++below <= 3) {
+      test::fail(__FILE__,
+                 __LINE__,
+                 "trial " + std::to_string(trial) + ": bounds " + std::to_string(most.value) +
+                   " and " + std::to_string(least.value) + ", largest values " +
+                   std::to_string(largest) + " and " + std::to_string(smallest));
+    }
+  }
+  GPRS_CHECK_EQ(below, 0);
+  GPRS_CHECK_EQ(without_point, 0);
+  GPRS_CHECK(compared > 11900 && multiples > 5000);
+}
+
 GPRS_TEST(e2e_structure_rejects_a_row_that_is_no_equation_as_the_equation)
 {
   // Row 1 is x + y <= 3 and was subtracted as if it were x + y = 3. The upper side of row 0
@@ -756,6 +861,143 @@ GPRS_TEST(e2e_structure_rejects_a_row_that_is_no_equation_as_the_equation)
     GPRS_CHECK_EQ(r.added_failures, 1);
     GPRS_CHECK_EQ(r.kept_failures, 1);
   }
+}
+
+GPRS_TEST(e2e_structure_takes_no_point_from_hyperplanes_that_do_not_meet)
+{
+  // Columns x, y, z. Row 0: x + y <= 1/2, row 1: x + y + z = 1, row 2: x + (1 + e) y + z = 1.
+  // The equations give y = 0 and x = 1 - z, so row 0 is violated by 1/2 at z = 0. The columns
+  // y and z are all but parallel on the two equations: their hyperplanes meet at the
+  // multipliers -1 / e and 1 / e, whose terms cancel in the sides and in x, and what is left of
+  // the coefficient of x, 1, is below every share of terms of that size.
+  constexpr int32_t z = 2;
+  for (double e : {std::ldexp(1., -40), std::ldexp(1., -30), 0.}) {
+    const row_t first{{{x, 1.}, {y, 1.}, {z, 1.}}, 1., 1.};
+    const row_t second{{{x, 1.}, {y, 1. + e}, {z, 1.}}, 1., 1.};
+    model_t m =
+      build({{{{x, 1.}, {y, 1.}}, -inf, 0.5}, first, second}, {-5., -5., 0.}, {5., 5., 3.});
+    result_t result = reduced_to(m, {first, second}, {1, 2});
+    add(result, 0, 1, 1.);
+    add(result, 0, 2, 1.);
+    structure_report_t r = structure_check(m, result);
+    GPRS_CHECK(r.composed);
+    GPRS_CHECK_EQ(r.added_tested, 1);
+    GPRS_CHECK_EQ(r.added_failures, 1);
+    GPRS_CHECK(r.added_worst > 0.49);
+    // With the side that the equations give, the row passes.
+    m.row_upper[0] = 1.;
+    GPRS_CHECK(silent(structure_check(m, result)));
+  }
+
+  // A generated result (rfuzz, seed 345082). Row 2 less 0.6 times row 0 and 3 / 7 times row 1
+  // is 3 x1 - 9 / 35 x2 = 5.507..., which is parallel to row 1 on x1 and x2: the system of
+  // those two columns is singular, and its pivot was the rounding of zero. Row 0, an equation
+  // of the model, is a range in the reduced model, so row 2 does not hold.
+  model_t m = build({{{{1, 0.14285714285714285}}, 0.25, 0.25},
+                     {{{1, -7.}, {2, 0.59999999999999998}, {3, -0.33333333333333331}},
+                      -13.183333333333334,
+                      -13.183333333333334},
+                     {{{1, 0.085714285714285701}, {3, -0.14285714285714285}},
+                      0.0071428571428571175,
+                      0.0071428571428571175}},
+                    {-inf, 1., -1., -1.},
+                    {2., 4., inf, 1.});
+  result_t result =
+    reduced_to(m,
+               {{{{1, 0.14285714285714285}}, -1.75, 2.25},
+                {{{1, -7.}, {2, 0.59999999999999998}, {3, -0.33333333333333331}},
+                 -13.183333333333334,
+                 -13.183333333333334},
+                {{{1, 3.}, {2, -0.25714285714285712}}, 5.5071428571428562, 5.5071428571428562}},
+               {0, 1, 2});
+  add(result, 2, 0, 0.59999999999999998);
+  add(result, 2, 1, 0.42857142857142855);
+  structure_report_t r = structure_check(m, result);
+  GPRS_CHECK(r.composed);
+  GPRS_CHECK_EQ(r.added_tested, 1);
+  GPRS_CHECK_EQ(r.added_failures, 1);
+  GPRS_CHECK_EQ(r.added_worst_row, 2);
+  // With row 0 as the model has it, row 2 holds.
+  result.reduced.row_lower[0] = 0.25;
+  result.reduced.row_upper[0] = 0.25;
+  GPRS_CHECK(silent(structure_check(m, result)));
+}
+
+GPRS_TEST(e2e_structure_keeps_a_coefficient_below_the_terms_of_large_multipliers)
+{
+  // Columns x, y, z. Row 0: x / 20 + y <= 1, row 1: x + y + z = 1, row 2: x + (1 + e) y + z = 1
+  // with e = 2^-18. The equations give y = 0 and x = 1 - z, so the row reaches 5000 at
+  // x = 1e5. The hyperplanes of y and z meet at the multipliers -2^18 and 2^18: their terms in
+  // x are 2^18 each and cancel, and the coefficient 1 / 20 that is left is the row's own.
+  constexpr int32_t z = 2;
+  double e            = std::ldexp(1., -18);
+  const row_t first{{{x, 1.}, {y, 1.}, {z, 1.}}, 1., 1.};
+  const row_t second{{{x, 1.}, {y, 1. + e}, {z, 1.}}, 1., 1.};
+  model_t m =
+    build({{{{x, 0.05}, {y, 1.}}, -inf, 1.}, first, second}, {-1e5, -5., -2e5}, {1e5, 5., 2e5});
+  result_t result = reduced_to(m, {first, second}, {1, 2});
+  add(result, 0, 1, 1.);
+  add(result, 0, 2, 1.);
+  structure_report_t r = structure_check(m, result);
+  GPRS_CHECK(r.composed);
+  GPRS_CHECK_EQ(r.added_tested, 1);
+  GPRS_CHECK_EQ(r.added_failures, 1);
+  // With x within [-20, 20] the row holds.
+  result.reduced.col_lower[x] = -20.;
+  result.reduced.col_upper[x] = 20.;
+  r                           = structure_check(m, result);
+  GPRS_CHECK_EQ(r.added_tested, 1);
+  GPRS_CHECK_EQ(r.added_failures, 0);
+}
+
+GPRS_TEST(e2e_structure_scales_a_violation_by_the_row_and_not_by_the_sides_of_the_equation)
+{
+  // Row 0: x + y + s <= upper, row 1: x + y + t = 3 + huge with t in [huge - 1, huge]. Row 0
+  // less row 1 is s - t <= upper - 3 - huge: the two sides are of the size of t and cancel in
+  // the bound of row 0, whose own terms are small.
+  auto with_huge = [](double huge) {
+    return row_t{{{x, 1.}, {y, 1.}, {t, 1.}}, 3. + huge, 3. + huge};
+  };
+  auto model = [&](double huge, double upper) {
+    return build({{{{x, 1.}, {y, 1.}, {s, 1.}}, -inf, upper}, with_huge(huge)},
+                 {0., 0., -10., huge - 1.},
+                 {3., 3., 200., huge});
+  };
+  auto check = [&](double huge, double upper, double side) {
+    model_t m = model(huge, upper);
+    result_t result =
+      reduced_to(m, {{{{s, 1.}, {t, -1.}}, -inf, side - huge}, with_huge(huge)}, {0, 1});
+    add(result, 0, 1, 1.);
+    structure_report_t r = structure_check(m, result);
+    GPRS_CHECK(r.composed);
+    GPRS_CHECK_EQ(r.added_tested, 1);
+    GPRS_CHECK_EQ(r.kept_failures, 0);
+    return r;
+  };
+  GPRS_CHECK(silent(check(1e7, 5., 2.)));
+  // s - t <= 52 - 1e7 admits x + y + s = 55, a violation of 50 by a row with terms up to 52.
+  structure_report_t r = check(1e7, 5., 52.);
+  GPRS_CHECK_EQ(r.added_failures, 1);
+  GPRS_CHECK_EQ(r.added_worst, 50. / 55.);
+  GPRS_CHECK_EQ(check(1e7, 5., 2.01).added_failures, 1);
+  // A side of the size 1e15 is stored to an eighth: 2.2 - 1e15 is 2.25 - 1e15, and the row
+  // x + y + s <= 5.2 is off by that rounding and no further.
+  GPRS_CHECK(silent(check(1e15, 5.2, 2.2)));
+  GPRS_CHECK_EQ(check(1e15, 5.2, 102.2).added_failures, 1);
+
+  // The same row after it left the model, with s in [0, 1]: the side of the equation cancels
+  // against the term of t at its bound.
+  model_t m       = model(1e7, 5.);
+  m.col_lower[s]  = 0.;
+  m.col_upper[s]  = 1.;
+  result_t result = reduced_to(m, {with_huge(1e7)}, {1});
+  add(result, 0, 1, 1.);
+  GPRS_CHECK(silent(structure_check(m, result)));
+  result.reduced.col_upper[s] = 51.;
+  r                           = structure_check(m, result);
+  GPRS_CHECK_EQ(r.added_tested, 1);
+  GPRS_CHECK_EQ(r.added_failures, 1);
+  GPRS_CHECK_EQ(r.added_worst, 50. / 55.);
 }
 
 GPRS_TEST(e2e_structure_passes_the_subtractions_of_the_engine)
