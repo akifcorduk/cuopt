@@ -5,16 +5,40 @@
  */
 /* clang-format on */
 
-// gprs_check <model.csr> <out.json> [--lp-time-limit <s>] [--mip-time-limit <s>]
-//            [--known-objective <value>] [--threads <n>]
-// Correctness check of the host engine on one instance, with HiGHS as the solver:
-//   1. LP relaxation of the original model and of the reduced model. The reduced value must not
-//      lie below the original one (no reduction relaxes the model), and not above the known
-//      objective value of the instance (the reductions keep an optimal solution).
-//   2. MIP solve of the reduced model with a time limit. A solution it finds is postsolved and
-//      tested in the original model: rows, bounds, integrality and the objective value.
-// The dump holds a minimisation, so --known-objective is given in that form.
-// Exit code 0 when the checks ran (whatever they found), 1 on an input error.
+// Correctness check of the host engine on one instance, with HiGHS as the solver.
+//
+// gprs_check <model.csr> <out.json> [--solutions <file>]... [--lp-time-limit <s>]
+//            [--mip-time-limit <s>] [--known-objective <value>] [--known-is-bound]
+//            [--expect infeasible|unbounded] [--primal-only] [--threads <n>]
+//   Presolve status. A status without a reduced model fails when the instance has a known
+//     objective value or a usable point of a solution file; limit and failed always fail.
+//   Crush check (crush_check.hpp), in default and in primal-only mode, with every usable point
+//     of the solution files (solution_file.hpp).
+//   Solver checks, on the presolve in default mode or with --primal-only in that mode:
+//     LP relaxation of the original and of the reduced model: the reduced value is not below
+//       the original one (no reduction relaxes) and not above a known solution value; the
+//       reduced relaxation ends optimal or at the time limit.
+//     MIP solve of the reduced model with gap 0: not infeasible; a solution is postsolved and
+//       tested in the original model, rows relative to their largest term; a proved optimum
+//       equals the known optimum within 1e-6 relative; the dual bound is not above a known
+//       solution value.
+//   --known-objective is the value of the minimisation in the dump. With --known-is-bound it is
+//   a best known value: an upper bound of the optimum, as is the best usable point. A time
+//   limit of 0 leaves the solve out. --expect names what is known of an instance without a
+//   solution: its reduced MIP must then not have one.
+//
+// gprs_check --solve <model.csr> <solutions file> [--mip-time-limit <s>] [--threads <n>]
+//            [--max-points <n>]
+//   Solves the original MIP with HiGHS and writes every improving solution that is a usable
+//   point to the solution file as it is found: the first max-points - 1 and the last one.
+//   A report goes to <solutions file>.json when the solve ends.
+//
+// A solve that HiGHS does not end long after its time limit is left behind with status
+// "Time limit ignored"; everything else is still checked and reported.
+// Exit code 0 when the tool ran (whatever the checks found), 1 on an input error.
+
+#include "crush_check.hpp"
+#include "solution_file.hpp"
 
 #include <gprs/io.hpp>
 #include <gprs/presolve.hpp>
@@ -25,10 +49,18 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <future>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
+
+using gprs_check::crush_report_t;
+using gprs_check::point_report_t;
+using gprs_check::point_set_t;
 
 double now()
 {
@@ -39,24 +71,15 @@ struct solve_t {
   bool ran           = false;
   std::string status = "not run";
   bool has_solution  = false;
-  double objective   = 0.;
-  double dual_bound  = 0.;
-  double seconds     = 0.;
+  // Not a number until a solve has ended.
+  double objective  = std::nan("");
+  double dual_bound = std::nan("");
+  double seconds    = 0.;
   std::vector<double> x;
 };
 
-solve_t solve(const gprs::model_t& model, bool relaxation, double time_limit, int threads)
+HighsLp to_highs(const gprs::model_t& model, bool relaxation)
 {
-  solve_t out;
-  out.ran = true;
-  if (model.ncols == 0) {
-    // Nothing to solve: the value is the offset; the rows of an empty model have no entries.
-    out.status       = "empty";
-    out.has_solution = true;
-    out.objective    = model.objective_offset;
-    out.dual_bound   = model.objective_offset;
-    return out;
-  }
   HighsLp lp;
   lp.num_col_           = model.ncols;
   lp.num_row_           = model.nrows;
@@ -81,14 +104,78 @@ solve_t solve(const gprs::model_t& model, bool relaxation, double time_limit, in
                              : HighsVarType::kContinuous;
     }
   }
+  return lp;
+}
+
+// The tolerance HiGHS solves a MIP with whose solution becomes a point of this tool: tighter
+// than the tolerance the point is tested with.
+constexpr double reduced_mip_tolerance  = 1e-7;
+constexpr double original_mip_tolerance = 1e-9;
+
+// HiGHS has run far past its time limit on some instances (var-smallemery-m6j6: 35 minutes
+// with a limit of 60 s, in a phase that polls neither the limit nor the interrupt callback). A
+// solve therefore runs in a thread of its own. One that has not ended at patience(limit) is
+// left behind with status "Time limit ignored": what does not need it is still checked and
+// reported, and the process ends without waiting for it (leave).
+bool solve_left_behind = false;
+
+#ifndef GPRS_CHECK_PATIENCE_SECONDS
+#define GPRS_CHECK_PATIENCE_SECONDS 60.
+#endif
+
+double patience(double time_limit) { return 1.5 * time_limit + GPRS_CHECK_PATIENCE_SECONDS; }
+
+// Runs work() in a thread; false when it was left behind. work owns everything it uses.
+template <typename work_t>
+bool run_bounded(work_t work, double time_limit)
+{
+  auto done               = std::make_shared<std::promise<void>>();
+  std::future<void> ended = done->get_future();
+  std::thread([work, done]() mutable {
+    work();
+    done->set_value();
+  }).detach();
+  std::chrono::duration<double> wait(patience(time_limit));
+  if (ended.wait_for(wait) == std::future_status::ready) { return true; }
+  solve_left_behind = true;
+  return false;
+}
+
+// The exit of main: a thread that was left behind is not waited for.
+int leave(int code)
+{
+  if (solve_left_behind) {
+    std::fflush(nullptr);
+    std::_Exit(code);
+  }
+  return code;
+}
+
+struct solve_job_t {
+  HighsLp lp;
+  bool relaxation   = false;
+  double time_limit = 0.;
+  int threads       = 1;
+  solve_t out;
+};
+
+void run_solve(solve_job_t& job)
+{
+  solve_t& out = job.out;
   Highs highs;
   highs.setOptionValue("output_flag", false);
-  highs.setOptionValue("time_limit", time_limit);
-  highs.setOptionValue("threads", threads);
+  highs.setOptionValue("time_limit", job.time_limit);
+  highs.setOptionValue("threads", job.threads);
+  if (!job.relaxation) {
+    highs.setOptionValue("mip_rel_gap", 0.);
+    highs.setOptionValue("mip_abs_gap", 0.);
+    highs.setOptionValue("mip_feasibility_tolerance", reduced_mip_tolerance);
+    highs.setOptionValue("primal_feasibility_tolerance", reduced_mip_tolerance);
+  }
   double start = now();
-  if (highs.passModel(std::move(lp)) == HighsStatus::kError) {
+  if (highs.passModel(std::move(job.lp)) == HighsStatus::kError) {
     out.status = "passModel failed";
-    return out;
+    return;
   }
   highs.run();
   out.seconds           = now() - start;
@@ -96,22 +183,115 @@ solve_t solve(const gprs::model_t& model, bool relaxation, double time_limit, in
   const HighsInfo& info = highs.getInfo();
   out.has_solution      = info.primal_solution_status == kSolutionStatusFeasible;
   out.objective         = info.objective_function_value;
-  out.dual_bound        = relaxation ? info.objective_function_value : info.mip_dual_bound;
+  out.dual_bound        = job.relaxation ? info.objective_function_value : info.mip_dual_bound;
   if (out.has_solution) { out.x = highs.getSolution().col_value; }
+}
+
+solve_t solve(const gprs::model_t& model, bool relaxation, double time_limit, int threads)
+{
+  solve_t out;
+  out.ran = true;
+  if (model.ncols == 0) {
+    // Nothing to solve: the value is the offset; the rows of an empty model have no entries.
+    out.status       = "empty";
+    out.has_solution = true;
+    out.objective    = model.objective_offset;
+    out.dual_bound   = model.objective_offset;
+    return out;
+  }
+  auto job        = std::make_shared<solve_job_t>();
+  job->lp         = to_highs(model, relaxation);
+  job->relaxation = relaxation;
+  job->time_limit = time_limit;
+  job->threads    = threads;
+  job->out.ran    = true;
+  double start    = now();
+  if (run_bounded([job] { run_solve(*job); }, time_limit)) { return job->out; }
+  out.status  = "Time limit ignored";
+  out.seconds = now() - start;
   return out;
+}
+
+// A JSON number, or null for a value that is not finite.
+std::string number(double v, const char* format = "%.17g")
+{
+  if (!std::isfinite(v)) { return "null"; }
+  char buffer[64];
+  std::snprintf(buffer, sizeof buffer, format, v);
+  return buffer;
+}
+
+std::string quoted(const std::string& text)
+{
+  std::string out = "\"";
+  for (char c : text) {
+    if (c == '"' || c == '\\') { out += '\\'; }
+    out += c;
+  }
+  return out + "\"";
 }
 
 void put_solve(FILE* out, const char* name, const solve_t& s)
 {
   std::fprintf(out,
-               "  \"%s\": {\"status\": \"%s\", \"has_solution\": %s, \"objective\": %.17g, "
-               "\"dual_bound\": %.17g, \"seconds\": %.3f},\n",
+               "  \"%s\": {\"status\": \"%s\", \"has_solution\": %s, \"objective\": %s, "
+               "\"dual_bound\": %s, \"seconds\": %.3f},\n",
                name,
                s.status.c_str(),
                s.has_solution ? "true" : "false",
-               std::isfinite(s.objective) ? s.objective : 0.,
-               std::isfinite(s.dual_bound) ? s.dual_bound : 0.,
+               number(s.objective).c_str(),
+               number(s.dual_bound).c_str(),
                s.seconds);
+}
+
+void put_highs(FILE* out)
+{
+  std::fprintf(out,
+               "  \"highs\": {\"version\": \"%s\", \"githash\": \"%s\", \"int_bytes\": %d},\n",
+               highsVersion(),
+               highsGithash(),
+               (int)sizeof(HighsInt));
+}
+
+void put_crush(FILE* out, const char* name, const crush_report_t& c, bool last)
+{
+  std::fprintf(out,
+               "    \"%s\": {\"status\": \"%s\", \"hash\": \"%016llx\", \"points\": %d, "
+               "\"first_failed_point\": %d,\n",
+               name,
+               c.status.c_str(),
+               (unsigned long long)c.hash,
+               c.points,
+               c.first_failed_point);
+  std::fprintf(out,
+               "      \"reduced_point\": {\"row\": %s, \"bound\": %s, \"integrality\": %s, "
+               "\"failed\": %d},\n",
+               number(c.reduced_row, "%.3g").c_str(),
+               number(c.reduced_bound, "%.3g").c_str(),
+               number(c.reduced_integrality, "%.3g").c_str(),
+               c.failed_reduced);
+  std::fprintf(out,
+               "      \"postsolved_point\": {\"row\": %s, \"bound\": %s, \"integrality\": %s, "
+               "\"failed\": %d},\n",
+               number(c.postsolved_row, "%.3g").c_str(),
+               number(c.postsolved_bound, "%.3g").c_str(),
+               number(c.postsolved_integrality, "%.3g").c_str(),
+               c.failed_postsolved);
+  std::fprintf(out,
+               "      \"objective\": {\"identity\": %s, \"rise\": %s, \"fall\": %s, "
+               "\"failed\": %d},\n",
+               number(c.objective_identity, "%.3g").c_str(),
+               number(c.objective_rise, "%.3g").c_str(),
+               number(c.objective_fall, "%.3g").c_str(),
+               c.failed_objective);
+  std::fprintf(out,
+               "      \"round_trip\": {\"integer\": %s, \"continuous\": %s, \"columns\": %lld, "
+               "\"failed\": %d}}%s\n",
+               number(c.moved_integer, "%.3g").c_str(),
+               number(c.moved_continuous, "%.3g").c_str(),
+               (long long)c.moved_columns,
+               c.failed_round_trip,
+               last ? "" : ",");
 }
 
 // "pass", "FAIL" or "skipped".
@@ -120,110 +300,391 @@ const char* verdict(bool applicable, bool ok)
   return !applicable ? "skipped" : ok ? "pass" : "FAIL";
 }
 
+bool write_file(const std::string& path, FILE* out)
+{
+  std::string tmp = path + ".tmp";
+  return std::fclose(out) == 0 && std::rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+struct arguments_t {
+  bool solve_mode = false;
+  std::string path;
+  std::string out_path;
+  std::vector<std::string> solutions;
+  double lp_limit  = 120.;
+  double mip_limit = 60.;
+  bool has_known   = false;
+  double known     = 0.;
+  bool known_bound = false;
+  std::string expect;
+  bool primal_only = false;
+  int threads      = 1;
+  int max_points   = 20;
+};
+
+int usage()
+{
+  std::fprintf(stderr,
+               "usage: gprs_check <model.csr> <out.json> [--solutions <file>]... "
+               "[--lp-time-limit <s>] [--mip-time-limit <s>] [--known-objective <value>] "
+               "[--known-is-bound] [--expect infeasible|unbounded] [--primal-only] "
+               "[--threads <n>]\n"
+               "       gprs_check --solve <model.csr> <solutions file> [--mip-time-limit <s>] "
+               "[--threads <n>] [--max-points <n>]\n");
+  return 1;
+}
+
+bool parse(int argc, char** argv, arguments_t& a)
+{
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    bool value      = i + 1 < argc;
+    if (arg == "--solve") {
+      a.solve_mode = true;
+    } else if (arg == "--solutions" && value) {
+      a.solutions.push_back(argv[++i]);
+    } else if (arg == "--lp-time-limit" && value) {
+      a.lp_limit = std::atof(argv[++i]);
+    } else if (arg == "--mip-time-limit" && value) {
+      a.mip_limit = std::atof(argv[++i]);
+    } else if (arg == "--known-objective" && value) {
+      a.known     = std::atof(argv[++i]);
+      a.has_known = true;
+    } else if (arg == "--known-is-bound") {
+      a.known_bound = true;
+    } else if (arg == "--expect" && value) {
+      a.expect = argv[++i];
+    } else if (arg == "--primal-only") {
+      a.primal_only = true;
+    } else if (arg == "--threads" && value) {
+      a.threads = std::atoi(argv[++i]);
+    } else if (arg == "--max-points" && value) {
+      a.max_points = std::atoi(argv[++i]);
+    } else if (arg[0] == '-') {
+      return false;
+    } else if (a.path.empty()) {
+      a.path = arg;
+    } else if (a.out_path.empty()) {
+      a.out_path = arg;
+    } else {
+      return false;
+    }
+  }
+  return !a.out_path.empty() &&
+         (a.expect.empty() || a.expect == "infeasible" || a.expect == "unbounded") &&
+         a.max_points >= 1;
+}
+
+// The solution mode: what the solver thread and the main thread share.
+struct collector_t {
+  gprs::model_t model;
+  gprs_check::solution_writer_t writer;
+  // Held while a record is written, and for good by a main thread that leaves the solve behind.
+  std::mutex mutex;
+  int max_points    = 20;
+  int found         = 0;
+  int rejected      = 0;
+  double last       = gprs::inf;  // objective of the last record
+  bool write_fail   = false;
+  double start      = 0.;
+  double time_limit = 0.;
+  int threads       = 1;
+  solve_t out;
+
+  void take(const std::vector<double>& x)
+  {
+    std::vector<double> rounded = x;
+    point_report_t report;
+    double integrality;
+    bool usable = gprs_check::usable_point(model, rounded, report, integrality);
+    std::lock_guard<std::mutex> lock(mutex);
+    ++found;
+    if (!usable) {
+      ++rejected;
+      return;
+    }
+    bool ok = writer.points < max_points ? writer.append(report.objective, x)
+                                         : writer.replace_last(report.objective, x);
+    last    = report.objective;
+    if (!ok) { write_fail = true; }
+  }
+};
+
+void run_original(collector_t& collector)
+{
+  solve_t& out = collector.out;
+  Highs highs;
+  highs.setOptionValue("output_flag", false);
+  highs.setOptionValue("time_limit", collector.time_limit);
+  highs.setOptionValue("threads", collector.threads);
+  highs.setOptionValue("mip_feasibility_tolerance", original_mip_tolerance);
+  highs.setOptionValue("primal_feasibility_tolerance", original_mip_tolerance);
+  highs.setCallback(
+    [&collector](int type,
+                 const std::string&,
+                 const HighsCallbackOutput* data,
+                 HighsCallbackInput* input,
+                 void*) {
+      if (type == kCallbackMipImprovingSolution) {
+        collector.take(data->mip_solution);
+      } else if (type == kCallbackMipInterrupt &&
+                 now() - collector.start > 1.1 * collector.time_limit + 10.) {
+        input->user_interrupt = true;
+      }
+    },
+    nullptr);
+  highs.startCallback(kCallbackMipImprovingSolution);
+  highs.startCallback(kCallbackMipInterrupt);
+  if (highs.passModel(to_highs(collector.model, false)) == HighsStatus::kError) {
+    out.status = "passModel failed";
+    return;
+  }
+  highs.run();
+  out.status            = highs.modelStatusToString(highs.getModelStatus());
+  const HighsInfo& info = highs.getInfo();
+  out.has_solution      = info.primal_solution_status == kSolutionStatusFeasible;
+  out.objective         = info.objective_function_value;
+  out.dual_bound        = info.mip_dual_bound;
+  // The final solution, when no callback delivered it.
+  if (out.has_solution && !(collector.last <= out.objective + 1e-9 * std::fabs(out.objective))) {
+    collector.take(highs.getSolution().col_value);
+  }
+}
+
+int solve_original(const arguments_t& a)
+{
+  auto collector = std::make_shared<collector_t>();
+  std::string error;
+  if (!gprs::read_csr_dump(a.path, collector->model, error)) {
+    std::fprintf(stderr, "%s\n", error.c_str());
+    return 1;
+  }
+  collector->max_points = a.max_points;
+  collector->time_limit = a.mip_limit;
+  collector->threads    = a.threads;
+  collector->start      = now();
+  if (!collector->writer.open(a.out_path, collector->model.ncols)) {
+    std::fprintf(stderr, "cannot write %s\n", a.out_path.c_str());
+    return 1;
+  }
+  solve_t out;
+  std::unique_lock<std::mutex> lock(collector->mutex, std::defer_lock);
+  if (run_bounded([collector] { run_original(*collector); }, a.mip_limit)) {
+    out = collector->out;
+  } else {
+    // The lock is kept: the file holds whole records and the counts below are final.
+    lock.lock();
+    out.status = "Time limit ignored";
+  }
+  out.ran     = true;
+  out.seconds = now() - collector->start;
+  if (collector->write_fail || !collector->writer.close()) {
+    std::fprintf(stderr, "cannot write %s\n", a.out_path.c_str());
+    return leave(1);
+  }
+
+  std::string report = a.out_path + ".json";
+  FILE* file         = std::fopen((report + ".tmp").c_str(), "w");
+  if (!file) {
+    std::fprintf(stderr, "cannot open %s.tmp\n", report.c_str());
+    return leave(1);
+  }
+  std::fprintf(file, "{\n  \"instance\": %s,\n", quoted(a.path).c_str());
+  put_highs(file);
+  put_solve(file, "mip_original", out);
+  std::fprintf(file,
+               "  \"time_limit\": %s,\n  \"tolerance\": %g,\n  \"points_found\": %d,\n"
+               "  \"points_rejected\": %d,\n  \"points_written\": %lld,\n"
+               "  \"best_point_objective\": %s\n}\n",
+               number(a.mip_limit, "%g").c_str(),
+               original_mip_tolerance,
+               collector->found,
+               collector->rejected,
+               (long long)collector->writer.points,
+               number(collector->last).c_str());
+  if (!write_file(report, file)) {
+    std::fprintf(stderr, "cannot write %s\n", report.c_str());
+    return leave(1);
+  }
+  std::printf("%s: %s, %lld points written, %d rejected, best %s\n",
+              a.path.c_str(),
+              out.status.c_str(),
+              (long long)collector->writer.points,
+              collector->rejected,
+              number(collector->last, "%.10g").c_str());
+  return leave(0);
+}
+
+struct solutions_t {
+  point_set_t set;
+  std::vector<std::string> files;
+  std::vector<int64_t> records;
+  std::vector<int64_t> tail_bytes;
+};
+
+bool read_points(const arguments_t& a, const gprs::model_t& model, solutions_t& s)
+{
+  for (const std::string& path : a.solutions) {
+    gprs_check::solution_set_t file;
+    std::string error;
+    if (!gprs_check::read_solutions(path, file, error)) {
+      std::fprintf(stderr, "%s\n", error.c_str());
+      return false;
+    }
+    if (file.ncols != model.ncols) {
+      std::fprintf(stderr,
+                   "%s has %lld columns, the model %d\n",
+                   path.c_str(),
+                   (long long)file.ncols,
+                   model.ncols);
+      return false;
+    }
+    s.files.push_back(path);
+    s.records.push_back(file.points.size());
+    s.tail_bytes.push_back(file.tail_bytes);
+    for (std::vector<double>& x : file.points) {
+      s.set.add(model, std::move(x));
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
-  std::string path, json_path;
-  double lp_limit = 120., mip_limit = 60., known = 0.;
-  bool has_known = false;
-  int threads    = 1;
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
-    if (arg == "--lp-time-limit" && i + 1 < argc) {
-      lp_limit = std::atof(argv[++i]);
-    } else if (arg == "--mip-time-limit" && i + 1 < argc) {
-      mip_limit = std::atof(argv[++i]);
-    } else if (arg == "--known-objective" && i + 1 < argc) {
-      known     = std::atof(argv[++i]);
-      has_known = true;
-    } else if (arg == "--threads" && i + 1 < argc) {
-      threads = std::atoi(argv[++i]);
-    } else if (path.empty()) {
-      path = arg;
-    } else if (json_path.empty()) {
-      json_path = arg;
-    } else {
-      std::fprintf(stderr, "usage: gprs_check <model.csr> <out.json> [options]\n");
-      return 1;
-    }
-  }
-  if (json_path.empty()) {
-    std::fprintf(stderr, "usage: gprs_check <model.csr> <out.json> [options]\n");
-    return 1;
-  }
+  arguments_t a;
+  if (!parse(argc, argv, a)) { return usage(); }
+  if (a.solve_mode) { return solve_original(a); }
 
   gprs::model_t model;
   std::string error;
-  if (!gprs::read_csr_dump(path, model, error)) {
+  if (!gprs::read_csr_dump(a.path, model, error)) {
     std::fprintf(stderr, "%s\n", error.c_str());
     return 1;
   }
-  gprs::options_t options;
-  gprs::result_t result = gprs::presolve(model, options);
-  bool has_reduced      = result.status == gprs::status_t::reduced ||
-                     result.status == gprs::status_t::unchanged ||
-                     result.status == gprs::status_t::reduced_to_empty;
+  solutions_t solutions;
+  if (!read_points(a, model, solutions)) { return 1; }
+  const point_set_t& points = solutions.set;
+  bool has_points           = !points.empty();
 
-  solve_t lp_original = solve(model, true, lp_limit, threads);
-  solve_t lp_reduced, mip_reduced;
-  gprs::point_check_t point;
+  // The presolve of the other mode serves the crush check only and is dropped before a solve.
+  crush_report_t crush_default, crush_primal;
+  gprs::options_t options;
+  if (has_points) {
+    options.primal_only  = !a.primal_only;
+    gprs::result_t other = gprs::presolve(model, options);
+    (a.primal_only ? crush_default : crush_primal) =
+      gprs_check::crush_check(model, other, options.primal_only, points);
+  }
+  options.primal_only   = a.primal_only;
+  gprs::result_t result = gprs::presolve(model, options);
+  bool has_reduced      = gprs_check::carries_model(result.status);
+  if (has_points) {
+    (a.primal_only ? crush_primal : crush_default) =
+      gprs_check::crush_check(model, result, a.primal_only, points);
+  }
+
+  solve_t lp_original, lp_reduced, mip_reduced;
+  if (a.lp_limit > 0) { lp_original = solve(model, true, a.lp_limit, a.threads); }
+  point_report_t point;
   bool has_point = false;
   if (has_reduced) {
-    lp_reduced = solve(result.reduced, true, lp_limit, threads);
-    if (mip_limit > 0) { mip_reduced = solve(result.reduced, false, mip_limit, threads); }
+    if (a.lp_limit > 0) { lp_reduced = solve(result.reduced, true, a.lp_limit, a.threads); }
+    if (a.mip_limit > 0) { mip_reduced = solve(result.reduced, false, a.mip_limit, a.threads); }
     if (mip_reduced.has_solution) {
       std::vector<double> x_reduced = mip_reduced.x;
       x_reduced.resize(result.reduced.ncols);
       std::vector<double> x_original;
       result.postsolve.postsolve(x_reduced, x_original);
-      point     = gprs::check_point(model, x_original);
+      point     = gprs_check::check_point_scaled(model, x_original);
       has_point = true;
     }
   }
 
-  // Tolerance of a comparison of two objective values: relative 1e-6, absolute 1e-6.
-  auto close_or_above = [](double a, double b) {
-    return a >= b - 1e-6 * std::fmax(1., std::fmax(std::fabs(a), std::fabs(b)));
+  // What is known of the instance. A usable point makes it feasible, and its value is an upper
+  // bound of the optimum like a best known value.
+  bool feasible_known   = a.has_known || has_points;
+  bool expect_none      = a.expect == "infeasible" && !feasible_known;
+  bool expect_unbounded = a.expect == "unbounded";
+  double upper          = points.best_objective();
+  if (a.has_known && a.known < upper) { upper = a.known; }
+  auto tolerance = [](double v) {
+    return gprs_check::objective_tolerance * std::fmax(1., std::fabs(v));
   };
-  bool lp_both = lp_original.status == "Optimal" &&
-                 (lp_reduced.status == "Optimal" || lp_reduced.status == "empty");
-  bool lp_red = lp_reduced.status == "Optimal" || lp_reduced.status == "empty";
-  const char* relaxation_not_weaker =
-    verdict(lp_both, close_or_above(lp_reduced.objective, lp_original.objective));
-  const char* relaxation_below_known =
-    verdict(has_known && lp_red, close_or_above(known, lp_reduced.objective));
-  // An infeasible reduced relaxation of an instance with a known solution is a wrong reduction.
-  const char* reduced_feasible =
-    verdict(has_known && has_reduced && lp_reduced.ran && lp_reduced.status != "Time limit reached",
-            lp_reduced.status != "Infeasible");
-  const char* point_feasible_verdict =
-    verdict(has_point,
-            point.row_violation <= 1e-5 && point.bound_violation <= 1e-5 &&
-              point.integrality_violation <= 1e-5);
-  const char* point_objective = verdict(has_point,
-                                        std::fabs(point.objective - mip_reduced.objective) <=
-                                          1e-6 * std::fmax(1., std::fabs(mip_reduced.objective)));
-  bool mip_optimal            = mip_reduced.status == "Optimal" || mip_reduced.status == "empty";
-  const char* optimum_known =
-    verdict(has_known && mip_optimal,
-            std::fabs(mip_reduced.objective - known) <= 1e-4 * std::fmax(1., std::fabs(known)));
-  // The MIP solution of the reduced model must not be better than the known optimum is not a
-  // test (the known value may be a best known one); a dual bound above it is one.
-  const char* bound_below_known =
-    verdict(has_known && mip_reduced.ran && mip_reduced.status != "empty" &&
-              std::isfinite(mip_reduced.dual_bound),
-            close_or_above(known + 1e-4 * std::fmax(1., std::fabs(known)), mip_reduced.dual_bound));
 
-  std::string tmp = json_path + ".tmp";
-  FILE* out       = std::fopen(tmp.c_str(), "w");
+  bool no_model_status = result.status == gprs::status_t::infeasible ||
+                         result.status == gprs::status_t::unbounded_or_infeasible;
+  bool status_expected =
+    no_model_status &&
+    (expect_unbounded ? result.status == gprs::status_t::unbounded_or_infeasible : expect_none);
+  const char* presolve_status = verdict(!no_model_status || feasible_known || !a.expect.empty(),
+                                        has_reduced || status_expected);
+
+  bool lp_red  = lp_reduced.status == "Optimal" || lp_reduced.status == "empty";
+  bool lp_both = lp_original.status == "Optimal" && lp_red;
+  const char* relaxation_not_weaker = verdict(
+    lp_both, lp_reduced.objective >= lp_original.objective - tolerance(lp_original.objective));
+  const char* relaxation_below_known =
+    verdict(feasible_known && lp_red, lp_reduced.objective <= upper + tolerance(upper));
+  // Without a known solution the reduced relaxation of an infeasible instance may be infeasible.
+  auto at_limit = [](const solve_t& s) {
+    return s.status == "Time limit reached" || s.status == "Time limit ignored";
+  };
+  bool lp_status_ok =
+    lp_red || at_limit(lp_reduced) ||
+    (!feasible_known && (lp_reduced.status == "Infeasible" ||
+                         lp_reduced.status == "Primal infeasible or unbounded")) ||
+    (expect_unbounded && lp_reduced.status == "Unbounded");
+  const char* reduced_relaxation_status = verdict(lp_reduced.ran, lp_status_ok);
+
+  bool mip_optimal = mip_reduced.status == "Optimal" || mip_reduced.status == "empty";
+  bool mip_ended   = mip_optimal || at_limit(mip_reduced);
+  const char* reduced_mip_status =
+    feasible_known ? verdict(mip_reduced.ran, mip_ended)
+                   : verdict(mip_reduced.ran && expect_none &&
+                               (mip_reduced.status == "Infeasible" || mip_reduced.has_solution),
+                             !mip_reduced.has_solution);
+  const char* point_feasible = verdict(has_point, point.within(gprs_check::check_tolerance));
+  const char* point_objective =
+    verdict(has_point,
+            std::fabs(point.objective - mip_reduced.objective) <= tolerance(mip_reduced.objective));
+  // A proved optimum of the reduced model is not above any known solution value, and not below
+  // a known optimum.
+  const char* optimum_known = verdict(
+    feasible_known && mip_optimal,
+    mip_reduced.objective <= upper + tolerance(upper) &&
+      (!a.has_known || a.known_bound || mip_reduced.objective >= a.known - tolerance(a.known)));
+  const char* bound_below_known =
+    verdict(feasible_known && mip_reduced.ran && mip_reduced.status != "empty" &&
+              std::isfinite(mip_reduced.dual_bound),
+            mip_reduced.dual_bound <= upper + tolerance(upper));
+
+  // A file with points of which none is usable would make the crush check silent.
+  const char* solution_points = verdict(points.read > 0, has_points);
+  auto crush_verdicts         = [&](const crush_report_t& c, const char* v[5], bool round_trip) {
+    v[0] = verdict(c.ran, c.has_reduced);
+    v[1] = verdict(c.ran && c.has_reduced, c.failed_reduced == 0);
+    v[2] = verdict(c.ran && c.has_reduced, c.failed_postsolved == 0);
+    v[3] = verdict(c.ran && c.has_reduced, c.failed_objective == 0);
+    v[4] = verdict(c.ran && c.has_reduced && round_trip, c.failed_round_trip == 0);
+  };
+  const char* in_default[5];
+  const char* in_primal[5];
+  crush_verdicts(crush_default, in_default, false);
+  crush_verdicts(crush_primal, in_primal, true);
+
+  FILE* out = std::fopen((a.out_path + ".tmp").c_str(), "w");
   if (!out) {
-    std::fprintf(stderr, "cannot open %s\n", tmp.c_str());
-    return 1;
+    std::fprintf(stderr, "cannot open %s.tmp\n", a.out_path.c_str());
+    return leave(1);
   }
-  std::fprintf(out, "{\n  \"instance\": \"%s\",\n", path.c_str());
+  std::fprintf(out, "{\n  \"instance\": %s,\n", quoted(a.path).c_str());
+  put_highs(out);
+  std::fprintf(out, "  \"presolve_mode\": \"%s\",\n", a.primal_only ? "primal_only" : "default");
   std::fprintf(out, "  \"presolve_status\": \"%s\",\n", gprs::status_name(result.status));
   std::fprintf(out, "  \"presolve_seconds\": %.6f,\n", result.seconds);
+  std::fprintf(out, "  \"hash\": \"%016llx\",\n", (unsigned long long)result.hash);
   std::fprintf(out,
                "  \"original\": {\"rows\": %d, \"cols\": %d, \"nnz\": %lld},\n",
                model.nrows,
@@ -234,34 +695,88 @@ int main(int argc, char** argv)
                result.reduced.nrows,
                result.reduced.ncols,
                (long long)result.reduced.nnz());
-  if (has_known) { std::fprintf(out, "  \"known_objective\": %.17g,\n", known); }
+  if (a.has_known) {
+    std::fprintf(out,
+                 "  \"known_objective\": %.17g,\n  \"known_is_bound\": %s,\n",
+                 a.known,
+                 a.known_bound ? "true" : "false");
+  }
+  if (!a.expect.empty()) { std::fprintf(out, "  \"expect\": \"%s\",\n", a.expect.c_str()); }
+  std::fprintf(out,
+               "  \"tolerances\": {\"point\": %g, \"check\": %g, \"objective\": %g, "
+               "\"objective_identity\": %g, \"reduced_mip\": %g},\n",
+               gprs_check::point_tolerance,
+               gprs_check::check_tolerance,
+               gprs_check::objective_tolerance,
+               gprs_check::identity_tolerance,
+               reduced_mip_tolerance);
   put_solve(out, "lp_original", lp_original);
   put_solve(out, "lp_reduced", lp_reduced);
   put_solve(out, "mip_reduced", mip_reduced);
   if (has_point) {
     std::fprintf(out,
-                 "  \"postsolved_point\": {\"row_violation\": %.3g, \"bound_violation\": %.3g, "
-                 "\"integrality_violation\": %.3g, \"objective\": %.17g},\n",
-                 point.row_violation,
-                 point.bound_violation,
-                 point.integrality_violation,
-                 point.objective);
+                 "  \"postsolved_point\": {\"row_violation\": %s, \"row_violation_scaled\": %s, "
+                 "\"bound_violation\": %s, \"integrality_violation\": %s, \"objective\": %s},\n",
+                 number(point.row, "%.3g").c_str(),
+                 number(point.row_scaled, "%.3g").c_str(),
+                 number(point.bound, "%.3g").c_str(),
+                 number(point.integrality, "%.3g").c_str(),
+                 number(point.objective).c_str());
+  }
+  std::fprintf(out, "  \"crush\": {\n    \"files\": [");
+  for (size_t k = 0; k < solutions.files.size(); ++k) {
+    std::fprintf(out,
+                 "%s{\"file\": %s, \"points\": %lld, \"incomplete_tail_bytes\": %lld}",
+                 k ? ", " : "",
+                 quoted(solutions.files[k]).c_str(),
+                 (long long)solutions.records[k],
+                 (long long)solutions.tail_bytes[k]);
   }
   std::fprintf(out,
-               "  \"checks\": {\"relaxation_not_weaker\": \"%s\", \"relaxation_below_known\": "
-               "\"%s\", \"reduced_relaxation_feasible\": \"%s\", \"postsolved_point_feasible\": "
-               "\"%s\", \"postsolved_point_objective\": \"%s\", \"optimum_equals_known\": \"%s\", "
-               "\"dual_bound_below_known\": \"%s\"}\n}\n",
+               "],\n    \"points\": %d, \"points_used\": %d, \"points_rejected\": %d,\n"
+               "    \"rejected\": {\"row\": %s, \"bound\": %s, \"integrality\": %s},\n"
+               "    \"best_objective\": %s%s\n",
+               points.read,
+               (int)points.points.size(),
+               points.rejected,
+               number(points.rejected_row, "%.3g").c_str(),
+               number(points.rejected_bound, "%.3g").c_str(),
+               number(points.rejected_integrality, "%.3g").c_str(),
+               number(points.best_objective()).c_str(),
+               has_points ? "," : "");
+  if (has_points) {
+    put_crush(out, "default", crush_default, false);
+    put_crush(out, "primal_only", crush_primal, true);
+  }
+  std::fprintf(out, "  },\n");
+  std::fprintf(out,
+               "  \"checks\": {\"presolve_status\": \"%s\", \"relaxation_not_weaker\": \"%s\", "
+               "\"relaxation_below_known\": \"%s\", \"reduced_relaxation_status\": \"%s\", "
+               "\"reduced_mip_status\": \"%s\", \"postsolved_point_feasible\": \"%s\", "
+               "\"postsolved_point_objective\": \"%s\", \"optimum_equals_known\": \"%s\", "
+               "\"dual_bound_below_known\": \"%s\", \"solution_points\": \"%s\",\n",
+               presolve_status,
                relaxation_not_weaker,
                relaxation_below_known,
-               reduced_feasible,
-               point_feasible_verdict,
+               reduced_relaxation_status,
+               reduced_mip_status,
+               point_feasible,
                point_objective,
                optimum_known,
-               bound_below_known);
-  if (std::fclose(out) != 0 || std::rename(tmp.c_str(), json_path.c_str()) != 0) {
-    std::fprintf(stderr, "cannot write %s\n", json_path.c_str());
-    return 1;
+               bound_below_known,
+               solution_points);
+  const char* names[5] = {"status", "reduced_point", "postsolved_point", "objective", "round_trip"};
+  for (int k = 0; k < 4; ++k) {
+    std::fprintf(out, "    \"crush_default_%s\": \"%s\",\n", names[k], in_default[k]);
   }
-  return 0;
+  for (int k = 0; k < 5; ++k) {
+    std::fprintf(
+      out, "    \"crush_primal_%s\": \"%s\"%s\n", names[k], in_primal[k], k < 4 ? "," : "}");
+  }
+  std::fprintf(out, "}\n");
+  if (!write_file(a.out_path, out)) {
+    std::fprintf(stderr, "cannot write %s\n", a.out_path.c_str());
+    return leave(1);
+  }
+  return leave(0);
 }

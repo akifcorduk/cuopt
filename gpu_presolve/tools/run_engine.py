@@ -7,6 +7,13 @@ the runs of one instance are not back to back. The summary keeps the smallest
 presolve time, all times, and whether the reduced-model hash is the same in
 every repetition. Results are written per repetition, so a restart with
 --skip-done continues where the last run stopped.
+
+Every run record and the summary hold the identity of the run
+(run_info.py: commit of the source tree, checksum of the tool binary, host,
+start time, load average). --skip-done reuses a repetition only if source
+tree, tool binary and command are those of the stored run. On the main set
+a status without a reduced model (anything but reduced, unchanged,
+reduced_to_empty) is a failure.
 """
 
 import argparse
@@ -17,7 +24,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import run_info
+
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+MODEL_STATUSES = ("reduced", "unchanged", "reduced_to_empty")
 
 
 def parse_args():
@@ -67,24 +77,32 @@ def find_dump(name, dirs):
     return None
 
 
-def run_one(args, entry, rep, out):
+def run_one(args, identity, entry, rep, out):
     """Run one repetition of one instance and write its run record."""
     name = entry["name"]
     record_path = out / ("%s.rep%d.run.json" % (name, rep))
+    dump = find_dump(name, args.dumps)
+    report = out / ("%s.rep%d.json" % (name, rep))
+    command = [args.tool, str(dump), "--json", str(report)]
+    if args.time_limit is not None:
+        command += ["--time-limit", str(args.time_limit)]
+    command += args.tool_arg
     if args.skip_done and record_path.is_file():
         with open(record_path) as f:
-            if "report" in json.load(f):
-                return
-    dump = find_dump(name, args.dumps)
-    record = {"name": name, "rep": rep}
+            old = json.load(f)
+        if (
+            "report" in old
+            and run_info.same_identity(old.get("identity"), identity)
+            and old.get("command") == command
+        ):
+            return
+    record = {"name": name, "rep": rep, "identity": identity}
     if dump is None:
         record["error"] = "no dump"
     else:
-        report = out / ("%s.rep%d.json" % (name, rep))
-        command = [args.tool, str(dump), "--json", str(report)]
-        if args.time_limit is not None:
-            command += ["--time-limit", str(args.time_limit)]
-        command += args.tool_arg
+        record["command"] = command
+        record.update(run_info.host_state())
+        report.unlink(missing_ok=True)
         start = time.time()
         with open(out / ("%s.rep%d.log" % (name, rep)), "w") as log:
             try:
@@ -99,6 +117,7 @@ def run_one(args, entry, rep, out):
                 record["exit_code"] = None
                 record["error"] = "killed after %g s" % args.kill_after
         record["wall_seconds"] = time.time() - start
+        record["end_load_average"] = run_info.host_state()["load_average"]
         if record["exit_code"] == 0 and report.is_file():
             with open(report) as f:
                 record["report"] = json.load(f)
@@ -124,7 +143,7 @@ def run_one(args, entry, rep, out):
     )
 
 
-def summarize(args, entries, out):
+def summarize(args, summary, entries, out):
     """Write summary.json from the run records and return the failure count."""
     instances = []
     failures = 0
@@ -139,6 +158,7 @@ def summarize(args, entries, out):
         }
         reports = []
         errors = []
+        runs = []
         for rep in range(args.reps):
             path = out / ("%s.rep%d.run.json" % (name, rep))
             if not path.is_file():
@@ -146,13 +166,25 @@ def summarize(args, entries, out):
                 continue
             with open(path) as f:
                 record = json.load(f)
+            runs.append(
+                {
+                    k: record.get(k)
+                    for k in (
+                        "rep",
+                        "host",
+                        "start_time",
+                        "load_average",
+                        "end_load_average",
+                        "wall_seconds",
+                    )
+                }
+            )
             if "report" in record:
                 reports.append(record["report"])
             else:
                 errors.append("rep %d: %s" % (rep, record.get("error")))
-        if errors:
-            row["errors"] = errors
-            failures += 1
+        row["runs"] = runs
+        failed = bool(errors)
         if reports:
             best = min(reports, key=lambda r: r["seconds"])
             row.update(
@@ -168,20 +200,37 @@ def summarize(args, entries, out):
                     "rules": best["rules"],
                 }
             )
-            if not row["same_hash"]:
-                failures += 1
+            if "seconds_outside_rules" in best:
+                row["seconds_outside_rules"] = best["seconds_outside_rules"]
+            failed = failed or not row["same_hash"]
+            statuses = sorted({r["status"] for r in reports})
+            if entry.get("role") == "main" and any(
+                s not in MODEL_STATUSES for s in statuses
+            ):
+                errors.append(
+                    "status without a reduced model: %s" % ", ".join(statuses)
+                )
+                failed = True
+        if errors:
+            row["errors"] = errors
+        failures += 1 if failed else 0
         instances.append(row)
+    summary.update(
+        {
+            "tool": args.tool,
+            "tool_args": args.tool_arg,
+            "reps": args.reps,
+            "end_time": run_info.host_state()["start_time"],
+            "end_load_average": run_info.host_state()["load_average"],
+            "failures": failures,
+            "instances": instances,
+        }
+    )
     with open(out / "summary.json", "w") as f:
-        json.dump(
-            {
-                "tool": args.tool,
-                "tool_args": args.tool_arg,
-                "reps": args.reps,
-                "instances": instances,
-            },
-            f,
-            indent=1,
-        )
+        json.dump(summary, f, indent=1)
+    for row in instances:
+        for error in row.get("errors", []):
+            print("%s: %s" % (row["name"], error))
     return failures
 
 
@@ -192,10 +241,19 @@ def main():
         entries = select(json.load(f), args.set, args.only)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    identity = run_info.run_identity(args.tool)
+    if identity["tool_checksum"] is None:
+        sys.exit("cannot read the tool %s" % args.tool)
+    summary = {"identity": identity}
+    summary.update(run_info.host_state())
     for rep in range(args.reps):
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            list(pool.map(lambda e: run_one(args, e, rep, out), entries))
-    failures = summarize(args, entries, out)
+            list(
+                pool.map(
+                    lambda e: run_one(args, identity, e, rep, out), entries
+                )
+            )
+    failures = summarize(args, summary, entries, out)
     print("%d instances, %d with a failure" % (len(entries), failures))
     sys.exit(1 if failures else 0)
 
