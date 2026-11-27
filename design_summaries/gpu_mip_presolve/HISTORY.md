@@ -2515,3 +2515,39 @@ No new user message.
 - I started M1 before the node had confirmed M0, because both M0 agents had compared the
   engines model by model and the local run on all 240 gave the stored hashes. What is still
   open on the node (the time of the lists) can change one function of M1, not its rules.
+
+## Entry 46 — 2026-11-27 — The groundwork (M0) verified on the node, merged and pushed
+
+No new user message.
+
+- Node chain on viking-cr-194 (`tools/stage1c_engine_runs.sh`; tags `s1c_base` = `f439c6d18`,
+  `s1c_m0` = `affa1eb9d`, `s1c_m0_off` = the four new families off):
+  - 417 tests pass in both builds.
+  - `s1c_m0` and `s1c_m0_off` equal `s1c_base` on the 240 benchmark instances, the 31 testbed
+    instances below 1e7 nonzeros and the 9 above: status, sizes, hash, fixed-point flag,
+    rounds, rebuilds and the counts of every Stage 1 family
+    (`analysis/stage1c_identity.py`). `s1c_base` equals the stored `v4pre` results of the old
+    node on all of them.
+  - Assertion build: no failure on the 240, the 31 and the 4 status instances.
+  - Check without a solver: structure check (with the new objective part) passes on all 240
+    and on the testbed in both modes; crush check passes on the 184 benchmark instances with
+    points and on the testbed; the only failure is the known `solution_points` of
+    hawaiiv10-130. My first run of the benchmark check used the testbed's solution files and
+    covered 29 instances; corrected in the script and rerun.
+  - Time, minimum of three alternating passes, one process at a time, node load 12 to 40
+    (`analysis/stage1c_time.py`): +1.07% on the 240 (16.50 s to 16.68 s), +2.27% on the 31
+    (4.06 to 4.15 s), +1.91% on the 9 large (77.5 to 79.0 s; dlr2 +5.1%, sesia +3.2%, from
+    the lists built with the state). With the families off: +0.50%, +2.46%, +1.68%. Work
+    units of the Stage 1 families equal on every set.
+- Decision by the design's own criterion (within 3% on the 240): the three column families
+  keep a row list each; the shared-list fallback is not taken.
+- Merged: `feat/gpu-presolve` fast-forwarded to the two M0 commits (`6eed652cf`, `74350acb3`)
+  and the node results with the scripts committed on top (`1f658f974`), pushed.
+- Overheads tracked (`analysis/overheads.py`, tag `s1c_m0`): on the 240 the engine takes
+  16.7 s, 60% of it outside the rules (state build 42.7%); it uses 8.7% of the time
+  allowance against HiGHS with the Stage 1 rule set (stored reference, one run).
+- Started on the node: `cuopt_runs/build_against_engine.sh s1c_m0` (the cuOpt adapter with
+  its tests and the device code against the changed headers), which neither M0 agent could
+  build.
+- Running: workflow `wf_88a2e01d-e49` (assumptions register), workflow `wf_baf55528-756`
+  (milestone M1).
