@@ -74,7 +74,7 @@ def engine_rows(directories):
 def timed_reference(name):
     """Return the minimum reference seconds over the passes of a timing run."""
     out = {}
-    for where in ("dev", "large"):
+    for where in ("dev", "large", "all"):
         for k in (1, 2, 3):
             path = (
                 STAGE1

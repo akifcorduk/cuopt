@@ -6,7 +6,9 @@ Usage: stage1_time_gate.py <name>
 Reads results/stage1/timing/<name>, written by
 baseline/stage1_timing_runs.sh: passes ref_dev_<k>, engine_dev_<k>,
 ref_large_<k>, engine_large_<k> (k = 1, 2, 3), the reference and the engine
-in turn. Per instance the time of a side is the minimum over its passes.
+in turn; or by baseline/bench240_timing_runs.sh on the 240 benchmark
+instances: ref_all_<k>, engine_all_<k>. Per instance the time of a side is
+the minimum over its passes.
 
 Time rule: t <= 1.2 * t(reference) + 0.02 s. It is a gate in bands A and B;
 the other bands are reported. An instance with fewer than three passes on a
@@ -40,7 +42,7 @@ def collect(directory, side, seconds_key):
     times = {}
     records = {}
     summaries = []
-    for where in ("dev", "large"):
+    for where in ("dev", "large", "all"):
         for k in PASSES:
             path = directory / ("%s_%s_%d" % (side, where, k)) / "summary.json"
             summary, rows = instances(path)
