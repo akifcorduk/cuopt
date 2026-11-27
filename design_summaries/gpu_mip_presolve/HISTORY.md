@@ -2555,3 +2555,49 @@ No new user message.
   cuOpt with the groundwork engine builds (7 minutes), the adapter's 27 tests pass, the device
   code builds against the changed headers and its state build test passes. Script committed
   and pushed (`1112631b6`). M0 has no open build item left.
+
+## Entry 47 — 2026-11-27 — The assumptions register exists (316 entries)
+
+No new user message.
+
+- Workflow `wf_88a2e01d-e49` ended: eight readers (the plan, the two rule designs, the two
+  halves of this history, the engine code, the cuOpt adapter, the measurement scripts), a
+  merge (312 entries), three critics (completeness: 20 findings; accuracy: 30, it opened the
+  place of every entry; strengthening: 19) and a final version. Result:
+  `design_summaries/gpu_mip_presolve/ASSUMPTIONS.md`, 316 entries AS-001 to AS-316, brought
+  up to Entry 46 and commit `1112631b6`, 816 citations with line numbers checked by script.
+- Sections: reductions held back, restricted or not built (42); defaults of the rules (26);
+  tolerances, limits and guards (43); order, rounds, budgets (21); use inside cuOpt (38);
+  measurement conventions and references (62); findings that later choices rest on (25);
+  known defects and blind spots (30); architecture and device (29).
+- Who set them, by the overview table: design 216 (and 10 design/code), code 36, the owner
+  24 (and 6 shared), taken as recommended 18.
+- Switches: 89 entries name a code option, 34 a script option, constant or cuOpt parameter,
+  171 have no switch yet. 110 entries ask for a cluster comparison of two arms that differ
+  in one switch; all of them depend on the adapter passing engine options, which it does
+  for two options only today (AS-152).
+- The opening defines the end test (both arms in adapter mode 3 with scaling off; primal
+  gap, optimal count and primal integral, and on the dual side the root relaxation
+  objective, the final bound and the node count) and a closing rule: a size run closes an
+  entry only when the reduced-model hash is equal on all 240 at both values of the choice.
+  The dual-side measures were added by the register, not by the owner.
+- What the register lists as open with the owner (17 points): the default of the integer
+  merge (AS-001) and the two dual singleton rules in primal-only mode (AS-004); eight
+  decisions of the five-rule design; the round limit (AS-118); mode 3 as the comparison arm
+  (AS-134); the fallback to PaPILO when the engine refuses a model (AS-156); no engine
+  assertions in cluster builds (AS-229); one row list per column family (AS-269); the
+  threshold, the runs per arm and the baseline of the end test (AS-214 to AS-216); whether
+  the dual-side measures count as solution quality (AS-217); strengthening rules without a
+  place in the plan (coefficient lifting from probing AS-009, substitutions from cliques
+  and implications AS-010, gcd rules and variable-bound extraction AS-018, cover
+  strengthening AS-019, the shift of a range-1 integer to a binary AS-020); what replaces
+  the held-out set (AS-274).
+- From now on: a new assumption gets the next free number in its section when it is made;
+  the agents of each milestone return theirs in their reports and I add them.
+
+### Lesson
+
+- The readers found three places where what I had reported to the owner and what the design
+  then fixed differ (the integer merge was reported as "a switch that is off inside cuOpt"
+  and became `range_kept` everywhere). A register entry has to say what the owner was told,
+  not only what is in the design.
