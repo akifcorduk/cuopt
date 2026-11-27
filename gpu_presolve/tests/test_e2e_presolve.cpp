@@ -331,6 +331,85 @@ GPRS_TEST(e2e_presolve_is_repeatable)
   }
 }
 
+// Cases that longer runs of the suites above found (seeds from 60000000 on).
+
+// Dual fixing puts x1 at its bound of 1e22, and rows 0 and 2 are parallel on what is left. A
+// side of row 0 is stored with the term of x1 in it: the lower side that row 2 gives it was
+// lost in that term and the presolve returned infeasible.
+GPRS_TEST(e2e_case_all_rules_dense_101108360)
+{
+  model_t base;
+  base.nrows            = 3;
+  base.ncols            = 4;
+  base.row_start        = {0, 3, 6, 8};
+  base.col_index        = {0, 1, 2, 0, 1, 2, 0, 2};
+  base.value            = {3., 3., -3., 3., -1., 3., -2., 2.};
+  base.row_lower        = {3., -inf, -inf};
+  base.row_upper        = {inf, 3., 5.};
+  base.col_lower        = {0., -inf, 3., 0.};
+  base.col_upper        = {2., 1e+22, 4., 2.};
+  base.cost             = {-3., 0., -2., 0.};
+  base.col_type         = {1, 1, 1, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {0.00390625, 0.125, 0.00390625}, {1., 1., 1., 1.});
+  options_t options;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// The same with x2 fixed at -2e20 and no rebuild before the parallel rows: row 4 gave row 2 the
+// lower side 3 - 4e20, which is -4e20, and the reduced model had the optimum 6 instead of 6.5.
+GPRS_TEST(e2e_case_rebuild_never_open_ends_60163257)
+{
+  model_t base;
+  base.nrows            = 5;
+  base.ncols            = 8;
+  base.row_start        = {0, 2, 5, 9, 14, 16};
+  base.col_index        = {3, 7, 0, 1, 6, 0, 2, 5, 6, 0, 1, 4, 5, 6, 0, 6};
+  base.value            = {-2., -3., 2., -2., 1., 3., 2., -3., -3., -1., 1., 1., -2., 3., 2., -2.};
+  base.row_lower        = {3., -inf, -inf, -inf, 1.};
+  base.row_upper        = {3., 3., 12., inf, inf};
+  base.col_lower        = {3., -inf, -2e+20, 0., 0., -3., 0., -inf};
+  base.col_upper        = {5., inf, -2., 3., 1., 0., 3., inf};
+  base.cost             = {0., 3., 0., 0., -2., 0., -2., 0.};
+  base.col_type         = {1, 0, 1, 1, 1, 1, 1, 1};
+  base.objective_offset = 5.;
+
+  oracle::case_t c = oracle::make_case(base, {}, {});
+  options_t options;
+  options.rebuild_dead_fraction  = 2.;
+  options.rebuild_fixed_fraction = 2.;
+  oracle::verdict_t verdict      = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// The lower bound of x0 comes down from -1e15 to -2, and coefficient strengthening sets its
+// coefficient to 1 plus the error bound of the activity, one rounding step above 1. x0 is an
+// integer line column of the reduced model: the oracle rounded the end that the row gives it
+// inwards without its tolerance and found the optimum 0 instead of -2.
+GPRS_TEST(e2e_case_all_rules_open_ends_60152816)
+{
+  model_t base;
+  base.nrows            = 3;
+  base.ncols            = 3;
+  base.row_start        = {0, 3, 6, 9};
+  base.col_index        = {0, 1, 2, 0, 1, 2, 0, 1, 2};
+  base.value            = {-2., -3., -1., 2., 3., 1., 2., 3., 1.};
+  base.row_lower        = {-inf, 3., 3.};
+  base.row_upper        = {-3., inf, inf};
+  base.col_lower        = {-1000000000000000., 1., 0.};
+  base.col_upper        = {inf, 2., 2.};
+  base.cost             = {2., 0., 2.};
+  base.col_type         = {1, 1, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {}, {});
+  options_t options;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
 // Multi-round sequence: the reduced model is a model like any other. Its data need not be
 // integers, so the oracle compares with its tolerance here.
 GPRS_TEST(e2e_second_presolve_of_the_reduced_model)

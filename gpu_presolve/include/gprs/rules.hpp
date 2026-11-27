@@ -169,6 +169,9 @@ struct doubleton_t {
 // the kept row's sides (set_row_lower / set_row_upper; infeasible when they cross by more than
 // the feasibility tolerance, a smaller crossing sets the new side to the opposite one), and the
 // other row is deleted and recorded.
+// A pair whose kept row has fixed terms f with |f| * tol.side_error > tol.feasibility is left
+// alone and counts as not parallel towards the limit: a side of that row is stored with f in it,
+// as one double, and would lose more than the tolerance (a column fixed at a huge bound).
 struct parallel_rows_t {
   struct work_t;
   parallel_rows_t();

@@ -166,7 +166,16 @@ comparison_t compare(const state_t& st,
   return result;
 }
 
+// A side of the kept row is stored as one double with the fixed terms of that row in it, and
+// the sides of the two rows are compared in that form. Fixed terms above this size take more
+// than the tolerance from a side next to them (as holds_tolerance in the row tightening).
+inline bool keeps_sides(dd_t fixed_terms, const tolerances_t& tol)
+{
+  return std::fabs(dd_value(fixed_terms)) * tol.side_error <= tol.feasibility;
+}
+
 // removed = ratio * kept on the free entries: the sides of `removed` become sides of `kept`.
+// The caller has tested keeps_sides(kept_fixed).
 rule_outcome_t merge(state_t& st,
                      postsolve_t& ps,
                      const tolerances_t& tol,
@@ -176,6 +185,7 @@ rule_outcome_t merge(state_t& st,
                      dd_t removed_fixed,
                      double ratio)
 {
+  gprs_assert(keeps_sides(kept_fixed, tol));
   auto image = [&](double side) {
     double free_side = std::isfinite(side) ? dd_residual(side, removed_fixed) : side;
     return free_side / ratio + dd_value(kept_fixed);
@@ -308,7 +318,7 @@ rule_result_t parallel_rows_t::run(state_t& st,
       gprs_assert(st.row_free_size[other] == key.length);
       budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
       comparison_t c = compare(st, tol, s, w.coefficient, other);
-      if (!c.parallel) {
+      if (!c.parallel || !keeps_sides(s.fixed_terms, tol)) {
         ++unlike;
         ++it;
         continue;
@@ -335,7 +345,7 @@ rule_result_t parallel_rows_t::run(state_t& st,
       gprs_assert(st.row_free_size[other] == key.length);
       budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
       comparison_t c = compare(st, tol, s, w.coefficient, other);
-      if (!c.parallel) {
+      if (!c.parallel || !keeps_sides(c.fixed_terms, tol)) {
         ++unlike;
         self = below;
         continue;

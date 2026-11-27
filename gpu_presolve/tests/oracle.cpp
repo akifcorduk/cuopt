@@ -570,7 +570,9 @@ solution_t solve(const model_t& model, const std::vector<uint8_t>& line_col, int
         gprs_assert(row_line[i] < 0);
         row_line[i]       = j;
         row_line_value[i] = model.value[e];
-      } else if (!is_integer(model.value[e])) {
+      }
+      // An end of an integer line column is rounded inwards, so its coefficient counts as well.
+      if ((!line_col[j] || model.col_type[j] == 1) && !is_integer(model.value[e])) {
         row_exact[i] = 0;
       }
     }

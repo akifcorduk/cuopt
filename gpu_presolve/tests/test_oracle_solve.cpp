@@ -472,6 +472,30 @@ GPRS_TEST(oracle_solve_uses_the_tolerance_on_data_that_are_not_integer)
   GPRS_CHECK_EQ(solve_model(m, 1, 10).feasible.size(), 2u);
 }
 
+GPRS_TEST(oracle_solve_integer_line_column_with_a_coefficient_that_is_not_an_integer)
+{
+  // -a y - x <= 1 with an integer line column y >= -2 and the coefficient a one rounding step
+  // above 1, as coefficient strengthening leaves it: y >= -(1 + x) / a lies just above -1 and
+  // -2, and the row has the tolerance although its sides and the coefficient of x are integers.
+  double a = 1. + 0x1p-52;
+  model_t m =
+    make_model({{-2., inf, 2., 1}, {0., 2., 2., 1}}, {{-inf, {{0, -a}, {1, -1.}}, 1.}}, 0.);
+  GPRS_CHECK(-1. / a > -1.);
+  solution_t s = solve_model(m, 3, 10);
+  GPRS_CHECK(s.outcome == outcome_t::optimal);
+  GPRS_CHECK_EQ(s.objective, -2.);
+  GPRS_CHECK(s.feasible == points_t({{-1., 0.}, {-2., 1.}, {-2., 2.}}));
+  // An integer coefficient is exact: 3 y >= 1 leaves y >= 1, and 3 y >= 3 - 1e-12 does so as well
+  // through the tolerance of its side.
+  m = make_model({{-inf, inf, 1., 1}}, {{1., {{0, 3.}}, inf}}, 0.);
+  GPRS_CHECK_EQ(solve_model(m, 3).objective, 1.);
+  m.row_lower[0] = 3. - 1e-12;
+  GPRS_CHECK_EQ(solve_model(m, 3).objective, 1.);
+  // A continuous line column keeps its exact ends: 0.5 y >= 1 with y <= 2 by its bound.
+  m = make_model({{-inf, 2., 1., 0}}, {{1., {{0, 0.5}}, inf}}, 0.);
+  GPRS_CHECK_EQ(solve_model(m, 3).objective, 2.);
+}
+
 GPRS_TEST(oracle_solve_tolerance_of_a_side_does_not_grow_with_the_other_side)
 {
   // 0.25 <= 0.25 x with a huge finite upper side, as a fixed column at a huge bound leaves it

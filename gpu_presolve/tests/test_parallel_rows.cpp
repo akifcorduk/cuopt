@@ -513,6 +513,54 @@ GPRS_TEST(parallel_fixed_terms)
   }
 }
 
+// A side of the kept row is stored with the fixed terms of that row in it. Fixed terms that one
+// double does not hold within the tolerance next to a side leave the pair alone.
+GPRS_TEST(parallel_huge_fixed_terms)
+{
+  {
+    // Row 0: 3 x0 - 3 x1 + 2 x2 <= 12 with x2 fixed at -2e20. Row 1: x0 - x1 >= 1, which as a
+    // lower side of row 0 would be 3 - 4e20: the 3 is lost and x0 == x1 becomes feasible.
+    model_t m = make_model(
+      {{3., -3., 2.}, {1., -1., 0.}}, {-inf, 1.}, {12., inf}, {0., 0., -2e20}, {3., 3., -2e20});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
+    GPRS_CHECK_EQ(f.st.row_lower[0], -inf);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 12.);
+    GPRS_CHECK_EQ(f.ps.parallel_rows.size(), (size_t)0);
+    GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 6);
+  }
+  {
+    // The same rows in the other order: the kept row has no fixed term and takes the upper side
+    // of the other row, (12 + 4e20) / 3.
+    model_t m = make_model(
+      {{1., -1., 0.}, {3., -3., 2.}}, {1., -inf}, {inf, 12.}, {0., 0., -2e20}, {3., 3., -2e20});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
+    GPRS_CHECK_EQ(f.st.row_lower[0], 1.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], (12. + 4e20) / 3.);
+    GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 6);
+  }
+  {
+    // The limit is |fixed terms| * tol.side_error <= tol.feasibility, 1e8 with the default
+    // tolerances. Row 0: x0 + x1 + x2 <= x2 + 5, row 1: x0 + x1 >= 2.
+    for (double value : {5e7, 2e8}) {
+      model_t m = make_model({{1., 1., 1.}, {1., 1., 0.}},
+                             {-inf, 2.},
+                             {value + 5., inf},
+                             {0., 0., value},
+                             {4., 4., value});
+      fixture_t f(m);
+      bool merged = value == 5e7;
+      GPRS_CHECK_EQ(f.run().findings, merged ? 1 : 0);
+      GPRS_CHECK_EQ(f.st.live_rows, merged ? 1 : 2);
+      if (merged) { GPRS_CHECK_EQ(f.st.row_lower[0], value + 2.); }
+      GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 16);
+    }
+  }
+}
+
 // Rows with fewer than two free entries are left to the row rules.
 GPRS_TEST(parallel_short_rows)
 {
