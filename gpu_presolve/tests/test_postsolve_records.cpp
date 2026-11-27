@@ -150,6 +150,40 @@ GPRS_TEST(postsolve_push_keeps_kinds_in_order)
   GPRS_CHECK(ps.col_removed == std::vector<uint8_t>({1, 1, 1, 1, 0}));
 }
 
+// A row addition has its own array and place in the order, removes no column, and the primal
+// postsolve passes it by.
+GPRS_TEST(postsolve_row_addition_record)
+{
+  postsolve_t ps;
+  ps.init(bare_model({0, 0, 1}, 3));
+  ps.push_row_addition(2, 0, -1.5);
+  ps.push_fixed_col(1, 4.);
+  ps.push_parallel_row(1, 0, 2.);
+  ps.push_row_addition(0, 2, 0.25);
+  std::vector<record_kind_t> order = {record_kind_t::row_addition,
+                                      record_kind_t::fixed_col,
+                                      record_kind_t::parallel_row,
+                                      record_kind_t::row_addition};
+  GPRS_CHECK(ps.order == order);
+  GPRS_REQUIRE(ps.row_additions.size() == 2 && ps.parallel_rows.size() == 1);
+  GPRS_CHECK_EQ(ps.row_additions[0].row, 2);
+  GPRS_CHECK_EQ(ps.row_additions[0].equation_row, 0);
+  GPRS_CHECK_EQ(ps.row_additions[0].factor, -1.5);
+  GPRS_CHECK_EQ(ps.row_additions[1].row, 0);
+  GPRS_CHECK_EQ(ps.row_additions[1].equation_row, 2);
+  GPRS_CHECK_EQ(ps.row_additions[1].factor, 0.25);
+  GPRS_CHECK(ps.col_removed == std::vector<uint8_t>({0, 1, 0}));
+  ps.col_origin = {0, 2};
+  std::vector<double> x;
+  ps.postsolve({7., 2.4}, x);
+  GPRS_CHECK(x == std::vector<double>({7., 4., 2.}));
+  std::vector<double> crushed;
+  ps.crush(x, crushed);
+  GPRS_CHECK(crushed == std::vector<double>({7., 2.}));
+  ps.init(bare_model({0, 0, 1}, 3));
+  GPRS_CHECK(ps.order.empty() && ps.row_additions.empty());
+}
+
 // Kinds interleaved, so that element k of a kind's array is not record k of the stack.
 GPRS_TEST(postsolve_hand_sequence)
 {

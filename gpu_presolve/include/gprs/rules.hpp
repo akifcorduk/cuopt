@@ -206,24 +206,60 @@ struct doubleton_t {
   std::unique_ptr<work_t> work;
 };
 
-// (e) Rows whose free entries are proportional: the same free columns and one ratio r with
-// |b - r * a| <= tol.zero * |b| for every pair of coefficients. work_t keeps, for every live row
-// with at least two free entries, a hash of its free entries that does not depend on their
-// storage order (coefficients divided by the one of the smallest column index and rounded, so
-// that parallel rows get one hash except at a rounding boundary). The rows of
-// row_list::parallel_rows get a new hash. A bucket is the set of those rows with equal hash and
-// equal free length, in index order. Each listed row, in index order, is compared exactly with
-// its neighbours in its bucket, listed or not: at most opt.parallel_bucket_limit below it and as
-// many above it. The work is thus bounded by the entries of the listed rows times twice that
-// limit, and a row that changed is still found parallel to a row that did not.
-// Of two parallel rows the one with the smaller index is kept: the other row's sides, less its
-// fixed terms, divided by the ratio, plus the fixed terms of the kept row, are intersected with
-// the kept row's sides (set_row_lower / set_row_upper; infeasible when they cross by more than
-// the feasibility tolerance, a smaller crossing sets the new side to the opposite one), and the
-// other row is deleted and recorded.
+// (e) Rows whose cores are proportional. A singleton column is a live column with one live
+// entry; the core of a row is its free entries outside singleton columns. Two rows are parallel
+// when their cores have the same columns and one ratio r with |b - r * a| <= tol.zero * |b| for
+// every pair of core coefficients. With opt.near_parallel_rows off the core of a row is all its
+// free entries, and what is said of singleton columns below does not occur.
+// work_t keeps, for every live row with at least two core entries, a hash of its core that does
+// not depend on the storage order (coefficients divided by the one of the smallest column index
+// and rounded, so that parallel rows get one hash except at a rounding boundary). The rows of
+// row_list::parallel_rows whose free entries changed get a new hash, and so do the rows of
+// row_list::singletons, whose core changed with their free entries as they were. A bucket is the
+// set of those rows with equal hash and equal core length, in index order. Each listed row, in
+// index order, is compared exactly with its neighbours in its bucket, listed or not: at most
+// opt.parallel_bucket_limit above it, then as many below it. The work is thus bounded by the
+// entries of the listed rows times twice that limit, and a row that changed is still found
+// parallel to a row that did not.
+// Two parallel rows without a singleton column: the one with the smaller index is kept: the
+// other row's sides, less its fixed terms, divided by the ratio, plus the fixed terms of the
+// kept row, are intersected with the kept row's sides (set_row_lower / set_row_upper;
+// infeasible when they cross by more than the feasibility tolerance, a smaller crossing sets
+// the new side to the opposite one), and the other row is deleted and recorded.
 // A pair whose kept row has fixed terms f with |f| * tol.side_error > tol.feasibility is left
 // alone and counts as not parallel towards the limit: a side of that row is stored with f in it,
 // as one double, and would lose more than the tolerance (a column fixed at a huge bound).
+// Two parallel rows with a singleton column in one of them at least: an equation of the pair is
+// subtracted from the other row, the target. The equation qualifies when it has no singleton
+// column, or one while the target has at most one; of two equations that qualify, the one with
+// fewer singleton columns is subtracted, then the one with the smaller index. With f = core of
+// the target / core of the equation (the coefficients of the smallest core column), in this
+// order: the first core entry of the target, in storage order, becomes the entry of the
+// equation's singleton column with -f times its coefficient there (move_entry), if it has one;
+// the other core entries of the target are deleted in storage order (delete_entry); the finite
+// sides of the target are shifted by f times the right-hand side of the equation less its fixed
+// terms (shift_row_sides), unless that is zero; the step is recorded (push_row_addition). No row
+// is deleted: the target is left with its own singleton columns and that of the equation, with
+// one or two entries or with a part of the entries it had, to the row rules and the doubleton
+// equations. The two rows have the same solutions before and after, integer columns or not.
+// Such a step takes at least one entry from the model, since a core has two entries or more and
+// the equation brings at most one, and no family adds an entry: their number is finite.
+// The pair is left alone, and counts as not parallel towards the limit, when neither row
+// qualifies; when |v| * tol.side_error > tol.feasibility for v the right-hand side of the
+// equation, its fixed terms, the shift, or a finite side of the target (the fixed terms of the
+// target stay in its entries and are not read); when f or the new coefficient is zero or not
+// finite; or when max |a| / min |a| over the free entries of the target would end above 1e6 and
+// above its value before. That last test and the step read the target once more and spend its
+// used slots.
+// A reduction can change the core of a row that stays: of the kept row or the equation, where a
+// column that only the two rows held becomes a singleton column, and of the equation, whose
+// singleton column gets a second entry. Such a row and the target have no key until the next
+// call, which lists them, and when the listed row is one of them its turn ends.
+// Integer columns: the subtraction is a row operation, so it changes no solution. It changes
+// what a single row tells. A target whose columns were all integer can get a continuous
+// singleton column of the equation and is then no row of (c); a bound that the target gave a
+// core column is now read from the equation and the bounds of its singleton column, which are
+// explicit only for an integer column or after the target has become a singleton row.
 struct parallel_rows_t {
   struct work_t;
   parallel_rows_t();

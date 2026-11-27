@@ -110,6 +110,11 @@ struct options_t {
   // Kept rows a row is compared with inside one hash bucket of the parallel-row search.
   int32_t parallel_bucket_limit = 4;
 
+  // Parallel rows compare the rows without their singleton columns and subtract an equation
+  // from a row that is parallel to it up to such columns (rules.hpp (e)). Off: only rows whose
+  // free entries are proportional are merged. The same in every call on one state.
+  bool near_parallel_rows = true;
+
   // Record a hash of state and postsolve stack after every phase in result_t::phase_hash.
   bool phase_hashes = false;
 };

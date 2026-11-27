@@ -66,11 +66,23 @@ void check_side(const activity_t& act, int32_t row, const expected_side_t& expec
 
 using list_t = std::vector<int32_t>;
 
-void check_rule_lists(const state_t& st, uint8_t events, const list_t& rows)
+// The five rule lists hold `rows` where `events` feeds them; `singleton` are the rows that got
+// row_event::singleton, before the rows of the operation (first) or after them.
+void check_rule_lists(const state_t& st,
+                      uint8_t events,
+                      const list_t& rows,
+                      const list_t& singleton = {},
+                      bool first              = false)
 {
   for (int32_t l = 0; l < row_list::compaction; ++l) {
-    GPRS_CHECK(st.row_frontier.list[l] == ((events >> l) & 1 ? rows : list_t()));
+    list_t expected = (events >> l) & 1 ? rows : list_t();
+    if (l == row_list::parallel_rows) {
+      expected.insert(
+        first ? expected.begin() : expected.end(), singleton.begin(), singleton.end());
+    }
+    GPRS_CHECK(st.row_frontier.list[l] == expected);
   }
+  GPRS_CHECK(st.row_frontier.list[row_list::singletons] == singleton);
 }
 
 // The lists after a bound change: every row of the column on the lists of a changed activity,
@@ -250,9 +262,10 @@ GPRS_TEST(state_ops_delete_row)
   GPRS_CHECK(st.down_locks == list_t({0, 2, 0, 1, 1}));
   check_side(st.min_act, 4, {0., 0., 0, 0, 0., 0});
   check_side(st.max_act, 4, {0., 0., 0, 0, 0., 0});
-  // Events for the live columns only, and no row event.
+  // Events for the live columns only. x0 is left with its entry in r0 and x4 with its entry in
+  // r2: both are singleton columns now. x1 has one entry left as well, but it is fixed.
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == list_t({0, 2, 4}));
-  check_rule_lists(st, 0, {});
+  check_rule_lists(st, 0, {}, {0, 2});
   GPRS_CHECK(st.col_frontier.empty(col_list::compaction));
   GPRS_CHECK_EQ(st.find_entry(4, 0), -1);
   GPRS_CHECK_EQ(st.dead_fraction(), 4. / 12.);
@@ -433,7 +446,8 @@ GPRS_TEST(state_ops_delete_entry)
   GPRS_CHECK_EQ(st.row_version[2], 1u);
   GPRS_CHECK_EQ(st.find_entry(2, 3), -1);
   GPRS_CHECK_EQ(st.find_entry(2, 4), 7);
-  check_rule_lists(st, row_event::entries, {2});
+  // x3 is left with its entry in r1.
+  check_rule_lists(st, row_event::entries, {2}, {1});
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == list_t({3}));
   GPRS_CHECK(st.row_frontier.empty(row_list::compaction));
   GPRS_CHECK(st.col_frontier.empty(col_list::compaction));
@@ -496,7 +510,8 @@ GPRS_TEST(state_ops_move_entry)
   GPRS_CHECK_EQ(st.find_entry(1, 0), 4);
   GPRS_CHECK_EQ(st.find_entry(1, 3), -1);
   GPRS_CHECK_EQ(st.dead_fraction(), 4. / 16.);
-  check_rule_lists(st, row_event::entries, {1});
+  // x3 is left with its entry in r2.
+  check_rule_lists(st, row_event::entries, {1}, {2}, true);
   GPRS_CHECK(st.col_frontier.list[col_list::dual_fixing] == list_t({3, 0}));
   check_consistent(st);
 

@@ -190,6 +190,31 @@ struct run_t {
     }
   }
 
+  // The live rows that hold the column.
+  std::vector<int32_t> rows_of_col(int32_t col) const
+  {
+    std::vector<int32_t> rows;
+    for (int32_t i = 0; i < sh.nrows; ++i) {
+      if (sh.row_alive[i] && sh.row[i].count(col)) { rows.push_back(i); }
+    }
+    return rows;
+  }
+
+  // The live column loses its entry in `row`: with one entry left, that row gets the event.
+  void expect_entry_leaves(int32_t row, int32_t col)
+  {
+    std::vector<int32_t> rows = rows_of_col(col);
+    if (!sh.live(col) || rows.size() != 2) { return; }
+    row_events[rows[0] == row ? rows[1] : rows[0]] |= row_event::singleton;
+  }
+
+  // The live column gets a second entry: the row of the first one gets the event.
+  void expect_entry_joins(int32_t col)
+  {
+    std::vector<int32_t> rows = rows_of_col(col);
+    if (rows.size() == 1) { row_events[rows[0]] |= row_event::singleton; }
+  }
+
   void expect_live_cols_of_row(int32_t row)
   {
     for (const auto& entry : sh.row[row]) {
@@ -305,6 +330,9 @@ struct run_t {
     int32_t i = random_live_row();
     if (i < 0) { return false; }
     expect_live_cols_of_row(i);
+    for (const auto& entry : sh.row[i]) {
+      expect_entry_leaves(i, entry.first);
+    }
     st.delete_row(i);
     sh.delete_row(i);
     return true;
@@ -391,10 +419,11 @@ struct run_t {
   {
     entry_t entry = random_free_entry();
     if (entry.slot < 0) { return false; }
+    expect_entry_leaves(entry.row, entry.col);
     st.delete_entry(entry.slot);
     sh.row[entry.row].erase(entry.col);
     ++sh.version[entry.row];
-    row_events[entry.row] = row_event::entries;
+    row_events[entry.row] |= row_event::entries;
     col_events[entry.col] = col_event::locks;
     return true;
   }
@@ -410,11 +439,13 @@ struct run_t {
     }
     if (target < 0) { return false; }
     double v = random_coefficient(rng, decimal);
+    expect_entry_leaves(entry.row, entry.col);
+    expect_entry_joins(target);
     st.move_entry(entry.slot, target, v);
     sh.row[entry.row].erase(entry.col);
     sh.row[entry.row][target] = v;
     ++sh.version[entry.row];
-    row_events[entry.row] = row_event::entries;
+    row_events[entry.row] |= row_event::entries;
     col_events[entry.col] = col_event::locks;
     col_events[target]    = col_event::locks;
     if (st.csr.index[entry.slot] != target) { failure = "move_entry changed the CSR slot"; }
@@ -549,9 +580,10 @@ struct run_t {
     if (!apply(kind)) { return false; }
     if (!failure.empty()) { return true; }
     for (int32_t i = 0; i < st.nrows; ++i) {
-      if ((st.row_frontier.pending[i] & row_event::entries) != row_events[i]) {
+      uint8_t rule_lists = row_event::entries | row_event::singleton;
+      if ((st.row_frontier.pending[i] & rule_lists) != row_events[i]) {
         failure = "row " + std::to_string(i) + ": events " +
-                  std::to_string(st.row_frontier.pending[i] & row_event::entries) + ", expected " +
+                  std::to_string(st.row_frontier.pending[i] & rule_lists) + ", expected " +
                   std::to_string(row_events[i]);
         return true;
       }

@@ -82,6 +82,48 @@ std::vector<profile_t> profiles()
   o.p_common_factor = 0.4;
   o.p_fixed_col     = 0.05;
   list.push_back({"binary", o});
+
+  // Rows parallel up to singleton columns, equations among them, and little that the cascade
+  // settles before the parallel rows see them: no side on an end of the activity range, no
+  // fixed column, hardly a short row. First many such rows with narrow integer singleton
+  // columns for the most part, then singleton columns that are line columns for the most part.
+  o                      = generator_options_t();
+  o.p_parallel_row       = 0.65;
+  o.p_equation           = 0.45;
+  o.p_singleton_col      = 0.8;
+  o.p_singleton_line     = 0.25;
+  o.max_singleton_cols   = 4;
+  o.max_rows             = 8;
+  o.max_enum_cols        = 3;
+  o.max_side             = 30;
+  o.density              = 0.8;
+  o.p_forcing_side       = 0.;
+  o.p_outside_side       = 0.;
+  o.p_fixed_col          = 0.;
+  o.p_doubleton_equation = 0.02;
+  o.p_singleton_row      = 0.;
+  o.p_empty_row          = 0.02;
+  list.push_back({"near_parallel", o});
+
+  o.p_parallel_row     = 0.5;
+  o.p_singleton_col    = 0.6;
+  o.p_singleton_line   = 0.9;
+  o.max_singleton_cols = 3;
+  o.max_rows           = 6;
+  o.max_enum_cols      = 4;
+  o.max_line_cols      = 1;
+  o.p_infinite_bound   = 0.3;
+  list.push_back({"near_parallel_lines", o});
+  return list;
+}
+
+// The two profiles with singleton columns.
+std::vector<profile_t> near_profiles()
+{
+  std::vector<profile_t> list;
+  for (const profile_t& profile : profiles()) {
+    if (profile.options.p_singleton_col > 0.) { list.push_back(profile); }
+  }
   return list;
 }
 
@@ -134,6 +176,7 @@ std::string options_code(const options_t& options)
     out +=
       "  options.parallel_bucket_limit = " + std::to_string(options.parallel_bucket_limit) + ";\n";
   }
+  if (!options.near_parallel_rows) { out += "  options.near_parallel_rows = false;\n"; }
   return out;
 }
 
@@ -356,6 +399,99 @@ GPRS_TEST(e2e_thresholds_parallel_bucket_of_one)
   options_t options;
   options.parallel_bucket_limit = 1;
   run_suite("parallel_bucket_of_one", options, 80);
+}
+
+// Parallel rows as they were before rows parallel up to singleton columns.
+GPRS_TEST(e2e_near_parallel_rows_off)
+{
+  options_t options;
+  options.near_parallel_rows = false;
+  run_suite("near_parallel_rows_off", options, 120);
+}
+
+// The suites reach the subtraction of an equation from a row that is parallel to it up to
+// singleton columns on the two profiles made for it, with every rule and more often with the
+// parallel rows alone or without the bound propagation, and the oracle decides the reduced
+// models: also those in which the row is left with two line columns, which it takes back into
+// its class.
+GPRS_TEST(e2e_near_parallel_rows_are_reached)
+{
+  options_t without_propagation = without(rule::propagation);
+  options_t off;
+  off.near_parallel_rows = false;
+  int64_t with_all = 0, with_few = 0, models_with = 0, two_line_columns = 0, switched_off = 0;
+  int32_t failures = 0;
+  for (const profile_t& profile : near_profiles()) {
+    for (uint64_t seed = 6000000; seed < 6000500 && failures < max_reports; ++seed) {
+      case_t c = oracle::generate(seed, profile.options);
+      for (const options_t& options :
+           {options_t(), only(rule::parallel_rows), without_propagation}) {
+        result_t r  = presolve(c.model, options);
+        verdict_t v = oracle::check_result(c, options, r);
+        if (!v.ok) {
+          ++failures;
+          report(std::string("reached, profile ") + profile.name + ", seed " + std::to_string(seed),
+                 std::string("reached_") + profile.name + "_" + std::to_string(seed),
+                 v.message,
+                 oracle::to_code(c),
+                 options,
+                 check_once);
+          continue;
+        }
+        size_t n = r.postsolve.row_additions.size();
+        (options.enabled[rule::row_rules] && options.enabled[rule::propagation] ? with_all
+                                                                                : with_few) += n;
+        models_with += n > 0;
+        std::vector<uint8_t> line;
+        two_line_columns +=
+          has_model(r.status) && n > 0 &&
+          !oracle::classify_widest(r.reduced, oracle::check_max_assignments, line);
+      }
+      switched_off += presolve(c.model, off).postsolve.row_additions.size();
+    }
+  }
+  GPRS_CHECK(with_all > 40);
+  GPRS_CHECK(with_few > 400);
+  GPRS_CHECK(models_with > 300);
+  GPRS_CHECK(two_line_columns > 8);
+  GPRS_CHECK_EQ(switched_off, 0);
+}
+
+// Rows x0 + x1 + x2 = 1 and x0 + x1 + x2 + s0 + s1 + s2 = 4: the first is subtracted from the
+// second once, after which neither row has a core. Subtracting the equation with the singleton
+// columns from the other one instead puts those columns into both rows, the next round takes
+// them out again, and the rounds end only at their limit.
+GPRS_TEST(e2e_case_near_parallel_rows_end)
+{
+  for (uint8_t type : {0, 1}) {
+    model_t base;
+    base.nrows            = 2;
+    base.ncols            = 6;
+    base.row_start        = {0, 3, 9};
+    base.col_index        = {0, 1, 2, 0, 1, 2, 3, 4, 5};
+    base.value            = {1., 1., 1., 1., 1., 1., 1., 1., 1.};
+    base.row_lower        = {1., 4.};
+    base.row_upper        = {1., 4.};
+    base.col_lower        = {0., 0., 0., 0., 0., 0.};
+    base.col_upper        = {1., 1., 1., 5., 5., 5.};
+    base.cost             = {1., 2., 3., -1., 2., 0.};
+    base.col_type         = {1, 1, 1, type, type, type};
+    base.objective_offset = 0.;
+    options_t options;
+    options.max_rounds = 200;
+    result_t result    = presolve(base, options);
+    GPRS_CHECK(result.status == status_t::reduced);
+    GPRS_CHECK(result.rounds <= 4);
+    GPRS_CHECK_EQ(result.postsolve.row_additions.size(), 1u);
+    GPRS_CHECK_EQ(result.reduced.nnz(), 6);
+    // Three continuous columns in one row are outside the oracle class; integer ones are
+    // enumerated.
+    if (type == 1) {
+      oracle::verdict_t verdict =
+        oracle::check_result(oracle::make_case(base, {}, {}), options, result);
+      if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+    }
+  }
 }
 
 // The same model gives the same result twice.

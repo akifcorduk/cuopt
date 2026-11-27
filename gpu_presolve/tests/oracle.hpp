@@ -25,6 +25,11 @@
 // The generator draws from this class. Stage 1 keeps a reduced model inside it: a line column
 // that a substitution puts into the rows of an enumerated column inherits that column's bounds
 // and is enumerated afterwards, which classify() re-derives on the reduced model.
+// One reduction leaves the class: an equation subtracted from a row that is parallel to it up
+// to singleton columns (rules.hpp (e)) can leave that row with two line columns, its own and
+// that of the equation. into_class() takes such a row back: it subtracts from it a multiple of
+// an equation of the model that holds one of the two as its only line column, which leaves the
+// feasible points as they are, and the solver then sees a model of the class.
 //
 // Where the tolerance enters, row by row: a row whose sides and enumerated coefficients are all
 // integers is tested exactly; any other row with solve_tolerance * max(1, sum |a * x|, |side|)
@@ -109,6 +114,16 @@ struct generator_options_t {
   // Per small finite bound of an integer column: the bound moves outwards by 1/2, which leaves
   // the integer points of the column as they are.
   double p_fractional_bound = 0.05;
+
+  // Singleton columns, behind the columns counted above: per row with an entry, the row gets a
+  // column that no other row holds, up to max_singleton_cols per model. With p_parallel_row and
+  // p_equation this gives rows that are parallel up to singleton columns, equations among
+  // them. The column is a line column with p_singleton_line when the row has none, else an
+  // integer column with bounds one apart; its cost is drawn as that of the other columns. With
+  // p_singleton_col == 0 nothing is drawn for it and the cases are those of before.
+  double p_singleton_col     = 0.;
+  double p_singleton_line    = 0.4;
+  int32_t max_singleton_cols = 3;
 };
 
 // A model for the presolve and the integer-data model it was scaled from.
@@ -134,6 +149,10 @@ struct case_t {
 // p_fractional_bound. An integer line column with two small finite bounds is wider than
 // max_width. Requires max_coefficient >= 1, max_width >= 0, max_side > max_width and
 // 0 <= max_scale_exp2 <= 30.
+// With p_singleton_col > 0 the singleton columns follow the columns counted above, in the
+// order of their rows; a row that is a multiple of an earlier row copies that row without its
+// singleton column and can get one of its own. The sides of a row are drawn with its singleton
+// column in the activity range.
 case_t generate(uint64_t seed, const generator_options_t& options);
 
 // base with row i multiplied by row_scale[i] > 0 and column j divided by col_scale[j] > 0
@@ -163,6 +182,19 @@ double assignments(const model_t& model, const std::vector<uint8_t>& line_col);
 // classify() with the largest max_width that keeps assignments() at or below max_assignments.
 // Returns false when no max_width puts the model into the oracle class within that limit.
 bool classify_widest(const model_t& model, double max_assignments, std::vector<uint8_t>& line_col);
+
+// A model of the class with the feasible points and the objective of `model`, and its line
+// columns: `model` itself with classify_widest() where that succeeds. Otherwise, for the largest
+// max_width within the limit that allows it, `model` with every row that holds several line
+// columns reduced to one: as long as such a row has a line column j that an equation of the
+// model holds as its only line column, that equation times the ratio of the two coefficients
+// of j is subtracted from the row (the first such column of the row, the first such equation).
+// A coefficient that cancels within 1e-12 of the two terms is dropped. False when a row is left
+// with two line columns for every max_width.
+bool into_class(const model_t& model,
+                double max_assignments,
+                model_t& in_class,
+                std::vector<uint8_t>& line_col);
 
 enum class outcome_t : uint8_t { optimal, infeasible, unbounded };
 
@@ -205,10 +237,10 @@ constexpr double check_max_assignments = 16384.;
 
 // Presolves c.model, solves the reduced model and compares with solve() on c.base:
 // - infeasible / unbounded_or_infeasible from the presolve agree with the base outcome;
-// - otherwise the reduced model is well_formed and in the oracle class, has the outcome of the
-//   base model, and for optimal its optimal value equals the base optimum and its optimal
-//   point, postsolved, is feasible for c.model (check_point, options.tol) with that objective
-//   value;
+// - otherwise the reduced model is well_formed and into_class() takes it into the oracle class,
+//   it has the outcome of the base model, and for optimal its optimal value equals the base
+//   optimum and its optimal point, postsolved, is feasible for c.model (check_point,
+//   options.tol) with that objective value;
 // - every point of solve(reduced, ..., checked_points).feasible, postsolved, is feasible for
 //   c.model;
 // - with options.primal_only and a feasible base model: the optimal point of the base model
@@ -216,8 +248,9 @@ constexpr double check_max_assignments = 16384.;
 //   crushed, is feasible for the reduced model and has the same objective value there.
 // Objective values are compared with a relative tolerance of 1e-9.
 // In addition to the above:
-// - both models are classified by classify_widest(..., check_max_assignments), so that an
-//   integer column with narrow finite bounds is enumerated wherever that is affordable;
+// - the base model is classified by classify_widest(..., check_max_assignments) and the reduced
+//   model by into_class(..., check_max_assignments), so that an integer column with narrow
+//   finite bounds is enumerated wherever that is affordable;
 // - the feasible points that are postsolved are checked_points of all those of the reduced
 //   model, evenly spaced in enumeration order (all of them when there are fewer), each with
 //   its point of solution_t::far: a constraint that the reduced model lost on the side of a

@@ -160,7 +160,10 @@ constexpr int32_t tightening    = 2;
 constexpr int32_t doubleton     = 3;
 constexpr int32_t parallel_rows = 4;
 constexpr int32_t compaction    = 5;  // rows with more tombstones than live entries
-constexpr int32_t count         = 6;
+// Rows with a column that became a singleton column or stopped being one (row_event::singleton).
+// Empty at construction.
+constexpr int32_t singletons = 6;
+constexpr int32_t count      = 7;
 }  // namespace row_list
 
 // Consumers of changed columns.
@@ -185,6 +188,12 @@ constexpr uint8_t side = activity | (1 << row_list::doubleton);
 // was fixed.
 constexpr uint8_t entries = side | (1 << row_list::parallel_rows);
 constexpr uint8_t sparse  = 1 << row_list::compaction;
+// A singleton column is a live column with one live entry. The row of that entry gets this event
+// when the column becomes one (delete_row, delete_entry or move_entry took its other entries)
+// and when it stops being one (move_entry gives it a second entry). The row itself does not
+// change: its entries, sides and version stay. No event when the column is fixed or when its
+// only entry leaves, which are events of the row anyway.
+constexpr uint8_t singleton = (1 << row_list::parallel_rows) | (1 << row_list::singletons);
 }  // namespace row_event
 
 namespace col_event {
@@ -333,6 +342,9 @@ struct state_t {
 
   // Deletes a live row: tombstones its entries in both stores and releases its locks
   // (col_event::locks for its live columns). O(csr.used[row]): no column is walked.
+  // Added with row_event::singleton: but for a live column that is left with one live entry,
+  // whose used slots are read up to that entry to find its row. The same holds for delete_entry
+  // and for both columns of move_entry.
   void delete_row(int32_t row);
 
   // New side of a live row; lower <= upper must hold afterwards and the value must differ from

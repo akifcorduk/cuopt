@@ -16,7 +16,7 @@ namespace gprs {
 
 // A record exists where a column disappears or where a later dual postsolve needs the step.
 // Deleted rows that are empty, redundant, singleton or forcing leave no record in Stage 1.
-enum class record_kind_t : uint8_t { fixed_col, alias, parallel_row };
+enum class record_kind_t : uint8_t { fixed_col, alias, parallel_row, row_addition };
 
 // x[col] = value.
 struct fixed_col_record_t {
@@ -42,6 +42,16 @@ struct parallel_row_record_t {
   double ratio;
 };
 
+// row became row - factor * equation_row on the free entries: those that the two rows shared
+// left the row, those that only the equation had entered it, and its finite sides moved by
+// factor times the right-hand side of the equation less its fixed terms. Both rows stay. The
+// primal postsolve ignores it.
+struct row_addition_record_t {
+  int32_t row;
+  int32_t equation_row;
+  double factor;
+};
+
 // The record stack. Each kind has its own array; order holds the kinds in application order, so
 // the k-th occurrence of a kind in order is element k of that kind's array. Indices are those of
 // the original model.
@@ -57,6 +67,7 @@ struct postsolve_t {
   std::vector<fixed_col_record_t> fixed_cols;
   std::vector<alias_record_t> aliases;
   std::vector<parallel_row_record_t> parallel_rows;
+  std::vector<row_addition_record_t> row_additions;
   // 1 once a fixed_col or alias record has removed the column.
   std::vector<uint8_t> col_removed;
 
@@ -67,10 +78,11 @@ struct postsolve_t {
   // record.
   // A fixed value is finite, and integral for an integer column. An alias has a finite scale
   // other than zero and a finite offset; an integer column has an integer rep and an integral
-  // scale and offset. A ratio is finite and not zero.
+  // scale and offset. A ratio and a factor are finite and not zero.
   void push_fixed_col(int32_t col, double value);
   void push_alias(int32_t col, int32_t rep, int32_t row, double scale, double offset);
   void push_parallel_row(int32_t removed_row, int32_t kept_row, double ratio);
+  void push_row_addition(int32_t row, int32_t equation_row, double factor);
 
   // Point of the reduced model -> point of the original model: integer columns of the reduced
   // point are rounded, then the records are undone in reverse order. Does not change the
