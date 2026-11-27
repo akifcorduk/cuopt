@@ -1,0 +1,12 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5052403-cygnet.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.666163,
+  "original": {"rows": 38268, "cols": 32868, "nnz": 4898304},
+  "reduced": {"rows": 19134, "cols": 27642, "nnz": 2449152},
+  "known_objective": 182,
+  "lp_original": {"status": "Time limit reached", "has_solution": false, "objective": 176.43368257351031, "dual_bound": 176.43368257351031, "seconds": 300.306},
+  "lp_reduced": {"status": "Time limit reached", "has_solution": false, "objective": 176.45934476021912, "dual_bound": 176.45934476021912, "seconds": 300.178},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": false, "objective": 0, "dual_bound": 0, "seconds": 120.213},
+  "checks": {"relaxation_not_weaker": "skipped", "relaxation_below_known": "skipped", "reduced_relaxation_feasible": "skipped", "postsolved_point_feasible": "skipped", "postsolved_point_objective": "skipped", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

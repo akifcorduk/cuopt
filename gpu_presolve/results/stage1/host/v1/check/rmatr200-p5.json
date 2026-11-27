@@ -1,0 +1,13 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/rmatr200-p5.csr",
+  "presolve_status": "unchanged",
+  "presolve_seconds": 0.034015,
+  "original": {"rows": 37617, "cols": 37816, "nnz": 113048},
+  "reduced": {"rows": 37617, "cols": 37816, "nnz": 113048},
+  "known_objective": 4521,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": 3283.653831263015, "dual_bound": 3283.653831263015, "seconds": 6.642},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": 3283.653831263015, "dual_bound": 3283.653831263015, "seconds": 6.757},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": true, "objective": 4581.0000000000364, "dual_bound": 3288.3349615193524, "seconds": 120.291},
+  "postsolved_point": {"row_violation": 5.46e-13, "bound_violation": 5.21e-13, "integrality_violation": 0, "objective": 4581.0000000000364},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "pass", "postsolved_point_objective": "pass", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

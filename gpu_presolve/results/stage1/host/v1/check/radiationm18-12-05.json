@@ -1,0 +1,13 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/radiationm18-12-05.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.046385,
+  "original": {"rows": 40935, "cols": 40623, "nnz": 96149},
+  "reduced": {"rows": 7243, "cols": 6868, "nnz": 20736},
+  "known_objective": 17566,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": 17554.5, "dual_bound": 17554.5, "seconds": 0.185},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": 17561.353679653679, "dual_bound": 17561.353679653679, "seconds": 0.092},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": true, "objective": 22120, "dual_bound": 17566.000000000036, "seconds": 120.064},
+  "postsolved_point": {"row_violation": 0, "bound_violation": 0, "integrality_violation": 0, "objective": 22120},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "pass", "postsolved_point_objective": "pass", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

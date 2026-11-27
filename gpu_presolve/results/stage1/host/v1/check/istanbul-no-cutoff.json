@@ -1,0 +1,13 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/istanbul-no-cutoff.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.017980,
+  "original": {"rows": 20346, "cols": 5282, "nnz": 71477},
+  "reduced": {"rows": 19303, "cols": 5012, "nnz": 64803},
+  "known_objective": 204.08170701,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": 51.109999999999999, "dual_bound": 51.109999999999999, "seconds": 1.306},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": 51.109999999999999, "dual_bound": 51.109999999999999, "seconds": 1.171},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": true, "objective": 207.83035499050845, "dual_bound": 80.442924628658375, "seconds": 120.041},
+  "postsolved_point": {"row_violation": 1.45e-14, "bound_violation": 8.88e-16, "integrality_violation": 0, "objective": 207.83035499050845},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "pass", "postsolved_point_objective": "pass", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

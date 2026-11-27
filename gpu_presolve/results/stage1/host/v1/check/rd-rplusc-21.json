@@ -1,0 +1,13 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/rd-rplusc-21.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.145450,
+  "original": {"rows": 125899, "cols": 622, "nnz": 852384},
+  "reduced": {"rows": 54170, "cols": 539, "nnz": 352277},
+  "known_objective": 165395.275295,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": 100, "dual_bound": 100, "seconds": 108.441},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": 100.00000000000004, "dual_bound": 100.00000000000004, "seconds": 0.362},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": true, "objective": 166109.18052369566, "dual_bound": 100.00000000000091, "seconds": 120.026},
+  "postsolved_point": {"row_violation": 9.8e-14, "bound_violation": 0, "integrality_violation": 0, "objective": 166109.18052369566},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "pass", "postsolved_point_objective": "pass", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

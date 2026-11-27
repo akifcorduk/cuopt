@@ -1,0 +1,13 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-4647030-tutaki.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.443575,
+  "original": {"rows": 8382, "cols": 12600, "nnz": 3953388},
+  "reduced": {"rows": 6993, "cols": 12600, "nnz": 1989344},
+  "known_objective": 27265.705999999958,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": 26911.641615553421, "dual_bound": 26911.641615553421, "seconds": 11.187},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": 26911.641615553421, "dual_bound": 26911.641615553421, "seconds": 2.686},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": true, "objective": 27271.257000000001, "dual_bound": 27265.1927, "seconds": 126.809},
+  "postsolved_point": {"row_violation": 8.88e-16, "bound_violation": 0, "integrality_violation": 0, "objective": 27271.257000000001},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "pass", "postsolved_point_objective": "pass", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

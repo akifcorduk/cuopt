@@ -1,0 +1,12 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/satellites2-60-fs.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.029488,
+  "original": {"rows": 16516, "cols": 35378, "nnz": 125048},
+  "reduced": {"rows": 15847, "cols": 34706, "nnz": 123135},
+  "known_objective": -19.000000000099998,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": -30, "dual_bound": -30, "seconds": 5.775},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": -30, "dual_bound": -30, "seconds": 10.107},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": false, "objective": 0, "dual_bound": -29, "seconds": 120.110},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "skipped", "postsolved_point_objective": "skipped", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

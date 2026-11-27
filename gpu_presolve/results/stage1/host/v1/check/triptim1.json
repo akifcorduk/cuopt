@@ -1,0 +1,12 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/triptim1.csr",
+  "presolve_status": "reduced",
+  "presolve_seconds": 0.069333,
+  "original": {"rows": 15706, "cols": 30055, "nnz": 515436},
+  "reduced": {"rows": 15686, "cols": 25676, "nnz": 497959},
+  "known_objective": 22.868099999999899,
+  "lp_original": {"status": "Optimal", "has_solution": true, "objective": 22.868087499999998, "dual_bound": 22.868087499999998, "seconds": 75.546},
+  "lp_reduced": {"status": "Optimal", "has_solution": true, "objective": 22.868087499999998, "dual_bound": 22.868087499999998, "seconds": 76.130},
+  "mip_reduced": {"status": "Time limit reached", "has_solution": false, "objective": 0, "dual_bound": 22.868100000000403, "seconds": 120.036},
+  "checks": {"relaxation_not_weaker": "pass", "relaxation_below_known": "pass", "reduced_relaxation_feasible": "pass", "postsolved_point_feasible": "skipped", "postsolved_point_objective": "skipped", "optimum_equals_known": "skipped", "dual_bound_below_known": "pass"}
+}

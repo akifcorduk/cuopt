@@ -1,0 +1,1546 @@
+{
+ "instances": [
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/istanbul-no-cutoff.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.01798,
+   "original": {
+    "rows": 20346,
+    "cols": 5282,
+    "nnz": 71477
+   },
+   "reduced": {
+    "rows": 19303,
+    "cols": 5012,
+    "nnz": 64803
+   },
+   "known_objective": 204.08170701,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 51.11,
+    "dual_bound": 51.11,
+    "seconds": 1.306
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 51.11,
+    "dual_bound": 51.11,
+    "seconds": 1.171
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 207.83035499050845,
+    "dual_bound": 80.44292462865837,
+    "seconds": 120.041
+   },
+   "postsolved_point": {
+    "row_violation": 1.45e-14,
+    "bound_violation": 8.88e-16,
+    "integrality_violation": 0,
+    "objective": 207.83035499050845
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "istanbul-no-cutoff"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/ns1208400.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.00985,
+   "original": {
+    "rows": 4289,
+    "cols": 2883,
+    "nnz": 81746
+   },
+   "reduced": {
+    "rows": 1984,
+    "cols": 2883,
+    "nnz": 81745
+   },
+   "known_objective": 2,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 0.467
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 0.72
+   },
+   "mip_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 2,
+    "dual_bound": 2,
+    "seconds": 63.706
+   },
+   "postsolved_point": {
+    "row_violation": 1e-10,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 2
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "pass",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "ns1208400"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/wachplan.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.007966,
+   "original": {
+    "rows": 1553,
+    "cols": 3361,
+    "nnz": 89361
+   },
+   "reduced": {
+    "rows": 696,
+    "cols": 2302,
+    "nnz": 12698
+   },
+   "known_objective": -8,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -9,
+    "dual_bound": -9,
+    "seconds": 0.243
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -9,
+    "dual_bound": -9,
+    "seconds": 0.216
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": -8,
+    "dual_bound": -9,
+    "seconds": 120.048
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": -8
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "wachplan"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/trento1.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.009246,
+   "original": {
+    "rows": 1265,
+    "cols": 7687,
+    "nnz": 93571
+   },
+   "reduced": {
+    "rows": 1264,
+    "cols": 7678,
+    "nnz": 93396
+   },
+   "known_objective": 5189487,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 5182758.8480556095,
+    "dual_bound": 5182758.8480556095,
+    "seconds": 2.605
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 5182758.848055617,
+    "dual_bound": 5182758.848055617,
+    "seconds": 2.516
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 5388077.999999834,
+    "dual_bound": 5183480.315952453,
+    "seconds": 120.052
+   },
+   "postsolved_point": {
+    "row_violation": 7.37e-13,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 5388077.999999926
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "trento1"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/radiationm18-12-05.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.046385,
+   "original": {
+    "rows": 40935,
+    "cols": 40623,
+    "nnz": 96149
+   },
+   "reduced": {
+    "rows": 7243,
+    "cols": 6868,
+    "nnz": 20736
+   },
+   "known_objective": 17566,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 17554.5,
+    "dual_bound": 17554.5,
+    "seconds": 0.185
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 17561.35367965368,
+    "dual_bound": 17561.35367965368,
+    "seconds": 0.092
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 22120,
+    "dual_bound": 17566.000000000036,
+    "seconds": 120.064
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 22120
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "radiationm18-12-05"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/ns1830653.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.008646,
+   "original": {
+    "rows": 2932,
+    "cols": 1629,
+    "nnz": 100933
+   },
+   "reduced": {
+    "rows": 1570,
+    "cols": 702,
+    "nnz": 34215
+   },
+   "known_objective": 20622,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 6153,
+    "dual_bound": 6153,
+    "seconds": 0.164
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 6583,
+    "dual_bound": 6583,
+    "seconds": 0.093
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 23622.000000000175,
+    "dual_bound": 14996,
+    "seconds": 120.064
+   },
+   "postsolved_point": {
+    "row_violation": 2.97e-13,
+    "bound_violation": 3.43e-13,
+    "integrality_violation": 0,
+    "objective": 23622.00000000018
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "ns1830653"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/supportcase40.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.013531,
+   "original": {
+    "rows": 38192,
+    "cols": 16440,
+    "nnz": 104420
+   },
+   "reduced": {
+    "rows": 8570,
+    "cols": 5168,
+    "nnz": 24592
+   },
+   "known_objective": 24256.3122898,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 22536.483378767967,
+    "dual_bound": 22536.483378767967,
+    "seconds": 0.313
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 22536.483378767967,
+    "dual_bound": 22536.483378767967,
+    "seconds": 0.226
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 24686.115944504792,
+    "dual_bound": 23407.591594423746,
+    "seconds": 120.304
+   },
+   "postsolved_point": {
+    "row_violation": 8.08e-12,
+    "bound_violation": 7.4e-12,
+    "integrality_violation": 0,
+    "objective": 24686.115944504923
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "supportcase40"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/rmatr200-p5.csr",
+   "presolve_status": "unchanged",
+   "presolve_seconds": 0.034015,
+   "original": {
+    "rows": 37617,
+    "cols": 37816,
+    "nnz": 113048
+   },
+   "reduced": {
+    "rows": 37617,
+    "cols": 37816,
+    "nnz": 113048
+   },
+   "known_objective": 4521,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 3283.653831263015,
+    "dual_bound": 3283.653831263015,
+    "seconds": 6.642
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 3283.653831263015,
+    "dual_bound": 3283.653831263015,
+    "seconds": 6.757
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 4581.000000000036,
+    "dual_bound": 3288.3349615193524,
+    "seconds": 120.291
+   },
+   "postsolved_point": {
+    "row_violation": 5.46e-13,
+    "bound_violation": 5.21e-13,
+    "integrality_violation": 0,
+    "objective": 4581.000000000036
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "rmatr200-p5"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/satellites2-60-fs.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.029488,
+   "original": {
+    "rows": 16516,
+    "cols": 35378,
+    "nnz": 125048
+   },
+   "reduced": {
+    "rows": 15847,
+    "cols": 34706,
+    "nnz": 123135
+   },
+   "known_objective": -19.0000000001,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -30,
+    "dual_bound": -30,
+    "seconds": 5.775
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -30,
+    "dual_bound": -30,
+    "seconds": 10.107
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": -29,
+    "seconds": 120.11
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "satellites2-60-fs"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/unitcal_7.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.045701,
+   "original": {
+    "rows": 48939,
+    "cols": 25755,
+    "nnz": 127595
+   },
+   "reduced": {
+    "rows": 40714,
+    "cols": 24029,
+    "nnz": 109670
+   },
+   "known_objective": 19635558.244,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 19387553.381270695,
+    "dual_bound": 19387553.381270695,
+    "seconds": 0.546
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 19390525.206908368,
+    "dual_bound": 19390525.206908368,
+    "seconds": 0.464
+   },
+   "mip_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 19635558.2440195,
+    "dual_bound": 19633598.669323374,
+    "seconds": 107.268
+   },
+   "postsolved_point": {
+    "row_violation": 1.06e-09,
+    "bound_violation": 1.41e-09,
+    "integrality_violation": 0,
+    "objective": 19635558.244019475
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "pass",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "unitcal_7"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/brazil3.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.022866,
+   "original": {
+    "rows": 14646,
+    "cols": 23968,
+    "nnz": 133184
+   },
+   "reduced": {
+    "rows": 9865,
+    "cols": 17610,
+    "nnz": 85482
+   },
+   "known_objective": 24,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 1.9999999999992908,
+    "dual_bound": 1.9999999999992908,
+    "seconds": 7.215
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 1.9999999999998217,
+    "dual_bound": 1.9999999999998217,
+    "seconds": 4.525
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 21.000000000034827,
+    "seconds": 120.013
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "brazil3"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/piperout-d27.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.036349,
+   "original": {
+    "rows": 17470,
+    "cols": 13104,
+    "nnz": 224457
+   },
+   "reduced": {
+    "rows": 14484,
+    "cols": 10984,
+    "nnz": 189702
+   },
+   "known_objective": 8124,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 7083.116279069769,
+    "dual_bound": 7083.116279069769,
+    "seconds": 0.489
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 7148.36871035941,
+    "dual_bound": 7148.36871035941,
+    "seconds": 0.425
+   },
+   "mip_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 8124,
+    "dual_bound": 8124,
+    "seconds": 20.789
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 8124
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "pass",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "piperout-d27"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/uccase9.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.084543,
+   "original": {
+    "rows": 49565,
+    "cols": 33242,
+    "nnz": 332316
+   },
+   "reduced": {
+    "rows": 33503,
+    "cols": 22942,
+    "nnz": 258531
+   },
+   "known_objective": 10993.131409,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 10819.582996589972,
+    "dual_bound": 10819.582996589972,
+    "seconds": 10.371
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 10819.582996589972,
+    "dual_bound": 10819.582996589972,
+    "seconds": 8.885
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 33226.21531756009,
+    "dual_bound": 10967.881860902202,
+    "seconds": 120.07
+   },
+   "postsolved_point": {
+    "row_violation": 3.3e-13,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 33226.21531756009
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "uccase9"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/sorrell3.csr",
+   "presolve_status": "unchanged",
+   "presolve_seconds": 0.185678,
+   "original": {
+    "rows": 169162,
+    "cols": 1024,
+    "nnz": 338324
+   },
+   "reduced": {
+    "rows": 169162,
+    "cols": 1024,
+    "nnz": 338324
+   },
+   "known_objective": -16,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -512,
+    "dual_bound": -512,
+    "seconds": 0.625
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -512,
+    "dual_bound": -512,
+    "seconds": 0.597
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": -15.999999999999833,
+    "dual_bound": -20,
+    "seconds": 120.18
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": -16
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "sorrell3"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/sp98ar.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.050992,
+   "original": {
+    "rows": 1435,
+    "cols": 15085,
+    "nnz": 426148
+   },
+   "reduced": {
+    "rows": 1402,
+    "cols": 15085,
+    "nnz": 419196
+   },
+   "known_objective": 529740623.2,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 524401296.55720735,
+    "dual_bound": 524401296.55720735,
+    "seconds": 0.394
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 524401296.55720896,
+    "dual_bound": 524401296.55720896,
+    "seconds": 0.329
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 537140911.6800002,
+    "dual_bound": 526798708.08527166,
+    "seconds": 120.176
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 537140911.68
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "sp98ar"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/supportcase42.csr",
+   "presolve_status": "unchanged",
+   "presolve_seconds": 0.050278,
+   "original": {
+    "rows": 18439,
+    "cols": 19466,
+    "nnz": 435653
+   },
+   "reduced": {
+    "rows": 18439,
+    "cols": 19466,
+    "nnz": 435653
+   },
+   "known_objective": 7.75863072227,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 7.343539137471289,
+    "dual_bound": 7.343539137471289,
+    "seconds": 50.33
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 7.343539137471289,
+    "dual_bound": 7.343539137471289,
+    "seconds": 51.168
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 239.94875258081657,
+    "dual_bound": 7.343539212783071,
+    "seconds": 121.702
+   },
+   "postsolved_point": {
+    "row_violation": 9.1e-13,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 239.94875258081657
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "supportcase42"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/triptim1.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.069333,
+   "original": {
+    "rows": 15706,
+    "cols": 30055,
+    "nnz": 515436
+   },
+   "reduced": {
+    "rows": 15686,
+    "cols": 25676,
+    "nnz": 497959
+   },
+   "known_objective": 22.8680999999999,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 22.868087499999998,
+    "dual_bound": 22.868087499999998,
+    "seconds": 75.546
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 22.868087499999998,
+    "dual_bound": 22.868087499999998,
+    "seconds": 76.13
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 22.868100000000403,
+    "seconds": 120.036
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "triptim1"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/supportcase6.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.082198,
+   "original": {
+    "rows": 771,
+    "cols": 130052,
+    "nnz": 584976
+   },
+   "reduced": {
+    "rows": 771,
+    "cols": 130052,
+    "nnz": 584976
+   },
+   "known_objective": 51906.47737,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 45090.73216346334,
+    "dual_bound": 45090.73216346334,
+    "seconds": 4.417
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 45090.73216346334,
+    "dual_bound": 45090.73216346334,
+    "seconds": 4.399
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 51985.50546777754,
+    "dual_bound": 45172.42256247615,
+    "seconds": 120.291
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 51985.50546777754
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "supportcase6"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-4306827-ravan.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.358983,
+   "original": {
+    "rows": 261877,
+    "cols": 162291,
+    "nnz": 639474
+   },
+   "reduced": {
+    "rows": 185534,
+    "cols": 119992,
+    "nnz": 467716
+   },
+   "known_objective": 10186.57303874958,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -35696.90191316502,
+    "dual_bound": -35696.90191316502,
+    "seconds": 12.342
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -27283.876923388787,
+    "dual_bound": -27283.876923388787,
+    "seconds": 11.994
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 12060.574257425742,
+    "dual_bound": 4534.098253893895,
+    "seconds": 120.221
+   },
+   "postsolved_point": {
+    "row_violation": 1.11e-16,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 12060.574257425742
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-4306827-ravan"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/rd-rplusc-21.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.14545,
+   "original": {
+    "rows": 125899,
+    "cols": 622,
+    "nnz": 852384
+   },
+   "reduced": {
+    "rows": 54170,
+    "cols": 539,
+    "nnz": 352277
+   },
+   "known_objective": 165395.275295,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 100,
+    "dual_bound": 100,
+    "seconds": 108.441
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 100.00000000000004,
+    "dual_bound": 100.00000000000004,
+    "seconds": 0.362
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 166109.18052369566,
+    "dual_bound": 100.00000000000091,
+    "seconds": 120.026
+   },
+   "postsolved_point": {
+    "row_violation": 9.8e-14,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 166109.18052369566
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "rd-rplusc-21"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/bab6.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.207005,
+   "original": {
+    "rows": 29904,
+    "cols": 114240,
+    "nnz": 1283181
+   },
+   "reduced": {
+    "rows": 29442,
+    "cols": 113900,
+    "nnz": 1157469
+   },
+   "known_objective": -284248.2307000001,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -321641.3587487217,
+    "dual_bound": -321641.3587487217,
+    "seconds": 16.901
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -299715.5239625,
+    "dual_bound": -299715.5239625,
+    "seconds": 20.962
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": -288752.8610159526,
+    "seconds": 120.542
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "bab6"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/splice1k1.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.21841,
+   "original": {
+    "rows": 6505,
+    "cols": 3253,
+    "nnz": 1761016
+   },
+   "reduced": {
+    "rows": 6505,
+    "cols": 3253,
+    "nnz": 1761016
+   },
+   "known_objective": -394,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -1646.7779789712745,
+    "dual_bound": -1646.7779789712745,
+    "seconds": 13.356
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -1646.1147363353264,
+    "dual_bound": -1646.1147363353264,
+    "seconds": 10.691
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": -121,
+    "dual_bound": -1645,
+    "seconds": 125.984
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": -121
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "splice1k1"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/savsched1.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.484826,
+   "original": {
+    "rows": 295989,
+    "cols": 328575,
+    "nnz": 1770507
+   },
+   "reduced": {
+    "rows": 295987,
+    "cols": 328292,
+    "nnz": 1770503
+   },
+   "known_objective": 3217.7,
+   "lp_original": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 217.40357142858193,
+    "dual_bound": 217.40357142858193,
+    "seconds": 300.13
+   },
+   "lp_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 217.4035714285783,
+    "dual_bound": 217.4035714285783,
+    "seconds": 300.127
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 146263.2,
+    "dual_bound": 58.79999999999927,
+    "seconds": 121.71
+   },
+   "postsolved_point": {
+    "row_violation": 0,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 146263.2
+   },
+   "checks": {
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_feasible": "skipped",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "savsched1"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/supportcase12.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.329164,
+   "original": {
+    "rows": 166781,
+    "cols": 799616,
+    "nnz": 2334437
+   },
+   "reduced": {
+    "rows": 27466,
+    "cols": 171982,
+    "nnz": 371401
+   },
+   "known_objective": -7559.533053817,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -7609.533053738851,
+    "dual_bound": -7609.533053738851,
+    "seconds": 30.199
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -7559.533053738853,
+    "dual_bound": -7559.533053738853,
+    "seconds": 20.737
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": -7500.391348194811,
+    "dual_bound": -7559.533053738846,
+    "seconds": 120.085
+   },
+   "postsolved_point": {
+    "row_violation": 7.38e-12,
+    "bound_violation": 6.64e-14,
+    "integrality_violation": 0,
+    "objective": -7500.391348194811
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "supportcase12"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/supportcase7.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.214285,
+   "original": {
+    "rows": 6532,
+    "cols": 138844,
+    "nnz": 2845545
+   },
+   "reduced": {
+    "rows": 5002,
+    "cols": 21692,
+    "nnz": 486122
+   },
+   "known_objective": -1132.223177,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -2396.2182131282593,
+    "dual_bound": -2396.2182131282593,
+    "seconds": 5.611
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -2396.2182131282584,
+    "dual_bound": -2396.2182131282584,
+    "seconds": 1.226
+   },
+   "mip_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": -1132.1909814023877,
+    "dual_bound": -1132.2892674935888,
+    "seconds": 60.106
+   },
+   "postsolved_point": {
+    "row_violation": 2.45e-12,
+    "bound_violation": 1.24e-14,
+    "integrality_violation": 0,
+    "objective": -1132.1909814023877
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "pass",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "supportcase7"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5116085-kenana.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 1.180157,
+   "original": {
+    "rows": 690242,
+    "cols": 509236,
+    "nnz": 3032792
+   },
+   "reduced": {
+    "rows": 687582,
+    "cols": 509236,
+    "nnz": 3027472
+   },
+   "known_objective": 602,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 452,
+    "dual_bound": 452,
+    "seconds": 16.758
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 452,
+    "dual_bound": 452,
+    "seconds": 11.308
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 570.75,
+    "seconds": 886.939
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-5116085-kenana"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-4647030-tutaki.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.443575,
+   "original": {
+    "rows": 8382,
+    "cols": 12600,
+    "nnz": 3953388
+   },
+   "reduced": {
+    "rows": 6993,
+    "cols": 12600,
+    "nnz": 1989344
+   },
+   "known_objective": 27265.70599999996,
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 26911.64161555342,
+    "dual_bound": 26911.64161555342,
+    "seconds": 11.187
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 26911.64161555342,
+    "dual_bound": 26911.64161555342,
+    "seconds": 2.686
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": true,
+    "objective": 27271.257,
+    "dual_bound": 27265.1927,
+    "seconds": 126.809
+   },
+   "postsolved_point": {
+    "row_violation": 8.88e-16,
+    "bound_violation": 0,
+    "integrality_violation": 0,
+    "objective": 27271.257
+   },
+   "checks": {
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "pass",
+    "postsolved_point_objective": "pass",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-4647030-tutaki"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5114902-kasavu.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 1.782195,
+   "original": {
+    "rows": 961170,
+    "cols": 710164,
+    "nnz": 4240376
+   },
+   "reduced": {
+    "rows": 957446,
+    "cols": 710164,
+    "nnz": 4232928
+   },
+   "known_objective": 655,
+   "lp_original": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 441.6527889748686,
+    "dual_bound": 441.6527889748686,
+    "seconds": 300.271
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 518,
+    "dual_bound": 518,
+    "seconds": 218.47
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 547,
+    "seconds": 120.696
+   },
+   "checks": {
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "pass",
+    "reduced_relaxation_feasible": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-5114902-kasavu"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/supportcase19.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.791221,
+   "original": {
+    "rows": 10713,
+    "cols": 1429098,
+    "nnz": 4287094
+   },
+   "reduced": {
+    "rows": 10712,
+    "cols": 1429097,
+    "nnz": 4287091
+   },
+   "known_objective": 12677205.99992052,
+   "lp_original": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 5855456.139660492,
+    "dual_bound": 5855456.139660492,
+    "seconds": 300.369
+   },
+   "lp_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 5876840.474549563,
+    "dual_bound": 5876840.474549563,
+    "seconds": 300.351
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 8,
+    "seconds": 121.33
+   },
+   "checks": {
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_feasible": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "supportcase19"
+  },
+  {
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-5052403-cygnet.csr",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.666163,
+   "original": {
+    "rows": 38268,
+    "cols": 32868,
+    "nnz": 4898304
+   },
+   "reduced": {
+    "rows": 19134,
+    "cols": 27642,
+    "nnz": 2449152
+   },
+   "known_objective": 182,
+   "lp_original": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 176.4336825735103,
+    "dual_bound": 176.4336825735103,
+    "seconds": 300.306
+   },
+   "lp_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 176.45934476021912,
+    "dual_bound": 176.45934476021912,
+    "seconds": 300.178
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 120.213
+   },
+   "checks": {
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_feasible": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "pass"
+   },
+   "name": "neos-5052403-cygnet"
+  }
+ ]
+}
