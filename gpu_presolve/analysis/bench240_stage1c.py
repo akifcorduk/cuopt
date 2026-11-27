@@ -94,10 +94,12 @@ STAGE1C_FAMILIES = (
 # Passes of the Stage 1c families together above which an instance is named.
 NAMED_PASSES = 10.0
 
-# Objective nonzeros of the reduced model in an engine result and of the
-# presolved model in a reference summary. No stored result has such a field
-# yet, so the names are this script's until the two tools write them.
-OBJECTIVE_ENGINE = "reduced.obj_nnz"
+# Objective nonzeros of the reduced model in an engine result
+# (tools/gprs_presolve.cpp writes them from the singleton-column rules on) and
+# of the presolved model in a reference summary, which no stored reference has
+# yet, so that name is this script's until the baseline tool writes it.
+OBJECTIVE_ENGINE = "objective_nnz.reduced"
+OBJECTIVE_ORIGINAL = "objective_nnz.original"
 OBJECTIVE_REFERENCE = "obj_nnz_after"
 
 # One line per rule family or sub-rule: the finding counters of the engine
@@ -106,9 +108,8 @@ OBJECTIVE_REFERENCE = "obj_nnz_after"
 # summed; a name of `fixing` or `bound_change` stands for its count). Each
 # side counts what its own rule calls a finding, so a line shows where a rule
 # fires and how often, not which side finds more. A milestone that adds a
-# family or a sub-rule adds or corrects its line; the sub-rule fields of the
-# Stage 1c families are the option names of the design until the engine
-# writes them.
+# family or a sub-rule adds or corrects its line; the sub-rule fields are
+# those of the report of tools/gprs_presolve.cpp (sub_rules.<name>).
 RULES = (
     (
         "row_rules",
@@ -185,33 +186,33 @@ RULES = (
         "singleton_cols",
         "free_singleton, primal and dual",
         (
-            "singleton_cols.free_singleton",
-            "singleton_cols.free_singleton_dual",
+            "sub_rules.free_singleton",
+            "sub_rules.free_singleton_dual",
         ),
         ("reductions.free_col_substitution",),
     ),
     (
         "singleton_cols",
         "free_singleton",
-        ("singleton_cols.free_singleton",),
+        ("sub_rules.free_singleton",),
         (),
     ),
     (
         "singleton_cols",
         "free_singleton_dual",
-        ("singleton_cols.free_singleton_dual",),
+        ("sub_rules.free_singleton_dual",),
         (),
     ),
     (
         "singleton_cols",
         "zero_cost_singleton",
-        ("singleton_cols.zero_cost_singleton",),
+        ("sub_rules.zero_cost_singleton",),
         ("reductions.zero_obj_singleton_col",),
     ),
     (
         "singleton_cols",
         "forcing_column",
-        ("singleton_cols.forcing_column",),
+        ("sub_rules.forcing_column",),
         ("reductions.forcing_column",),
     ),
     (
@@ -227,13 +228,13 @@ RULES = (
     (
         "dual_cols",
         "dual_bound",
-        ("dual_cols.dual_bound",),
+        ("sub_rules.dual_bound",),
         ("fixing.dual_fixing_bound", "bound_change.dual_fixing"),
     ),
     (
         "dual_cols",
         "lock_alias",
-        ("dual_cols.lock_alias",),
+        ("sub_rules.lock_alias",),
         ("substitutions.dual_fixing",),
     ),
     (
@@ -245,13 +246,13 @@ RULES = (
     (
         "parallel_cols",
         "parallel_dominance",
-        ("parallel_cols.parallel_dominance",),
+        ("sub_rules.parallel_dominance",),
         ("parallel.cols_dominated",),
     ),
     (
         "parallel_cols",
         "parallel_merge",
-        ("parallel_cols.parallel_merge",),
+        ("sub_rules.parallel_merge",),
         ("parallel.cols_merged",),
     ),
     ("not built", "implied equation", (), ("reductions.implied_equation",)),
@@ -939,6 +940,114 @@ def print_work(rows, before):
             or "none",
         )
     )
+    print_first_calls(rows)
+
+
+def print_first_calls(rows):
+    """Print the work of each Stage 1c family in its first and later calls."""
+    lines = []
+    for family in STAGE1C_FAMILIES:
+        first, later = [], []
+        for name, row in rows.items():
+            stats = (row.get("rules") or {}).get(family) or {}
+            if "first_work" not in stats or not stats.get("calls"):
+                continue
+            one_pass = row["nnz"] + LINE_VISIT_WORK * (
+                row["rows"] + row["cols"]
+            )
+            first.append((name, stats["first_work"] / one_pass))
+            later.append(
+                (name, (stats["work"] - stats["first_work"]) / one_pass)
+            )
+        if first and any(v > 0 for _, v in first + later):
+            lines.append(spread_line(family + ", first call", first))
+            lines.append(spread_line(family + ", later calls", later))
+    if lines:
+        print(
+            "Work of a Stage 1c family in its first call, which serves every "
+            "column, and in all its later calls"
+        )
+        print("\n".join(lines))
+
+
+def print_column_statistics(rows):
+    """Print what the column rules count besides their findings."""
+    rows = {
+        n: r for n, r in rows.items() if isinstance(r.get("columns"), dict)
+    }
+    if not rows:
+        return
+    print("\nColumn rules, %d instances with the statistics" % len(rows))
+
+    def total(path):
+        values = [(field(r, path) or 0, n) for n, r in rows.items()]
+        hit = [v for v in values if v[0]]
+        most = max(values) if hit else (0, "-")
+        return sum(v for v, _ in values), len(hit), most
+
+    for label, path in (
+        ("columns that got a cost (cost_fill)", "columns.cost_fill"),
+        ("entries of saved rows", "columns.saved_entries"),
+        (
+            "refused by the growth factor of the column",
+            "columns.growth_refused",
+        ),
+        (
+            "refused by the ratio of the pivot row",
+            "columns.growth_refused_row",
+        ),
+        ("visits refused by the saved-row limit", "columns.saved_row_refused"),
+        (
+            "refusals of the implied-bound test on explicit bounds",
+            "columns.free_singleton_rejected_explicit",
+        ),
+        ("records: column defined by an equation", "col_from_rows.defined"),
+        (
+            "records: column defined by a tight row",
+            "col_from_rows.defined_dual",
+        ),
+        ("records: zero-cost singleton columns", "col_from_rows.interval"),
+        ("  columns of those records", "col_from_rows.interval_columns"),
+        ("records: forcing column", "col_from_rows.forcing"),
+        ("  rows of those records", "col_from_rows.forcing_rows"),
+    ):
+        sum_, count, most = total(path)
+        print(
+            "  %-55s %10d on %3d instances, most %d on %s"
+            % (label, sum_, count, most[0], most[1])
+        )
+    growth = max(
+        (field(r, "columns.max_growth") or 0.0, n) for n, r in rows.items()
+    )
+    print("  largest growth factor of a substitution: %g on %s" % growth)
+    share = max(
+        ((field(r, "columns.saved_entries") or 0) / max(r["nnz"], 1), n)
+        for n, r in rows.items()
+    )
+    print(
+        "  most saved entries per nonzero of the input model: %.3f on %s"
+        % share
+    )
+    objective = [
+        (
+            field(r, OBJECTIVE_ORIGINAL),
+            field(r, OBJECTIVE_ENGINE),
+            (r.get("reduced") or {}).get("nnz"),
+        )
+        for r in rows.values()
+    ]
+    objective = [o for o in objective if None not in o]
+    if objective:
+        print(
+            "  objective nonzeros, %d instances: %d in the input models, %d in "
+            "the reduced models next to %d matrix nonzeros"
+            % (
+                len(objective),
+                sum(o[0] for o in objective),
+                sum(o[1] for o in objective),
+                sum(o[2] for o in objective),
+            )
+        )
 
 
 def rounds_text(rows):
@@ -1114,6 +1223,7 @@ def main():
     with_result = {n: r for n, r in engine.items() if "reduced" in r}
     before_result = {n: r for n, r in before.items() if "reduced" in r}
     print_work(with_result, before_result)
+    print_column_statistics(with_result)
     print_rounds_and_flags(with_result, before_result)
     if args.csv:
         write_csv(args.csv, engine, reference, before, records, left)

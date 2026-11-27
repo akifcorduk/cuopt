@@ -283,6 +283,7 @@ GPRS_TEST(hash_state_depends_on_every_array)
     change{"tol.implied_bound_step", [](state_t& st) { st.tol.implied_bound_step = 0.5; }},
     change{"tol.side_error", [](state_t& st) { st.tol.side_error = 0.5; }},
     change{"tol.cancellation", [](state_t& st) { st.tol.cancellation = 0.5; }},
+    change{"tol.integral_drift_share", [](state_t& st) { st.tol.integral_drift_share = 0.5; }},
     change{"row lists, one more", [](state_t& st) { st.row_frontier.list.emplace_back(); }},
     change{"column lists, one more", [](state_t& st) { st.col_frontier.list.emplace_back(); }}};
 
@@ -314,7 +315,7 @@ GPRS_TEST(hash_state_depends_on_every_array)
   for (int32_t l = 0; l < col_list::count; ++l) {
     changes.push_back({"column list", [l](state_t& st) { st.col_frontier.list[l].push_back(1); }});
   }
-  GPRS_CHECK_EQ(changes.size(), (size_t)(42 + 2 * 8 + 2 * 6 + row_list::count + col_list::count));
+  GPRS_CHECK_EQ(changes.size(), (size_t)(43 + 2 * 8 + 2 * 6 + row_list::count + col_list::count));
   check_changes<state_t>(base, hash_of_state, changes);
 }
 

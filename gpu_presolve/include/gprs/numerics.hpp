@@ -36,6 +36,11 @@ struct tolerances_t {
   double side_error = 1e-14;
   // t + s * p is a structural zero when |t + s * p| <= cancellation * (|t| + |s * p|).
   double cancellation = 1e-12;
+  // Share of the feasibility tolerance by which ratios of coefficients that are taken as
+  // integers may move a row over the bounds of its columns, where a column gets an integer
+  // value from a row (a free singleton column of integer type, an alias between two integer
+  // columns). Row tightening has the same share for the row it scales.
+  double integral_drift_share = 0.1;
 };
 
 // s = fl(a + b) and error = (a + b) - s, exactly.

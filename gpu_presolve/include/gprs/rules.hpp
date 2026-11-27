@@ -73,11 +73,22 @@ struct column_stats_t {
   // Largest growth factor of a substituted free singleton column: what a restored value can
   // multiply a deviation of the reduced point by.
   double max_growth = 0.;
+  // Free singleton columns that passed every other test and were left for
+  // opt.pivot_growth_limit, each counted once in a presolve: by the factor that earlier
+  // substitutions gave the column (the call reports limited when the visit leaves the column
+  // in the model), and by the coefficients of the pivot row alone.
+  int64_t growth_refused     = 0;
+  int64_t growth_refused_row = 0;
+  // Visits that left the zero-cost singleton columns of a row for opt.saved_row_factor (the
+  // call then reports limited).
+  int64_t saved_row_refused = 0;
   // Largest depth of a tree in the alias forest of one call of simple probing: the aliases
   // composed between a substituted column and its root.
   int32_t alias_depth = 0;
-  // Singleton columns that the implied-free test refused after the switch to explicit bounds
-  // (bound_propagation_t::make_explicit).
+  // Refusals of a singleton column by the test "the pivot row implies its bounds" after the
+  // switch to explicit bounds (bound_propagation_t::make_explicit), one per visit of its row in
+  // which the test fails: what reading explicit bounds only still costs the free singleton
+  // column once every implied bound has become explicit.
   int64_t free_singleton_rejected_explicit = 0;
 };
 
@@ -101,7 +112,10 @@ struct rule_result_t {
   // The call left undone a reduction that no list holds, or cannot tell: bound propagation,
   // when a bound of a continuous column has had its steps (see (b)); the parallel rows, when
   // they leave a pair alone only because the presolve has changed one of its rows, or end the
-  // comparisons of a row on opt.parallel_bucket_limit with rows of its bucket left (see (e)).
+  // comparisons of a row on opt.parallel_bucket_limit with rows of its bucket left (see (e));
+  // the singleton columns, when only the growth factor of earlier substitutions keeps a free
+  // singleton column in the model or opt.saved_row_factor the zero-cost singleton columns of a
+  // row (see (h)).
   // The state is then no fixed point of the rules, although every list can be empty.
   bool limited = false;
 };
@@ -358,8 +372,8 @@ struct parallel_rows_t {
 // without locks. A finite target bound: the column is fixed there (zero cost and no lock at all:
 // the lower bound if finite, else the upper bound, else 0). An infinite target bound: cost != 0
 // gives unbounded_or_infeasible; cost == 0 with a lock in the other direction leaves the column
-// (Stage 3 removes it with its rows). Not called in primal-only mode. Every finding is a dual
-// finding (rule_result_t::dual_findings).
+// (the forcing column of (h) removes it with its rows). Not called in primal-only mode. Every
+// finding is a dual finding (rule_result_t::dual_findings).
 struct dual_fixing_t {
   struct work_t;
   dual_fixing_t();
@@ -385,8 +399,8 @@ struct dual_fixing_t {
 // A family takes its lists when it is called and, when it stops on its budget, returns the part
 // it has not served. A reduction that it leaves undone for a reason that is no function of the
 // state reports limited.
-// A family whose reductions are not built takes its lists and reports nothing: none of the four
-// holds a reduction so far.
+// A family whose reductions are not built takes its lists and reports nothing: (g), (i) and
+// (j). The singleton columns (h) are built.
 
 // Largest range upper - lower of a column that simple probing or the lock alias replaces by a
 // binary: it is the scale of the alias, which multiplies every coefficient of the column into
@@ -402,15 +416,79 @@ struct simple_probing_t {
   std::unique_ptr<work_t> work;
 };
 
-// (h) Columns of col_list::singleton_cols and rows of row_list::singleton_cols. The reductions
-// sub_rule::free_singleton, zero_cost_singleton, forcing_column and free_singleton_dual belong
-// here. state_t::row_singletons tells for a listed row, in O(1), whether it holds a singleton
-// column at all.
+// (h) Columns of col_list::singleton_cols and rows of row_list::singleton_cols. A singleton
+// column is a live column with one live entry. The call takes both lists, serves the columns
+// and then the rows in list order, and takes the lists again until both stay empty or the
+// budget stops it between two of them: its own reductions list the rows and columns they touch,
+// so a column that a deleted row leaves as a singleton column is served in the same call.
+// A listed singleton column leads to a visit of its row and a listed row is visited; a row is
+// visited at most once per pass over the lists, and a listed row without a singleton column
+// (state_t::row_singletons) costs the visit and no scan. Every listed live column is then tested
+// as a forcing column in O(1).
+// A visit scans the row once (its singleton columns in increasing index, the terms of its fixed
+// columns, its two largest coefficients) and applies the first of these that fits:
+// - free_singleton, the row an equation with two or more free entries, or free_singleton_dual,
+//   the row no equation: the singleton column with the smallest index that passes leaves the
+//   model with the row. The pivot side S is the right-hand side of the equation; for an
+//   inequality the side at which the column is stopped when it moves to lower cost (the upper
+//   side when the activity rises with that move), with a cost other than zero and S finite.
+//   The column passes when:
+//   S is readable (src/implied.hpp) and so is S less the terms of the fixed columns, S';
+//   the row implies its bounds: each end of the range of (S - rest) / a over the explicit bounds
+//   of the other columns, from the stored activities less the term of the column and moved
+//   outward by its rounding (candidate_slack), is within implied_tolerance of the bound of the
+//   column on that side, an infinite bound needing nothing and an end with an infinite term or
+//   one that the error guard of (b) drops, after one fresh summation, failing;
+//   with a finite bound, the largest coefficient of the other free entries is at most
+//   opt.pivot_growth_limit times |a|, and so is that ratio times the growth factor that earlier
+//   substitutions gave the column (a column that this factor alone refuses and that the visit
+//   leaves in the model reports limited);
+//   an integer column has only integer columns next to it, with ratios and a side that are
+//   integral for it and a drift below tol.integral_drift_share in the units of the row
+//   (integral_for, src/integral.hpp);
+//   cost / a, its product with S' and every new cost are finite.
+//   Then the row is saved without the column and deleted, every other free column of it gets
+//   cost - (cost of the column / a) * its coefficient (zero when that cancels within
+//   tol.cancellation), the offset gets (cost of the column / a) * S', and the column is removed
+//   and recorded (postsolve_t::push_defined_col, with `dual` for an inequality). Each saved
+//   column gets the growth factor max(its own, g * |its coefficient| / |a|), g being the factor
+//   of the removed column, at least 1 when that column has a finite bound.
+//   An equation gives the column its value at every feasible point. With an inequality a
+//   feasible point moves the column to lower cost until the row is tight, which passes no bound
+//   by the end tests: an optimal point is kept, and the finding is a dual finding.
+// - zero_cost_singleton, the row with two finite sides: all its continuous singleton columns
+//   with a cost of exactly zero leave it together, unless no other free entry would be left. A
+//   column whose term at a finite bound is beyond the size of a readable side is not taken. The
+//   lower side loses the largest sum of their terms over their bounds and the upper side the
+//   smallest (a side becomes infinite where a bound it needs is; compensated sums), which are
+//   the sides that the other entries must meet for values of the removed columns to exist. The
+//   visit does nothing when a new finite side or a side less the fixed terms is not readable.
+//   The row is saved without the columns, their entries are deleted, the sides are set (or the
+//   row is deleted when both are infinite), the columns are removed and recorded
+//   (push_interval_cols). A row that stays is saved again at every such visit: beyond
+//   opt.saved_row_factor times the nonzeros of the input model in such entries the visit does
+//   nothing and reports limited.
+//   An exact projection: every feasible point keeps its objective value when the columns are
+//   dropped, so the finding is no dual finding.
+// forcing_column, for a listed live column of any type and length: cost exactly zero, and no
+// down lock, a lower bound of -inf and an up lock, or the mirror. Whatever its other columns
+// are, a value of the column meets all its rows and its bound, so the rows restrict nothing:
+// each is saved without the column and deleted (a row without a finite side is deleted and not
+// saved), and the column is removed and recorded (push_forcing_col). The column is left when
+// the finite side of one of its rows, or that side less the fixed terms, is not readable. When
+// the rows do not fit the rest of the budget the call stops and the column waits for the next
+// one; the first reduction of a call is never left for that. No dual finding either.
+// Tests of one visit read the state as it is; what depends on history (the growth factor, the
+// saved entries) reports limited when it alone refuses a reduction.
 struct singleton_cols_t {
   struct work_t;
   singleton_cols_t();
   ~singleton_cols_t();
   rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
+  // The engine has made the bounds of continuous columns explicit
+  // (bound_propagation_t::make_explicit): from here on a refusal of the implied-bound test
+  // counts in column_stats_t::free_singleton_rejected_explicit.
+  void bounds_became_explicit();
   std::unique_ptr<work_t> work;
 };
 

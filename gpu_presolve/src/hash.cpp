@@ -110,6 +110,7 @@ struct hasher_t {
     add(tol.implied_bound_step);
     add(tol.side_error);
     add(tol.cancellation);
+    add(tol.integral_drift_share);
   }
 };
 
@@ -213,6 +214,35 @@ uint64_t postsolve_hash(const postsolve_t& ps)
     h.add(r.equation_row);
     h.add(r.factor);
   }
+  h.add(ps.nnz);
+  h.add(ps.col_from_rows.size());
+  for (const col_from_rows_record_t& r : ps.col_from_rows) {
+    h.add(r.kind);
+    h.add((uint8_t)r.dual);
+    h.add(r.cols_begin);
+    h.add(r.cols_end);
+    h.add(r.rows_begin);
+    h.add(r.rows_end);
+    h.add(r.coefficients);
+  }
+  h.add(ps.record_cols.size());
+  for (const record_col_t& c : ps.record_cols) {
+    h.add(c.col);
+    h.add(c.lower);
+    h.add(c.upper);
+    h.add(c.prefer);
+  }
+  h.add(ps.saved_rows.size());
+  for (const saved_row_t& row : ps.saved_rows) {
+    h.add(row.row);
+    h.add(row.lower);
+    h.add(row.upper);
+    h.add(row.begin);
+    h.add(row.end);
+  }
+  h.add(ps.record_coefficients);
+  h.add(ps.saved_entries.col);
+  h.add(ps.saved_entries.value);
   return h.h;
 }
 

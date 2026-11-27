@@ -5,6 +5,8 @@
  */
 /* clang-format on */
 
+#include "integral.hpp"
+
 #include <gprs/assert.hpp>
 #include <gprs/postsolve.hpp>
 
@@ -49,12 +51,16 @@ edge_map_t read_edge(const state_t& st, const alias_edge_t& edge, bool child_is_
     double scale = std::round(map.scale), offset = std::round(map.offset);
     // The rounded map leaves (child_coef * scale + parent_coef) * x[parent] =
     // rhs - child_coef * offset of the row, which has to be 0 = 0 in the units of the row too: a
-    // large child_coef turns a deviation below tol.zero into a violated row.
-    map.admissible = st.is_integer(parent) && usable(scale, offset) &&
-                     std::fabs(map.scale - scale) <= st.tol.zero &&
-                     std::fabs(map.offset - offset) <= st.tol.zero &&
-                     std::fabs(child_coef * scale + parent_coef) <= st.tol.zero &&
-                     std::fabs(edge.rhs - child_coef * offset) <= st.tol.feasibility;
+    // large child_coef turns a deviation below tol.zero into a violated row, and so does a
+    // parent that reaches far (the drift). The child leaves the model, so the units of the row
+    // are enough.
+    integral_form_t form;
+    integral_term(
+      st.tol, child_coef, parent_coef, st.col_lower[parent], st.col_upper[parent], form);
+    integral_side(st.tol, child_coef, edge.rhs, form);
+    map.admissible =
+      st.is_integer(parent) && usable(scale, offset) && form.integral &&
+      drift_within(st.tol, st.tol.integral_drift_share, child_coef, form, drift_units_t::row);
     map.scale  = scale;
     map.offset = offset;
   } else {

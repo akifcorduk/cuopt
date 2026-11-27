@@ -127,6 +127,24 @@ struct generator_options_t {
   double p_singleton_col     = 0.;
   double p_singleton_line    = 0.4;
   int32_t max_singleton_cols = 3;
+  // Singleton columns of one row: after its first one the row gets further ones, each with
+  // p_singleton_col, up to this many (and max_singleton_cols per model). At most one of them is
+  // a line column. With 1 nothing more is drawn.
+  int32_t max_row_singletons = 1;
+  // Probability that a singleton column has no cost; negative for p_zero_cost.
+  double p_singleton_zero_cost = -1.;
+
+  // Forcing columns, behind the singleton columns: up to max_forcing_cols times, each with
+  // p_forcing_col, the model gets a line column whose bound in one direction is infinite (the
+  // other one infinite or small), in one to three rows that have entries, a finite side and no
+  // line column. Mostly these rows have one finite side and the coefficient gets the sign with
+  // which the row holds the column in the other direction only, and the cost is zero: the
+  // column is then held from one end by all its rows and free at the other. One time in seven
+  // the rows are drawn from those with two finite sides as well, one time in seven one of the
+  // coefficients gets the other sign, and one time in seven the column has a cost, so that it
+  // is no such column. With p_forcing_col == 0 nothing is drawn.
+  double p_forcing_col     = 0.;
+  int32_t max_forcing_cols = 2;
 };
 
 // A model for the presolve and the integer-data model it was scaled from.
@@ -155,7 +173,8 @@ struct case_t {
 // With p_singleton_col > 0 the singleton columns follow the columns counted above, in the
 // order of their rows; a row that is a multiple of an earlier row copies that row without its
 // singleton column and can get one of its own. The sides of a row are drawn with its singleton
-// column in the activity range.
+// columns in the activity range. With p_forcing_col > 0 the forcing columns follow, after the
+// sides are drawn.
 case_t generate(uint64_t seed, const generator_options_t& options);
 
 // base with row i multiplied by row_scale[i] > 0 and column j divided by col_scale[j] > 0

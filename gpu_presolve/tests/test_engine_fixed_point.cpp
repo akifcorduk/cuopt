@@ -39,6 +39,16 @@ model_t with_cost(model_t m, const std::vector<double>& cost)
   return m;
 }
 
+// The rounds without the singleton-column rules. Each model that is presolved with these
+// options is the smallest that shows one step of the rounds, and has columns that are left
+// with one entry once that step is done: those rules would go on and take it apart.
+options_t stage1()
+{
+  options_t options;
+  options.enabled[rule::singleton_cols] = false;
+  return options;
+}
+
 // The presolve ended at a fixed point and a second presolve of its result changes nothing.
 void check_fixed_point(const result_t& result, const options_t& options)
 {
@@ -71,8 +81,8 @@ GPRS_TEST(engine_implied_bounds_make_a_row_redundant)
 {
   model_t m = two_implied_bounds();
   GPRS_REQUIRE(well_formed(m));
-  options_t options;
-  result_t result = presolve(m, options);
+  options_t options = stage1();
+  result_t result   = presolve(m, options);
   GPRS_CHECK_EQ(result.status, status_t::reduced);
   GPRS_CHECK_EQ(result.reduced.nrows, 2);
   GPRS_CHECK(result.postsolve.row_origin == std::vector<int32_t>({0, 1}));
@@ -105,8 +115,8 @@ GPRS_TEST(engine_implied_bounds_strengthen_a_coefficient)
   std::vector<col_t> cols = {{0., 1., true}, {0., inf, false}};
   std::vector<row_t> rows = {{{{0, -1.}, {1, 1.}}, -inf, 0.}, {{{0, -100.}, {1, 1.}}, -inf, 0.}};
   model_t m               = with_cost(make_model(cols, rows), {1., -1.});
-  options_t options;
-  result_t result = presolve(m, options);
+  options_t options       = stage1();
+  result_t result         = presolve(m, options);
   GPRS_CHECK_EQ(result.status, status_t::reduced);
   GPRS_CHECK_EQ(result.reduced.nrows, 1);
   GPRS_CHECK(result.reduced.value == std::vector<double>({-1., 1.}));
@@ -128,9 +138,9 @@ GPRS_TEST(engine_implied_bounds_follow_a_chain)
                              {{{0, -1.}, {1, 1.}}, -inf, 1.},
                              {{{2, 1.}, {3, 1.}}, -inf, 15.}};
   // The cost keeps every column away from the bound that dual fixing would give it.
-  model_t m = with_cost(make_model(cols, rows), {1., -1., 1., -1.});
-  options_t options;
-  result_t result = presolve(m, options);
+  model_t m         = with_cost(make_model(cols, rows), {1., -1., 1., -1.});
+  options_t options = stage1();
+  result_t result   = presolve(m, options);
   GPRS_CHECK_EQ(result.status, status_t::reduced);
   GPRS_CHECK_EQ(result.reduced.nrows, 3);
   GPRS_CHECK(result.reduced.col_upper == std::vector<double>({5., 6., 7., 8.}));
@@ -142,8 +152,8 @@ GPRS_TEST(engine_implied_bounds_follow_a_chain)
 // not a fixed point.
 GPRS_TEST(engine_fixed_point_needs_the_rounds_to_end)
 {
-  model_t m = two_implied_bounds();
-  options_t options;
+  model_t m         = two_implied_bounds();
+  options_t options = stage1();
   GPRS_CHECK(presolve(m, options).fixed_point);
 
   // One round is the round that records. The bounds become explicit, and no round is left for
@@ -157,26 +167,26 @@ GPRS_TEST(engine_fixed_point_needs_the_rounds_to_end)
   GPRS_CHECK_EQ(result.reduced.col_upper[0], 1000.);
   GPRS_CHECK(well_formed(result.reduced));
   // The second presolve goes on where the first stopped.
-  result_t again = presolve(result.reduced, options_t());
+  result_t again = presolve(result.reduced, stage1());
   GPRS_CHECK_EQ(again.status, status_t::reduced);
   GPRS_CHECK_EQ(again.reduced.nrows, 2);
 
   // A family that stops on its budget in the last round.
-  options                         = options_t();
+  options                         = stage1();
   options.budget[rule::row_rules] = budget_t{0., 0., 0};
   result                          = presolve(m, options);
   GPRS_CHECK(!result.fixed_point);
   GPRS_CHECK_EQ(result.reduced.nrows, 3);
 
   // A cascade that max_cascade_passes ends with a list left.
-  options                    = options_t();
+  options                    = stage1();
   options.max_cascade_passes = 0;
   result                     = presolve(m, options);
   GPRS_CHECK(!result.fixed_point);
   GPRS_CHECK_EQ(result.status, status_t::unchanged);
 
   // The time limit.
-  options            = options_t();
+  options            = stage1();
   options.time_limit = 0.;
   result             = presolve(m, options);
   GPRS_CHECK_EQ(result.status, status_t::limit);
@@ -309,8 +319,8 @@ GPRS_TEST(engine_fixed_terms_leave_the_rows_before_the_last_round)
   std::vector<row_t> rows = {{{{0, 2.}, {1, -3.}, {2, -1.}, {4, 3.}}, -inf, -2.}};
   model_t m               = with_cost(make_model(cols, rows), {0., 1., -1., 2., -2.});
   m.objective_offset      = 9.;
-  options_t options;
-  result_t result = presolve(m, options);
+  options_t options       = stage1();
+  result_t result         = presolve(m, options);
   GPRS_CHECK_EQ(result.status, status_t::reduced);
   GPRS_CHECK_EQ(result.reduced.nrows, 1);
   GPRS_CHECK(result.reduced.value == std::vector<double>({-1., 1.}));
@@ -367,7 +377,7 @@ GPRS_TEST(engine_fixed_term_counts_in_the_error_bound)
     {{{0, -256.}, {3, 16.}}, -24., inf}};
   model_t m = with_cost(make_model(cols, rows), {0., -2048., -0.0078125, 1., -2.});
   for (double fraction : {0.25, 2., 0.}) {
-    options_t options;
+    options_t options              = stage1();
     options.rebuild_dead_fraction  = fraction;
     options.rebuild_fixed_fraction = fraction;
     result_t result                = presolve(m, options);
@@ -562,7 +572,7 @@ GPRS_TEST(engine_subtraction_after_the_bounds_became_explicit)
   std::vector<double> point = {1., 1., 0., 1., 3.};
   GPRS_REQUIRE(point_feasible(check_point(m, point), tolerances_t()));
   for (bool primal_only : {true, false}) {
-    options_t options;
+    options_t options   = stage1();
     options.primal_only = primal_only;
     result_t result     = presolve(m, options);
     GPRS_REQUIRE(result.status == status_t::reduced);

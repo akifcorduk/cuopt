@@ -5,7 +5,7 @@
  */
 /* clang-format on */
 
-// gprs_fuzz <first seed> <seeds per profile> [--singletons] [--profile <name>]
+// gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] [--profile <name>]
 // Long random runs of the engine, for every rule change (tools/run_campaign.sh splits one run
 // over processes). For each seed and each generator profile: one generated model, the presolve
 // with options chosen by the seed, and three verdicts.
@@ -23,6 +23,11 @@
 //              (subtracted), the rows that are made of equations as well (added), those tested
 //              against the reduced row of such an equation and those not tested, and the
 //              largest multiplier of an equation in those tests.
+//   The line "columns" counts what the singleton-column rules reached: the results with a
+//   finding of each of their reductions and the findings, the results with a col_from_rows
+//   record of each kind (defined, defined with the dual flag, interval, forcing), the box ends
+//   and snapshots that the structure check tested, and the results that the family left as
+//   limited.
 // With the engine as it is, all three must be silent. A structure failure that the oracle does
 // not share is a false alarm of the structure check (or a relaxation without effect on the
 // optimum); an oracle failure that the structure check does not share is, on a result with a
@@ -32,7 +37,12 @@
 // the oracle takes: a result is relaxed when one of them postsolves to a point that the model
 // rejects.
 // --singletons adds columns with one entry to the generated model (rows parallel up to singleton
-// columns). GPRS_FUZZ_SHOW=<n> prints the first n models of each kind of disagreement.
+// columns). --columns makes the generator draw what the singleton-column rules act on: up to
+// two singleton columns per row, most of them line columns and half of them without a cost,
+// and forcing columns (oracle.hpp). GPRS_FUZZ_SHOW=<n> prints the first n models of each kind
+// of disagreement. GPRS_FUZZ_OFF=<rule family> switches that family off for every seed, on top
+// of the options of the seed: with a family off the run can be compared, line by line, with
+// that of an engine that does not have it.
 // The profiles are those of tests/test_e2e_presolve.cpp and four more.
 // Exit code 1 when the oracle, the second presolve or the structure check failed on any model.
 
@@ -225,10 +235,23 @@ case_t add_singletons(const case_t& c, uint64_t seed, const generator_options_t&
   return oracle::make_case(m, c.row_scale, col_scale);
 }
 
+// --columns: the knobs of the generator that draw singleton columns and forcing columns.
+generator_options_t with_columns(generator_options_t o)
+{
+  o.p_singleton_col       = std::fmax(o.p_singleton_col, 0.5);
+  o.p_singleton_line      = 0.7;
+  o.p_singleton_zero_cost = 0.5;
+  o.max_singleton_cols    = 4;
+  o.max_row_singletons    = 2;
+  o.p_forcing_col         = 0.5;
+  return o;
+}
+
 // The options of a seed: three seeds in ten keep the defaults; one each has primal-only mode;
 // one family or one reduction of the column rules switched off; a random subset of the families
 // and of those reductions (each on with probability 3/4), a random mode and a random setting of
-// merge_integers; a rebuild after every phase; no rebuild; tiny budgets; few rounds and passes.
+// merge_integers; a rebuild after every phase; no rebuild; tiny budgets; few rounds and passes,
+// half of them with the two limits of the singleton-column rules at their tightest.
 options_t variant(uint64_t seed)
 {
   options_t o;
@@ -273,6 +296,10 @@ options_t variant(uint64_t seed)
       o.max_rounds            = 1 + (w & 1);
       o.max_cascade_passes    = 1 + ((w >> 1) & 1);
       o.parallel_bucket_limit = 1;
+      if ((w >> 2) & 1) {
+        o.pivot_growth_limit = 1.;
+        o.saved_row_factor   = 0.;
+      }
       break;
     default: break;
   }
@@ -311,16 +338,18 @@ int main(int argc, char** argv)
 {
   if (argc < 3) {
     std::fprintf(stderr,
-                 "usage: gprs_fuzz <first seed> <seeds per profile> [--singletons] "
+                 "usage: gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] "
                  "[--profile <name>]\n");
     return 2;
   }
   uint64_t first   = std::strtoull(argv[1], nullptr, 10);
   uint64_t count   = std::strtoull(argv[2], nullptr, 10);
   bool singletons  = false;
+  bool columns     = false;
   const char* only = nullptr;
   for (int i = 3; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--singletons")) { singletons = true; }
+    if (!std::strcmp(argv[i], "--columns")) { columns = true; }
     if (!std::strcmp(argv[i], "--profile") && i + 1 < argc) { only = argv[++i]; }
   }
   std::map<std::string, int64_t> tally;
@@ -334,23 +363,58 @@ int main(int argc, char** argv)
   int64_t rows_tested = 0, kept_tested = 0, kept_parallel = 0, kept_untested = 0;
   int64_t subtracted = 0, added_rows = 0, added_tested = 0, added_untested = 0;
   double worst = 0., multiplier = 0.;
+  // By reduction of the singleton-column rules: results with a finding, and findings.
+  const int32_t reductions[4] = {sub_rule::free_singleton,
+                                 sub_rule::free_singleton_dual,
+                                 sub_rule::zero_cost_singleton,
+                                 sub_rule::forcing_column};
+  int64_t sub_results[4] = {}, sub_found[4] = {};
+  // Results with a record of the kind: defined, defined with the dual flag, interval, forcing.
+  int64_t kind_results[4] = {};
+  int64_t box_tested = 0, snapshot_tested = 0, snapshot_untested = 0, limited_results = 0;
   std::map<std::string, int64_t> parts;
   int64_t show_missed =
     std::getenv("GPRS_FUZZ_SHOW") ? std::atoll(std::getenv("GPRS_FUZZ_SHOW")) : 0;
+  int32_t off = -1;
+  if (const char* name = std::getenv("GPRS_FUZZ_OFF")) {
+    for (int32_t r = 0; r < rule::count; ++r) {
+      if (!std::strcmp(name, rule_name(r))) { off = r; }
+    }
+    if (off < 0) {
+      std::fprintf(stderr, "GPRS_FUZZ_OFF: %s is no rule family\n", name);
+      return 2;
+    }
+  }
   for (const profile_t& profile : profiles()) {
     if (only && std::strcmp(only, profile.name)) { continue; }
+    generator_options_t generator = columns ? with_columns(profile.options) : profile.options;
     for (uint64_t seed = first; seed < first + count; ++seed) {
-      case_t c = oracle::generate(seed, profile.options);
+      case_t c = oracle::generate(seed, generator);
       if (singletons) {
         case_t d = add_singletons(c, seed, profile.options);
         mutated += d.model.ncols != c.model.ncols;
         c = d;
       }
       options_t options = variant(seed);
-      result_t result   = presolve(c.model, options);
-      verdict_t v       = oracle::check_result(c, options, result);
+      if (off >= 0) { options.enabled[off] = false; }
+      result_t result = presolve(c.model, options);
+      verdict_t v     = oracle::check_result(c, options, result);
       ++models;
       dual_findings += result.dual_findings;
+      for (int32_t k = 0; k < 4; ++k) {
+        sub_results[k] += result.sub_findings[reductions[k]] > 0;
+        sub_found[k] += result.sub_findings[reductions[k]];
+      }
+      bool has_kind[4] = {};
+      for (const col_from_rows_record_t& r : result.postsolve.col_from_rows) {
+        has_kind[r.kind == col_from_rows_kind_t::defined    ? (r.dual ? 1 : 0)
+                 : r.kind == col_from_rows_kind_t::interval ? 2
+                                                            : 3] = true;
+      }
+      for (int32_t k = 0; k < 4; ++k) {
+        kind_results[k] += has_kind[k];
+      }
+      limited_results += result.columns.growth_refused + result.columns.saved_row_refused > 0;
       if (v.ok && v.crushed_points > 0) {
         ++crush_results;
         crush_dual += result.dual_findings > 0;
@@ -386,17 +450,22 @@ int main(int argc, char** argv)
         added_tested += s.added_tested;
         added_untested += s.added_untested;
         if (s.added_multiplier > multiplier) { multiplier = s.added_multiplier; }
+        box_tested += s.box_tested;
+        snapshot_tested += s.snapshot_tested;
+        snapshot_untested += s.snapshot_untested;
         if (!s.stack_error.empty()) { part += " stack"; }
         if (s.lost_integers) { part += " types"; }
         if (s.bound_failures) { part += " bounds"; }
         if (s.row_failures) { part += " rows"; }
         if (s.kept_failures) { part += " kept_rows"; }
         if (s.added_failures) { part += " added_rows"; }
+        if (s.box_failures || s.integral_failures || s.snapshot_failures) { part += " columns"; }
         if (s.objective_failures) { part += " objective"; }
         if (s.postsolve_failures) { part += " postsolve"; }
         s_bad = !part.empty();
         double w =
           std::fmax(std::fmax(s.bound_worst, s.row_worst), std::fmax(s.kept_worst, s.added_worst));
+        w = std::fmax(w, std::fmax(s.box_worst, s.snapshot_worst));
         if (!s_bad && w > worst) { worst = w; }
         if (s_bad) {
           ++s_fail;
@@ -409,7 +478,8 @@ int main(int argc, char** argv)
             if (++s_only <= show_missed) {
               std::printf(
                 "STRUCTURE-ONLY profile %s seed %llu variant %llu:%s | %s | bound %g col %d "
-                "row %g row %d kept %g row %d added %g row %d objective %g col %d constant %g "
+                "row %g row %d kept %g row %d added %g row %d box %g col %d integral %lld col %d "
+                "snapshot %g row %d objective %g col %d constant %g "
                 "post %g col %d\n%s\n",
                 profile.name,
                 (unsigned long long)seed,
@@ -424,6 +494,12 @@ int main(int argc, char** argv)
                 s.kept_worst_row,
                 s.added_worst,
                 s.added_worst_row,
+                s.box_worst,
+                s.box_worst_col,
+                (long long)s.integral_failures,
+                s.first_integral_col,
+                s.snapshot_worst,
+                s.snapshot_worst_row,
                 s.objective_worst,
                 s.objective_worst_col,
                 s.objective_constant,
@@ -531,6 +607,29 @@ int main(int argc, char** argv)
     (long long)dual_findings,
     (long long)second_runs,
     (long long)second_changed);
+  // Per reduction of the singleton-column rules the results with a finding and the findings;
+  // the results with a record of each kind; what the structure check tested of them; the
+  // results in which a limit of the family refused a reduction.
+  std::printf(
+    "columns free_singleton %lld %lld free_singleton_dual %lld %lld zero_cost_singleton %lld "
+    "%lld forcing_column %lld %lld | records defined %lld defined_dual %lld interval %lld "
+    "forcing %lld | box_tested %lld snapshot_tested %lld snapshot_untested %lld limited %lld\n",
+    (long long)sub_results[0],
+    (long long)sub_found[0],
+    (long long)sub_results[1],
+    (long long)sub_found[1],
+    (long long)sub_results[2],
+    (long long)sub_found[2],
+    (long long)sub_results[3],
+    (long long)sub_found[3],
+    (long long)kind_results[0],
+    (long long)kind_results[1],
+    (long long)kind_results[2],
+    (long long)kind_results[3],
+    (long long)box_tested,
+    (long long)snapshot_tested,
+    (long long)snapshot_untested,
+    (long long)limited_results);
   for (const auto& t : parts) {
     std::printf("  part %lld x%s\n", (long long)t.second, t.first.c_str());
   }

@@ -68,5 +68,14 @@ grep -h "^crush " "$out"/part.*.txt |
        END {print "crush test: results", r, "of them with a dual finding", d,
                   "points crushed", p, "points left out", s, "dual findings", f,
                   "| second presolves of a fixed point", n, "changed", c}'
+grep -h "^columns " "$out"/part.*.txt |
+  awk '{a += $3; b += $4; c += $6; d += $7; e += $9; f += $10; g += $12; h += $13;
+        i += $17; j += $19; k += $21; l += $23; m += $26; n += $28; o += $30; p += $32}
+       END {print "singleton columns, results and findings: free_singleton", a, b,
+                  "free_singleton_dual", c, d, "zero_cost_singleton", e, f,
+                  "forcing_column", g, h;
+            print "results with a record: defined", i, "defined by a dual rule", j,
+                  "interval", k, "forcing", l, "| boxes tested", m, "snapshots tested", n,
+                  "not tested", o, "results with limited", p}'
 grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND" "$out"/part.*.txt | cut -c1-200 | head -20
 exit $bad

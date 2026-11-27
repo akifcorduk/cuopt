@@ -222,6 +222,9 @@ struct engine_t {
       columns.alias_depth = r.columns.alias_depth;
     }
     columns.free_singleton_rejected_explicit += r.columns.free_singleton_rejected_explicit;
+    columns.growth_refused += r.columns.growth_refused;
+    columns.growth_refused_row += r.columns.growth_refused_row;
+    columns.saved_row_refused += r.columns.saved_row_refused;
     if (r.outcome != rule_outcome_t::ok) {
       outcome = r.outcome;
       return false;
@@ -245,6 +248,7 @@ struct engine_t {
     sizes_t before                   = sizes();
     engine_clock_t::time_point begin = engine_clock_t::now();
     rule_result_t r                  = family.run(st, budget, result.postsolve, opt);
+    if (result.stats[rule].calls == 0) { result.stats[rule].first_work = budget.used; }
     ++result.stats[rule].calls;
     result.stats[rule].work += budget.used;
     if (!book(rule, r, before, begin)) { return false; }
@@ -418,6 +422,7 @@ struct engine_t {
       sizes_t before  = sizes();
       size_t listed   = st.row_frontier.list[row_list::propagation].size();
       rule_result_t r = propagation.make_explicit(st, result.postsolve, opt);
+      singleton_cols.bounds_became_explicit();
       explicit_bounds = true;
       if (!book(rule::propagation, r, before, explicit_begin)) { return ended_status(outcome); }
       renewed = r.findings > 0 || st.row_frontier.list[row_list::propagation].size() > listed;
