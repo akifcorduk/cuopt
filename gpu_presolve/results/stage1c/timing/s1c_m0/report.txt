@@ -1,0 +1,24 @@
+the 240 benchmark instances: 240 instances in every side, passes base 3, new 3, off 3
+  base    16.502 s   +0.00%   rules    6.440 s, outside   10.045 s, work of the shared families 1901179984
+  new     16.679 s   +1.07%   rules    6.597 s, outside   10.064 s, work of the shared families 1901179984
+       largest changes: propagation +0.049 s, state +0.033 s, row_rules +0.025 s, doubleton +0.018 s, parallel_rows +0.014 s, tightening +0.014 s
+       above +3% among the 126 instances of at least 10 ms: 32 (neos-787933 +17.7%, var-smallemery-m6j6 +14.3%, neos-5195221-niemur +13.2%, sing44 +11.7%, sp98ar +10.9%, n3div36 +10.2%, chromaticindex1024-7 +8.3%, rail02 +8.0%)
+  off     16.584 s   +0.50%   rules    6.535 s, outside   10.031 s, work of the shared families 1901179984
+       largest changes: propagation +0.039 s, row_rules +0.019 s, tightening +0.014 s, parallel_rows +0.012 s, storage -0.012 s, finish -0.011 s
+       above +3% among the 126 instances of at least 10 ms: 19 (rd-rplusc-21 +8.8%, rmatr200-p5 +8.8%, cryptanalysiskb128n5obj16 +6.5%, chromaticindex512-7 +6.0%, s250r10 +4.9%, unitcal_7 +4.7%, traininstance2 +4.6%, neos-5188808-nattai +4.4%)
+testbed below 1e7 nonzeros: 31 instances in every side, passes base 3, new 3, off 3
+  base     4.061 s   +0.00%   rules    1.735 s, outside    2.325 s, work of the shared families 517937560
+  new      4.153 s   +2.27%   rules    1.785 s, outside    2.367 s, work of the shared families 517937560
+       largest changes: state +0.041 s, propagation +0.029 s, singleton_cols +0.004 s, dual_cols +0.004 s, parallel_cols +0.004 s, row_rules +0.004 s
+       above +3% among the 25 instances of at least 10 ms: 10 (rmatr200-p5 +7.8%, triptim1 +6.4%, neos-5114902-kasavu +4.7%, piperout-d27 +4.4%, supportcase12 +4.3%, brazil3 +3.8%, neos-5116085-kenana +3.5%, radiationm18-12-05 +3.4%)
+  off      4.161 s   +2.46%   rules    1.769 s, outside    2.391 s, work of the shared families 517937560
+       largest changes: state +0.066 s, propagation +0.020 s, parallel_rows +0.008 s, row_rules +0.003 s, tightening +0.002 s, doubleton +0.001 s
+       above +3% among the 25 instances of at least 10 ms: 10 (var-smallemery-m6j6 +11.9%, rmatr200-p5 +8.5%, bab6 +5.5%, supportcase42 +5.0%, supportcase12 +4.7%, neos-5114902-kasavu +3.9%, uccase9 +3.8%, triptim1 +3.3%)
+testbed above 1e7 nonzeros: 9 instances in every side, passes base 3, new 3, off 3
+  base    77.547 s   +0.00%   rules   29.807 s, outside   47.469 s, work of the shared families 7510740657
+  new     79.028 s   +1.91%   rules   30.563 s, outside   48.192 s, work of the shared families 7510740657
+       largest changes: state +0.682 s, parallel_rows +0.154 s, tightening +0.152 s, propagation +0.108 s, doubleton +0.105 s, row_rules +0.064 s
+       above +3% among the 9 instances of at least 10 ms: 2 (dlr2 +5.1%, neos-4332810-sesia +3.2%)
+  off     78.847 s   +1.68%   rules   30.419 s, outside   48.150 s, work of the shared families 7510740657
+       largest changes: state +0.627 s, doubleton +0.176 s, parallel_rows +0.152 s, tightening +0.141 s, propagation +0.094 s, row_rules +0.052 s
+       above +3% among the 9 instances of at least 10 ms: 2 (dlr2 +4.8%, neos-4332810-sesia +4.2%)

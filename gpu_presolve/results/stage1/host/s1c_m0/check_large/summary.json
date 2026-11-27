@@ -1,0 +1,2773 @@
+{
+ "identity": {
+  "commit": "affa1eb9d22d247743906b22606a84e50aaf82f7",
+  "source_commit": "affa1eb9d22d247743906b22606a84e50aaf82f7",
+  "source_dirty": [],
+  "source_checksum": "ac406436412514d1bdb6aa8234403da382107310c88b5f26ffc7daa02d5edc45",
+  "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/s1c_m0/check/gprs_check",
+  "tool_checksum": "5cc18a0b9c2684f2968a1a1baf83b7b3bd9bc5af6936fe4b68eb2b59ecb443fc"
+ },
+ "host": "d57576a30df5",
+ "start_time": "2026-11-27T20:51:47+0000",
+ "load_average": [
+  20.10546875,
+  21.44775390625,
+  16.3037109375
+ ],
+ "arguments": {
+  "dumps": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps"
+  ],
+  "stats_dir": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/results/stage1/dumps_dev_stats",
+   "gpu_presolve/results/stage1/refs/stage1c",
+   "gpu_presolve/results/stage1/refs/stage1c_large",
+   "gpu_presolve/results/bench240/highs_stock"
+  ],
+  "out": "gpu_presolve/results/stage1/host/s1c_m0/check_large",
+  "set": "large",
+  "only": null,
+  "jobs": 2,
+  "threads": 2,
+  "lp_time_limit": 0.0,
+  "mip_time_limit": 0.0,
+  "primal_only": false,
+  "solutions_dir": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions",
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external"
+  ],
+  "make_solutions": false,
+  "solution_time_limit": 300.0,
+  "max_points": 20,
+  "cost_variants": 1,
+  "push_points": 1,
+  "require_points": true,
+  "kill_after": 1200.0,
+  "skip_done": true
+ },
+ "end_time": "2026-11-27T20:56:19+0000",
+ "end_load_average": [
+  12.9208984375,
+  16.5712890625,
+  15.5634765625
+ ],
+ "failures": 1,
+ "instances": [
+  {
+   "name": "usafa",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:51:47+0000",
+    "load_average": [
+     20.10546875,
+     21.44775390625,
+     16.3037109375
+    ],
+    "end_load_average": [
+     18.8876953125,
+     21.1142578125,
+     16.2763671875
+    ],
+    "wall_seconds": 10.740797996520996,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/usafa.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 1.583647,
+   "hash": "32981e52b11bcea3",
+   "original": {
+    "rows": 1377561,
+    "cols": 228648,
+    "nnz": 16485102
+   },
+   "reduced": {
+    "rows": 219466,
+    "cols": 228630,
+    "nnz": 3031178
+   },
+   "known_objective": 160.1671356761785,
+   "known_is_bound": false,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/usafa.gprssol",
+      "points": 1,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/usafa.gprssol",
+      "points": 2,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 3,
+    "points_used": 6,
+    "points_rejected": 0,
+    "points_pushed": 3,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": 160.16713576572644,
+    "default": {
+     "status": "reduced",
+     "hash": "32981e52b11bcea3",
+     "points": 6,
+     "first_failed_point": -1,
+     "dual_findings": 3,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "8b97f81818c2fbad",
+     "points": 6,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 16,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 1377545,
+      "parallel": 1158079,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 15,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 1377546,
+      "parallel": 1158079,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "d5f873e9b2f3c1c1",
+     "moved_columns": 2593,
+     "objective_fall": -219,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "d171521d223040f1",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "a2864-99blp",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:51:47+0000",
+    "load_average": [
+     20.10546875,
+     21.44775390625,
+     16.3037109375
+    ],
+    "end_load_average": [
+     19.3134765625,
+     21.234375,
+     16.2890625
+    ],
+    "wall_seconds": 9.539072036743164,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/a2864-99blp.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 1.688779,
+   "hash": "9049dd30d0f806e0",
+   "original": {
+    "rows": 22117,
+    "cols": 200787,
+    "nnz": 20078717
+   },
+   "reduced": {
+    "rows": 20669,
+    "cols": 13824,
+    "nnz": 1378816
+   },
+   "known_objective": -257,
+   "known_is_bound": false,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/a2864-99blp.gprssol",
+      "points": 2,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/a2864-99blp.gprssol",
+      "points": 1,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 3,
+    "points_used": 5,
+    "points_rejected": 0,
+    "points_pushed": 2,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": -257,
+    "default": {
+     "status": "reduced",
+     "hash": "9049dd30d0f806e0",
+     "points": 5,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "9049dd30d0f806e0",
+     "points": 5,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 1224,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 20893,
+      "parallel": 224,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 1224,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 20893,
+      "parallel": 224,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "eb6186fdd6294d44",
+     "moved_columns": 147,
+     "objective_fall": -7.58,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "0e54538864ace4ae",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "crush_default_round_trip": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "neos-3740487-motru",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:51:56+0000",
+    "load_average": [
+     19.3134765625,
+     21.234375,
+     16.2890625
+    ],
+    "end_load_average": [
+     17.29248046875,
+     20.55859375,
+     16.22021484375
+    ],
+    "wall_seconds": 30.196649312973022,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/neos-3740487-motru.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 5.151613,
+   "hash": "9b952af497b763aa",
+   "original": {
+    "rows": 4936372,
+    "cols": 1689612,
+    "nnz": 26433474
+   },
+   "reduced": {
+    "rows": 4936248,
+    "cols": 1689550,
+    "nnz": 26433226
+   },
+   "known_objective": 164.4691736839999,
+   "known_is_bound": false,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/neos-3740487-motru.gprssol",
+      "points": 0,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/neos-3740487-motru.gprssol",
+      "points": 1,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 1,
+    "points_used": 1,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": 164.469173684,
+    "default": {
+     "status": "reduced",
+     "hash": "9b952af497b763aa",
+     "points": 1,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 6.94e-18,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "9b952af497b763aa",
+     "points": 1,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 6.94e-18,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 124,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 4936248,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 124,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 4936248,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "0ce15e893e6c573d",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "0ce15e893e6c573d",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "crush_default_round_trip": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "square47",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:51:58+0000",
+    "load_average": [
+     18.8876953125,
+     21.1142578125,
+     16.2763671875
+    ],
+    "end_load_average": [
+     18.1357421875,
+     20.8798828125,
+     16.25146484375
+    ],
+    "wall_seconds": 12.443010568618774,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/square47.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 2.253966,
+   "hash": "7f2b983568e5a145",
+   "original": {
+    "rows": 61591,
+    "cols": 95030,
+    "nnz": 27329856
+   },
+   "reduced": {
+    "rows": 2294,
+    "cols": 35733,
+    "nnz": 8471002
+   },
+   "known_objective": 15.9999999997877,
+   "known_is_bound": false,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/square47.gprssol",
+      "points": 0,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/square47.gprssol",
+      "points": 1,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 1,
+    "points_used": 1,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": 16,
+    "default": {
+     "status": "reduced",
+     "hash": "7f2b983568e5a145",
+     "points": 1,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "7f2b983568e5a145",
+     "points": 1,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 59297,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 2294,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 59297,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 2294,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "d14ddb880be4d68b",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "d14ddb880be4d68b",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "crush_default_round_trip": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "t11nonreg",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:52:10+0000",
+    "load_average": [
+     18.1357421875,
+     20.8798828125,
+     16.25146484375
+    ],
+    "end_load_average": [
+     16.0947265625,
+     20.0146484375,
+     16.154296875
+    ],
+    "wall_seconds": 39.6140615940094,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/t11nonreg.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 6.446636,
+   "hash": "84254e1eb7c1eab4",
+   "original": {
+    "rows": 27375,
+    "cols": 4596905,
+    "nnz": 46841437
+   },
+   "reduced": {
+    "rows": 22606,
+    "cols": 3282097,
+    "nnz": 32448929
+   },
+   "known_objective": 1029039.499999974,
+   "known_is_bound": false,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/t11nonreg.gprssol",
+      "points": 0,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/t11nonreg.gprssol",
+      "points": 1,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 1,
+    "points_used": 1,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": 1029039.5,
+    "default": {
+     "status": "reduced",
+     "hash": "84254e1eb7c1eab4",
+     "points": 1,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "84254e1eb7c1eab4",
+     "points": 1,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 4672,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 22606,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 97,
+      "tested": 97,
+      "not_tested": 0,
+      "multiplier": 1,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 4672,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 22606,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 97,
+      "tested": 97,
+      "not_tested": 0,
+      "multiplier": 1,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "f1d9367a32fa9dfb",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "f1d9367a32fa9dfb",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "crush_default_round_trip": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "neos-4332810-sesia",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:52:27+0000",
+    "load_average": [
+     17.29248046875,
+     20.55859375,
+     16.22021484375
+    ],
+    "end_load_average": [
+     14.24072265625,
+     18.44580078125,
+     15.9365234375
+    ],
+    "wall_seconds": 106.77380132675171,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/neos-4332810-sesia.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 18.12461,
+   "hash": "a9e49880016ba5e2",
+   "original": {
+    "rows": 19912111,
+    "cols": 20682487,
+    "nnz": 47513027
+   },
+   "reduced": {
+    "rows": 13306364,
+    "cols": 14110659,
+    "nnz": 34283539
+   },
+   "known_objective": 21849.762376,
+   "known_is_bound": false,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/neos-4332810-sesia.gprssol",
+      "points": 4,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/neos-4332810-sesia.gprssol",
+      "points": 1,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 5,
+    "points_used": 5,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": 21849.762376237577,
+    "default": {
+     "status": "reduced",
+     "hash": "a9e49880016ba5e2",
+     "points": 5,
+     "first_failed_point": -1,
+     "dual_findings": 11976,
+     "reduced_point": {
+      "row": 4.89e-12,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 4.81e-13,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 2.71e-20,
+      "columns": 0,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "abde9907d636d7b2",
+     "points": 5,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 4.89e-12,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 4.81e-13,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 2.71e-20,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 6605747,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 13306364,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 1.83e-16,
+      "row": 137557,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 6605739,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 13306372,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 1.83e-16,
+      "row": 137557,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "89431f70c7c0e475",
+     "moved_columns": 3751,
+     "objective_fall": -1.23,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "6198ff6e5c60233c",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "dlr2",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:52:50+0000",
+    "load_average": [
+     16.0947265625,
+     20.0146484375,
+     16.154296875
+    ],
+    "end_load_average": [
+     14.24072265625,
+     18.44580078125,
+     15.9365234375
+    ],
+    "wall_seconds": 85.11856698989868,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/dlr2.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 12.247538,
+   "hash": "c34b94fa7d775e57",
+   "original": {
+    "rows": 7132926,
+    "cols": 38868107,
+    "nnz": 78091589
+   },
+   "reduced": {
+    "rows": 3934530,
+    "cols": 36437946,
+    "nnz": 72603249
+   },
+   "known_objective": 18311711.89666227,
+   "known_is_bound": true,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/dlr2.gprssol",
+      "points": 0,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/dlr2.gprssol",
+      "points": 1,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 1,
+    "points_used": 2,
+    "points_rejected": 0,
+    "points_pushed": 1,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": 18311711.896662273,
+    "default": {
+     "status": "reduced",
+     "hash": "c34b94fa7d775e57",
+     "points": 2,
+     "first_failed_point": -1,
+     "dual_findings": 275457,
+     "reduced_point": {
+      "row": 1.28e-12,
+      "bound": 4.22e-11,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 2.27e-13,
+      "bound": 4.22e-11,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 100,
+      "continuous": 4.4e-16,
+      "columns": 39781,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "a6ab2b5dbff33905",
+     "points": 2,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 1.28e-12,
+      "bound": 4.22e-11,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 2.27e-13,
+      "bound": 4.22e-11,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 4.4e-16,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 2967193,
+      "worst": 3.66e-17,
+      "row": 46552,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 3963693,
+      "parallel": 29163,
+      "not_tested": 0,
+      "worst": 3.35e-16,
+      "row": 6167627,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 202759,
+      "tested": 202040,
+      "not_tested": 0,
+      "multiplier": 1,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 2514686,
+      "worst": 1.97e-31,
+      "row": 2752771,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 4618239,
+      "parallel": 29163,
+      "not_tested": 0,
+      "worst": 3.35e-16,
+      "row": 6167627,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 1,
+      "tested": 1,
+      "not_tested": 0,
+      "multiplier": 1,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "31f8d2e83d6d037c",
+     "moved_columns": 24900,
+     "objective_fall": -0.0944,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "f25e394985a932d4",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "hawaiiv10-130",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:54:13+0000",
+    "load_average": [
+     14.24072265625,
+     18.44580078125,
+     15.9365234375
+    ],
+    "end_load_average": [
+     13.427734375,
+     17.0390625,
+     15.6767578125
+    ],
+    "wall_seconds": 94.5958993434906,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/hawaiiv10-130.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 15.792083,
+   "hash": "03c9e007021518fe",
+   "original": {
+    "rows": 1388052,
+    "cols": 685130,
+    "nnz": 183263061
+   },
+   "reduced": {
+    "rows": 1244114,
+    "cols": 678157,
+    "nnz": 180976267
+   },
+   "known_objective": 52425028.9449536,
+   "known_is_bound": false,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/hawaiiv10-130.gprssol",
+      "points": 0,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/hawaiiv10-130.gprssol",
+      "points": 2,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 2,
+    "points_used": 0,
+    "points_rejected": 2,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 2.81e-07,
+     "bound": 1e-06,
+     "integrality": 0
+    },
+    "best_objective": null
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 139716,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 1247781,
+      "parallel": 3667,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 555,
+      "tested": 555,
+      "not_tested": 0,
+      "multiplier": 100,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 136491,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 1251466,
+      "parallel": 3667,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 95,
+      "tested": 95,
+      "not_tested": 0,
+      "multiplier": 1,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "1c94d7c17ebe8d68",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "e7819363ff21d96e",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "FAIL",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "skipped",
+    "crush_default_reduced_point": "skipped",
+    "crush_default_postsolved_point": "skipped",
+    "crush_default_objective": "skipped",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "skipped",
+    "crush_primal_reduced_point": "skipped",
+    "crush_primal_postsolved_point": "skipped",
+    "crush_primal_objective": "skipped",
+    "crush_primal_round_trip": "skipped",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   },
+   "no_usable_point": true
+  },
+  {
+   "name": "neos-4535459-waipa",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:54:15+0000",
+    "load_average": [
+     14.24072265625,
+     18.44580078125,
+     15.9365234375
+    ],
+    "end_load_average": [
+     12.9208984375,
+     16.5712890625,
+     15.5634765625
+    ],
+    "wall_seconds": 124.02195024490356,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/neos-4535459-waipa.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 15.535783,
+   "hash": "1d4a05ab024cbb51",
+   "original": {
+    "rows": 163001,
+    "cols": 961401,
+    "nnz": 256963402
+   },
+   "reduced": {
+    "rows": 163001,
+    "cols": 961401,
+    "nnz": 256963402
+   },
+   "known_objective": 26040609,
+   "known_is_bound": true,
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions/neos-4535459-waipa.gprssol",
+      "points": 0,
+      "incomplete_tail_bytes": 0
+     },
+     {
+      "file": "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external/neos-4535459-waipa.gprssol",
+      "points": 2,
+      "incomplete_tail_bytes": 0
+     }
+    ],
+    "points": 2,
+    "points_used": 2,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": 26040609,
+    "default": {
+     "status": "reduced",
+     "hash": "1d4a05ab024cbb51",
+     "points": 2,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "status": "reduced",
+     "hash": "1d4a05ab024cbb51",
+     "points": 2,
+     "first_failed_point": -1,
+     "dual_findings": 0,
+     "reduced_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "postsolved_point": {
+      "row": 0,
+      "bound": 0,
+      "integrality": 0,
+      "failed": 0
+     },
+     "objective": {
+      "identity": 0,
+      "rise": 0,
+      "fall": 0,
+      "failed": 0
+     },
+     "round_trip": {
+      "integer": 0,
+      "continuous": 0,
+      "columns": 0,
+      "failed": 0
+     }
+    }
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 163001,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 163001,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "f6f597ef9d4786f5",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "f6f597ef9d4786f5",
+     "moved_columns": 0,
+     "objective_fall": 0,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "pass",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "pass",
+    "crush_default_reduced_point": "pass",
+    "crush_default_postsolved_point": "pass",
+    "crush_default_objective": "pass",
+    "crush_default_round_trip": "pass",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "pass",
+    "crush_primal_reduced_point": "pass",
+    "crush_primal_postsolved_point": "pass",
+    "crush_primal_objective": "pass",
+    "crush_primal_round_trip": "pass",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  }
+ ]
+}

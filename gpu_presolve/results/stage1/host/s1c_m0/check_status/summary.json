@@ -1,0 +1,813 @@
+{
+ "identity": {
+  "commit": "affa1eb9d22d247743906b22606a84e50aaf82f7",
+  "source_commit": "affa1eb9d22d247743906b22606a84e50aaf82f7",
+  "source_dirty": [],
+  "source_checksum": "ac406436412514d1bdb6aa8234403da382107310c88b5f26ffc7daa02d5edc45",
+  "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/s1c_m0/check/gprs_check",
+  "tool_checksum": "5cc18a0b9c2684f2968a1a1baf83b7b3bd9bc5af6936fe4b68eb2b59ecb443fc"
+ },
+ "host": "d57576a30df5",
+ "start_time": "2026-11-27T20:51:41+0000",
+ "load_average": [
+  20.72412109375,
+  21.5908203125,
+  16.32177734375
+ ],
+ "arguments": {
+  "dumps": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev"
+  ],
+  "stats_dir": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/results/stage1/dumps_dev_stats",
+   "gpu_presolve/results/stage1/refs/stage1c",
+   "gpu_presolve/results/stage1/refs/stage1c_large",
+   "gpu_presolve/results/bench240/highs_stock"
+  ],
+  "out": "gpu_presolve/results/stage1/host/s1c_m0/check_status",
+  "set": "status",
+  "only": "bnatt500,fhnw-binpack4-4,neos-2075418-temuka",
+  "jobs": 3,
+  "threads": 2,
+  "lp_time_limit": 0.0,
+  "mip_time_limit": 0.0,
+  "primal_only": false,
+  "solutions_dir": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions",
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external"
+  ],
+  "make_solutions": false,
+  "solution_time_limit": 300.0,
+  "max_points": 20,
+  "cost_variants": 2,
+  "push_points": 4,
+  "require_points": false,
+  "kill_after": 1200.0,
+  "skip_done": true
+ },
+ "end_time": "2026-11-27T20:51:47+0000",
+ "end_load_average": [
+  20.10546875,
+  21.44775390625,
+  16.3037109375
+ ],
+ "failures": 0,
+ "instances": [
+  {
+   "name": "bnatt500",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:51:41+0000",
+    "load_average": [
+     20.72412109375,
+     21.5908203125,
+     16.32177734375
+    ],
+    "end_load_average": [
+     20.72412109375,
+     21.5908203125,
+     16.32177734375
+    ],
+    "wall_seconds": 0.0717005729675293,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/bnatt500.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.003739,
+   "hash": "1cf896818a9768fd",
+   "original": {
+    "rows": 7029,
+    "cols": 4500,
+    "nnz": 27203
+   },
+   "reduced": {
+    "rows": 5034,
+    "cols": 2517,
+    "nnz": 21242
+   },
+   "expect": "infeasible",
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [],
+    "points": 0,
+    "points_used": 0,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": null
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 1995,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 5034,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 1995,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 5034,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "a787936f69a546a6",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "a787936f69a546a6",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "062a2287be3236f0",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "062a2287be3236f0",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "skipped",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "skipped",
+    "crush_default_reduced_point": "skipped",
+    "crush_default_postsolved_point": "skipped",
+    "crush_default_objective": "skipped",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "skipped",
+    "crush_primal_reduced_point": "skipped",
+    "crush_primal_postsolved_point": "skipped",
+    "crush_primal_objective": "skipped",
+    "crush_primal_round_trip": "skipped",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "fhnw-binpack4-4",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:51:41+0000",
+    "load_average": [
+     20.72412109375,
+     21.5908203125,
+     16.32177734375
+    ],
+    "end_load_average": [
+     20.72412109375,
+     21.5908203125,
+     16.32177734375
+    ],
+    "wall_seconds": 0.01892852783203125,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/fhnw-binpack4-4.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.000187,
+   "hash": "f23cc7175f28b19b",
+   "original": {
+    "rows": 620,
+    "cols": 520,
+    "nnz": 2332
+   },
+   "reduced": {
+    "rows": 465,
+    "cols": 420,
+    "nnz": 1602
+   },
+   "expect": "infeasible",
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [],
+    "points": 0,
+    "points_used": 0,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": null
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 155,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 465,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 155,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 465,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "e1fb475b721ef165",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "e1fb475b721ef165",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "363ef044dc433438",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "363ef044dc433438",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "skipped",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "skipped",
+    "crush_default_reduced_point": "skipped",
+    "crush_default_postsolved_point": "skipped",
+    "crush_default_objective": "skipped",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "skipped",
+    "crush_primal_reduced_point": "skipped",
+    "crush_primal_postsolved_point": "skipped",
+    "crush_primal_objective": "skipped",
+    "crush_primal_round_trip": "skipped",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "neos-2075418-temuka",
+   "run": {
+    "host": "d57576a30df5",
+    "start_time": "2026-11-27T20:51:41+0000",
+    "load_average": [
+     20.72412109375,
+     21.5908203125,
+     16.32177734375
+    ],
+    "end_load_average": [
+     20.10546875,
+     21.44775390625,
+     16.3037109375
+    ],
+    "wall_seconds": 5.733122825622559,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-2075418-temuka.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "unchanged",
+   "presolve_seconds": 0.631494,
+   "hash": "421e059886e9bc16",
+   "original": {
+    "rows": 349602,
+    "cols": 122304,
+    "nnz": 7610261
+   },
+   "reduced": {
+    "rows": 349602,
+    "cols": 122304,
+    "nnz": 7610261
+   },
+   "expect": "infeasible",
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "lp_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "mip_reduced": {
+    "status": "not run",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 0.0
+   },
+   "crush": {
+    "files": [],
+    "points": 0,
+    "points_used": 0,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": null
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "unchanged",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 349602,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 349602,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "objective": {
+      "worst": 0,
+      "column": -1,
+      "constant": 0,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "unchanged",
+     "hash": "3daf258ea47e2ffa",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "unchanged",
+     "hash": "3daf258ea47e2ffa",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "default",
+     "status": "unchanged",
+     "hash": "3966fb0681e2911f",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "primal_only",
+     "status": "unchanged",
+     "hash": "3966fb0681e2911f",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "skipped",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "skipped",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "skipped",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_objective": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "skipped",
+    "crush_default_reduced_point": "skipped",
+    "crush_default_postsolved_point": "skipped",
+    "crush_default_objective": "skipped",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_objective": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "skipped",
+    "crush_primal_reduced_point": "skipped",
+    "crush_primal_postsolved_point": "skipped",
+    "crush_primal_objective": "skipped",
+    "crush_primal_round_trip": "skipped",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  }
+ ]
+}

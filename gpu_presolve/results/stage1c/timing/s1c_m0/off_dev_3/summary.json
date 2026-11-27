@@ -1,0 +1,5215 @@
+{
+ "identity": {
+  "commit": "affa1eb9d22d247743906b22606a84e50aaf82f7",
+  "source_commit": "affa1eb9d22d247743906b22606a84e50aaf82f7",
+  "source_dirty": [],
+  "source_checksum": "ac406436412514d1bdb6aa8234403da382107310c88b5f26ffc7daa02d5edc45",
+  "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/s1c_m0/release/gprs_presolve",
+  "tool_checksum": "8e6c41145f43ec3721cf930e9876f111dee83f27f55c14e542e3150eaee159f8"
+ },
+ "host": "d57576a30df5",
+ "start_time": "2026-11-27T20:50:56+0000",
+ "load_average": [
+  25.8134765625,
+  22.4951171875,
+  16.337890625
+ ],
+ "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/s1c_m0/release/gprs_presolve",
+ "tool_args": [
+  "--off",
+  "simple_probing",
+  "--off",
+  "singleton_cols",
+  "--off",
+  "dual_cols",
+  "--off",
+  "parallel_cols"
+ ],
+ "reps": 1,
+ "end_time": "2026-11-27T20:51:02+0000",
+ "end_load_average": [
+  24.787109375,
+  22.33740234375,
+  16.31982421875
+ ],
+ "failures": 0,
+ "instances": [
+  {
+   "name": "istanbul-no-cutoff",
+   "band": "A1",
+   "rows": 20346,
+   "cols": 5282,
+   "nnz": 71477,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.03468751907348633
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 19303,
+    "cols": 5012,
+    "nnz": 64803
+   },
+   "seconds": 0.009738,
+   "all_seconds": [
+    0.009738
+   ],
+   "hash": "4cf775025bfae4ec",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 6,
+     "work": 223502,
+     "findings": 1002,
+     "records": 0,
+     "seconds": 0.000512,
+     "rows_removed": 814,
+     "cols_removed": 166,
+     "nnz_removed": 5540
+    },
+    "propagation": {
+     "calls": 7,
+     "work": 278034,
+     "findings": 1,
+     "records": 24262,
+     "seconds": 0.001333,
+     "rows_removed": 0,
+     "cols_removed": 1,
+     "nnz_removed": 583
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 354703,
+     "findings": 2216,
+     "records": 0,
+     "seconds": 0.000555,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 163875,
+     "findings": 98,
+     "records": 0,
+     "seconds": 0.000784,
+     "rows_removed": 98,
+     "cols_removed": 98,
+     "nnz_removed": 246
+    },
+    "parallel_rows": {
+     "calls": 3,
+     "work": 541677,
+     "findings": 131,
+     "records": 0,
+     "seconds": 0.001717,
+     "rows_removed": 131,
+     "cols_removed": 0,
+     "nnz_removed": 300
+    },
+    "dual_fixing": {
+     "calls": 3,
+     "work": 44845,
+     "findings": 5,
+     "records": 0,
+     "seconds": 1.6e-05,
+     "rows_removed": 0,
+     "cols_removed": 5,
+     "nnz_removed": 5
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.003172,
+    "start": 3.7e-05,
+    "storage": 0.000179,
+    "finish": 0.000583,
+    "hash": 0.00077
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 3.7e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.000301
+   },
+   "parallel_rows": {
+    "merges": 131,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "ns1208400",
+   "band": "A1",
+   "rows": 4289,
+   "cols": 2883,
+   "nnz": 81746,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.020023584365844727
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1981,
+    "cols": 2597,
+    "nnz": 73621
+   },
+   "seconds": 0.008411,
+   "all_seconds": [
+    0.008411
+   ],
+   "hash": "2ea5cc8a35548bf8",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 54575,
+     "findings": 2595,
+     "records": 0,
+     "seconds": 0.000172,
+     "rows_removed": 2308,
+     "cols_removed": 286,
+     "nnz_removed": 8125
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 192396,
+     "findings": 5,
+     "records": 6,
+     "seconds": 0.001292,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 649646,
+     "findings": 528,
+     "records": 0,
+     "seconds": 0.001789,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 23456,
+     "findings": 0,
+     "records": 0,
+     "seconds": 2e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 436915,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000944,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 23064,
+     "findings": 0,
+     "records": 0,
+     "seconds": 8e-06,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.002548,
+    "start": 1.1e-05,
+    "storage": 0.000375,
+    "finish": 0.000466,
+    "hash": 0.000622
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 1.1e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.001855
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "wachplan",
+   "band": "A1",
+   "rows": 1553,
+   "cols": 3361,
+   "nnz": 89361,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.01955127716064453
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 696,
+    "cols": 2302,
+    "nnz": 12698
+   },
+   "seconds": 0.005699,
+   "all_seconds": [
+    0.005699
+   ],
+   "hash": "5fc679545518b94e",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 44958,
+     "findings": 1168,
+     "records": 0,
+     "seconds": 0.000534,
+     "rows_removed": 811,
+     "cols_removed": 357,
+     "nnz_removed": 75656
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 106913,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.000701,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 347177,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000926,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 11024,
+     "findings": 0,
+     "records": 0,
+     "seconds": 9e-06,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 288442,
+     "findings": 46,
+     "records": 0,
+     "seconds": 0.000614,
+     "rows_removed": 46,
+     "cols_removed": 0,
+     "nnz_removed": 305
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 42446,
+     "findings": 702,
+     "records": 0,
+     "seconds": 5.5e-05,
+     "rows_removed": 0,
+     "cols_removed": 702,
+     "nnz_removed": 702
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.002336,
+    "start": 9e-06,
+    "storage": 0.000282,
+    "finish": 9.5e-05,
+    "hash": 0.000135
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 9e-06,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 1e-06
+   },
+   "parallel_rows": {
+    "merges": 46,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "trento1",
+   "band": "A1",
+   "rows": 1265,
+   "cols": 7687,
+   "nnz": 93571,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.019702911376953125
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1264,
+    "cols": 7678,
+    "nnz": 93396
+   },
+   "seconds": 0.006393,
+   "all_seconds": [
+    0.006393
+   ],
+   "hash": "d0c4d7ac0058771f",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 4,
+     "work": 20128,
+     "findings": 1,
+     "records": 0,
+     "seconds": 3.2e-05,
+     "rows_removed": 1,
+     "cols_removed": 0,
+     "nnz_removed": 166
+    },
+    "propagation": {
+     "calls": 4,
+     "work": 175500,
+     "findings": 1248,
+     "records": 2511,
+     "seconds": 0.00134,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 222295,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000199,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 10120,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.7e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 308125,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000648,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 61505,
+     "findings": 9,
+     "records": 0,
+     "seconds": 1.5e-05,
+     "rows_removed": 0,
+     "cols_removed": 9,
+     "nnz_removed": 9
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.002616,
+    "start": 1.8e-05,
+    "storage": 4.8e-05,
+    "finish": 0.000609,
+    "hash": 0.000819
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 1.8e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.001045
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "radiationm18-12-05",
+   "band": "A1",
+   "rows": 40935,
+   "cols": 40623,
+   "nnz": 96149,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.06721949577331543
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 7243,
+    "cols": 6868,
+    "nnz": 20736
+   },
+   "seconds": 0.028672,
+   "all_seconds": [
+    0.028672
+   ],
+   "hash": "c99ca5c75906b960",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 3,
+   "rules": {
+    "row_rules": {
+     "calls": 6,
+     "work": 598049,
+     "findings": 10458,
+     "records": 0,
+     "seconds": 0.001703,
+     "rows_removed": 7822,
+     "cols_removed": 1455,
+     "nnz_removed": 10417
+    },
+    "propagation": {
+     "calls": 5,
+     "work": 832149,
+     "findings": 14428,
+     "records": 40099,
+     "seconds": 0.003925,
+     "rows_removed": 0,
+     "cols_removed": 2816,
+     "nnz_removed": 7190
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 910117,
+     "findings": 12031,
+     "records": 0,
+     "seconds": 0.002055,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 512317,
+     "findings": 25870,
+     "records": 0,
+     "seconds": 0.007644,
+     "rows_removed": 25870,
+     "cols_removed": 25870,
+     "nnz_removed": 51740
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1032450,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003709,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 5,
+     "work": 414920,
+     "findings": 3614,
+     "records": 0,
+     "seconds": 0.000387,
+     "rows_removed": 0,
+     "cols_removed": 3614,
+     "nnz_removed": 6066
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.006788,
+    "start": 0.000143,
+    "storage": 0.001736,
+    "finish": 0.000236,
+    "hash": 0.000338
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000143,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 2.9e-05
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "ns1830653",
+   "band": "A2",
+   "rows": 2932,
+   "cols": 1629,
+   "nnz": 100933,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.018953561782836914
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1570,
+    "cols": 702,
+    "nnz": 34215
+   },
+   "seconds": 0.006751,
+   "all_seconds": [
+    0.006751
+   ],
+   "hash": "7f001a9db5b769fb",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 101589,
+     "findings": 2085,
+     "records": 0,
+     "seconds": 0.000761,
+     "rows_removed": 1190,
+     "cols_removed": 895,
+     "nnz_removed": 63054
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 103629,
+     "findings": 0,
+     "records": 166,
+     "seconds": 0.000556,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 191841,
+     "findings": 56,
+     "records": 0,
+     "seconds": 0.000377,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 12560,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.5e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 145664,
+     "findings": 172,
+     "records": 0,
+     "seconds": 0.000436,
+     "rows_removed": 172,
+     "cols_removed": 0,
+     "nnz_removed": 3664
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 10720,
+     "findings": 32,
+     "records": 0,
+     "seconds": 9e-06,
+     "rows_removed": 0,
+     "cols_removed": 32,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.003181,
+    "start": 7e-06,
+    "storage": 0.000871,
+    "finish": 0.000253,
+    "hash": 0.00028
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 7e-06,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 1e-06
+   },
+   "parallel_rows": {
+    "merges": 172,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "supportcase40",
+   "band": "A2",
+   "rows": 38192,
+   "cols": 16440,
+   "nnz": 104420,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.03549838066101074
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 8570,
+    "cols": 5168,
+    "nnz": 24592
+   },
+   "seconds": 0.010193,
+   "all_seconds": [
+    0.010193
+   ],
+   "hash": "da04049cf4d06ddc",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 462792,
+     "findings": 37722,
+     "records": 0,
+     "seconds": 0.001698,
+     "rows_removed": 29522,
+     "cols_removed": 8200,
+     "nnz_removed": 62196
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 131288,
+     "findings": 0,
+     "records": 12064,
+     "seconds": 0.000441,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 3,
+     "work": 184908,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00024,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 68560,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000165,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 218996,
+     "findings": 100,
+     "records": 0,
+     "seconds": 0.000901,
+     "rows_removed": 100,
+     "cols_removed": 0,
+     "nnz_removed": 700
+    },
+    "dual_fixing": {
+     "calls": 3,
+     "work": 104016,
+     "findings": 2952,
+     "records": 0,
+     "seconds": 0.000128,
+     "rows_removed": 0,
+     "cols_removed": 2952,
+     "nnz_removed": 4592
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.004893,
+    "start": 0.000247,
+    "storage": 0.000816,
+    "finish": 0.000302,
+    "hash": 0.000356
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 120,
+    "records": 0,
+    "seconds": 0.000247,
+    "rows_removed": 0,
+    "cols_removed": 120,
+    "nnz_removed": 12340
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 1.8e-05
+   },
+   "parallel_rows": {
+    "merges": 100,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "rmatr200-p5",
+   "band": "A2",
+   "rows": 37617,
+   "cols": 37816,
+   "nnz": 113048,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.035805463790893555
+    }
+   ],
+   "status": "unchanged",
+   "reduced": {
+    "rows": 37617,
+    "cols": 37816,
+    "nnz": 113048
+   },
+   "seconds": 0.015284,
+   "all_seconds": [
+    0.015284
+   ],
+   "hash": "c659db42871b8c16",
+   "same_hash": true,
+   "rounds": 1,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 300936,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000284,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 338952,
+     "findings": 0,
+     "records": 37616,
+     "seconds": 0.000638,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 414984,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000365,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 300936,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000213,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 941016,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.002421,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 302528,
+     "findings": 0,
+     "records": 0,
+     "seconds": 8.7e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.007238,
+    "start": 0.000131,
+    "storage": 1e-06,
+    "finish": 0.002085,
+    "hash": 0.001816
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000131,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 2.5e-05
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "satellites2-60-fs",
+   "band": "A2",
+   "rows": 16516,
+   "cols": 35378,
+   "nnz": 125048,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.03613090515136719
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 15847,
+    "cols": 34706,
+    "nnz": 123135
+   },
+   "seconds": 0.017332,
+   "all_seconds": [
+    0.017332
+   ],
+   "hash": "7218b1f3f8b42fc8",
+   "same_hash": true,
+   "rounds": 6,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 7,
+     "work": 199784,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000271,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 6,
+     "work": 507372,
+     "findings": 2961,
+     "records": 3165,
+     "seconds": 0.002924,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 660261,
+     "findings": 82,
+     "records": 0,
+     "seconds": 0.001595,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 162024,
+     "findings": 640,
+     "records": 0,
+     "seconds": 0.001304,
+     "rows_removed": 640,
+     "cols_removed": 640,
+     "nnz_removed": 1280
+    },
+    "parallel_rows": {
+     "calls": 3,
+     "work": 728630,
+     "findings": 29,
+     "records": 0,
+     "seconds": 0.001902,
+     "rows_removed": 29,
+     "cols_removed": 0,
+     "nnz_removed": 600
+    },
+    "dual_fixing": {
+     "calls": 4,
+     "work": 285633,
+     "findings": 32,
+     "records": 0,
+     "seconds": 8.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 32,
+     "nnz_removed": 33
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.006186,
+    "start": 0.0001,
+    "storage": 2.9e-05,
+    "finish": 0.00131,
+    "hash": 0.001599
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.0001,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 3,
+    "seconds": 0.00072
+   },
+   "parallel_rows": {
+    "merges": 29,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "unitcal_7",
+   "band": "A2",
+   "rows": 48939,
+   "cols": 25755,
+   "nnz": 127595,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.06717777252197266
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 39747,
+    "cols": 23966,
+    "nnz": 107633
+   },
+   "seconds": 0.025537,
+   "all_seconds": [
+    0.025537
+   ],
+   "hash": "dfd256356df84377",
+   "same_hash": true,
+   "rounds": 8,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 343,
+     "work": 944697,
+     "findings": 9108,
+     "records": 0,
+     "seconds": 0.001995,
+     "rows_removed": 6343,
+     "cols_removed": 1042,
+     "nnz_removed": 9865
+    },
+    "propagation": {
+     "calls": 343,
+     "work": 1167001,
+     "findings": 12406,
+     "records": 56922,
+     "seconds": 0.00654,
+     "rows_removed": 0,
+     "cols_removed": 393,
+     "nnz_removed": 3699
+    },
+    "tightening": {
+     "calls": 342,
+     "work": 1344998,
+     "findings": 4663,
+     "records": 0,
+     "seconds": 0.001794,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 6,
+     "work": 376792,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000268,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 6,
+     "work": 1236833,
+     "findings": 2849,
+     "records": 0,
+     "seconds": 0.004932,
+     "rows_removed": 2849,
+     "cols_removed": 0,
+     "nnz_removed": 5698
+    },
+    "dual_fixing": {
+     "calls": 343,
+     "work": 268364,
+     "findings": 354,
+     "records": 0,
+     "seconds": 0.000134,
+     "rows_removed": 0,
+     "cols_removed": 354,
+     "nnz_removed": 700
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.00661,
+    "start": 9.7e-05,
+    "storage": 0.0001,
+    "finish": 0.001337,
+    "hash": 0.001594
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 9.7e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 3,
+    "seconds": 0.006394
+   },
+   "parallel_rows": {
+    "merges": 2849,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "brazil3",
+   "band": "A2",
+   "rows": 14646,
+   "cols": 23968,
+   "nnz": 133184,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.03508162498474121
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 9315,
+    "cols": 17610,
+    "nnz": 75082
+   },
+   "seconds": 0.017022,
+   "all_seconds": [
+    0.017022
+   ],
+   "hash": "bc3e4f38ca88316c",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 218756,
+     "findings": 8417,
+     "records": 0,
+     "seconds": 0.001042,
+     "rows_removed": 4851,
+     "cols_removed": 3566,
+     "nnz_removed": 28546
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 425782,
+     "findings": 2600,
+     "records": 0,
+     "seconds": 0.00227,
+     "rows_removed": 0,
+     "cols_removed": 2600,
+     "nnz_removed": 13600
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 504207,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001215,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 83912,
+     "findings": 192,
+     "records": 0,
+     "seconds": 0.000617,
+     "rows_removed": 192,
+     "cols_removed": 192,
+     "nnz_removed": 384
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 597482,
+     "findings": 838,
+     "records": 0,
+     "seconds": 0.002817,
+     "rows_removed": 288,
+     "cols_removed": 0,
+     "nnz_removed": 15572
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 275248,
+     "findings": 0,
+     "records": 0,
+     "seconds": 8.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.005673,
+    "start": 7.2e-05,
+    "storage": 0.001914,
+    "finish": 0.000389,
+    "hash": 0.000917
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 7.2e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 3e-06
+   },
+   "parallel_rows": {
+    "merges": 288,
+    "subtractions": 550
+   }
+  },
+  {
+   "name": "piperout-d27",
+   "band": "A3",
+   "rows": 17470,
+   "cols": 13104,
+   "nnz": 224457,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.03516530990600586
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 14470,
+    "cols": 10970,
+    "nnz": 189572
+   },
+   "seconds": 0.021115,
+   "all_seconds": [
+    0.021115
+   ],
+   "hash": "971772b62d28491c",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 6,
+     "work": 183654,
+     "findings": 1310,
+     "records": 0,
+     "seconds": 0.000424,
+     "rows_removed": 1290,
+     "cols_removed": 19,
+     "nnz_removed": 901
+    },
+    "propagation": {
+     "calls": 6,
+     "work": 712707,
+     "findings": 1137,
+     "records": 50,
+     "seconds": 0.003929,
+     "rows_removed": 0,
+     "cols_removed": 1121,
+     "nnz_removed": 30411
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 845774,
+     "findings": 90,
+     "records": 0,
+     "seconds": 0.00233,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 4,
+     "work": 142914,
+     "findings": 975,
+     "records": 0,
+     "seconds": 0.002199,
+     "rows_removed": 975,
+     "cols_removed": 975,
+     "nnz_removed": 1954
+    },
+    "parallel_rows": {
+     "calls": 4,
+     "work": 905024,
+     "findings": 749,
+     "records": 0,
+     "seconds": 0.002422,
+     "rows_removed": 735,
+     "cols_removed": 0,
+     "nnz_removed": 1619
+    },
+    "dual_fixing": {
+     "calls": 4,
+     "work": 106928,
+     "findings": 0,
+     "records": 0,
+     "seconds": 4.4e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.006256,
+    "start": 4.5e-05,
+    "storage": 0.000322,
+    "finish": 0.001269,
+    "hash": 0.001729
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 19,
+    "records": 0,
+    "seconds": 4.5e-05,
+    "rows_removed": 0,
+    "cols_removed": 19,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 1,
+    "seconds": 0.000456
+   },
+   "parallel_rows": {
+    "merges": 735,
+    "subtractions": 14
+   }
+  },
+  {
+   "name": "uccase9",
+   "band": "A3",
+   "rows": 49565,
+   "cols": 33242,
+   "nnz": 332316,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.06779932975769043
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 33503,
+    "cols": 22942,
+    "nnz": 258531
+   },
+   "seconds": 0.046847,
+   "all_seconds": [
+    0.046847
+   ],
+   "hash": "7f8a054b2d17c8a8",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 4,
+     "work": 511528,
+     "findings": 8386,
+     "records": 0,
+     "seconds": 0.00108,
+     "rows_removed": 7432,
+     "cols_removed": 951,
+     "nnz_removed": 16058
+    },
+    "propagation": {
+     "calls": 4,
+     "work": 901155,
+     "findings": 168,
+     "records": 91302,
+     "seconds": 0.006463,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 3,
+     "work": 1437242,
+     "findings": 2349,
+     "records": 0,
+     "seconds": 0.002024,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 555096,
+     "findings": 8222,
+     "records": 0,
+     "seconds": 0.008768,
+     "rows_removed": 8222,
+     "cols_removed": 8222,
+     "nnz_removed": 16444
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 2047046,
+     "findings": 408,
+     "records": 0,
+     "seconds": 0.005828,
+     "rows_removed": 408,
+     "cols_removed": 0,
+     "nnz_removed": 12229
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 299634,
+     "findings": 650,
+     "records": 0,
+     "seconds": 0.000129,
+     "rows_removed": 0,
+     "cols_removed": 650,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.012402,
+    "start": 0.00024,
+    "storage": 0.005478,
+    "finish": 0.001801,
+    "hash": 0.002627
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 477,
+    "records": 0,
+    "seconds": 0.00024,
+    "rows_removed": 0,
+    "cols_removed": 477,
+    "nnz_removed": 29054
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 1,
+    "seconds": 0.000613
+   },
+   "parallel_rows": {
+    "merges": 408,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "sorrell3",
+   "band": "A3",
+   "rows": 169162,
+   "cols": 1024,
+   "nnz": 338324,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.06820273399353027
+    }
+   ],
+   "status": "unchanged",
+   "reduced": {
+    "rows": 169162,
+    "cols": 1024,
+    "nnz": 338324
+   },
+   "seconds": 0.050085,
+   "all_seconds": [
+    0.050085
+   ],
+   "hash": "10f5a86c280ef8af",
+   "same_hash": true,
+   "rounds": 1,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 1353296,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001641,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 1691620,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003558,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 2706592,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.006108,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 1353296,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000672,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 3721564,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.011143,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 8192,
+     "findings": 0,
+     "records": 0,
+     "seconds": 3e-06,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.017386,
+    "start": 0.000139,
+    "storage": 1e-06,
+    "finish": 0.005034,
+    "hash": 0.004397
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000139,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 4e-06
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "sp98ar",
+   "band": "A3",
+   "rows": 1435,
+   "cols": 15085,
+   "nnz": 426148,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.0679924488067627
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 1402,
+    "cols": 15085,
+    "nnz": 419196
+   },
+   "seconds": 0.034574,
+   "all_seconds": [
+    0.034574
+   ],
+   "hash": "834b51079ab64f32",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 12248,
+     "findings": 5,
+     "records": 0,
+     "seconds": 1.9e-05,
+     "rows_removed": 5,
+     "cols_removed": 0,
+     "nnz_removed": 5
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 472243,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00355,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 1886198,
+     "findings": 95,
+     "records": 0,
+     "seconds": 0.005407,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 11216,
+     "findings": 0,
+     "records": 0,
+     "seconds": 4.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1308387,
+     "findings": 28,
+     "records": 0,
+     "seconds": 0.002647,
+     "rows_removed": 28,
+     "cols_removed": 0,
+     "nnz_removed": 6947
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 161440,
+     "findings": 0,
+     "records": 0,
+     "seconds": 5.1e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.016805,
+    "start": 3.4e-05,
+    "storage": 1e-06,
+    "finish": 0.002668,
+    "hash": 0.003339
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 3.4e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 1.3e-05
+   },
+   "parallel_rows": {
+    "merges": 28,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "supportcase42",
+   "band": "A3",
+   "rows": 18439,
+   "cols": 19466,
+   "nnz": 435653,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:56+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.06773686408996582
+    }
+   ],
+   "status": "unchanged",
+   "reduced": {
+    "rows": 18439,
+    "cols": 19466,
+    "nnz": 435653
+   },
+   "seconds": 0.023761,
+   "all_seconds": [
+    0.023761
+   ],
+   "hash": "41903acb3fa555a8",
+   "same_hash": true,
+   "rounds": 1,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 147512,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000132,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 147512,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000119,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 583165,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000493,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 147512,
+     "findings": 0,
+     "records": 0,
+     "seconds": 8.3e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 1581443,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003143,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 155728,
+     "findings": 0,
+     "records": 0,
+     "seconds": 4.2e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.012485,
+    "start": 5.8e-05,
+    "storage": 1e-06,
+    "finish": 0.003483,
+    "hash": 0.003719
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 5.8e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 1e-05
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "triptim1",
+   "band": "B1",
+   "rows": 15706,
+   "cols": 30055,
+   "nnz": 515436,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:57+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.06733584403991699
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 15686,
+    "cols": 25676,
+    "nnz": 497959
+   },
+   "seconds": 0.040739,
+   "all_seconds": [
+    0.040739
+   ],
+   "hash": "012a4fb7ee5835b5",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 4,
+     "work": 183223,
+     "findings": 4367,
+     "records": 0,
+     "seconds": 0.000683,
+     "rows_removed": 7,
+     "cols_removed": 4360,
+     "nnz_removed": 17440
+    },
+    "propagation": {
+     "calls": 4,
+     "work": 844274,
+     "findings": 144,
+     "records": 11,
+     "seconds": 0.005546,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 2093242,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.005067,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 125696,
+     "findings": 13,
+     "records": 0,
+     "seconds": 0.003598,
+     "rows_removed": 13,
+     "cols_removed": 13,
+     "nnz_removed": 26
+    },
+    "parallel_rows": {
+     "calls": 3,
+     "work": 1804921,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003557,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 205608,
+     "findings": 0,
+     "records": 0,
+     "seconds": 7.6e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.014238,
+    "start": 8.1e-05,
+    "storage": 0.000453,
+    "finish": 0.003078,
+    "hash": 0.004238
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 6,
+    "records": 0,
+    "seconds": 8.1e-05,
+    "rows_removed": 0,
+    "cols_removed": 6,
+    "nnz_removed": 11
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.000603
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "supportcase6",
+   "band": "B1",
+   "rows": 771,
+   "cols": 130052,
+   "nnz": 584976,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:57+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "wall_seconds": 0.11733007431030273
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 771,
+    "cols": 130052,
+    "nnz": 584976
+   },
+   "seconds": 0.055789,
+   "all_seconds": [
+    0.055789
+   ],
+   "hash": "b7fed7cc849ebce4",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 6176,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.2e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 1177561,
+     "findings": 1,
+     "records": 0,
+     "seconds": 0.010113,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 1761096,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.005197,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 6168,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000401,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 1767264,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003978,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 1040416,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000265,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.023187,
+    "start": 0.000284,
+    "storage": 1e-06,
+    "finish": 0.006085,
+    "hash": 0.006261
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000284,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 9.9e-05
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "neos-4306827-ravan",
+   "band": "B1",
+   "rows": 261877,
+   "cols": 162291,
+   "nnz": 639474,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:57+0000",
+     "load_average": [
+      25.8134765625,
+      22.4951171875,
+      16.337890625
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.16749048233032227
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 185534,
+    "cols": 119992,
+    "nnz": 467716
+   },
+   "seconds": 0.130248,
+   "all_seconds": [
+    0.130248
+   ],
+   "hash": "3af482cf4ccc4fbf",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 9,
+     "work": 2826326,
+     "findings": 73134,
+     "records": 0,
+     "seconds": 0.008465,
+     "rows_removed": 55170,
+     "cols_removed": 17964,
+     "nnz_removed": 127194
+    },
+    "propagation": {
+     "calls": 9,
+     "work": 2929675,
+     "findings": 3744,
+     "records": 10769,
+     "seconds": 0.008092,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 7,
+     "work": 4848793,
+     "findings": 3323,
+     "records": 0,
+     "seconds": 0.01081,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 4,
+     "work": 2243743,
+     "findings": 10901,
+     "records": 0,
+     "seconds": 0.013611,
+     "rows_removed": 10901,
+     "cols_removed": 10901,
+     "nnz_removed": 21812
+    },
+    "parallel_rows": {
+     "calls": 4,
+     "work": 6360409,
+     "findings": 10272,
+     "records": 0,
+     "seconds": 0.029267,
+     "rows_removed": 10272,
+     "cols_removed": 0,
+     "nnz_removed": 20724
+    },
+    "dual_fixing": {
+     "calls": 7,
+     "work": 1535388,
+     "findings": 13434,
+     "records": 0,
+     "seconds": 0.000744,
+     "rows_removed": 0,
+     "cols_removed": 13434,
+     "nnz_removed": 2028
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.036202,
+    "start": 0.000582,
+    "storage": 0.010619,
+    "finish": 0.004555,
+    "hash": 0.007291
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000582,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.00517
+   },
+   "parallel_rows": {
+    "merges": 10272,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "var-smallemery-m6j6",
+   "band": "B1",
+   "rows": 13416,
+   "cols": 5608,
+   "nnz": 850621,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:57+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.1173863410949707
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 8619,
+    "cols": 3338,
+    "nnz": 518475
+   },
+   "seconds": 0.06388,
+   "all_seconds": [
+    0.06388
+   ],
+   "hash": "c65346ad8c791fce",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 11,
+     "work": 141584,
+     "findings": 2914,
+     "records": 0,
+     "seconds": 0.000357,
+     "rows_removed": 2914,
+     "cols_removed": 0,
+     "nnz_removed": 3848
+    },
+    "propagation": {
+     "calls": 10,
+     "work": 169810,
+     "findings": 1,
+     "records": 9,
+     "seconds": 0.000559,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 10,
+     "work": 8788318,
+     "findings": 10,
+     "records": 0,
+     "seconds": 0.008689,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 69032,
+     "findings": 0,
+     "records": 0,
+     "seconds": 6.6e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1838536,
+     "findings": 1883,
+     "records": 0,
+     "seconds": 0.004254,
+     "rows_removed": 1883,
+     "cols_removed": 0,
+     "nnz_removed": 3766
+    },
+    "dual_fixing": {
+     "calls": 10,
+     "work": 415908,
+     "findings": 2269,
+     "records": 0,
+     "seconds": 0.002275,
+     "rows_removed": 0,
+     "cols_removed": 2269,
+     "nnz_removed": 324532
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.030806,
+    "start": 2.7e-05,
+    "storage": 0.010015,
+    "finish": 0.002844,
+    "hash": 0.003981
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 1,
+    "records": 0,
+    "seconds": 2.7e-05,
+    "rows_removed": 0,
+    "cols_removed": 1,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.001191
+   },
+   "parallel_rows": {
+    "merges": 1883,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "rd-rplusc-21",
+   "band": "B1",
+   "rows": 125899,
+   "cols": 622,
+   "nnz": 852384,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:57+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.1184697151184082
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 54170,
+    "cols": 539,
+    "nnz": 352277
+   },
+   "seconds": 0.077153,
+   "all_seconds": [
+    0.077153
+   ],
+   "hash": "7153b47f69a26019",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 7,
+     "work": 2237700,
+     "findings": 367,
+     "records": 0,
+     "seconds": 0.002193,
+     "rows_removed": 361,
+     "cols_removed": 2,
+     "nnz_removed": 510
+    },
+    "propagation": {
+     "calls": 7,
+     "work": 2513593,
+     "findings": 56,
+     "records": 2364,
+     "seconds": 0.005434,
+     "rows_removed": 0,
+     "cols_removed": 5,
+     "nnz_removed": 18
+    },
+    "tightening": {
+     "calls": 5,
+     "work": 5169721,
+     "findings": 199002,
+     "records": 0,
+     "seconds": 0.008274,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 3,
+     "work": 973683,
+     "findings": 67,
+     "records": 0,
+     "seconds": 0.001738,
+     "rows_removed": 67,
+     "cols_removed": 67,
+     "nnz_removed": 136
+    },
+    "parallel_rows": {
+     "calls": 4,
+     "work": 6847724,
+     "findings": 71301,
+     "records": 0,
+     "seconds": 0.022766,
+     "rows_removed": 71301,
+     "cols_removed": 0,
+     "nnz_removed": 499023
+    },
+    "dual_fixing": {
+     "calls": 7,
+     "work": 9670,
+     "findings": 7,
+     "records": 0,
+     "seconds": 6e-06,
+     "rows_removed": 0,
+     "cols_removed": 7,
+     "nnz_removed": 22
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.025633,
+    "start": 0.000127,
+    "storage": 0.005085,
+    "finish": 0.002525,
+    "hash": 0.003215
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 2,
+    "records": 0,
+    "seconds": 0.000127,
+    "rows_removed": 0,
+    "cols_removed": 2,
+    "nnz_removed": 398
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.012878
+   },
+   "parallel_rows": {
+    "merges": 71301,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "bab6",
+   "band": "B2",
+   "rows": 29904,
+   "cols": 114240,
+   "nnz": 1283181,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:57+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.21908783912658691
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 29442,
+    "cols": 113900,
+    "nnz": 1157469
+   },
+   "seconds": 0.151819,
+   "all_seconds": [
+    0.151819
+   ],
+   "hash": "3ac1d2249119c819",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 242144,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000359,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 2530261,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.018687,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 8437372,
+     "findings": 252,
+     "records": 0,
+     "seconds": 0.029303,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 242225,
+     "findings": 340,
+     "records": 0,
+     "seconds": 0.010163,
+     "rows_removed": 340,
+     "cols_removed": 340,
+     "nnz_removed": 680
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 4644991,
+     "findings": 122,
+     "records": 0,
+     "seconds": 0.012257,
+     "rows_removed": 122,
+     "cols_removed": 0,
+     "nnz_removed": 125032
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 1415392,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000497,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.06131,
+    "start": 0.000293,
+    "storage": 3e-06,
+    "finish": 0.008367,
+    "hash": 0.010574
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000293,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 7.5e-05
+   },
+   "parallel_rows": {
+    "merges": 122,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "splice1k1",
+   "band": "B2",
+   "rows": 6505,
+   "cols": 3253,
+   "nnz": 1761016,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:57+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.21915340423583984
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 6505,
+    "cols": 3253,
+    "nnz": 1761016
+   },
+   "seconds": 0.144996,
+   "all_seconds": [
+    0.144996
+   ],
+   "hash": "e0997ff2c3110b95",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 77584,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000103,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 2652309,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.019445,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 11142111,
+     "findings": 9195,
+     "records": 0,
+     "seconds": 0.02706,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 52040,
+     "findings": 0,
+     "records": 0,
+     "seconds": 1.8e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 5387128,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.010259,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 26024,
+     "findings": 0,
+     "records": 0,
+     "seconds": 8e-06,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.063837,
+    "start": 1.6e-05,
+    "storage": 2e-06,
+    "finish": 0.011094,
+    "hash": 0.013149
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 1.6e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 1e-06
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "savsched1",
+   "band": "B2",
+   "rows": 295989,
+   "cols": 328575,
+   "nnz": 1770507,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:58+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.26958703994750977
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 295987,
+    "cols": 328292,
+    "nnz": 1770503
+   },
+   "seconds": 0.206956,
+   "all_seconds": [
+    0.206956
+   ],
+   "hash": "7b83dcd54c6dd47c",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 2367968,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.002865,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 3387319,
+     "findings": 7,
+     "records": 75565,
+     "seconds": 0.011328,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 7471133,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.01551,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 2367920,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.001734,
+     "rows_removed": 2,
+     "cols_removed": 2,
+     "nnz_removed": 4
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 12554502,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.035509,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 2628616,
+     "findings": 281,
+     "records": 0,
+     "seconds": 0.000828,
+     "rows_removed": 0,
+     "cols_removed": 281,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.096536,
+    "start": 0.00108,
+    "storage": 2e-06,
+    "finish": 0.020314,
+    "hash": 0.021242
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.00108,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 1,
+    "seconds": 0.000346
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "supportcase12",
+   "band": "B2",
+   "rows": 166781,
+   "cols": 799616,
+   "nnz": 2334437,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:58+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.36834073066711426
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 27466,
+    "cols": 171982,
+    "nnz": 371401
+   },
+   "seconds": 0.287691,
+   "all_seconds": [
+    0.287691
+   ],
+   "hash": "3a428e570615bd2c",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 5,
+     "work": 6510379,
+     "findings": 752522,
+     "records": 0,
+     "seconds": 0.073664,
+     "rows_removed": 137987,
+     "cols_removed": 614535,
+     "nnz_removed": 1954057
+    },
+    "propagation": {
+     "calls": 5,
+     "work": 2177158,
+     "findings": 141862,
+     "records": 657943,
+     "seconds": 0.031651,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 4,
+     "work": 1779189,
+     "findings": 4,
+     "records": 0,
+     "seconds": 0.003182,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 238928,
+     "findings": 600,
+     "records": 0,
+     "seconds": 0.00334,
+     "rows_removed": 600,
+     "cols_removed": 600,
+     "nnz_removed": 1600
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1626823,
+     "findings": 728,
+     "records": 0,
+     "seconds": 0.008489,
+     "rows_removed": 728,
+     "cols_removed": 0,
+     "nnz_removed": 6579
+    },
+    "dual_fixing": {
+     "calls": 3,
+     "work": 1537280,
+     "findings": 12499,
+     "records": 0,
+     "seconds": 0.002302,
+     "rows_removed": 0,
+     "cols_removed": 12499,
+     "nnz_removed": 800
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.136465,
+    "start": 0.001963,
+    "storage": 0.014103,
+    "finish": 0.006914,
+    "hash": 0.005609
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.001963,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 1,
+    "seconds": 0.016679
+   },
+   "parallel_rows": {
+    "merges": 728,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "supportcase7",
+   "band": "B2",
+   "rows": 6532,
+   "cols": 138844,
+   "nnz": 2845545,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:58+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.268721342086792
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 4958,
+    "cols": 21692,
+    "nnz": 484011
+   },
+   "seconds": 0.200298,
+   "all_seconds": [
+    0.200298
+   ],
+   "hash": "c543055331ad4c2f",
+   "same_hash": true,
+   "rounds": 5,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 7,
+     "work": 2925658,
+     "findings": 118569,
+     "records": 0,
+     "seconds": 0.021127,
+     "rows_removed": 1524,
+     "cols_removed": 117036,
+     "nnz_removed": 2334324
+    },
+    "propagation": {
+     "calls": 6,
+     "work": 1544513,
+     "findings": 21586,
+     "records": 92809,
+     "seconds": 0.013063,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 6,
+     "work": 2842872,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.002895,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 2,
+     "work": 40128,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000468,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 1669105,
+     "findings": 50,
+     "records": 0,
+     "seconds": 0.003852,
+     "rows_removed": 50,
+     "cols_removed": 0,
+     "nnz_removed": 27189
+    },
+    "dual_fixing": {
+     "calls": 6,
+     "work": 278290,
+     "findings": 116,
+     "records": 0,
+     "seconds": 0.000358,
+     "rows_removed": 0,
+     "cols_removed": 116,
+     "nnz_removed": 21
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.127744,
+    "start": 0.000309,
+    "storage": 0.02291,
+    "finish": 0.003595,
+    "hash": 0.00396
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000309,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.009821
+   },
+   "parallel_rows": {
+    "merges": 50,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "neos-5116085-kenana",
+   "band": "B3",
+   "rows": 690242,
+   "cols": 509236,
+   "nnz": 3032792,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:59+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.5700905323028564
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 687582,
+    "cols": 509236,
+    "nnz": 3027472
+   },
+   "seconds": 0.453445,
+   "all_seconds": [
+    0.453445
+   ],
+   "hash": "e2c039cefb0ee9e5",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 11168752,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.014372,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 11797408,
+     "findings": 514332,
+     "records": 1316342,
+     "seconds": 0.124781,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 19551980,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.018861,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 5500656,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003151,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 20147568,
+     "findings": 2660,
+     "records": 0,
+     "seconds": 0.059986,
+     "rows_removed": 2660,
+     "cols_removed": 0,
+     "nnz_removed": 5320
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 4116448,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001258,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.155105,
+    "start": 0.002072,
+    "storage": 3e-06,
+    "finish": 0.036216,
+    "hash": 0.037627
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.002072,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.120644
+   },
+   "parallel_rows": {
+    "merges": 2660,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "neos-4647030-tutaki",
+   "band": "B3",
+   "rows": 8382,
+   "cols": 12600,
+   "nnz": 3953388,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:50:59+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.47008228302001953
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 6993,
+    "cols": 12600,
+    "nnz": 1989344
+   },
+   "seconds": 0.399315,
+   "all_seconds": [
+    0.399315
+   ],
+   "hash": "3660582911c524fc",
+   "same_hash": true,
+   "rounds": 3,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 100592,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000145,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 3,
+     "work": 11922004,
+     "findings": 1472,
+     "records": 23608,
+     "seconds": 0.153012,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 3,
+     "work": 11933920,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00862,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 55944,
+     "findings": 0,
+     "records": 0,
+     "seconds": 9.1e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 19864260,
+     "findings": 1389,
+     "records": 0,
+     "seconds": 0.057619,
+     "rows_removed": 1389,
+     "cols_removed": 0,
+     "nnz_removed": 1964044
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 123200,
+     "findings": 0,
+     "records": 0,
+     "seconds": 3.9e-05,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.134676,
+    "start": 3.9e-05,
+    "storage": 0.017632,
+    "finish": 0.012448,
+    "hash": 0.014986
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 3.9e-05,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 1,
+    "seconds": 0.052966
+   },
+   "parallel_rows": {
+    "merges": 1389,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "neos-5114902-kasavu",
+   "band": "B3",
+   "rows": 961170,
+   "cols": 710164,
+   "nnz": 4240376,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:51:00+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.7709870338439941
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 957446,
+    "cols": 710164,
+    "nnz": 4232928
+   },
+   "seconds": 0.641209,
+   "all_seconds": [
+    0.641209
+   ],
+   "hash": "2afb1b2e3227fd4e",
+   "same_hash": true,
+   "rounds": 4,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 3,
+     "work": 15556464,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.020202,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 16441824,
+     "findings": 718172,
+     "records": 1837130,
+     "seconds": 0.172216,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 27281772,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.026275,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 7659568,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.004986,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 28107296,
+     "findings": 3724,
+     "records": 0,
+     "seconds": 0.084494,
+     "rows_removed": 3724,
+     "cols_removed": 0,
+     "nnz_removed": 7448
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 5740896,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.001763,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.223982,
+    "start": 0.002883,
+    "storage": 6e-06,
+    "finish": 0.051924,
+    "hash": 0.052468
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.002883,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 2,
+    "seconds": 0.166857
+   },
+   "parallel_rows": {
+    "merges": 3724,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "supportcase19",
+   "band": "B3",
+   "rows": 10713,
+   "cols": 1429098,
+   "nnz": 4287094,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:51:00+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.6205449104309082
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 10712,
+    "cols": 1429097,
+    "nnz": 4287091
+   },
+   "seconds": 0.499115,
+   "all_seconds": [
+    0.499115
+   ],
+   "hash": "a697a23230fd2f10",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 1,
+   "rules": {
+    "row_rules": {
+     "calls": 1,
+     "work": 85724,
+     "findings": 2,
+     "records": 0,
+     "seconds": 0.000142,
+     "rows_removed": 1,
+     "cols_removed": 1,
+     "nnz_removed": 3
+    },
+    "propagation": {
+     "calls": 1,
+     "work": 7230885,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.065622,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 1,
+     "work": 14375972,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.039665,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 85696,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.004179,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 1,
+     "work": 13032671,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.030751,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_fixing": {
+     "calls": 1,
+     "work": 11432776,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.003227,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.248167,
+    "start": 0.003231,
+    "storage": 0.000756,
+    "finish": 0.050349,
+    "hash": 0.053008
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.003231,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": true,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 0.001827
+   },
+   "parallel_rows": {
+    "merges": 0,
+    "subtractions": 0
+   }
+  },
+  {
+   "name": "neos-5052403-cygnet",
+   "band": "B3",
+   "rows": 38268,
+   "cols": 32868,
+   "nnz": 4898304,
+   "runs": [
+    {
+     "rep": 0,
+     "host": "d57576a30df5",
+     "start_time": "2026-11-27T20:51:01+0000",
+     "load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "end_load_average": [
+      24.787109375,
+      22.33740234375,
+      16.31982421875
+     ],
+     "wall_seconds": 0.5690112113952637
+    }
+   ],
+   "status": "reduced",
+   "reduced": {
+    "rows": 19134,
+    "cols": 27642,
+    "nnz": 2449152
+   },
+   "seconds": 0.509206,
+   "all_seconds": [
+    0.509206
+   ],
+   "hash": "4cb3fa574bab90a2",
+   "same_hash": true,
+   "rounds": 2,
+   "rebuilds": 2,
+   "rules": {
+    "row_rules": {
+     "calls": 2,
+     "work": 459216,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.00068,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "propagation": {
+     "calls": 2,
+     "work": 10255824,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.075792,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "tightening": {
+     "calls": 2,
+     "work": 16781640,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.043537,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "doubleton": {
+     "calls": 1,
+     "work": 153072,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.000215,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_rows": {
+     "calls": 2,
+     "work": 25409952,
+     "findings": 19134,
+     "records": 0,
+     "seconds": 0.084373,
+     "rows_removed": 19134,
+     "cols_removed": 0,
+     "nnz_removed": 2449152
+    },
+    "dual_fixing": {
+     "calls": 2,
+     "work": 484080,
+     "findings": 5226,
+     "records": 0,
+     "seconds": 0.000291,
+     "rows_removed": 0,
+     "cols_removed": 5226,
+     "nnz_removed": 0
+    },
+    "simple_probing": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "singleton_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "dual_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    },
+    "parallel_cols": {
+     "calls": 0,
+     "work": 0,
+     "findings": 0,
+     "records": 0,
+     "seconds": 0.0,
+     "rows_removed": 0,
+     "cols_removed": 0,
+     "nnz_removed": 0
+    }
+   },
+   "seconds_outside_rules": {
+    "state": 0.23788,
+    "start": 0.000131,
+    "storage": 0.032377,
+    "finish": 0.015178,
+    "hash": 0.018743
+   },
+   "start": {
+    "calls": 1,
+    "work": 0,
+    "findings": 0,
+    "records": 0,
+    "seconds": 0.000131,
+    "rows_removed": 0,
+    "cols_removed": 0,
+    "nnz_removed": 0
+   },
+   "fixed_point": false,
+   "explicit": {
+    "rounds": 0,
+    "seconds": 2e-06
+   },
+   "parallel_rows": {
+    "merges": 19134,
+    "subtractions": 0
+   }
+  }
+ ]
+}
