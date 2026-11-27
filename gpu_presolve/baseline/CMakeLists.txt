@@ -22,3 +22,10 @@ target_compile_options(baseline_tool PRIVATE -Wall -Wextra)
 target_compile_definitions(baseline_tool PRIVATE BASELINE_HIGHS_ROOT="${HIGHS_ROOT}")
 target_link_libraries(baseline_tool PRIVATE highs::highs ${CMAKE_DL_LIBS})
 set_target_properties(baseline_tool PROPERTIES BUILD_RPATH "${HIGHS_ROOT}/lib")
+
+# Converts solutions that name their variables into the solution files of the correctness check.
+add_executable(convert_solution convert_solution.cpp)
+target_compile_features(convert_solution PRIVATE cxx_std_17)
+target_compile_options(convert_solution PRIVATE -Wall -Wextra)
+target_link_libraries(convert_solution PRIVATE highs::highs)
+set_target_properties(convert_solution PROPERTIES BUILD_RPATH "${HIGHS_ROOT}/lib")
