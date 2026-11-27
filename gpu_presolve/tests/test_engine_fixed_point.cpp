@@ -14,6 +14,7 @@
 #include "harness.hpp"
 #include "test_rows_support.hpp"
 
+#include <gprs/postsolve.hpp>
 #include <gprs/presolve.hpp>
 
 #include <cmath>
@@ -374,7 +375,94 @@ GPRS_TEST(engine_fixed_term_counts_in_the_error_bound)
     GPRS_CHECK_EQ(result.reduced.nrows, 1);
     GPRS_CHECK_EQ(result.reduced.ncols, 2);
     GPRS_CHECK_EQ(result.reduced.col_lower[0], -2.56e24);
-    GPRS_CHECK_EQ(result.reduced.col_upper[0], 0.);
+    // The bound is 0 moved outward by the error bound of the activity over the coefficient,
+    // which the guard keeps below a tenth of the tolerance.
+    GPRS_CHECK(result.reduced.col_upper[0] >= 0. && result.reduced.col_upper[0] <= 1e-7);
     check_fixed_point(result, options);
   }
+}
+
+// -x0 / 1024 + x1 >= 3.25 - 4 / 1024 and 3 x0 - x1 >= 8.75 with x0 in [-1, 4] have the one
+// point (4, 3.25). Propagation takes the bounds towards it in steps that shrink by 3072 each
+// and ends, at the step limit of a continuous bound, with x0 >= 3.9999994...: the first row
+// then misses its lower side by 5e-10, inside the forcing tolerance, and fixing x0 at that bound
+// violates the second row by 1.6e-6. The presolve reported a feasible model as infeasible.
+GPRS_TEST(engine_forcing_row_keeps_a_continuous_column_that_is_off_its_bound)
+{
+  double c                  = 1. / 1024.;
+  std::vector<col_t> cols   = {{-1., 4., false}, {-inf, inf, false}};
+  std::vector<row_t> rows   = {{{{0, -c}, {1, 1.}}, 3.25 - 4. * c, inf},
+                               {{{0, 3.}, {1, -1.}}, 8.75, inf}};
+  model_t m                 = make_model(cols, rows);
+  std::vector<double> point = {4., 3.25};
+  GPRS_REQUIRE(point_feasible(check_point(m, point), tolerances_t()));
+  for (bool primal_only : {false, true}) {
+    options_t options;
+    options.primal_only = primal_only;
+    result_t result     = presolve(m, options);
+    GPRS_REQUIRE(result.status == status_t::reduced);
+    std::vector<double> crushed;
+    result.postsolve.crush(point, crushed);
+    point_check_t check = check_point(result.reduced, crushed);
+    GPRS_CHECK_EQ(check.row_violation, 0.);
+    GPRS_CHECK_EQ(check.bound_violation, 0.);
+    check_fixed_point(result, options);
+  }
+}
+
+// -3 x0 - x1 + x2 >= 3 * 2^60 with x1 fixed at -1 holds at x0 = -2^60, x2 = -1, the lower bound
+// of x0. The side less the term of x1 is 3 * 2^60 - 1, which no double holds: with the term
+// moved into the side before the last rounds the row read 3 * 2^60, one more than its largest
+// activity, and the presolve reported a feasible model infeasible. The terms stay in the rows
+// and the presolve ends without the fixed point.
+GPRS_TEST(engine_fixed_terms_stay_in_a_row_that_cannot_take_them)
+{
+  double big              = 0x1p60;
+  std::vector<col_t> cols = {{-big, 3.25, false}, {-1., -1., true}, {-1.25, 1e12, false}};
+  std::vector<row_t> rows = {
+    {{{0, -0.1}, {1, -1.}, {2, -3.}}, 1.1529215046068469e+17, 1.1586861121298814e+17},
+    {{{0, -3.}, {1, -1.}, {2, 1.}}, 3. * big, inf},
+    {{{0, -2.}, {2, 3.}}, 2.0752587082923244e+18, inf},
+    {{{1, 1.}, {2, -2.}}, 0.75, inf}};
+  model_t m                 = with_cost(make_model(cols, rows), {0., -2., -3.});
+  std::vector<double> point = {-big, -1., -1.};
+  point_check_t in          = check_point(m, point);
+  GPRS_REQUIRE(in.row_violation == 0. && in.bound_violation == 0.);
+  for (bool primal_only : {false, true}) {
+    options_t options;
+    options.primal_only = primal_only;
+    result_t result     = presolve(m, options);
+    GPRS_CHECK(result.status == status_t::reduced || result.status == status_t::reduced_to_empty);
+    GPRS_CHECK(!result.fixed_point);
+  }
+}
+
+// 2.9 x0 + 1.3 x1 <= 7.18 gives x0 an upper bound next to 1.4; the three rows below carry it
+// on with a coefficient of 131072 each, to x4, whose upper bound 3 the point
+// (1.4, 2.4, 1, 2, 3) meets. A bound of x0 one rounding step below the largest x0 of the first
+// row arrives as x3 <= 2 - 3.8e-6 against x3 >= 2: infeasible, for a feasible model.
+GPRS_TEST(engine_rounding_of_a_bound_is_not_carried_into_other_rows)
+{
+  double gain               = 131072.;
+  std::vector<col_t> cols   = {{-inf, inf, false},
+                               {2.4000000000000004, 7.4000000000000004, false},
+                               {-inf, inf, false},
+                               {-inf, inf, false},
+                               {-inf, 3., false}};
+  std::vector<row_t> rows   = {{{{0, 2.9000000000000004}, {1, 1.3}}, -inf, 7.1800000000000015},
+                               {{{0, gain}, {2, 1.}}, 183501.80000000002, inf},
+                               {{{2, gain}, {3, 1.}}, -inf, 131074.},
+                               {{{3, gain}, {4, 1.}}, 262147., inf}};
+  model_t m                 = make_model(cols, rows);
+  std::vector<double> point = {1.4000000000000001, 2.4000000000000004, 1., 2., 3.};
+  point_check_t in          = check_point(m, point);
+  GPRS_REQUIRE(in.row_violation == 0. && in.bound_violation == 0.);
+  options_t options;
+  options.primal_only = true;
+  result_t result     = presolve(m, options);
+  GPRS_REQUIRE(result.status == status_t::reduced);
+  std::vector<double> crushed;
+  result.postsolve.crush(point, crushed);
+  GPRS_CHECK(point_feasible(check_point(result.reduced, crushed), options.tol));
+  check_fixed_point(result, options);
 }

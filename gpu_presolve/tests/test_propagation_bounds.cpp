@@ -581,8 +581,8 @@ GPRS_TEST(propagation_explicit_step)
     check_bounds(f.st, 1, 0., 4.998);
   }
   {
-    // 1e-11 of 4e15 is 4e4: 30000 below the bound does not count, 50000 does. A bound of this
-    // size is moved outward by four rounding units of its size, 1.8, which is 2 here.
+    // 1e-11 of 4e15 is 4e4: 30000 below the bound does not count, 50000 does. The candidate is
+    // an exact quotient and becomes the bound as it is.
     double big              = 4e15;
     double a                = 0x1p-30;
     std::vector<col_t> cols = {{0., big, false}, {0., big, false}};
@@ -592,7 +592,47 @@ GPRS_TEST(propagation_explicit_step)
     GPRS_CHECK_EQ(f.st.implied_upper[1], big - 50000.);
     GPRS_CHECK_EQ(p.make_explicit().findings, 1);
     check_bounds(f.st, 0, 0., big);
-    check_bounds(f.st, 1, 0., big - 50000. + 2.);
+    check_bounds(f.st, 1, 0., big - 50000.);
+  }
+}
+
+// A candidate that is not an exact quotient is a bound of a continuous column only when moved
+// outward by its rounding: the record and the explicit bound lie at or above the true quotient,
+// by no more than a few rounding units of its size, before and after make_explicit.
+GPRS_TEST(propagation_continuous_bound_is_moved_outward)
+{
+  // 3 x <= 3 * (4e15 - 50000) + 2, scaled by 2^-30 so that the side is small: the quotient is
+  // 4e15 - 50000 + 2/3, between two doubles.
+  double big              = 4e15;
+  double quotient         = big - 50000.;
+  double scale            = 0x1p-30;
+  std::vector<col_t> cols = {{0., big, false}};
+  fixture_t f(cols, {{{{0, 3. * scale}}, -inf, (3. * quotient + 2.) * scale}});
+  propagation_t p{f, {}};
+  GPRS_CHECK_EQ(p.run().records, 1);
+  GPRS_CHECK(f.st.implied_upper[0] >= quotient + 1.);
+  GPRS_CHECK(f.st.implied_upper[0] <= quotient + 3.);
+  GPRS_CHECK_EQ(p.make_explicit().findings, 1);
+  GPRS_CHECK_EQ(f.st.col_upper[0], f.st.implied_upper[0]);
+
+  // 2.9 x0 + 1.3 x1 <= 7.18 with x1 >= 2.4 in doubles: the largest x0 of the row is the double
+  // above 1.4, and the candidate is the double below it. The same after the switch.
+  double side  = 7.1800000000000015;
+  double point = 1.4000000000000001;
+  for (bool after_switch : {false, true}) {
+    std::vector<col_t> two = {{-inf, inf, false}, {2.4000000000000004, 7.4000000000000004, false}};
+    fixture_t g(two, {{{{0, 2.9000000000000004}, {1, 1.3}}, -inf, side}});
+    GPRS_CHECK(upper_excess(g.st, 0, {point, 2.4000000000000004}) <= 0.);
+    propagation_t q{g, {}};
+    if (after_switch) {
+      GPRS_CHECK_EQ(q.make_explicit().findings, 0);
+      GPRS_CHECK_EQ(q.run().findings, 1);
+    } else {
+      GPRS_CHECK_EQ(q.run().findings, 0);
+      GPRS_CHECK_EQ(q.make_explicit().findings, 1);
+    }
+    GPRS_CHECK(g.st.col_upper[0] >= point);
+    GPRS_CHECK(g.st.col_upper[0] <= point + 1e-14);
   }
 }
 

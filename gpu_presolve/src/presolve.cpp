@@ -245,8 +245,11 @@ struct engine_t {
   void end_phase()
   {
     engine_clock_t::time_point begin = engine_clock_t::now();
-    if (st.dead_fraction() > opt.rebuild_dead_fraction ||
-        st.fixed_nnz > opt.rebuild_fixed_fraction * st.live_nnz) {
+    // A rebuild moves the terms of the fixed columns into the sides, which the rules of the
+    // next phase read.
+    if ((st.dead_fraction() > opt.rebuild_dead_fraction ||
+         st.fixed_nnz > opt.rebuild_fixed_fraction * st.live_nnz) &&
+        st.fixed_terms_absorbable()) {
       st.rebuild();
       ++result.rebuilds;
     } else {
@@ -344,7 +347,9 @@ struct engine_t {
         rounds();
         if (outcome != rule_outcome_t::ok) { return ended_status(outcome); }
       }
-      if (!settled || out_of_time || !fixed_terms_matter()) { break; }
+      if (!settled || out_of_time || !fixed_terms_matter() || !st.fixed_terms_absorbable()) {
+        break;
+      }
       absorb_fixed_terms();
       renewed = cascade_pending() || waiting(rule::parallel_rows);
     }

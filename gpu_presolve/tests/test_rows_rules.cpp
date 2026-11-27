@@ -317,6 +317,84 @@ GPRS_TEST(rows_forcing_row_dynamism)
   GPRS_CHECK_EQ(one_row(unit, {{{0, 1.}, {1, 1e-7}}, -inf, 0.}).findings, 3);
 }
 
+// x0 + x1 <= 1 + 5e-7 with both lower bounds 0.5 is within the tolerance of forcing. Two
+// integer columns have no point but the bounds and are fixed. A continuous column has points up
+// to 5e-7 off its bound, and another row can hold it with a larger coefficient: the row stays
+// and the column keeps its bounds. A slack of rounding size is still forcing, and so is a row
+// that misses its side on the infeasible side.
+GPRS_TEST(rows_forcing_row_continuous_column)
+{
+  std::vector<col_t> integers = {{1., 3., true}, {1., 3., true}};
+  GPRS_CHECK_EQ(one_row(integers, {{{0, 1.}, {1, 1.}}, -inf, 2. + 5e-7}).findings, 3);
+  for (bool second_integer : {false, true}) {
+    std::vector<col_t> cols = {{0.5, 3., false}, {second_integer ? 1. : 0.5, 3., second_integer}};
+    double activity         = second_integer ? 1.5 : 1.;
+    fixture_t f(cols, {{{{0, 1.}, {1, 1.}}, -inf, activity + 5e-7}});
+    rule_result_t result = run_rows(f);
+    GPRS_CHECK_EQ(result.outcome, ok);
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK_EQ(f.st.live_rows, 1);
+    GPRS_CHECK_EQ(f.st.live_cols, 2);
+    // At the lower side with the maximum activity, the same.
+    GPRS_CHECK_EQ(one_row(cols, {{{0, -1.}, {1, -1.}}, -activity - 5e-7, inf}).findings, 0);
+    // A slack of a few rounding units of the terms.
+    GPRS_CHECK_EQ(one_row(cols, {{{0, 1.}, {1, 1.}}, -inf, activity + 4e-16}).findings, 3);
+    GPRS_CHECK_EQ(one_row(cols, {{{0, 1.}, {1, 1.}}, -inf, activity}).findings, 3);
+    // The row cannot be met by 5e-7: the bounds are the point nearest to it.
+    GPRS_CHECK_EQ(one_row(cols, {{{0, 1.}, {1, 1.}}, -inf, activity - 5e-7}).findings, 3);
+    GPRS_CHECK_EQ(one_row(cols, {{{0, -1.}, {1, -1.}}, -activity + 5e-7, inf}).findings, 3);
+  }
+}
+
+// A row can take the terms of its fixed columns when each side less the terms is exact, small
+// enough for a double to hold it within the tolerance, or out of reach of the free part of the
+// row whatever it loses (state_t::fixed_terms_absorbable).
+GPRS_TEST(rows_fixed_terms_absorbable)
+{
+  double big = 3. * 0x1p60;
+  struct case_t {
+    double reach;  // x0 lies in [-reach, reach]
+    row_t row;
+    double fixed;  // value of column 2
+    bool absorbable;
+  };
+  std::vector<case_t> cases = {
+    // Small numbers, exact or not.
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 1.}}, -inf, 7.}, 2., true},
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 0.1}}, 0.3, 7.7}, 3., true},
+    // 3 * 2^60 less 1 is no double; less 1024 it is one.
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 1.}}, big, inf}, 1., false},
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 1024.}}, big, inf}, 1., true},
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 1.}}, -inf, -big}, 1., false},
+    // A small side next to a huge term is lost in it.
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 0x1p60}}, -inf, 3.}, 4., false},
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 0x1p60}}, -inf, 4096.}, 4., true},
+    // Sizes of 2e15 are integers in a double.
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 1.}}, 2e15, 2e15 + 2.}, 1., true},
+    {0x1p62, {{{0, 1.}, {1, 1.}, {2, 0.1}}, 2e15, inf}, 1., false},
+    // With x0 in [-5, 5] the same sides are out of reach of x0 + x1: never met, or never
+    // satisfiable, whatever the move rounds away.
+    {5., {{{0, 1.}, {1, 1.}, {2, 1.}}, big, inf}, 1., true},
+    {5., {{{0, 1.}, {1, 1.}, {2, 1.}}, -inf, -big}, 1., true},
+    {5., {{{0, 1.}, {1, 1.}, {2, 0x1p60}}, -inf, 3.}, 4., true},
+    {5., {{{0, 1.}, {1, 1.}, {2, -0x1p60}}, -inf, 3.}, 4., true},
+    {5., {{{0, 1.}, {1, 1.}, {2, 0.1}}, 2e15, inf}, 1., true},
+  };
+  for (const case_t& c : cases) {
+    std::vector<col_t> cols = {{-c.reach, c.reach, false}, {0., 5., false}, {0., 5., true}};
+    fixture_t f(cols, {c.row});
+    GPRS_CHECK(f.st.fixed_terms_absorbable());
+    fix_column(f.st, f.ps, 2, c.fixed);
+    GPRS_CHECK_EQ(f.st.fixed_terms_absorbable(), c.absorbable);
+    f.check_consistent();
+    if (c.absorbable) {
+      f.st.absorb_fixed_terms();
+      GPRS_CHECK(f.st.fixed_terms_absorbable());
+      f.check_consistent();
+    }
+  }
+}
+
 // 1e-7 x1 + 1e-7 x2 <= 1e-7 has dynamism 1 and leaves (0, 1) feasible: the tolerance is also
 // divided by the size of the coefficients when they are below 1.
 GPRS_TEST(rows_forcing_row_small_coefficients)

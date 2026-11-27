@@ -46,31 +46,24 @@ constexpr uint8_t upper_stale   = 8;
 constexpr uint8_t max_explicit_steps = 16;
 
 // A candidate is rounded twice, in the residual and in the division, by up to this many rounding
-// units of its size in all. The integer rounding allows for the feasibility tolerance only, which
-// is less than that from about 1e10 on.
+// units of its size in all.
 constexpr double candidate_rounding_units = 4.;
 
-// What a bound of a continuous column must improve on to count: implied_bound_step feasibility
-// tolerances, or as many times what a bound of its size loses when it is stored.
-inline double improvement_step(const tolerances_t& tol, double bound)
-{
-  return tol.implied_bound_step * std::fmax(tol.feasibility, tol.side_error * std::fabs(bound));
-}
-
-// A candidate becomes an explicit bound moved outward by its own rounding error, or a point that
-// meets the row exactly would be cut off.
 inline double bound_rounding(double bound)
 {
   return candidate_rounding_units * rounding_unit * std::fabs(bound);
 }
 
-// The same for a continuous column, where nothing is rounded afterwards: the error counts only
-// when it is not far below the feasibility tolerance (from a bound of about 2e8 on). A smaller
-// bound is taken as it is: a candidate of 8 gives the bound 8.
-inline double continuous_rounding(const tolerances_t& tol, double bound)
+// What a bound of a continuous column must improve on to count: implied_bound_step feasibility
+// tolerances, or as many times what a bound of its size loses when it is stored, and never less
+// than two candidates of one bound can differ by: each is moved outward by its rounding and by
+// the error bound of its activity, which the guard keeps below a share of the tolerance and
+// which is another one in every presolve.
+inline double improvement_step(const tolerances_t& tol, double bound)
 {
-  double rounding = bound_rounding(bound);
-  return rounding > tol.activity_error_share * tol.feasibility ? rounding : 0.;
+  double step =
+    tol.implied_bound_step * std::fmax(tol.feasibility, tol.side_error * std::fabs(bound));
+  return std::fmax(step, 2. * (bound_rounding(bound) + tol.activity_error_share * tol.feasibility));
 }
 
 struct context_t {
@@ -101,7 +94,14 @@ struct context_t {
 // has no infinite term, or its only one at e. It is the same for every entry of the row: a
 // candidate changes the bound of its column that this activity does not hold, and a column
 // fixed by its candidate is fixed at the bound that the activity holds.
-bool candidate(context_t& c, int32_t row, int64_t e, bool upper_side, double& bound)
+// slack is what the true quotient can lie beyond the candidate by: nothing when the residual
+// and the division are exact for the stored sum (a candidate of 8 is 8, whatever the history of
+// the sum), else their rounding and the error bound of the activity. A bound of a continuous
+// column is the candidate moved outward by it, so that the bound holds for every point of the
+// row: a bound that is a rounding step too tight cuts a point off, and a row with a large
+// coefficient of the column carries that on, multiplied (131072 twice turns one step into
+// 4e-6).
+bool candidate(context_t& c, int32_t row, int64_t e, bool upper_side, double& bound, double& slack)
 {
   const state_t& st     = c.st;
   const activity_t& act = upper_side ? st.min_act : st.max_act;
@@ -123,22 +123,35 @@ bool candidate(context_t& c, int32_t row, int64_t e, bool upper_side, double& bo
     c.guarded = true;
     return false;
   }
-  bound = dd_residual(upper_side ? st.row_upper[row] : st.row_lower[row], rest) / a;
+  // dd_residual, with what its two additions round away.
+  double carry, tail_rounding, residual_rounding;
+  double difference = two_sum(upper_side ? st.row_upper[row] : st.row_lower[row], -rest.hi, carry);
+  double tail       = two_sum(carry, -rest.lo, tail_rounding);
+  double residual   = two_sum(difference, tail, residual_rounding);
+  bound             = residual / a;
   // An overflow of the division says nothing about the column.
-  return std::isfinite(bound);
+  if (!std::isfinite(bound)) { return false; }
+  bool exact =
+    tail_rounding == 0. && residual_rounding == 0. && std::fma(bound, a, -residual) == 0.;
+  slack = exact
+            ? 0.
+            : bound_rounding(bound) +
+                (error + std::fabs(tail_rounding) + std::fabs(residual_rounding)) / std::fabs(a);
+  return true;
 }
 
 rule_outcome_t propagate_entry(context_t& c, int32_t row, int64_t e, bool upper_side)
 {
   state_t& st = c.st;
-  double bound;
-  if (!candidate(c, row, e, upper_side, bound)) { return rule_outcome_t::ok; }
+  double bound, slack;
+  if (!candidate(c, row, e, upper_side, bound, slack)) { return rule_outcome_t::ok; }
   int32_t col   = st.csr.index[e];
   bool is_upper = (st.csr.value[e] > 0) == upper_side;
   bool pending  = false;
   if (st.is_integer(col)) {
     pending = true;
   } else {
+    bound       = is_upper ? bound + slack : bound - slack;
     double step = improvement_step(c.tol, bound);
     bool lost   = false;
     if (is_upper) {
@@ -181,7 +194,9 @@ rule_outcome_t propagate_entry(context_t& c, int32_t row, int64_t e, bool upper_
     }
   }
   if (!pending) { return rule_outcome_t::ok; }
-  double rounding = st.is_integer(col) ? bound_rounding(bound) : continuous_rounding(c.tol, bound);
+  // The integer rounding allows for the feasibility tolerance only, which is less than the
+  // rounding of the candidate from about 1e10 on.
+  double rounding       = st.is_integer(col) ? bound_rounding(bound) : 0.;
   bound_change_t change = is_upper ? tighten_upper(st, c.ps, col, bound + rounding)
                                    : tighten_lower(st, c.ps, col, bound - rounding);
   if (change.changed) {
@@ -286,9 +301,8 @@ rule_result_t bound_propagation_t::make_explicit(state_t& st, postsolve_t& ps, c
       if (st.implied_lower_valid(col)) {
         double bound = st.implied_lower[col];
         if (bound > st.col_lower[col] + improvement_step(tol, bound)) {
-          bound_change_t change =
-            tighten_lower(st, ps, col, bound - continuous_rounding(tol, bound));
-          result.outcome = change.outcome;
+          bound_change_t change = tighten_lower(st, ps, col, bound);
+          result.outcome        = change.outcome;
           if (result.outcome != rule_outcome_t::ok) { return result; }
           result.findings += change.changed;
           taken = true;
@@ -301,9 +315,8 @@ rule_result_t bound_propagation_t::make_explicit(state_t& st, postsolve_t& ps, c
       if (st.implied_upper_valid(col)) {
         double bound = st.implied_upper[col];
         if (bound < st.col_upper[col] - improvement_step(tol, bound)) {
-          bound_change_t change =
-            tighten_upper(st, ps, col, bound + continuous_rounding(tol, bound));
-          result.outcome = change.outcome;
+          bound_change_t change = tighten_upper(st, ps, col, bound);
+          result.outcome        = change.outcome;
           if (result.outcome != rule_outcome_t::ok) { return result; }
           result.findings += change.changed;
           taken = true;

@@ -191,7 +191,9 @@ struct result_t {
 // locks they leave, repeated until their lists are empty, a budget stops them or
 // max_cascade_passes is reached; (2) parallel rows on the state the cascade leaves; (3) doubleton
 // equations. Rounds repeat until one changes nothing or max_rounds is reached. Between phases
-// the state compacts sparse lines and rebuilds by the two fractions above.
+// the state compacts sparse lines and rebuilds by the two fractions above; it rebuilds only
+// when every row can take the terms of its fixed columns (state_t::fixed_terms_absorbable), so
+// that no rule reads a side that the move has rounded by more than the tolerance.
 // A family is called with make_budget(options.budget[rule], state).
 // The order of the whole presolve:
 // 1. Rounds with the implied bounds of continuous columns apart from the explicit ones: bound
@@ -208,7 +210,10 @@ struct result_t {
 //    limit makes an activity infinite; the limits on the size of a side), so only this state
 //    is the one a second presolve would see. A rebuild between the phases lists such rows for
 //    the same reason (state_t::rebuild). Skipped when only dual fixing and doubleton equations
-//    are switched on, which read no side and no activity.
+//    are switched on, which read no side and no activity, and when a row cannot take its terms
+//    (state_t::fixed_terms_absorbable): the rules would read a side that the move has rounded
+//    by more than the tolerance. The terms then stay in the rows until the reduced model is
+//    read, as before the switch, and the presolve does not end at a fixed point.
 // 4. The reduced model is read from the state.
 // Rounds that ended on a budget or on max_cascade_passes are not taken up again in steps 2 and
 // 3: only a new reason starts them.
@@ -221,7 +226,8 @@ struct result_t {
 // holds for every feasible point and stays a bound of the model whatever happens to that row.
 // Fixed point: with result_t::fixed_point set, presolve(result.reduced, options) returns
 // unchanged, and the reduced model has, for the families that are switched on, no empty row,
-// no singleton row, no row that is redundant or forcing on its own bounds, no coefficient that
+// no singleton row, no row that is redundant or forcing on its own bounds (forcing as in
+// rules.hpp, (a), which leaves a row with a continuous column off its bound), no coefficient that
 // row tightening would change and no bound that propagation would tighten. What it rests on:
 // every row was visited by every family after its last change; no row holds the term of a fixed
 // column, and a row that lost one other than plainly was visited again; an activity whose error

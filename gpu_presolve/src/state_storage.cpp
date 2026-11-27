@@ -146,6 +146,56 @@ void absorb_row(state_t& st, int32_t row)
 
 }  // namespace
 
+bool state_t::fixed_terms_absorbable() const
+{
+  double limit = tol.feasibility / tol.side_error;
+  slot_visits += nrows;
+  for (int32_t row = 0; row < nrows; ++row) {
+    if (!row_alive[row] || csr.size[row] == row_free_size[row]) { continue; }
+    dd_t fixed_terms, free_min, free_max;
+    double fixed_size = 0.;
+    bool min_finite = true, max_finite = true;
+    for (int64_t e = csr.begin(row); e < csr.end(row); ++e) {
+      if (!csr.live(e)) { continue; }
+      int32_t col = csr.index[e];
+      double a    = csr.value[e];
+      if (col_status[col] == col_status_t::fixed) {
+        dd_add_product(fixed_terms, a, col_lower[col]);
+        fixed_size += std::fabs(a * col_lower[col]);
+        continue;
+      }
+      double low  = min_activity_bound(a, col_lower[col], col_upper[col]);
+      double high = max_activity_bound(a, col_lower[col], col_upper[col]);
+      if (is_infinite_term(a, low, tol)) {
+        min_finite = false;
+      } else {
+        dd_add_product(free_min, a, low);
+      }
+      if (is_infinite_term(a, high, tol)) {
+        max_finite = false;
+      } else {
+        dd_add_product(free_max, a, high);
+      }
+    }
+    slot_visits += csr.used[row];
+    for (double side : {row_lower[row], row_upper[row]}) {
+      if (std::isinf(side) || (std::fabs(side) <= limit && fixed_size <= limit)) { continue; }
+      // dd_residual(side, fixed_terms), with what its two additions round away.
+      double carry, tail_rounding, rounding;
+      double difference = two_sum(side, -fixed_terms.hi, carry);
+      double tail       = two_sum(carry, -fixed_terms.lo, tail_rounding);
+      double moved      = two_sum(difference, tail, rounding);
+      double lost       = std::fabs(tail_rounding) + std::fabs(rounding);
+      if (lost == 0.) { continue; }
+      double margin = lost + tol.feasibility;
+      bool above    = max_finite && dd_residual(moved, free_max) > margin;
+      bool below    = min_finite && -dd_residual(moved, free_min) > margin;
+      if (!above && !below) { return false; }
+    }
+  }
+  return true;
+}
+
 void state_t::absorb_fixed_terms()
 {
   for (int32_t col = 0; col < ncols; ++col) {

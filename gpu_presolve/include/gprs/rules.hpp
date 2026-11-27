@@ -90,6 +90,12 @@ struct rule_result_t {
 // coefficient, become explicit bounds of the column (tighten_lower / tighten_upper) and the row
 // is deleted. Forcing row: an activity meets its side within feasibility / dynamism of the row;
 // every free column is fixed at the bound that gives that activity and the row is deleted.
+// With a free continuous column the row is forcing only when the activity can move towards the
+// side by no more than its rounding (its error bound plus a few rounding units of its terms):
+// the points of the row lie up to that distance, divided by the coefficient, off the bound of
+// such a column, fixing it moves them onto the bound, and another row that holds the column
+// with a larger coefficient would be violated by more. An activity beyond the side, within
+// the tolerance, has no such point and is forcing as before.
 // Every test reads the activities over the explicit bounds. A recorded implied bound enters no
 // test: it becomes an explicit bound first (bound_propagation_t::make_explicit).
 struct row_rules_t {
@@ -113,9 +119,14 @@ struct row_rules_t {
 // (with the activity summed from scratch first if it was not fresh), or when
 // |side| * tol.side_error > tol.feasibility. Integer column: the explicit bound is tightened
 // (tighten_lower / tighten_upper, which round).
-// Continuous column, with step = tol.implied_bound_step * max(tol.feasibility,
-// tol.side_error * |candidate|), the second term being what a bound of that size loses when it
-// is stored:
+// Continuous column: a candidate whose residual and division are exact for the stored sum stays
+// as it is. Any other is moved outward by what the true quotient can lie beyond it by: the
+// rounding of the residual and of the division and the error bound of the activity over |a|.
+// The rounding of one bound is then never a restriction that other rows carry on and multiply
+// by their coefficients. With step = tol.implied_bound_step *
+// max(tol.feasibility, tol.side_error * |candidate|), the second term being what a bound of that
+// size loses when it is stored, and at least what two candidates of one bound differ by (twice
+// their rounding plus twice tol.activity_error_share * tol.feasibility):
 // - The candidate is recorded as implied bound (a record, not a finding) when it improves the
 //   valid record by more than the step, whatever the explicit bound is.
 // - A candidate that improves the explicit bound by more than the step is pending. Before
@@ -123,8 +134,7 @@ struct row_rules_t {
 //   explicit bound is tightened to the candidate (tighten_lower / tighten_upper; a finding), as
 //   for an integer column, but at most max_explicit_steps times per bound (a constant in the
 //   source file): a candidate for a bound that has had them is dropped and the call reports
-//   limited. The candidate is moved outward by its own rounding error where that error is above
-//   tol.activity_error_share * tol.feasibility, and taken as it is below.
+//   limited.
 // An explicit bound is the candidate of a row that is live when the bound is written, over
 // explicit bounds that are at least as tight as those the candidate was computed on: in run()
 // the candidate of the row it visits, in make_explicit a record whose source row is alive and
@@ -140,8 +150,8 @@ struct bound_propagation_t {
   rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
   // From this call on run() tightens the explicit bounds of continuous columns. For every column
   // with a pending bound: a valid record that improves the explicit bound by more than the step
-  // becomes that bound, moved outward as in run() (a finding; infeasible when the bounds cross
-  // by more than the tolerance). The live rows of the column go on row_list::propagation, so
+  // becomes that bound (a finding; infeasible when the bounds cross by more than the
+  // tolerance). The live rows of the column go on row_list::propagation, so
   // that the next run() derives what is pending from the state as it is, unless the record was
   // taken and no visit of the column ever found its record void: every candidate that was not
   // recorded is then within the step of the record, no row has more to give for the column, and

@@ -365,6 +365,21 @@ struct state_t {
   // O(columns + used slots of the rows that hold such a term).
   void absorb_fixed_terms();
 
+  // True when every row can take the terms of its fixed columns into its sides, as
+  // absorb_fixed_terms and rebuild move them. A finite side can when one of these holds:
+  // - the side less the sum of the terms is exact;
+  // - side and terms are at most tol.feasibility / tol.side_error in size, where a double holds
+  //   the difference far within the tolerance;
+  // - the new side is out of reach of the free part of the row by more than the tolerance plus
+  //   what the difference rounds away: above its maximum or below its minimum activity over the
+  //   bounds. The side is then never met or never satisfiable, whatever it lost (12 next to a
+  //   term of 2e21).
+  // Any other side is another constraint afterwards, by more than the tolerance (3 * 2^60 less 1
+  // is 3 * 2^60), and a family that reads the stored side as it is reports a feasible row
+  // infeasible; with the terms in the row its activities hold them exactly.
+  // O(rows + used slots of the rows that hold such a term).
+  bool fixed_terms_absorbable() const;
+
   // Multiplies the entries and the finite sides of a live row by factor > 0 and recomputes its
   // activities (row_event::entries). With integral set, each product a * factor is replaced by
   // the nearest integer; the caller has checked that every product is one within its tolerance.
