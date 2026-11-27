@@ -1,0 +1,115 @@
+engine     results/stage1/host/v4/release_dev: 31 instances, 0 with a failure, source checksum 6edd0693d244, started 2026-11-27T14:01:33+0000
+engine     results/stage1/host/v4/release_large: 9 instances, 0 with a failure, source checksum 6edd0693d244, started 2026-11-27T14:01:52+0000
+reference  results/stage1c/refs/cheap_dev/summary.json: 31 instances, variant cheap_dev, presolve_rule_off 0, switched off: probing,enumeration,clique_substitutions,clique_merging,implied_integers,aggregator,sparsify,fourier_motzkin,strengthen_inequalities,dominated_columns
+reference  results/stage1c/refs/cheap_large/summary.json: 9 instances, variant cheap_large, presolve_rule_off 0, switched off: probing,enumeration,clique_substitutions,clique_merging,implied_integers,aggregator,sparsify,fourier_motzkin,strengthen_inequalities,dominated_columns
+before     the engine result itself, nothing to compare
+
+Nonzeros plus objective nonzeros are not compared: the engine result has no reduced.obj_nnz on 40 of 40 instances; the reference has no obj_nnz_after on 40 of 40 instances
+
+Geometric mean of reference / engine; below 1 the engine leaves more
+instances                                  n         nonzeros             rows          columns
+all                                       40           0.8008           0.8238           0.7654
+  the engine's lead counted as zero       40           0.8008           0.8238           0.7654
+  also without neos-4332810-sesia, dlr2   38           0.9357           0.9210           0.9184
+  class A1                                 5           0.9466           0.9378           0.9521
+  class A2                                 6           0.8853           0.8350           0.8383
+  class A3                                 5           0.9997           0.9968           0.9970
+  class B1                                 5           0.8581           0.8712           0.8412
+  class B2                                 5           0.8622           0.8743           0.8376
+  class B3                                 5           0.9983           0.9546           0.9741
+  class C                                  6           0.4776           0.4687           0.4332
+  class D                                  3           0.5256           0.9376           0.4387
+
+Instances below 0.95 | the engine leaves less / the same / more
+instances                                  n                 nonzeros                     rows                  columns
+all                                       40      9 |   0 /  13 /  27      9 |   0 /  15 /  25     10 |   0 /  13 /  27
+  also without neos-4332810-sesia, dlr2   38      7 |   0 /  13 /  25      7 |   0 /  15 /  23      8 |   0 /  13 /  25
+
+Nonzeros, below 0.95: 9 of 40 instances
+      ratio    reference       engine  class instance
+     0.0119       407609     34283539  C     neos-4332810-sesia
+     0.1452     10542701     72603249  D     dlr2
+     0.5187       192634       371401  B2    supportcase12
+     0.5383        40419        75082  A2    brazil3
+     0.5650       264244       467716  B1    neos-4306827-ravan
+     0.7599        15757        20736  A1    radiationm18-12-05
+     0.8597       445729       518475  B1    var-smallemery-m6j6
+     0.9035        97249       107633  A2    unitcal_7
+     0.9341       452096       484011  B2    supportcase7
+
+Nonzeros, the engine leaves less: 0 of 40 instances
+
+Rows, below 0.95: 9 of 40 instances
+      ratio    reference       engine  class instance
+     0.0119       157874     13306364  C     neos-4332810-sesia
+     0.3509         3269         9315  A2    brazil3
+     0.5261        14450        27466  B2    supportcase12
+     0.5390        99998       185534  B1    neos-4306827-ravan
+     0.7254         5254         7243  A1    radiationm18-12-05
+     0.7998         5593         6993  B3    neos-4647030-tutaki
+     0.8262      3250859      3934530  D     dlr2
+     0.9019        20389        22606  C     t11nonreg
+     0.9333         8044         8619  B1    var-smallemery-m6j6
+
+Rows, the engine leaves less: 0 of 40 instances
+
+Columns, below 0.95: 10 of 40 instances
+      ratio    reference       engine  class instance
+     0.0067        94469     14110659  C     neos-4332810-sesia
+     0.0861      3137652     36437946  D     dlr2
+     0.3909         6884        17610  A2    brazil3
+     0.4377        75282       171982  B2    supportcase12
+     0.4924        59080       119992  B1    neos-4306827-ravan
+     0.7823         5373         6868  A1    radiationm18-12-05
+     0.8577         2863         3338  B1    var-smallemery-m6j6
+     0.8889        11200        12600  B3    neos-4647030-tutaki
+     0.9153        21936        23966  A2    unitcal_7
+     0.9434       309697       328292  B2    savsched1
+
+Columns, the engine leaves less: 0 of 40 instances
+
+Findings of the engine and HiGHS's counters of the matching rule, summed over 40 instances.
+Each side counts what its own rule calls a finding. In brackets: instances with a count above zero, 'of n' when only n instances have the field. A dash: none has it.
+family          sub-rule                                          engine              HiGHS  HiGHS counters
+row_rules                                                   7408066 (26)      16245107 (30)  reductions.redundant_row + reductions.singleton_row + reductions.forcing_row
+propagation                                                 4272224 (28)       1805804 (20)  bound_change.implied_bound + bound_change.binary_row_test
+tightening                                                 13501601 (20)
+doubleton                                                   7127188 (18)       7181706 (19)  doubleton.removed
+parallel_rows                                               1521170 (27)       1501363 (28)  parallel.duplicate_rows + parallel.row_additions
+parallel_rows   merges                                      1317195 (26)       1500066 (27)  parallel.duplicate_rows
+parallel_rows   subtractions                                  203975 (5)           1297 (4)  parallel.row_additions
+dual_fixing                                                  334228 (20)      46459751 (22)  fixing.dual_fixing_lock + fixing.empty_col + fixing.dominated_col + fixing.weakly_dominated_col
+simple_probing                                                         -          14102 (4)  substitutions.simple_probing
+simple_probing  fixed columns of the row                                            678 (2)  fixing.simple_probing
+singleton_cols                                                         -       1132185 (19)  reductions.free_col_substitution + reductions.zero_obj_singleton_col + reductions.forcing_column
+singleton_cols  free_singleton, primal and dual                        -        658853 (18)  reductions.free_col_substitution
+singleton_cols  free_singleton                                         -
+singleton_cols  free_singleton_dual                                    -
+singleton_cols  zero_cost_singleton                                    -         473328 (6)  reductions.zero_obj_singleton_col
+singleton_cols  forcing_column                                         -              4 (1)  reductions.forcing_column
+dual_cols                                                              -        633689 (18)  fixing.dual_fixing_bound + bound_change.dual_fixing + substitutions.dual_fixing
+dual_cols       dual_bound                                             -        482590 (13)  fixing.dual_fixing_bound + bound_change.dual_fixing
+dual_cols       lock_alias                                             -        151099 (12)  substitutions.dual_fixing
+parallel_cols                                                          -         115018 (8)  parallel.cols_dominated + parallel.cols_merged
+parallel_cols   parallel_dominance                                     -          51112 (4)  parallel.cols_dominated
+parallel_cols   parallel_merge                                         -          63906 (5)  parallel.cols_merged
+not built       implied equation                                                     21 (1)  reductions.implied_equation
+not built       single-equation dual fixing                                       14790 (4)  fixing.dual_fixing_single_equation
+not built       column stuffing                                                       0 (0)  fixing.col_stuffing
+not built       implied-integer columns left                                    170198 (10)  total.implied_integer_cols
+not built       implied-integer conversion, bounds                                 5512 (7)  bound_change.implied_integer
+
+Work in passes of the input model (nonzeros + 8 * (rows + columns))
+  family                  n   median      90%  largest  on
+  row_rules              40     0.41     0.88     1.30  unitcal_7
+  propagation            40     0.93     1.52     2.89  neos-4647030-tutaki
+  tightening             40     1.38     3.46     8.76  var-smallemery-m6j6
+  doubleton              40     0.13     0.59     0.80  sorrell3
+  parallel_rows          40     1.86     3.14     4.82  neos-4647030-tutaki
+  dual_fixing            40     0.26     0.62     0.72  supportcase19
+  all families           40     5.72     9.92    11.39  var-smallemery-m6j6
+
+Rounds, 40 instances: median 3.5, largest 8 (unitcal_7), on max_rounds = 20: none
+
+Fixed-point flag: set on 37 of 40 instances
+  not set: a2864-99blp, dlr2, neos-5052403-cygnet

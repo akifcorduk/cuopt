@@ -1,0 +1,197 @@
+engine     results/bench240/v4pre/release_all: 240 instances, 0 with a failure, source commit 0ee2ce720553, started 2026-11-27T10:30:59+0000
+reference  results/bench240/highs_cheap_all/summary.json: 240 instances, variant cheap_all, presolve_rule_off 0, switched off: probing,enumeration,clique_substitutions,clique_merging,implied_integers,aggregator,sparsify,fourier_motzkin,strengthen_inequalities,dominated_columns
+before     the engine result itself, nothing to compare
+
+Nonzeros plus objective nonzeros are not compared: the engine result has no reduced.obj_nnz on 240 of 240 instances; the reference has no obj_nnz_after on 240 of 240 instances
+
+Geometric mean of reference / engine; below 1 the engine leaves more
+instances                              n         nonzeros             rows          columns
+without ex9, ex10, enlight_hard      237           0.9563           0.9653           0.9424
+  the engine's lead counted as zero  237           0.9552           0.9643           0.9413
+  class S                             92           0.9685           0.9815           0.9445
+  class A                             93           0.9712           0.9790           0.9691
+  class B                             50           0.9061           0.9106           0.8889
+  class C                              2           1.0000           1.0000           1.0000
+all                                  240           0.9568           0.9657           0.9431
+
+Instances below 0.95 | the engine leaves less / the same / more
+instances                              n                 nonzeros                     rows                  columns
+without ex9, ex10, enlight_hard      237     39 |   9 / 121 / 107     19 |   7 / 140 /  90     32 |   7 / 122 / 108
+all                                  240     39 |   9 / 124 / 107     19 |   7 / 143 /  90     32 |   7 / 125 / 108
+
+Nonzeros, below 0.95: 39 of 240 instances
+      ratio    reference       engine  class instance
+     0.1901       381000      2003808  B     neos-3402294-bobin
+     0.3267       379495      1161605  B     highschool1-aigio
+     0.5108        20524        40180  S     neos-1445765
+     0.5187       192634       371401  B     supportcase12
+     0.5207       331225       636067  B     nw04
+     0.5383        40419        75082  A     brazil3
+     0.6123         4519         7380  S     mcsched
+     0.6517        31461        48278  A     decomp2
+     0.7476        25480        34084  S     swath1
+     0.7476        25480        34084  S     swath3
+     0.7501        63721        84946  A     radiationm40-10-02
+     0.7599        15757        20736  A     radiationm18-12-05
+     0.7950        33280        41860  S     neos-3004026-krka
+     0.8004       190420       237920  A     neos-2746589-doon
+     0.8061         4158         5158  S     neos-3627168-kasai
+     0.8116       468353       577109  B     neos-2987310-joes
+     0.8597       445729       518475  B     var-smallemery-m6j6
+     0.8873          378          426  S     neos-3046615-murg
+     0.9035        97249       107633  A     unitcal_7
+     0.9064          736          812  S     timtab1
+     0.9066       606182       668641  B     rail02
+     0.9086       409523       450713  B     irish-electricity
+     0.9094        15173        16684  S     icir97_tension
+     0.9100       178101       195717  A     blp-ar98
+     0.9141         3993         4368  S     neos-4954672-berkel
+     0.9154       101260       110622  A     neos-827175
+     0.9163       284447       310429  A     neos-4722843-widden
+     0.9276       174745       188382  A     blp-ic98
+     0.9319         8331         8940  S     n5-3
+     0.9341       452096       484011  B     supportcase7
+     0.9367       159437       170207  A     germanrr
+     0.9375         1200         1280  S     neos859080
+     0.9381        18826        20068  S     sct2
+     0.9410       107443       114174  A     leo1
+     0.9427       168178       178395  A     n3div36
+     0.9471      1510275      1594656  B     co-100
+     0.9475       200495       211595  A     leo2
+     0.9477       370506       390948  B     neos-5093327-huahum
+     0.9482        93161        98254  A     irp
+
+Nonzeros, the engine leaves less: 9 of 240 instances
+      ratio    reference       engine  class instance
+     1.1525       154778       134300  A     rocII-5-11
+     1.0504        12260        11672  S     rocI-4-11
+     1.0355        28734        27749  S     piperout-08
+     1.0134        55569        54836  A     dws008-01
+     1.0123          986          974  S     sp150x300d
+     1.0073        62548        62093  A     momentum1
+     1.0053        35922        35732  A     piperout-27
+     1.0027       381181       380143  B     neos-3555904-turama
+     1.0017       163390       163116  A     neos-1122047
+
+Rows, below 0.95: 19 of 240 instances
+      ratio    reference       engine  class instance
+     0.0570        32932       577300  B     neos-3402294-bobin
+     0.3509         3269         9315  A     brazil3
+     0.4703          999         2124  S     neos-1445765
+     0.5180        36715        70878  B     highschool1-aigio
+     0.5261        14450        27466  B     supportcase12
+     0.7148        21259        29742  A     radiationm40-10-02
+     0.7254         5254         7243  A     radiationm18-12-05
+     0.7500          120          160  S     neos859080
+     0.7998         5593         6993  B     neos-4647030-tutaki
+     0.8290        10400        12545  S     neos-3004026-krka
+     0.8559          297          347  S     csched007
+     0.8708        70646        81129  B     irish-electricity
+     0.8863          881          994  S     icir97_tension
+     0.8870        20550        23168  A     neos-2746589-doon
+     0.9333         8044         8619  B     var-smallemery-m6j6
+     0.9344         6424         6875  A     decomp2
+     0.9348          129          138  S     neos-3046615-murg
+     0.9433          699          741  S     rococoC10-001000
+     0.9463          810          856  S     rococoB10-011000
+
+Rows, the engine leaves less: 7 of 240 instances
+      ratio    reference       engine  class instance
+     1.1182        14391        12870  A     rocII-5-11
+     1.0515         4489         4269  S     rocI-4-11
+     1.0411         5653         5430  A     dws008-01
+     1.0178          343          337  S     sp150x300d
+     1.0090        24496        24278  A     momentum1
+     1.0035        67773        67537  B     neos-3555904-turama
+     1.0024        57746        57609  A     neos-1122047
+
+Columns, below 0.95: 32 of 240 instances
+      ratio    reference       engine  class instance
+     0.1036         2133        20590  S     neos-1445765
+     0.1508        45231       300020  B     highschool1-aigio
+     0.2727          792         2904  B     neos-3402294-bobin
+     0.3909         6884        17610  A     brazil3
+     0.4377        75282       171982  B     supportcase12
+     0.4962         8450        17030  S     neos-3004026-krka
+     0.5245         1115         2126  S     icir97_tension
+     0.5280        46189        87481  B     nw04
+     0.5305         6677        12587  A     decomp2
+     0.6464          669         1035  S     neos-4954672-berkel
+     0.7500          120          160  S     neos859080
+     0.7715        40633        52666  B     irish-electricity
+     0.7736        21754        28122  A     radiationm40-10-02
+     0.7823         5373         6868  A     radiationm18-12-05
+     0.8063          308          382  S     timtab1
+     0.8283        62787        75803  A     neos-4722843-widden
+     0.8415          876         1041  S     roll3000
+     0.8556       198308       231779  B     rail02
+     0.8577         2863         3338  B     var-smallemery-m6j6
+     0.8636         2508         2904  B     neos-3402454-bohle
+     0.8824         5927         6717  A     physiciansched6-2
+     0.8889        11200        12600  B     neos-4647030-tutaki
+     0.8942        24867        27810  B     neos-2987310-joes
+     0.9108         1143         1255  S     seymour1
+     0.9148         2157         2358  S     n5-3
+     0.9153        21936        23966  A     unitcal_7
+     0.9187         1153         1255  S     seymour
+     0.9302        17401        18706  B     physiciansched3-3
+     0.9314        20602        22120  A     n3div36
+     0.9398        44933        47813  B     co-100
+     0.9416          145          154  S     neos-3046615-murg
+     0.9434       309697       328292  B     savsched1
+
+Columns, the engine leaves less: 7 of 240 instances
+      ratio    reference       engine  class instance
+     1.1289         5974         5292  A     rocII-5-11
+     1.0694         7878         7367  S     piperout-08
+     1.0412         2453         2356  S     rocI-4-11
+     1.0136         8664         8548  A     piperout-27
+     1.0123          493          487  S     sp150x300d
+     1.0119        10927        10799  A     dws008-01
+     1.0032        22215        22145  B     neos-3555904-turama
+
+Findings of the engine and HiGHS's counters of the matching rule, summed over 240 instances.
+Each side counts what its own rule calls a finding. In brackets: instances with a count above zero, 'of n' when only n instances have the field. A dash: none has it.
+family          sub-rule                                          engine              HiGHS  HiGHS counters
+row_rules                                                  3200782 (124)      2467920 (143)  reductions.redundant_row + reductions.singleton_row + reductions.forcing_row
+propagation                                                2771047 (138)        415691 (77)  bound_change.implied_bound + bound_change.binary_row_test
+tightening                                                  1421026 (93)
+doubleton                                                    485894 (95)        494466 (99)  doubleton.removed
+parallel_rows                                               359983 (107)       291830 (111)  parallel.duplicate_rows + parallel.row_additions
+parallel_rows   merges                                      351044 (103)       281654 (108)  parallel.duplicate_rows
+parallel_rows   subtractions                                   8939 (16)         10176 (13)  parallel.row_additions
+dual_fixing                                                  417028 (78)        404512 (92)  fixing.dual_fixing_lock + fixing.empty_col + fixing.dominated_col + fixing.weakly_dominated_col
+simple_probing                                                         -        296239 (13)  substitutions.simple_probing
+simple_probing  fixed columns of the row                                           5616 (7)  fixing.simple_probing
+singleton_cols                                                         -         75773 (67)  reductions.free_col_substitution + reductions.zero_obj_singleton_col + reductions.forcing_column
+singleton_cols  free_singleton, primal and dual                        -         16881 (59)  reductions.free_col_substitution
+singleton_cols  free_singleton                                         -
+singleton_cols  free_singleton_dual                                    -
+singleton_cols  zero_cost_singleton                                    -         58511 (19)  reductions.zero_obj_singleton_col
+singleton_cols  forcing_column                                         -            381 (5)  reductions.forcing_column
+dual_cols                                                              -        299977 (74)  fixing.dual_fixing_bound + bound_change.dual_fixing + substitutions.dual_fixing
+dual_cols       dual_bound                                             -        225057 (52)  fixing.dual_fixing_bound + bound_change.dual_fixing
+dual_cols       lock_alias                                             -         74920 (37)  substitutions.dual_fixing
+parallel_cols                                                          -        127299 (40)  parallel.cols_dominated + parallel.cols_merged
+parallel_cols   parallel_dominance                                     -        103066 (24)  parallel.cols_dominated
+parallel_cols   parallel_merge                                         -         24233 (19)  parallel.cols_merged
+not built       implied equation                                                   666 (11)  reductions.implied_equation
+not built       single-equation dual fixing                                      13017 (11)  fixing.dual_fixing_single_equation
+not built       column stuffing                                                      73 (3)  fixing.col_stuffing
+not built       implied-integer columns left                                     23621 (31)  total.implied_integer_cols
+not built       implied-integer conversion, bounds                               13324 (27)  bound_change.implied_integer
+
+Work in passes of the input model (nonzeros + 8 * (rows + columns))
+  family                  n   median      90%  largest  on
+  row_rules             240     0.39     0.99     2.09  neos-1122047
+  propagation           240     0.90     1.42    13.96  neos-1122047
+  tightening            240     1.40     2.77     8.76  var-smallemery-m6j6
+  doubleton             240     0.26     0.63     5.80  traininstance6
+  parallel_rows         240     1.59     2.54     4.82  neos-4647030-tutaki
+  dual_fixing           240     0.37     0.67     0.97  highschool1-aigio
+  all families          240     5.06     8.30    23.75  neos-1122047
+
+Rounds, 240 instances: median 3, largest 13 (neos-3555904-turama), on max_rounds = 20: none
+
+Fixed-point flag: set on 234 of 240 instances
+  not set: co-100, comp21-2idx, icir97_tension, neos-1122047, neos-2075418-temuka, neos-5052403-cygnet
