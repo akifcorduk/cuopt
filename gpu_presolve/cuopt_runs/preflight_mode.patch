@@ -1,11 +1,11 @@
 diff --git a/cpp/src/mip_heuristics/solve.cu b/cpp/src/mip_heuristics/solve.cu
-index 24c84be0a..f817af51f 100644
+index 08dce6005..eb78a70a7 100644
 --- a/cpp/src/mip_heuristics/solve.cu
 +++ b/cpp/src/mip_heuristics/solve.cu
 @@ -737,7 +737,12 @@ mip_solution_t<i_t, f_t> solve_mip_helper(
-       cuopt_expects(hp.presolve_gprs >= 0 && hp.presolve_gprs <= 2,
+       cuopt_expects(hp.presolve_gprs >= 0 && hp.presolve_gprs <= 3,
                      error_type_t::ValidationError,
-                     "mip_hyper_params.presolve_gprs must be 0, 1 or 2");
+                     "mip_hyper_params.presolve_gprs must be 0, 1, 2 or 3");
 -      presolver->set_gprs_presolve((mip::gprs_presolve_mode_t)hp.presolve_gprs);
 +      // PREFLIGHT ONLY, NOT FOR COMMIT: the mode from the environment.
 +      i_t gprs_preflight_mode = hp.presolve_gprs;
