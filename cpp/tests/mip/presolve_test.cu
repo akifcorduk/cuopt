@@ -193,6 +193,34 @@ End
   EXPECT_NE(std::find(coefficients.begin(), coefficients.end(), 1.0), coefficients.end());
 }
 
+// Runs the solver on a problem that went through the trivial presolve and checks the solution on
+// the original problem, as solve_mip does.
+static mip_solution_t<int, double> run_solver_on_presolved_problem(
+  mip::problem_t<int, double>& original_problem, mip::problem_t<int, double>& presolved_problem)
+{
+  mip_solver_settings_t<int, double> settings;
+  settings.time_limit      = 10;
+  settings.presolver       = presolver_t::Papilo;
+  settings.num_cpu_threads = 2;
+
+  timer_t timer(settings.time_limit);
+  mip::mip_solver_t<int, double> solver(presolved_problem, settings, timer);
+  mip::solution_t<int, double> solver_solution(presolved_problem);
+
+#pragma omp parallel num_threads(2)
+  {
+#pragma omp masked
+    {
+      solver_solution = solver.run_solver();
+    }
+  }
+  const bool feasible_on_presolved = solver_solution.get_feasible();
+  solver_solution.problem_ptr      = &original_problem;
+  const bool feasible_on_original  = solver_solution.compute_feasibility();
+  return solver_solution.get_solution(
+    feasible_on_presolved || feasible_on_original, solver.get_solver_stats(), false);
+}
+
 TEST(presolve, duplicate_substitution)
 {
   const raft::handle_t handle{};
@@ -216,30 +244,42 @@ End
   presolved_problem.preprocess_problem();
   mip::trivial_presolve(presolved_problem, true);
 
-  mip_solver_settings_t<int, double> settings;
-  settings.time_limit      = 10;
-  settings.presolver       = presolver_t::Papilo;
-  settings.num_cpu_threads = 2;
-
-  timer_t timer(settings.time_limit);
-  mip::mip_solver_t<int, double> solver(presolved_problem, settings, timer);
-  mip::solution_t<int, double> solver_solution(presolved_problem);
-
-#pragma omp parallel num_threads(2)
-  {
-#pragma omp masked
-    {
-      solver_solution = solver.run_solver();
-    }
-  }
-  const bool feasible_on_presolved = solver_solution.get_feasible();
-  solver_solution.problem_ptr      = &original_problem;
-  const bool feasible_on_original  = solver_solution.compute_feasibility();
-  auto solution                    = solver_solution.get_solution(
-    feasible_on_presolved || feasible_on_original, solver.get_solver_stats(), false);
+  auto solution = run_solver_on_presolved_problem(original_problem, presolved_problem);
 
   ASSERT_EQ(solution.get_termination_status(), mip_termination_status_t::Optimal);
   EXPECT_NEAR(solution.get_objective_value(), -2.0, 1e-6);
+}
+
+// Bounds propagation in cuOpt presolve fixes every variable, so the problem only becomes empty
+// after the solver has started.
+TEST(presolve, problem_emptied_by_cuopt_presolve)
+{
+  const raft::handle_t handle{};
+  auto problem = cuopt::test::parse_inline_lp(R"LP(
+Minimize
+ obj: 3 x + 2 y + z
+Subject To
+ c1: x + y >= 2
+ c2: x + z <= 1
+Binaries
+ x y z
+End
+)LP");
+
+  auto op_problem = mps_data_model_to_optimization_problem(&handle, problem);
+  mip::problem_t<int, double> original_problem(op_problem);
+  mip::problem_t<int, double> presolved_problem(original_problem);
+  presolved_problem.preprocess_problem();
+  mip::trivial_presolve(presolved_problem, true);
+  ASSERT_EQ(presolved_problem.n_variables, 3);
+
+  auto solution = run_solver_on_presolved_problem(original_problem, presolved_problem);
+
+  ASSERT_TRUE(presolved_problem.empty);
+  ASSERT_EQ(solution.get_termination_status(), mip_termination_status_t::Optimal);
+  EXPECT_NEAR(solution.get_objective_value(), 5.0, 1e-6);
+  const auto assignment = host_copy(solution.get_solution(), handle.get_stream());
+  EXPECT_EQ(assignment, (std::vector<double>{1.0, 1.0, 0.0}));
 }
 
 }  // namespace cuopt::mathematical_optimization::test
