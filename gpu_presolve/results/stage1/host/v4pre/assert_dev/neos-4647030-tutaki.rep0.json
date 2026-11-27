@@ -1,0 +1,23 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-4647030-tutaki.csr",
+  "status": "reduced",
+  "original": {"rows": 8382, "cols": 12600, "nnz": 3953388},
+  "reduced": {"rows": 6993, "cols": 12600, "nnz": 1989344},
+  "seconds": 1.674728,
+  "seconds_outside_rules": {"state": 0.151952, "start": 0.158174, "storage": 0.876644, "finish": 0.227160, "hash": 0.015033},
+  "hash": "3660582911c524fc",
+  "rounds": 3,
+  "rebuilds": 2,
+  "fixed_point": true,
+  "explicit": {"rounds": 1, "seconds": 0.290189},
+  "parallel_rows": {"merges": 1389, "subtractions": 0},
+  "start": {"calls": 1, "work": 0, "findings": 0, "records": 0, "seconds": 0.158174, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+  "rules": {
+    "row_rules": {"calls": 3, "work": 100592, "findings": 0, "records": 0, "seconds": 0.000156, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "propagation": {"calls": 3, "work": 11922004, "findings": 1472, "records": 23608, "seconds": 0.156159, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "tightening": {"calls": 3, "work": 11933920, "findings": 0, "records": 0, "seconds": 0.009063, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "doubleton": {"calls": 1, "work": 55944, "findings": 0, "records": 0, "seconds": 0.000025, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "parallel_rows": {"calls": 2, "work": 19864260, "findings": 1389, "records": 0, "seconds": 0.080305, "rows_removed": 1389, "cols_removed": 0, "nnz_removed": 1964044},
+    "dual_fixing": {"calls": 2, "work": 123200, "findings": 0, "records": 0, "seconds": 0.000044, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0}
+  }
+}

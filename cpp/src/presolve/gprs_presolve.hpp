@@ -18,7 +18,10 @@ namespace cuopt::mathematical_optimization::mip {
 enum class gprs_presolve_mode_t : int {
   OFF                    = 0,
   BEFORE_THIRD_PARTY     = 1,  // the third-party presolve gets the problem gprs reduced
-  INSTEAD_OF_THIRD_PARTY = 2
+  INSTEAD_OF_THIRD_PARTY = 2,
+  // As 1, with the third-party presolve restricted to cuOpt's own reductions (indicator
+  // strengthening, GF2, BHW coefficient reduction, single-lock dual aggregation).
+  THEN_OWN_REDUCTIONS = 3
 };
 
 enum class gprs_presolve_status_t {

@@ -1116,7 +1116,26 @@ third_party_presolve_t<i_t, f_t>::apply_presolve_from_mps_data(
   const double third_party_time_limit = time_limit - gprs->get_presolve_time();
   const bool gprs_kept_problem        = gprs_status == gprs_presolve_status_t::NOT_RUN ||
                                  (gprs_status == gprs_presolve_status_t::UNCHANGED &&
-                                  gprs_mode_ == gprs_presolve_mode_t::BEFORE_THIRD_PARTY);
+                                  gprs_mode_ != gprs_presolve_mode_t::INSTEAD_OF_THIRD_PARTY);
+  // With gprs in place of the third-party rules, the framework still runs cuOpt's own reductions.
+  // A problem gprs did not take keeps the whole third-party presolve.
+  const auto caller_allowlist = reduction_allowlist_;
+  if (gprs_mode_ == gprs_presolve_mode_t::THEN_OWN_REDUCTIONS &&
+      gprs_status != gprs_presolve_status_t::NOT_RUN) {
+    std::unordered_set<std::string> own;
+    for (const char* name : {"indicatorstrengthening",
+                             "gf2presolve",
+                             "bhwcoeffreduce",
+                             "single_lock_dual_aggregation"}) {
+      if (!caller_allowlist.has_value() || caller_allowlist->count(name) > 0) { own.insert(name); }
+    }
+    reduction_allowlist_ = std::move(own);
+  }
+  struct restore_allowlist_t {
+    std::optional<std::unordered_set<std::string>>& target;
+    std::optional<std::unordered_set<std::string>> value;
+    ~restore_allowlist_t() { target = std::move(value); }
+  } restore_allowlist{reduction_allowlist_, caller_allowlist};
   if (gprs_kept_problem) {
     return apply_third_party_presolve(mps,
                                       category,
