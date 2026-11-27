@@ -14,8 +14,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <map>
+#include <set>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 using namespace gprs;
@@ -903,4 +907,497 @@ GPRS_TEST(parallel_random_incremental)
   GPRS_CHECK(removed_later > 800);
   GPRS_CHECK(infeasible_cases > 200);
   GPRS_CHECK(nonempty > 1000);
+}
+
+// Two rows share a bucket when their normalised coefficients agree after rounding the mantissa
+// to 20 bits, a tie away from zero. Rows on the two sides of a tie are parallel within
+// tol.zero and stay apart; a mantissa that rounds up to 1 meets the next power of two.
+GPRS_TEST(parallel_hash_rounding)
+{
+  // 2^19 * tie is a whole number plus 1/2.
+  double tie = 0x1.92a21p0;
+  GPRS_REQUIRE(std::ldexp(tie, 19) - std::floor(std::ldexp(tie, 19)) == 0.5);
+  double below = tie * (1. - 4e-10), above = tie * (1. + 4e-10), far_above = tie * (1. + 9e-10);
+  for (double sign : {1., -1.}) {
+    model_t m = make_model({{1., sign * below},
+                            {1., sign * above},
+                            {1., sign * tie},
+                            {1., sign * far_above},
+                            {1., sign * below}},
+                           dense_t(5, -inf),
+                           {9., 8., 7., 6., 5.},
+                           {0., 0.},
+                           {9., 9.});
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.outcome, ok);
+    // Rows 1, 2 and 3 lie on the tie or beyond it, rows 0 and 4 before it.
+    GPRS_CHECK_EQ(result.findings, 3);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
+    GPRS_CHECK_EQ(f.st.row_upper[0], 5.);
+    GPRS_CHECK_EQ(f.st.row_upper[1], 6.);
+    check_record(f.ps, 0, 4, 0, 1.);
+    check_record(f.ps, 1, 2, 1, 1.);
+    check_record(f.ps, 2, 3, 1, 1.);
+  }
+  {
+    // 2 * (1 - 1e-10) has a mantissa that rounds up to 1: the bucket of 2 = 1/2 * 2^2.
+    model_t m = make_model({{1., 2.}, {1., 2. * (1. - 1e-10)}, {-3., -6. * (1. - 1e-10)}},
+                           dense_t(3, -inf),
+                           {9., 8., 21.},
+                           {0., 0.},
+                           {9., 9.});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 2);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
+  }
+  {
+    // A normalised coefficient below the normal numbers: 1e-10 / 1e300.
+    model_t m = make_model({{1e300, 1e-10}, {1e300, 2e-10}, {2e300, 2e-10}},
+                           dense_t(3, -inf),
+                           {1e300, 1e300, 1e300},
+                           {0., 0.},
+                           {1., 1.});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
+    check_record(f.ps, 0, 2, 0, 2.);
+  }
+}
+
+// A first call with more keys than two bytes of the hash tell apart: 35,000 pairs of parallel
+// rows, the second row of a pair far from the first. Every pair is found from its first row.
+GPRS_TEST(parallel_many_rows)
+{
+  constexpr int32_t pairs = 35000, ncols = 700;
+  auto partner = [](int32_t i) { return (int32_t)((i * 7919ll + 13) % pairs); };
+  model_t m;
+  m.nrows = 2 * pairs;
+  m.ncols = ncols;
+  m.row_start.push_back(0);
+  for (int32_t i = 0; i < 2 * pairs; ++i) {
+    int32_t source = i < pairs ? i : partner(i - pairs);
+    double factor  = i < pairs ? 1. : i % 3 == 0 ? -2. : 0.5;
+    // Every source row has its own pair of columns.
+    int32_t first = source % ncols, second = (first + 1 + source / ncols) % ncols;
+    if (first > second) { std::swap(first, second); }
+    m.col_index.push_back(first);
+    m.value.push_back(factor);
+    m.col_index.push_back(second);
+    m.value.push_back(factor * (2. + source % 97));
+    m.row_start.push_back(m.col_index.size());
+    m.row_lower.push_back(factor > 0 ? -inf : -1000.);
+    m.row_upper.push_back(factor > 0 ? 1000. + i : inf);
+  }
+  m.col_lower.assign(ncols, 0.);
+  m.col_upper.assign(ncols, 9.);
+  m.cost.assign(ncols, 1.);
+  m.col_type.assign(ncols, 1);
+  fixture_t f(m);
+  work_budget_t budget;
+  budget.limit = budget.stall_limit = no_limit;
+  rule_result_t result              = f.rule.run(f.st, budget, f.ps, f.opt);
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK_EQ(result.findings, pairs);
+  GPRS_CHECK_EQ(f.st.live_rows, pairs);
+  GPRS_REQUIRE(f.ps.parallel_rows.size() == (size_t)pairs);
+  list_t removed_of(pairs);
+  for (int32_t i = 0; i < pairs; ++i) {
+    removed_of[partner(i)] = pairs + i;
+  }
+  int32_t wrong = 0;
+  for (int32_t k = 0; k < pairs; ++k) {
+    const parallel_row_record_t& record = f.ps.parallel_rows[k];
+    wrong += record.kept_row != k || record.removed_row != removed_of[k];
+  }
+  GPRS_CHECK_EQ(wrong, 0);
+  // Hashing of every row; a scatter and one comparison per kept row.
+  GPRS_CHECK_EQ(budget.used,
+                2 * pairs * (line_visit_work + 4) + pairs * (line_visit_work + 2) +
+                  pairs * (line_visit_work + 4));
+  GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
+}
+
+namespace {
+
+// The rule as rules.hpp (e) states it, one call at a time and without the changes of the
+// state: which row a call removes into which, in which order, the work it spends and the rows
+// it gives back. Buckets are keyed by the rounded normalised entries themselves, not by a hash
+// of them.
+struct reference_t {
+  using key_t = std::vector<std::tuple<int32_t, int64_t, int>>;  // column, mantissa, exponent
+  struct row_t {
+    key_t key;
+    uint32_t version = 0;
+    bool keyed       = false;
+  };
+  struct call_t {
+    std::vector<std::pair<int32_t, int32_t>> merges;  // removed, kept
+    int64_t work        = 0;
+    int64_t comparisons = 0;
+    bool stopped        = false;
+    list_t given_back;
+  };
+
+  std::vector<row_t> rows;
+  std::map<key_t, std::set<int32_t>> buckets;
+
+  static entries_t free_entries(const state_t& st, int32_t row)
+  {
+    entries_t entries;
+    for (int64_t e = st.csr.begin(row); e < st.csr.end(row); ++e) {
+      if (st.csr.live(e) && st.is_live(st.csr.index[e])) {
+        entries[st.csr.index[e]] = st.csr.value[e];
+      }
+    }
+    return entries;
+  }
+
+  static key_t key_of(const entries_t& entries)
+  {
+    constexpr int32_t mantissa_bits = 20;
+    key_t key;
+    for (const auto& entry : entries) {
+      int exponent    = 0;
+      double mantissa = std::frexp(entry.second / entries.begin()->second, &exponent);
+      int64_t grid    = std::llround(std::ldexp(mantissa, mantissa_bits));
+      if (grid == 1 << mantissa_bits || grid == -(1 << mantissa_bits)) {
+        grid /= 2;
+        ++exponent;
+      }
+      key.emplace_back(entry.first, grid, exponent);
+    }
+    return key;
+  }
+
+  // larger = ratio * smaller, entry by entry, within tol.zero.
+  static bool parallel(const entries_t& smaller, const entries_t& larger)
+  {
+    if (smaller.size() != larger.size()) { return false; }
+    double ratio = larger.begin()->second / smaller.begin()->second;
+    double zero  = tolerances_t().zero;
+    for (auto a = smaller.begin(), b = larger.begin(); a != smaller.end(); ++a, ++b) {
+      if (a->first != b->first) { return false; }
+      if (!(std::fabs(b->second - ratio * a->second) <= zero * std::fabs(b->second))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void unkey(int32_t row)
+  {
+    buckets[rows[row].key].erase(row);
+    rows[row].keyed = false;
+  }
+
+  call_t run(const state_t& st, list_t listed, work_budget_t budget, int32_t limit)
+  {
+    call_t call;
+    rows.resize(st.nrows);
+    std::sort(listed.begin(), listed.end());
+    std::vector<uint8_t> removed(st.nrows, 0);
+    auto alive = [&](int32_t row) { return st.row_alive[row] && !removed[row]; };
+    auto stop  = [&](size_t from) {
+      call.stopped = true;
+      for (size_t k = from; k < listed.size(); ++k) {
+        if (alive(listed[k])) { call.given_back.push_back(listed[k]); }
+      }
+      call.work = budget.used;
+    };
+    for (int32_t row : listed) {
+      if (budget.stop()) {
+        stop(0);
+        return call;
+      }
+      size_t length = st.row_alive[row] && st.row_free_size[row] >= 2 ? st.row_free_size[row] : 0;
+      if (rows[row].keyed) {
+        if (rows[row].key.size() == length && rows[row].version == st.row_version[row]) {
+          continue;
+        }
+        unkey(row);
+      }
+      if (length == 0) { continue; }
+      budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[row]);
+      rows[row].key     = key_of(free_entries(st, row));
+      rows[row].version = st.row_version[row];
+      rows[row].keyed   = true;
+      buckets[rows[row].key].insert(row);
+    }
+    for (size_t k = 0; k < listed.size(); ++k) {
+      if (budget.stop()) {
+        stop(k);
+        return call;
+      }
+      int32_t row = listed[k];
+      if (!rows[row].keyed) { continue; }
+      budget.spend(line_visit_work + st.csr.used[row]);
+      std::set<int32_t>& bucket = buckets[rows[row].key];
+      entries_t mine            = free_entries(st, row);
+      int32_t unlike            = 0;
+      for (auto it = bucket.upper_bound(row); it != bucket.end() && unlike < limit;) {
+        int32_t other = *it;
+        if (!alive(other)) {
+          rows[other].keyed = false;
+          it                = bucket.erase(it);
+          continue;
+        }
+        budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
+        ++call.comparisons;
+        if (!parallel(mine, free_entries(st, other))) {
+          ++unlike;
+          ++it;
+          continue;
+        }
+        call.merges.emplace_back(other, row);
+        removed[other]    = 1;
+        rows[other].keyed = false;
+        it                = bucket.erase(it);
+        budget.found();
+      }
+      unlike = 0;
+      for (auto at = bucket.find(row); at != bucket.begin() && unlike < limit;) {
+        auto below    = std::prev(at);
+        int32_t other = *below;
+        if (!alive(other)) {
+          rows[other].keyed = false;
+          bucket.erase(below);
+          continue;
+        }
+        budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
+        ++call.comparisons;
+        if (!parallel(free_entries(st, other), mine)) {
+          ++unlike;
+          at = below;
+          continue;
+        }
+        call.merges.emplace_back(row, other);
+        removed[row] = 1;
+        unkey(row);
+        budget.found();
+        break;
+      }
+    }
+    call.work = budget.used;
+    return call;
+  }
+};
+
+// Rows that are multiples of a few patterns: exact ones, ones within tol.zero and ones that
+// are off by less than the rounding of the hash. The sides are so wide that no merge makes
+// them cross.
+model_t bucket_model(rng_t& rng, int32_t nrows, int32_t ncols)
+{
+  static const double factor[] = {1., 1., 1., -1., 2., -2., 0.5, -0.5, 3., 1.5, 4., 0.25};
+  int32_t npatterns            = rng.in(1, 6);
+  double p_exact = rng.in(1, 9) / 10., p_unlike = rng.in(0, 9) / 10.;
+  std::vector<dense_t> pattern(npatterns, dense_t(ncols, 0.));
+  for (dense_t& p : pattern) {
+    for (int32_t k = rng.in(2, 5); k > 0; --k) {
+      p[rng.in(0, ncols - 1)] = rng.coefficient();
+    }
+  }
+  std::vector<dense_t> rows(nrows, dense_t(ncols, 0.));
+  for (dense_t& row : rows) {
+    const dense_t& p = pattern[rng.in(0, npatterns - 1)];
+    double f         = factor[rng.in(0, 11)];
+    for (int32_t j = 0; j < ncols; ++j) {
+      row[j] = f * p[j];
+    }
+    if (!rng.chance(p_exact)) {
+      double step = rng.chance(p_unlike) ? 1e-8 : 1e-10;
+      row[rng.in(0, ncols - 1)] *= 1. + step * rng.in(1, 4);
+    }
+    if (rng.chance(0.2)) { row[rng.in(0, ncols - 1)] = rng.in(1, 3); }
+  }
+  dense_t col_lower(ncols), col_upper(ncols);
+  for (int32_t j = 0; j < ncols; ++j) {
+    col_lower[j] = rng.in(-2, 1);
+    col_upper[j] = col_lower[j] + (rng.chance(0.1) ? 0 : rng.in(1, 3));
+  }
+  return make_model(rows, dense_t(nrows, -inf), dense_t(nrows, 1e9), col_lower, col_upper);
+}
+
+// One call of the rule on the list as it is, checked against the reference.
+reference_t::call_t checked_call(fixture_t& f, reference_t& reference, work_budget_t budget)
+{
+  const list_t& listed         = f.st.row_frontier.list[row_list::parallel_rows];
+  reference_t::call_t expected = reference.run(f.st, listed, budget, f.opt.parallel_bucket_limit);
+  size_t records               = f.ps.parallel_rows.size();
+  rule_result_t result         = f.rule.run(f.st, budget, f.ps, f.opt);
+  GPRS_CHECK_EQ(result.outcome, ok);
+  GPRS_CHECK_EQ(result.findings, (int64_t)expected.merges.size());
+  GPRS_CHECK_EQ(result.stopped, expected.stopped);
+  GPRS_CHECK_EQ(budget.used, expected.work);
+  GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == expected.given_back);
+  GPRS_CHECK_EQ(f.ps.parallel_rows.size(), records + expected.merges.size());
+  for (size_t k = 0; k < expected.merges.size() && records + k < f.ps.parallel_rows.size(); ++k) {
+    GPRS_CHECK_EQ(f.ps.parallel_rows[records + k].removed_row, expected.merges[k].first);
+    GPRS_CHECK_EQ(f.ps.parallel_rows[records + k].kept_row, expected.merges[k].second);
+  }
+  return expected;
+}
+
+}  // namespace
+
+// Calls on one row, on a few rows and on all of them, with and without a budget, between
+// changed entries, fixed columns, deleted rows and rebuilds: every call removes the rows that
+// the definition removes, into the same rows and in the same order, spends the same work and
+// gives the same rows back.
+GPRS_TEST(parallel_random_sequences)
+{
+  int64_t calls = 0, merges = 0, stops = 0;
+  for (uint64_t seed = 1; seed <= 250; ++seed) {
+    rng_t rng(seed);
+    int32_t nrows = rng.in(1, seed % 5 == 0 ? 40 : 400), ncols = rng.in(2, 12);
+    fixture_t f(bucket_model(rng, nrows, ncols));
+    reference_t reference;
+    static const int32_t limits[] = {1, 2, 4, 4, 8};
+    f.opt.parallel_bucket_limit   = limits[rng.in(0, 4)];
+    int32_t failures              = gprs::test::failure_count();
+    for (int32_t step = rng.in(3, 12); step > 0; --step) {
+      work_budget_t budget;
+      budget.limit                 = rng.chance(0.5) ? no_limit : rng.in(1, 30 * nrows);
+      budget.stall_limit           = rng.chance(0.7) ? budget.limit : rng.in(1, 30 * nrows);
+      reference_t::call_t expected = checked_call(f, reference, budget);
+      GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
+      ++calls;
+      merges += expected.merges.size();
+      stops += expected.stopped;
+      if (gprs::test::failure_count() != failures) {
+        std::printf("    seed %llu\n", (unsigned long long)seed);
+        return;
+      }
+      // One row changes, or a few, or many.
+      int32_t changes = rng.chance(0.3) ? rng.in(4, 40) : rng.in(0, 3);
+      for (; changes > 0; --changes) {
+        int32_t row = rng.in(0, nrows - 1), col = rng.in(0, ncols - 1), kind = rng.in(0, 9);
+        if (kind == 0) {
+          if (f.st.is_live(col)) { fix_column(f.st, f.ps, col, f.st.col_lower[col]); }
+        } else if (kind == 1) {
+          if (f.st.row_alive[row]) { f.st.delete_row(row); }
+        } else if (kind == 2) {
+          f.st.rebuild();
+        } else if (f.st.row_alive[row] && f.st.is_live(col)) {
+          int64_t e = f.st.find_entry(row, col);
+          if (e < 0) { continue; }
+          double old   = f.st.csr.value[e];
+          double value = kind < 6 ? rng.coefficient() : old * (1. + 1e-8 * rng.in(1, 3));
+          if (value != old) { f.st.set_coefficient(e, value); }
+        }
+      }
+    }
+  }
+  // The test is not vacuous.
+  GPRS_CHECK(calls > 1500);
+  GPRS_CHECK(merges > 15000);
+  GPRS_CHECK(stops > 120);
+}
+
+// 2,000 rows x0 + v xj over 8 columns j, each alone in its bucket at first. Then one to three
+// rows move per call, so that a call lists few of the rows: into the bucket of a row of their
+// column, as a parallel row or as one that is off by less than the rounding of the hash, or
+// into a bucket of their own. Rows that moved lately move again and are joined more often than
+// the others, so that buckets form, change and dissolve among the keys of few calls.
+GPRS_TEST(parallel_few_rows_among_many)
+{
+  constexpr int32_t nrows = 2000, classes = 8;
+  std::vector<dense_t> rows(nrows, dense_t(classes + 1, 0.));
+  for (int32_t i = 0; i < nrows; ++i) {
+    rows[i][0]               = 1.;
+    rows[i][1 + i % classes] = 3. + i / classes;
+  }
+  fixture_t f(make_model(rows,
+                         dense_t(nrows, -inf),
+                         dense_t(nrows, 1e9),
+                         dense_t(classes + 1, 0.),
+                         dense_t(classes + 1, 9.)));
+  reference_t reference;
+  rng_t rng(7);
+  auto slot = [&](int32_t row) { return f.st.find_entry(row, 1 + row % classes); };
+  list_t moved;
+  double unused  = 1000.5;
+  int64_t merges = 0, stops = 0, comparisons = 0;
+  int32_t failures = gprs::test::failure_count();
+  for (int32_t step = 0; step < 1500 && gprs::test::failure_count() == failures; ++step) {
+    work_budget_t budget;
+    budget.limit = budget.stall_limit = rng.chance(0.9) ? no_limit : rng.in(1, 200);
+    reference_t::call_t expected      = checked_call(f, reference, budget);
+    merges += expected.merges.size();
+    stops += expected.stopped;
+    comparisons += expected.comparisons;
+    if (step % 150 == 149) {
+      f.st.rebuild();
+      GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
+    }
+    for (int32_t changes = rng.in(1, 3); changes > 0; --changes) {
+      int32_t row = rng.in(0, nrows - 1);
+      if (!moved.empty() && rng.chance(0.4)) { row = moved[rng.in(0, moved.size() - 1)]; }
+      if (!f.st.row_alive[row]) { continue; }
+      int32_t kind = rng.in(0, 9);
+      double value = unused;
+      if (kind == 0) {
+        f.st.delete_row(row);
+        continue;
+      } else if (kind < 3) {
+        unused += 1.;
+      } else {
+        int32_t target = classes * rng.in(0, nrows / classes - 1) + row % classes;
+        for (int32_t tries = kind < 8 ? 6 : 0; tries > 0 && !moved.empty(); --tries) {
+          int32_t other = moved[rng.in(0, moved.size() - 1)];
+          if (other % classes == row % classes && other != row) {
+            target = other;
+            break;
+          }
+        }
+        if (target == row || !f.st.row_alive[target]) { continue; }
+        value = f.st.csr.value[slot(target)] * (1. + 1e-8 * rng.in(0, 3));
+      }
+      if (value != f.st.csr.value[slot(row)]) { f.st.set_coefficient(slot(row), value); }
+      moved.push_back(row);
+      if (moved.size() > 30) { moved.erase(moved.begin()); }
+    }
+  }
+  GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
+  // The test is not vacuous.
+  GPRS_CHECK(merges > 250);
+  GPRS_CHECK(comparisons > 1200);
+  GPRS_CHECK(stops > 8);
+}
+
+// A row that joined a bucket in a call on one row, stayed there through a call on enough rows
+// to order all keys afresh, and then left: a row that joins the bucket afterwards meets the
+// rows that are in it and not the one that left.
+GPRS_TEST(parallel_bucket_left_after_many_rows_changed)
+{
+  constexpr int32_t nrows = 100;
+  std::vector<dense_t> rows;
+  for (int32_t i = 0; i < nrows; ++i) {
+    rows.push_back({1., 3. + i});
+  }
+  fixture_t f(make_model(rows, dense_t(nrows, -inf), dense_t(nrows, 1e9), {0., 0.}, {9., 9.}));
+  reference_t reference;
+  work_budget_t budget;
+  budget.limit = budget.stall_limit = no_limit;
+  auto set                          = [&](int32_t row, double value) {
+    f.st.set_coefficient(f.st.find_entry(row, 1), value);
+  };
+  auto call = [&]() { return checked_call(f, reference, budget).comparisons; };
+  GPRS_CHECK_EQ(call(), 0);
+  // Rows 50, 30 and 70 join row 10, each off by less than the rounding of the hash.
+  double joined = f.st.csr.value[f.st.find_entry(10, 1)];
+  set(50, joined * (1. + 1e-8));
+  GPRS_CHECK_EQ(call(), 1);
+  for (int32_t row = 90; row < 94; ++row) {
+    set(row, 500. + row);
+  }
+  GPRS_CHECK_EQ(call(), 0);
+  set(50, 700.);
+  GPRS_CHECK_EQ(call(), 0);
+  set(30, joined * (1. + 2e-8));
+  GPRS_CHECK_EQ(call(), 1);
+  set(70, joined * (1. + 3e-8));
+  GPRS_CHECK_EQ(call(), 2);
+  GPRS_CHECK_EQ(f.st.live_rows, nrows);
+  GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
 }

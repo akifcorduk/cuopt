@@ -10,8 +10,11 @@
 #include <gprs/rules.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <iterator>
+#include <numeric>
 #include <set>
 #include <utility>
 #include <vector>
@@ -38,15 +41,31 @@ inline uint64_t mix(uint64_t x)
 
 inline uint64_t entry_hash(int32_t col, double normalised)
 {
-  int exponent = 0;
-  int64_t grid = 0;
-  if (std::isfinite(normalised) && normalised != 0.) {
+  // The fields of a double.
+  constexpr int32_t fraction_bits = 52, sign_bit = 63, exponent_values = 2048;
+  constexpr int32_t exponent_of_half = 1022;
+  constexpr int32_t dropped_bits     = fraction_bits + 1 - hash_mantissa_bits;
+  constexpr uint64_t one             = 1;
+  int exponent                       = 0;
+  int64_t grid                       = 0;
+  uint64_t bits;
+  std::memcpy(&bits, &normalised, sizeof(bits));
+  int32_t biased = (bits >> fraction_bits) % exponent_values;
+  if (biased != 0 && biased != exponent_values - 1) {
+    // A normal number, where the bits give what frexp, ldexp and llround give below: the
+    // mantissa in [1/2, 1) is 1/2 + fraction / 2^53, and llround rounds a tie away from zero.
+    uint64_t fraction = bits % (one << fraction_bits);
+    grid =
+      (1 << (hash_mantissa_bits - 1)) + ((fraction + (one << (dropped_bits - 1))) >> dropped_bits);
+    exponent = biased - exponent_of_half;
+    if (bits >> sign_bit) { grid = -grid; }
+  } else if (std::isfinite(normalised) && normalised != 0.) {
     grid = std::llround(std::ldexp(std::frexp(normalised, &exponent), hash_mantissa_bits));
-    // A mantissa that rounds up to 1 is the mantissa 1/2 of the next exponent.
-    if (grid == 1 << hash_mantissa_bits || grid == -(1 << hash_mantissa_bits)) {
-      grid /= 2;
-      ++exponent;
-    }
+  }
+  // A mantissa that rounds up to 1 is the mantissa 1/2 of the next exponent.
+  if (grid == 1 << hash_mantissa_bits || grid == -(1 << hash_mantissa_bits)) {
+    grid /= 2;
+    ++exponent;
   }
   return mix(mix(mix(col) ^ grid) ^ exponent);
 }
@@ -87,7 +106,75 @@ inline bool operator<(const bucket_key_t& a, const bucket_key_t& b)
   return a.row < b.row;
 }
 
-using buckets_t = std::set<bucket_key_t>;
+inline bool same_bucket(const bucket_key_t& a, const bucket_key_t& b)
+{
+  return a.hash == b.hash && a.length == b.length;
+}
+
+constexpr int32_t no_row = -1;
+
+// The keys of all rows are sorted afresh when the keys set since the last sort reach one in
+// this many rows; below that, each new key searches its bucket. The search of one key costs
+// about as much as the sort costs for this many rows.
+constexpr size_t sort_share = 32;
+
+// Keys up to which the comparison sort alone is used.
+constexpr size_t comparison_sort_size = 64;
+
+// Orders the keys by hash, free length, row. Stable counting passes on the leading bytes of
+// the hash, the lowest of them first, order the keys by those bytes, as many bytes as tell n
+// hashes that spread over their range apart; each run of equal leading bytes is then sorted by
+// comparison. With hashes that share their leading bytes the comparison sort does all the
+// work, so the cost is O(n log n) for any hashes and O(n) for spread ones.
+void sort_keys(std::vector<bucket_key_t>& keys)
+{
+  constexpr int32_t byte_bits = 8, hash_bits = 64, max_passes = 4;
+  constexpr size_t byte_values = 256;
+  size_t n                     = keys.size();
+  int32_t passes               = 0;
+  if (n > comparison_sort_size) {
+    for (size_t reach = 1; reach < n; reach *= byte_values) {
+      ++passes;
+    }
+  }
+  // A row index has 31 bits.
+  gprs_assert(passes <= max_passes);
+  int32_t low = hash_bits - byte_bits * passes;
+  if (passes > 0) {
+    std::array<std::array<size_t, byte_values>, max_passes> count{};
+    for (const bucket_key_t& key : keys) {
+      for (int32_t p = 0; p < passes; ++p) {
+        ++count[p][(key.hash >> (low + byte_bits * p)) % byte_values];
+      }
+    }
+    std::vector<bucket_key_t> other(n);
+    for (int32_t p = 0; p < passes; ++p) {
+      int32_t shift                         = low + byte_bits * p;
+      std::array<size_t, byte_values>& next = count[p];
+      if (next[(keys[0].hash >> shift) % byte_values] == n) { continue; }
+      size_t sum = 0;
+      for (size_t& slot : next) {
+        size_t size = slot;
+        slot        = sum;
+        sum += size;
+      }
+      for (const bucket_key_t& key : keys) {
+        other[next[(key.hash >> shift) % byte_values]++] = key;
+      }
+      keys.swap(other);
+    }
+  }
+  uint64_t lead = 0;
+  if (passes > 0) { lead = ~lead << low; }
+  for (size_t begin = 0; begin < n;) {
+    size_t end = begin + 1;
+    while (end < n && ((keys[end].hash ^ keys[begin].hash) & lead) == 0) {
+      ++end;
+    }
+    if (end - begin > 1) { std::sort(keys.begin() + begin, keys.begin() + end); }
+    begin = end;
+  }
+}
 
 // The free entries of one row scattered over the columns.
 struct scattered_row_t {
@@ -214,13 +301,29 @@ rule_outcome_t merge(state_t& st,
 }  // namespace
 
 struct parallel_rows_t::work_t {
-  // Key of each row in buckets; length 0 without one. version is row_version at hashing: with
-  // the free length it tells whether the free entries are those that were hashed.
+  // Key of each row; length 0 without one. version is row_version at hashing: with the free
+  // length it tells whether the free entries are those that were hashed.
   std::vector<uint64_t> hash;
   std::vector<int32_t> length;
   std::vector<uint32_t> version;
-  // Ordered by hash, free length, row: a bucket is a range, in index order.
-  buckets_t buckets;
+  // A bucket is a list of the rows with one hash and one free length, in index order: the next
+  // row of the bucket above and below each row, no_row at the ends.
+  std::vector<int32_t> above;
+  std::vector<int32_t> below;
+  // Where a new key finds its bucket. base holds the keys of the last sort, ordered by hash,
+  // free length, row; in_base marks the rows whose key is still the one in base. recent holds
+  // the keys set since.
+  std::vector<bucket_key_t> base;
+  std::vector<uint8_t> in_base;
+  std::set<bucket_key_t> recent;
+  // Over the entries of base that a search found stale: skip_up[i] leads towards the first
+  // entry at or above i that can be current, skip_down[i + 1] towards the last one at or below
+  // i (union-find with path compression; base.size() and -1 without one). Empty until the
+  // first search after a sort.
+  std::vector<int32_t> skip_up;
+  std::vector<int32_t> skip_down;
+  // The rows that got a new key in this call.
+  std::vector<int32_t> fresh;
   // The free entries of the listed row under comparison, by column and 0 elsewhere, and its
   // free columns.
   std::vector<double> coefficient;
@@ -232,8 +335,121 @@ struct parallel_rows_t::work_t {
   void drop(int32_t row)
   {
     gprs_assert(length[row] != 0);
-    buckets.erase(key(row));
+    int32_t lower = below[row], upper = above[row];
+    if (lower != no_row) { above[lower] = upper; }
+    if (upper != no_row) { below[upper] = lower; }
+    below[row] = above[row] = no_row;
+    if (in_base[row]) {
+      in_base[row] = 0;
+    } else {
+      size_t erased = recent.erase(key(row));
+      gprs_assert(erased == 1);
+    }
     length[row] = 0;
+  }
+
+  // Sorts the keys of all rows and links the buckets.
+  void sort_all()
+  {
+    int32_t nrows = length.size();
+    size_t keys   = 0;
+    for (int32_t row = 0; row < nrows; ++row) {
+      in_base[row] = length[row] != 0;
+      keys += in_base[row];
+    }
+    base.clear();
+    base.reserve(keys);
+    for (int32_t row = 0; row < nrows; ++row) {
+      if (in_base[row]) { base.push_back(key(row)); }
+    }
+    sort_keys(base);
+    recent.clear();
+    skip_up.clear();
+    skip_down.clear();
+    std::fill(above.begin(), above.end(), no_row);
+    std::fill(below.begin(), below.end(), no_row);
+    for (size_t i = 1; i < base.size(); ++i) {
+      if (!same_bucket(base[i - 1], base[i])) { continue; }
+      above[base[i - 1].row] = base[i].row;
+      below[base[i].row]     = base[i - 1].row;
+    }
+  }
+
+  // First entry of base at or above i whose key is current; base.size() without one.
+  int32_t current_from(int32_t i)
+  {
+    int32_t n     = base.size();
+    int32_t found = i;
+    while (true) {
+      while (skip_up[found] != found) {
+        found = skip_up[found];
+      }
+      if (found == n || in_base[base[found].row]) { break; }
+      skip_up[found] = found + 1;
+    }
+    while (skip_up[i] != found) {
+      int32_t next = skip_up[i];
+      skip_up[i]   = found;
+      i            = next;
+    }
+    return found;
+  }
+
+  // Last entry of base at or below i whose key is current; -1 without one.
+  int32_t current_to(int32_t i)
+  {
+    int32_t found = i + 1;
+    while (true) {
+      while (skip_down[found] != found) {
+        found = skip_down[found];
+      }
+      if (found == 0 || in_base[base[found - 1].row]) { break; }
+      skip_down[found] = found - 1;
+    }
+    for (int32_t at = i + 1; skip_down[at] != found;) {
+      int32_t next  = skip_down[at];
+      skip_down[at] = found;
+      at            = next;
+    }
+    return found - 1;
+  }
+
+  // Puts a row whose new key is in neither base nor recent into its bucket: between the
+  // nearest rows of the bucket below and above it, which are current entries of base or
+  // entries of recent.
+  void insert(int32_t row)
+  {
+    if (skip_up.empty()) {
+      skip_up.resize(base.size() + 1);
+      std::iota(skip_up.begin(), skip_up.end(), 0);
+      skip_down = skip_up;
+    }
+    bucket_key_t k = key(row);
+    gprs_assert(!in_base[row] && recent.count(k) == 0);
+    auto self     = recent.insert(k).first;
+    int32_t lower = no_row, upper = no_row;
+    if (self != recent.begin() && same_bucket(*std::prev(self), k)) {
+      lower = std::prev(self)->row;
+    }
+    if (std::next(self) != recent.end() && same_bucket(*std::next(self), k)) {
+      upper = std::next(self)->row;
+    }
+    int32_t n    = base.size();
+    int32_t at   = std::lower_bound(base.begin(), base.end(), k) - base.begin();
+    int32_t up   = current_from(at);
+    int32_t down = current_to(at - 1);
+    if (up < n && same_bucket(base[up], k) && (upper == no_row || base[up].row < upper)) {
+      upper = base[up].row;
+    }
+    if (down >= 0 && same_bucket(base[down], k) && base[down].row > lower) {
+      lower = base[down].row;
+    }
+    gprs_assert(lower == no_row || above[lower] == upper);
+    gprs_assert(upper == no_row || below[upper] == lower);
+    below[row] = lower;
+    above[row] = upper;
+    if (lower != no_row) { above[lower] = row; }
+    if (upper != no_row) { below[upper] = row; }
   }
 };
 
@@ -251,7 +467,13 @@ rule_result_t parallel_rows_t::run(state_t& st,
     w.hash.assign(st.nrows, 0);
     w.length.assign(st.nrows, 0);
     w.version.assign(st.nrows, 0);
-    w.buckets.clear();
+    w.above.assign(st.nrows, no_row);
+    w.below.assign(st.nrows, no_row);
+    w.base.clear();
+    w.in_base.assign(st.nrows, 0);
+    w.recent.clear();
+    w.skip_up.clear();
+    w.skip_down.clear();
   }
   if (w.coefficient.size() != (size_t)st.ncols) { w.coefficient.assign(st.ncols, 0.); }
   const tolerances_t& tol = opt.tol;
@@ -259,7 +481,7 @@ rule_result_t parallel_rows_t::run(state_t& st,
   rule_result_t result;
 
   st.row_frontier.take(row_list::parallel_rows, w.rows);
-  std::sort(w.rows.begin(), w.rows.end());
+  if (!std::is_sorted(w.rows.begin(), w.rows.end())) { std::sort(w.rows.begin(), w.rows.end()); }
   auto give_back = [&](size_t from) {
     for (size_t k = from; k < w.rows.size(); ++k) {
       if (st.row_alive[w.rows[k]]) { st.row_frontier.push(own_list, w.rows[k]); }
@@ -267,12 +489,14 @@ rule_result_t parallel_rows_t::run(state_t& st,
     result.stopped = true;
   };
 
-  // Every listed row gets its key before the first comparison, so that two listed rows meet in
-  // one bucket. A row that comes back unchanged keeps its key at no cost.
+  // Every listed row gets its key and its bucket before the first comparison, so that two
+  // listed rows meet in one bucket. A row that comes back unchanged keeps its key at no cost.
+  w.fresh.clear();
+  bool out_of_budget = false;
   for (int32_t row : w.rows) {
     if (budget.stop()) {
-      give_back(0);
-      return result;
+      out_of_budget = true;
+      break;
     }
     int32_t length = st.row_alive[row] && st.row_free_size[row] >= 2 ? st.row_free_size[row] : 0;
     if (w.length[row] != 0) {
@@ -284,7 +508,18 @@ rule_result_t parallel_rows_t::run(state_t& st,
     w.hash[row]    = row_hash(st, row);
     w.length[row]  = length;
     w.version[row] = st.row_version[row];
-    w.buckets.insert(w.key(row));
+    w.fresh.push_back(row);
+  }
+  if (sort_share * (w.fresh.size() + w.recent.size()) < (size_t)st.nrows) {
+    for (int32_t row : w.fresh) {
+      w.insert(row);
+    }
+  } else if (!w.fresh.empty()) {
+    w.sort_all();
+  }
+  if (out_of_budget) {
+    give_back(0);
+    return result;
   }
 
   for (size_t k = 0; k < w.rows.size() && result.outcome == ok; ++k) {
@@ -296,58 +531,50 @@ rule_result_t parallel_rows_t::run(state_t& st,
     if (w.length[row] == 0) { continue; }
     gprs_assert(st.row_alive[row]);
     budget.spend(line_visit_work + st.csr.used[row]);
+    if (w.above[row] == no_row && w.below[row] == no_row) { continue; }
     scattered_row_t s = scatter(st, row, w.coefficient, w.cols);
-    bucket_key_t key  = w.key(row);
-    auto self         = w.buckets.find(key);
-    gprs_assert(self != w.buckets.end());
-    auto same_bucket = [&](const bucket_key_t& other) {
-      return other.hash == key.hash && other.length == key.length;
-    };
 
     // Rows above first: they are merged into this row, whose sides then go to a row below.
     int32_t unlike = 0;
-    for (auto it = std::next(self);
-         it != w.buckets.end() && same_bucket(*it) && unlike < opt.parallel_bucket_limit;) {
-      int32_t other = it->row;
+    for (int32_t other = w.above[row]; other != no_row && unlike < opt.parallel_bucket_limit;) {
+      int32_t next = w.above[other];
       if (!st.row_alive[other]) {
-        w.length[other] = 0;
-        it              = w.buckets.erase(it);
+        w.drop(other);
+        other = next;
         continue;
       }
       // Every change of the free entries of a row puts it on the list, so a key is current.
-      gprs_assert(st.row_free_size[other] == key.length);
+      gprs_assert(st.row_free_size[other] == w.length[row]);
       budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
       comparison_t c = compare(st, tol, s, w.coefficient, other);
       if (!c.parallel || !keeps_sides(s.fixed_terms, tol)) {
         ++unlike;
-        ++it;
+        other = next;
         continue;
       }
       result.outcome = merge(st, ps, tol, row, s.fixed_terms, other, c.fixed_terms, c.ratio);
       if (result.outcome != ok) { break; }
-      w.length[other] = 0;
-      it              = w.buckets.erase(it);
+      w.drop(other);
+      other = next;
       ++result.findings;
       budget.found();
     }
 
+    // at is the listed row or, below it, the last row found unlike.
     unlike = 0;
-    while (result.outcome == ok && self != w.buckets.begin() &&
-           unlike < opt.parallel_bucket_limit) {
-      auto below = std::prev(self);
-      if (!same_bucket(*below)) { break; }
-      int32_t other = below->row;
+    for (int32_t at = row; result.outcome == ok && unlike < opt.parallel_bucket_limit;) {
+      int32_t other = w.below[at];
+      if (other == no_row) { break; }
       if (!st.row_alive[other]) {
-        w.length[other] = 0;
-        w.buckets.erase(below);
+        w.drop(other);
         continue;
       }
-      gprs_assert(st.row_free_size[other] == key.length);
+      gprs_assert(st.row_free_size[other] == w.length[row]);
       budget.spend(line_visit_work + 2 * (int64_t)st.csr.used[other]);
       comparison_t c = compare(st, tol, s, w.coefficient, other);
       if (!c.parallel || !keeps_sides(c.fixed_terms, tol)) {
         ++unlike;
-        self = below;
+        at = other;
         continue;
       }
       result.outcome = merge(st, ps, tol, other, c.fixed_terms, row, s.fixed_terms, c.ratio);
