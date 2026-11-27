@@ -10,10 +10,20 @@
 // gprs_check <model.csr> <out.json> [--solutions <file>]... [--lp-time-limit <s>]
 //            [--mip-time-limit <s>] [--known-objective <value>] [--known-is-bound]
 //            [--expect infeasible|unbounded] [--primal-only] [--threads <n>]
+//            [--cost-variants <n>] [--push-points <n>]
 //   Presolve status. A status without a reduced model fails when the instance has a known
 //     objective value or a usable point of a solution file; limit and failed always fail.
+//   Structure check (structure_check.hpp), in default and in primal-only mode: the postsolve
+//     stack, the column types, the bounds, and every original row against the bounds or
+//     against its row of the reduced model. It needs neither a point nor a solver.
 //   Crush check (crush_check.hpp), in default and in primal-only mode, with every usable point
-//     of the solution files (solution_file.hpp).
+//     of the solution files (solution_file.hpp) and up to --push-points (at most 4) points
+//     made from each by moving its columns to where bounds and rows stop them.
+//   Cost variants: structure and crush check on --cost-variants copies of the model with other
+//     costs. The points are feasible whatever the objective is, and the costs of a variant push
+//     every column towards a finite bound, so a variant with a usable point is neither
+//     infeasible nor unbounded. They reach the cost paths (dual fixing, the cost and offset of a
+//     substituted column) on columns that the objective of the instance leaves at zero.
 //   Solver checks, on the presolve in default mode or with --primal-only in that mode:
 //     LP relaxation of the original and of the reduced model: the reduced value is not below
 //       the original one (no reduction relaxes) and not above a known solution value; the
@@ -39,6 +49,7 @@
 
 #include "crush_check.hpp"
 #include "solution_file.hpp"
+#include "structure_check.hpp"
 
 #include <gprs/io.hpp>
 #include <gprs/presolve.hpp>
@@ -61,6 +72,7 @@ namespace {
 using gprs_check::crush_report_t;
 using gprs_check::point_report_t;
 using gprs_check::point_set_t;
+using gprs_check::structure_report_t;
 
 double now()
 {
@@ -294,10 +306,150 @@ void put_crush(FILE* out, const char* name, const crush_report_t& c, bool last)
                last ? "" : ",");
 }
 
+void put_structure(FILE* out, const char* name, const structure_report_t& s, bool last)
+{
+  std::fprintf(out,
+               "    \"%s\": {\"ran\": %s, \"stack_error\": %s, \"lost_integers\": %lld, "
+               "\"first_lost_integer\": %d,\n",
+               name,
+               s.ran ? "true" : "false",
+               quoted(s.stack_error).c_str(),
+               (long long)s.lost_integers,
+               s.first_lost_integer);
+  std::fprintf(out,
+               "      \"bounds\": {\"worst\": %s, \"column\": %d, \"failed\": %lld},\n",
+               number(s.bound_worst, "%.3g").c_str(),
+               s.bound_worst_col,
+               (long long)s.bound_failures);
+  std::fprintf(
+    out,
+    "      \"rows\": {\"tested\": %lld, \"worst\": %s, \"row\": %d, \"failed\": %lld},\n",
+    (long long)s.rows_tested,
+    number(s.row_worst, "%.3g").c_str(),
+    s.row_worst_row,
+    (long long)s.row_failures);
+  std::fprintf(out,
+               "      \"kept_rows\": {\"tested\": %lld, \"parallel\": %lld, \"not_tested\": %lld, "
+               "\"worst\": %s, \"row\": %d, \"failed\": %lld},\n",
+               (long long)s.kept_tested,
+               (long long)s.kept_parallel,
+               (long long)s.kept_untested,
+               number(s.kept_worst, "%.3g").c_str(),
+               s.kept_worst_row,
+               (long long)s.kept_failures);
+  std::fprintf(out,
+               "      \"postsolve\": {\"worst\": %s, \"column\": %d, \"failed\": %lld}}%s\n",
+               number(s.postsolve_worst, "%.3g").c_str(),
+               s.postsolve_worst_col,
+               (long long)s.postsolve_failures,
+               last ? "" : ",");
+}
+
 // "pass", "FAIL" or "skipped".
 const char* verdict(bool applicable, bool ok)
 {
   return !applicable ? "skipped" : ok ? "pass" : "FAIL";
+}
+
+// What needs no solver, for one presolve result.
+struct mode_report_t {
+  std::string status;
+  bool has_reduced = false;
+  uint64_t hash    = 0;
+  structure_report_t structure;
+  crush_report_t crush;
+};
+
+mode_report_t solver_free_checks(const gprs::model_t& model,
+                                 const gprs::result_t& result,
+                                 bool primal_only,
+                                 const point_set_t& points)
+{
+  mode_report_t r;
+  r.status      = gprs::status_name(result.status);
+  r.has_reduced = gprs_check::carries_model(result.status);
+  r.hash        = result.hash;
+  if (r.has_reduced) { r.structure = gprs_check::structure_check(model, result); }
+  if (!points.empty()) { r.crush = gprs_check::crush_check(model, result, primal_only, points); }
+  return r;
+}
+
+struct named_verdict_t {
+  std::string name;
+  const char* value;
+};
+
+// The verdicts of one mode, named <check>_<mode>_<part>.
+void mode_verdicts(const mode_report_t& r, bool primal_only, std::vector<named_verdict_t>& out)
+{
+  std::string mode            = primal_only ? "primal_" : "default_";
+  const structure_report_t& s = r.structure;
+  bool composed               = s.ran && s.composed;
+  out.push_back({"structure_" + mode + "stack", verdict(s.ran, s.composed)});
+  out.push_back({"structure_" + mode + "types", verdict(composed, s.lost_integers == 0)});
+  out.push_back({"structure_" + mode + "bounds", verdict(composed, s.bound_failures == 0)});
+  out.push_back({"structure_" + mode + "rows", verdict(composed, s.row_failures == 0)});
+  out.push_back({"structure_" + mode + "kept_rows", verdict(composed, s.kept_failures == 0)});
+  out.push_back({"structure_" + mode + "postsolve", verdict(composed, s.postsolve_failures == 0)});
+  const crush_report_t& c = r.crush;
+  bool crushed            = c.ran && c.has_reduced;
+  out.push_back({"crush_" + mode + "status", verdict(c.ran, c.has_reduced)});
+  out.push_back({"crush_" + mode + "reduced_point", verdict(crushed, c.failed_reduced == 0)});
+  out.push_back({"crush_" + mode + "postsolved_point", verdict(crushed, c.failed_postsolved == 0)});
+  out.push_back({"crush_" + mode + "objective", verdict(crushed, c.failed_objective == 0)});
+  if (primal_only) {
+    out.push_back({"crush_" + mode + "round_trip", verdict(crushed, c.failed_round_trip == 0)});
+  }
+}
+
+// The model with the costs of variant `number`: an integer of size 0 to 3 per column, with the
+// sign that pushes the column towards a finite bound (either sign with two finite bounds, zero
+// with none), so the objective is bounded on the feasible set.
+gprs::model_t cost_variant(const gprs::model_t& model, int number)
+{
+  gprs::model_t variant    = model;
+  variant.objective_offset = 0.;
+  uint64_t state           = 0x9e3779b97f4a7c15ull * (uint64_t)number;
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    state           = state * 6364136223846793005ull + 1442695040888963407ull;
+    uint32_t draw   = (uint32_t)(state >> 33);
+    bool lower      = model.col_lower[j] > -gprs::inf;
+    bool upper      = model.col_upper[j] < gprs::inf;
+    double sign     = lower && upper ? ((draw >> 8) & 1 ? 1. : -1.) : lower ? 1. : upper ? -1. : 0.;
+    variant.cost[j] = sign * (draw % 4);
+  }
+  return variant;
+}
+
+struct variant_report_t {
+  int number = 0;
+  mode_report_t in_mode[2];  // default, primal-only
+  std::vector<std::string> failed[2];
+};
+
+// Structure and crush check of both modes on the cost variants.
+std::vector<variant_report_t> check_cost_variants(const gprs::model_t& model,
+                                                  const point_set_t& points,
+                                                  int count)
+{
+  std::vector<variant_report_t> reports(count);
+  for (int v = 0; v < count; ++v) {
+    variant_report_t& report = reports[v];
+    report.number            = v + 1;
+    gprs::model_t variant    = cost_variant(model, report.number);
+    for (int mode = 0; mode < 2; ++mode) {
+      gprs::options_t options;
+      options.primal_only = mode == 1;
+      report.in_mode[mode] =
+        solver_free_checks(variant, gprs::presolve(variant, options), mode == 1, points);
+      std::vector<named_verdict_t> verdicts;
+      mode_verdicts(report.in_mode[mode], mode == 1, verdicts);
+      for (const named_verdict_t& check : verdicts) {
+        if (std::string(check.value) == "FAIL") { report.failed[mode].push_back(check.name); }
+      }
+    }
+  }
+  return reports;
 }
 
 bool write_file(const std::string& path, FILE* out)
@@ -317,9 +469,11 @@ struct arguments_t {
   double known     = 0.;
   bool known_bound = false;
   std::string expect;
-  bool primal_only = false;
-  int threads      = 1;
-  int max_points   = 20;
+  bool primal_only  = false;
+  int threads       = 1;
+  int max_points    = 20;
+  int cost_variants = 0;
+  int push_points   = 0;
 };
 
 int usage()
@@ -328,7 +482,7 @@ int usage()
                "usage: gprs_check <model.csr> <out.json> [--solutions <file>]... "
                "[--lp-time-limit <s>] [--mip-time-limit <s>] [--known-objective <value>] "
                "[--known-is-bound] [--expect infeasible|unbounded] [--primal-only] "
-               "[--threads <n>]\n"
+               "[--threads <n>] [--cost-variants <n>] [--push-points <n>]\n"
                "       gprs_check --solve <model.csr> <solutions file> [--mip-time-limit <s>] "
                "[--threads <n>] [--max-points <n>]\n");
   return 1;
@@ -360,6 +514,10 @@ bool parse(int argc, char** argv, arguments_t& a)
       a.threads = std::atoi(argv[++i]);
     } else if (arg == "--max-points" && value) {
       a.max_points = std::atoi(argv[++i]);
+    } else if (arg == "--cost-variants" && value) {
+      a.cost_variants = std::atoi(argv[++i]);
+    } else if (arg == "--push-points" && value) {
+      a.push_points = std::atoi(argv[++i]);
     } else if (arg[0] == '-') {
       return false;
     } else if (a.path.empty()) {
@@ -372,7 +530,7 @@ bool parse(int argc, char** argv, arguments_t& a)
   }
   return !a.out_path.empty() &&
          (a.expect.empty() || a.expect == "infeasible" || a.expect == "unbounded") &&
-         a.max_points >= 1;
+         a.max_points >= 1 && a.cost_variants >= 0 && a.push_points >= 0;
 }
 
 // The solution mode: what the solver thread and the main thread share.
@@ -565,25 +723,26 @@ int main(int argc, char** argv)
   }
   solutions_t solutions;
   if (!read_points(a, model, solutions)) { return 1; }
+  if (a.push_points > 0 && !solutions.set.empty()) {
+    gprs_check::add_pushed_points(model, solutions.set, a.push_points);
+  }
   const point_set_t& points = solutions.set;
   bool has_points           = !points.empty();
 
-  // The presolve of the other mode serves the crush check only and is dropped before a solve.
-  crush_report_t crush_default, crush_primal;
+  // What needs no solver, in both modes. The presolve of the mode that is not solved, and those
+  // of the cost variants, are dropped before a solve.
+  mode_report_t in_mode[2];  // default, primal-only
   gprs::options_t options;
-  if (has_points) {
-    options.primal_only  = !a.primal_only;
-    gprs::result_t other = gprs::presolve(model, options);
-    (a.primal_only ? crush_default : crush_primal) =
-      gprs_check::crush_check(model, other, options.primal_only, points);
-  }
-  options.primal_only   = a.primal_only;
-  gprs::result_t result = gprs::presolve(model, options);
-  bool has_reduced      = gprs_check::carries_model(result.status);
-  if (has_points) {
-    (a.primal_only ? crush_primal : crush_default) =
-      gprs_check::crush_check(model, result, a.primal_only, points);
-  }
+  options.primal_only = !a.primal_only;
+  in_mode[!a.primal_only] =
+    solver_free_checks(model, gprs::presolve(model, options), !a.primal_only, points);
+  std::vector<variant_report_t> variants = check_cost_variants(model, points, a.cost_variants);
+  options.primal_only                    = a.primal_only;
+  gprs::result_t result                  = gprs::presolve(model, options);
+  bool has_reduced                       = gprs_check::carries_model(result.status);
+  in_mode[a.primal_only]                 = solver_free_checks(model, result, a.primal_only, points);
+  const crush_report_t& crush_default    = in_mode[0].crush;
+  const crush_report_t& crush_primal     = in_mode[1].crush;
 
   solve_t lp_original, lp_reduced, mip_reduced;
   if (a.lp_limit > 0) { lp_original = solve(model, true, a.lp_limit, a.threads); }
@@ -662,17 +821,28 @@ int main(int argc, char** argv)
 
   // A file with points of which none is usable would make the crush check silent.
   const char* solution_points = verdict(points.read > 0, has_points);
-  auto crush_verdicts         = [&](const crush_report_t& c, const char* v[5], bool round_trip) {
-    v[0] = verdict(c.ran, c.has_reduced);
-    v[1] = verdict(c.ran && c.has_reduced, c.failed_reduced == 0);
-    v[2] = verdict(c.ran && c.has_reduced, c.failed_postsolved == 0);
-    v[3] = verdict(c.ran && c.has_reduced, c.failed_objective == 0);
-    v[4] = verdict(c.ran && c.has_reduced && round_trip, c.failed_round_trip == 0);
-  };
-  const char* in_default[5];
-  const char* in_primal[5];
-  crush_verdicts(crush_default, in_default, false);
-  crush_verdicts(crush_primal, in_primal, true);
+
+  std::vector<named_verdict_t> checks = {{"presolve_status", presolve_status},
+                                         {"relaxation_not_weaker", relaxation_not_weaker},
+                                         {"relaxation_below_known", relaxation_below_known},
+                                         {"reduced_relaxation_status", reduced_relaxation_status},
+                                         {"reduced_mip_status", reduced_mip_status},
+                                         {"postsolved_point_feasible", point_feasible},
+                                         {"postsolved_point_objective", point_objective},
+                                         {"optimum_equals_known", optimum_known},
+                                         {"dual_bound_below_known", bound_below_known},
+                                         {"solution_points", solution_points}};
+  mode_verdicts(in_mode[0], false, checks);
+  mode_verdicts(in_mode[1], true, checks);
+  // A variant with a usable point has a reduced model and passes structure and crush check.
+  for (int mode = 0; mode < 2; ++mode) {
+    bool ok = true;
+    for (const variant_report_t& v : variants) {
+      ok = ok && v.failed[mode].empty() && (v.in_mode[mode].has_reduced || !has_points);
+    }
+    checks.push_back(
+      {mode ? "cost_variants_primal" : "cost_variants_default", verdict(!variants.empty(), ok)});
+  }
 
   FILE* out = std::fopen((a.out_path + ".tmp").c_str(), "w");
   if (!out) {
@@ -733,12 +903,14 @@ int main(int argc, char** argv)
                  (long long)solutions.tail_bytes[k]);
   }
   std::fprintf(out,
-               "],\n    \"points\": %d, \"points_used\": %d, \"points_rejected\": %d,\n"
+               "],\n    \"points\": %d, \"points_used\": %d, \"points_rejected\": %d, "
+               "\"points_pushed\": %d,\n"
                "    \"rejected\": {\"row\": %s, \"bound\": %s, \"integrality\": %s},\n"
                "    \"best_objective\": %s%s\n",
                points.read,
                (int)points.points.size(),
                points.rejected,
+               points.pushed,
                number(points.rejected_row, "%.3g").c_str(),
                number(points.rejected_bound, "%.3g").c_str(),
                number(points.rejected_integrality, "%.3g").c_str(),
@@ -750,30 +922,43 @@ int main(int argc, char** argv)
   }
   std::fprintf(out, "  },\n");
   std::fprintf(out,
-               "  \"checks\": {\"presolve_status\": \"%s\", \"relaxation_not_weaker\": \"%s\", "
-               "\"relaxation_below_known\": \"%s\", \"reduced_relaxation_status\": \"%s\", "
-               "\"reduced_mip_status\": \"%s\", \"postsolved_point_feasible\": \"%s\", "
-               "\"postsolved_point_objective\": \"%s\", \"optimum_equals_known\": \"%s\", "
-               "\"dual_bound_below_known\": \"%s\", \"solution_points\": \"%s\",\n",
-               presolve_status,
-               relaxation_not_weaker,
-               relaxation_below_known,
-               reduced_relaxation_status,
-               reduced_mip_status,
-               point_feasible,
-               point_objective,
-               optimum_known,
-               bound_below_known,
-               solution_points);
-  const char* names[5] = {"status", "reduced_point", "postsolved_point", "objective", "round_trip"};
-  for (int k = 0; k < 4; ++k) {
-    std::fprintf(out, "    \"crush_default_%s\": \"%s\",\n", names[k], in_default[k]);
+               "  \"structure\": {\n    \"tolerance\": %g, \"other_mode_status\": \"%s\",\n",
+               gprs_check::structure_tolerance,
+               in_mode[!a.primal_only].status.c_str());
+  put_structure(out, "default", in_mode[0].structure, false);
+  put_structure(out, "primal_only", in_mode[1].structure, true);
+  std::fprintf(out, "  },\n  \"cost_variants\": [");
+  for (size_t k = 0; k < variants.size(); ++k) {
+    for (int mode = 0; mode < 2; ++mode) {
+      const mode_report_t& r = variants[k].in_mode[mode];
+      std::fprintf(out,
+                   "%s\n    {\"variant\": %d, \"mode\": \"%s\", \"status\": \"%s\", "
+                   "\"hash\": \"%016llx\", \"moved_columns\": %lld, \"objective_fall\": %s, "
+                   "\"failed\": [",
+                   k + mode ? "," : "",
+                   variants[k].number,
+                   mode ? "primal_only" : "default",
+                   r.status.c_str(),
+                   (unsigned long long)r.hash,
+                   (long long)r.crush.moved_columns,
+                   number(r.crush.objective_fall, "%.3g").c_str());
+      for (size_t f = 0; f < variants[k].failed[mode].size(); ++f) {
+        std::fprintf(out, "%s%s", f ? ", " : "", quoted(variants[k].failed[mode][f]).c_str());
+      }
+      std::fprintf(out, "]}");
+    }
   }
-  for (int k = 0; k < 5; ++k) {
-    std::fprintf(
-      out, "    \"crush_primal_%s\": \"%s\"%s\n", names[k], in_primal[k], k < 4 ? "," : "}");
+  std::fprintf(out, "],\n  \"checks\": {");
+  for (size_t k = 0; k < checks.size(); ++k) {
+    std::fprintf(out,
+                 "%s\"%s\": \"%s\"",
+                 k == 0  ? ""
+                 : k % 2 ? ", "
+                         : ",\n    ",
+                 checks[k].name.c_str(),
+                 checks[k].value);
   }
-  std::fprintf(out, "}\n");
+  std::fprintf(out, "}\n}\n");
   if (!write_file(a.out_path, out)) {
     std::fprintf(stderr, "cannot write %s\n", a.out_path.c_str());
     return leave(1);

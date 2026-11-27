@@ -16,6 +16,10 @@ Time gate: t <= 1.2 * t(reference) + 0.02 s per instance of bands A and B;
 the other bands and the median per band are reported.
 Runs: an instance with an error in a repetition or with different hashes
 between repetitions is flagged and fails.
+Results: the source tree and the tool binary of each summary are printed
+(tools/run_info.py); summaries of different binaries or source trees under
+one tag fail. A missing release_dev summary (the runner removes it at its
+start and writes it at its end) fails as well.
 
 Writes results/stage1/host/<tag>/compare.csv and exits with code 1 when a
 gate fails.
@@ -68,6 +72,48 @@ def load(path):
     """Return the instances of a runner summary by name."""
     with open(path) as f:
         return {r["name"]: r for r in json.load(f)["instances"]}
+
+
+def summary_identity(path):
+    """Return the identity and the start time stored in a runner summary."""
+    with open(path) as f:
+        summary = json.load(f)
+    identity = dict(summary.get("identity") or {})
+    identity["start_time"] = summary.get("start_time")
+    return identity
+
+
+def results_gate(identities):
+    """Print where the summaries come from; False when they do not agree."""
+    for directory, identity in identities.items():
+        if not identity.get("tool_checksum"):
+            print("results: %s has no stored identity" % directory)
+            continue
+        dirty = identity.get("source_dirty")
+        print(
+            "results: %s of source commit %s%s, source checksum %s, tool "
+            "checksum %s, started %s"
+            % (
+                directory,
+                str(identity.get("source_commit"))[:12],
+                " with uncommitted changes" if dirty else "",
+                str(identity.get("source_checksum"))[:12],
+                identity["tool_checksum"][:12],
+                identity.get("start_time"),
+            )
+        )
+    stored = [i for i in identities.values() if i.get("tool_checksum")]
+    same = all(
+        i.get(key) == stored[0].get(key)
+        for i in stored
+        for key in ("tool_checksum", "source_checksum")
+    )
+    if not same:
+        print(
+            "results: FAIL. The summaries were made by different tool "
+            "binaries or source trees"
+        )
+    return same
 
 
 def presolved_statistics(variant, name):
@@ -287,6 +333,13 @@ def reductions_gate(records, no_result):
             sum(1 for v in ratios if v > 1.05),
         )
     )
+    above = [
+        r["name"] for r in records if r["has_model"] and r["ratio"] > 1.05
+    ]
+    if above:
+        # The reference has every rule of the engine: what is smaller than
+        # the reference by this much has to pass check/run_check.py.
+        print("  above 1.05 (raises the mean): %s" % ", ".join(above))
     if no_model:
         print("  no reduced model, not in the mean: %s" % ", ".join(no_model))
     if no_result:
@@ -373,9 +426,16 @@ def main():
     """Print the comparison, write compare.csv and return the exit code."""
     tag = sys.argv[1] if len(sys.argv) > 1 else "v1"
     host = STAGE1 / "host" / tag
-    runs = load(host / "release_dev" / "summary.json")
-    if (host / "release_large" / "summary.json").is_file():
-        runs.update(load(host / "release_large" / "summary.json"))
+    runs = {}
+    identities = {}
+    for directory in ("release_dev", "release_large"):
+        path = host / directory / "summary.json"
+        if path.is_file():
+            runs.update(load(path))
+            identities[directory] = summary_identity(path)
+    if "release_dev" not in identities:
+        print("no summary of release_dev under %s: the run did not end" % host)
+        return 1
     ref, unusable = reference()
     records = compare(runs, ref)
     compared = {r["name"] for r in records}
@@ -392,6 +452,7 @@ def main():
     ok = reductions_gate(records, no_result)
     ok = time_gate(records) and ok
     ok = runs_gate(records) and ok
+    ok = results_gate(identities) and ok
 
     with open(host / "compare.csv", "w", newline="") as f:
         writer = csv.writer(f)

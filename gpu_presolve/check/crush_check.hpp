@@ -39,7 +39,14 @@
 //
 // With an optimal x the check proves that the optimum is not cut off. It sees no relaxation
 // (a row deleted that is not redundant) unless that makes a later lock argument move a column
-// across the deleted row; relaxations are the job of the solver checks in gprs_check.cpp.
+// across the deleted row; relaxations are the job of the structure check and of the solver
+// checks in gprs_check.cpp.
+//
+// A restriction is seen only when it cuts a point that is tested. A point of a solver has many
+// columns where a dual reduction puts them and few on a bound that only the rows imply, so
+// every point of a file gives up to four pushed points (push_point): its columns moved one
+// after the other as far as bounds and rows allow. They are points of the original model like
+// the others and are tested for that before they are used.
 
 #include <gprs/presolve.hpp>
 
@@ -149,6 +156,17 @@ inline point_report_t check_point_scaled(const gprs::model_t& model, const std::
   return r;
 }
 
+// The objective value check_point_scaled reports, alone.
+inline double objective_of(const gprs::model_t& model, const std::vector<double>& x)
+{
+  sum_t objective;
+  objective.add(model.objective_offset, 1.);
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    objective.add(model.cost[j], x[j]);
+  }
+  return objective.value();
+}
+
 inline bool carries_model(gprs::status_t status)
 {
   return status == gprs::status_t::reduced || status == gprs::status_t::unchanged ||
@@ -180,6 +198,8 @@ struct point_set_t {
   std::vector<double> objective;
   int32_t read     = 0;
   int32_t rejected = 0;
+  // Points made by push_point that were taken; they count neither as read nor as rejected.
+  int32_t pushed = 0;
   // Largest violations among the rejected points, for the report.
   double rejected_row         = 0.;
   double rejected_bound       = 0.;
@@ -202,6 +222,17 @@ struct point_set_t {
     raise_to(rejected_integrality, integrality);
   }
 
+  // Takes a point made from a usable one when it is usable itself.
+  void add_pushed(const gprs::model_t& model, std::vector<double> x)
+  {
+    point_report_t r;
+    double integrality;
+    if (!usable_point(model, x, r, integrality)) { return; }
+    objective.push_back(r.objective);
+    points.push_back(std::move(x));
+    ++pushed;
+  }
+
   bool empty() const { return points.empty(); }
 
   double best_objective() const
@@ -213,6 +244,89 @@ struct point_set_t {
     return best;
   }
 };
+
+// The entries of a model by column, for push_point.
+struct columns_t {
+  std::vector<int64_t> start;
+  std::vector<int32_t> row;
+  std::vector<double> value;
+
+  explicit columns_t(const gprs::model_t& model)
+    : start(model.ncols + 1, 0), row(model.nnz()), value(model.nnz())
+  {
+    for (int64_t e = 0; e < model.nnz(); ++e) {
+      ++start[model.col_index[e] + 1];
+    }
+    for (int32_t j = 0; j < model.ncols; ++j) {
+      start[j + 1] += start[j];
+    }
+    std::vector<int64_t> fill(start.begin(), start.end() - 1);
+    for (int32_t i = 0; i < model.nrows; ++i) {
+      for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
+        int64_t p = fill[model.col_index[e]]++;
+        row[p]    = i;
+        value[p]  = model.value[e];
+      }
+    }
+  }
+};
+
+// Moves the columns of a point of the model one after the other, in index order or in reverse,
+// up or down as far as its bounds and its rows allow with the other columns where they are; an
+// integer column by whole units. Returns the number of columns moved. O(nonzeros).
+inline int64_t push_point(const gprs::model_t& model,
+                          const columns_t& columns,
+                          bool up,
+                          bool reverse,
+                          std::vector<double>& x)
+{
+  std::vector<double> activity(model.nrows);
+  for (int32_t i = 0; i < model.nrows; ++i) {
+    sum_t sum;
+    for (int64_t e = model.row_start[i]; e < model.row_start[i + 1]; ++e) {
+      sum.add(model.value[e], x[model.col_index[e]]);
+    }
+    activity[i] = sum.value();
+  }
+  int64_t moved = 0;
+  for (int32_t n = 0; n < model.ncols; ++n) {
+    int32_t j   = reverse ? model.ncols - 1 - n : n;
+    double room = up ? model.col_upper[j] - x[j] : x[j] - model.col_lower[j];
+    for (int64_t p = columns.start[j]; p < columns.start[j + 1] && room > 0; ++p) {
+      int32_t i    = columns.row[p];
+      double a     = up ? columns.value[p] : -columns.value[p];
+      double slack = a > 0 ? model.row_upper[i] - activity[i] : activity[i] - model.row_lower[i];
+      room         = std::fmin(room, slack / std::fabs(a));
+    }
+    if (!std::isfinite(room) || !(room > 0)) { continue; }
+    // A continuous column stops a rounding error short of the row that limits it.
+    double step = model.col_type[j] ? std::floor(room + 1e-9) : room * (1. - 1e-12);
+    if (!(step > 1e-9 * std::fmax(1., std::fabs(x[j])))) { continue; }
+    double change = up ? step : -step;
+    x[j] += change;
+    for (int64_t p = columns.start[j]; p < columns.start[j + 1]; ++p) {
+      activity[columns.row[p]] += columns.value[p] * change;
+    }
+    ++moved;
+  }
+  return moved;
+}
+
+// Adds up to `count` (at most 4) pushed points per point of the set: down and up in index
+// order, then down and up in reverse order.
+inline void add_pushed_points(const gprs::model_t& model, point_set_t& set, int count)
+{
+  columns_t columns(model);
+  size_t from_files = set.points.size();
+  for (size_t k = 0; k < from_files; ++k) {
+    for (int variant = 0; variant < count && variant < 4; ++variant) {
+      std::vector<double> x = set.points[k];
+      if (push_point(model, columns, variant & 1, variant & 2, x) > 0) {
+        set.add_pushed(model, std::move(x));
+      }
+    }
+  }
+}
 
 // The worst values over the points, and the number of points that fail each requirement.
 struct crush_report_t {
@@ -291,7 +405,7 @@ inline crush_report_t crush_check(const gprs::model_t& model,
     // that of x is a comparison of two points.
     double size     = std::fmax(1., std::fmax(back.objective_size, reduced.objective_size));
     double identity = std::fabs(back.objective - reduced.objective) / size;
-    double known    = set.objective[k];
+    double known    = objective_of(model, x);
     double change   = back.objective - known;
     double allowed =
       objective_tolerance * std::fmax(1., std::fabs(known)) + identity_tolerance * size;

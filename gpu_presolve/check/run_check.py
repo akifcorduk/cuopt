@@ -16,10 +16,16 @@ instance instead and writes the solution files into the first
 
 Every tool run is killed after --kill-after seconds. A run record with the
 identity of the run (tools/run_info.py) is written next to each result, and
---skip-done reuses a check result only if source tree, tool binary, command
-and solution files are those of the stored run. A solution file does not
-depend on the engine and is tested when it is read: --skip-done keeps it
-when the command is the one of the stored run.
+--skip-done reuses a check result only if source tree, tool binary, command,
+dump and solution files are those of the stored run. A solution file does
+not depend on the engine and is tested when it is read: --skip-done keeps
+it when command and dump are those of the stored run.
+
+The summary of an earlier run is removed before anything runs, so a run
+that is killed or ends with an error leaves no summary of other results.
+With --require-points an instance that has a solution, according to the
+testbed, and no usable point is a failure: without a solver its check is
+the presolve status and the structure check alone.
 """
 
 import argparse
@@ -56,6 +62,9 @@ def parse_args():
     parser.add_argument("--make-solutions", action="store_true")
     parser.add_argument("--solution-time-limit", type=float, default=300.0)
     parser.add_argument("--max-points", type=int, default=20)
+    parser.add_argument("--cost-variants", type=int, default=2)
+    parser.add_argument("--push-points", type=int, default=4)
+    parser.add_argument("--require-points", action="store_true")
     parser.add_argument("--kill-after", type=float)
     parser.add_argument("--skip-done", action="store_true")
     parser.add_argument(
@@ -90,6 +99,10 @@ def select(testbed, set_name, only):
     selected = sets[set_name]
     if only:
         names = set(only.split(","))
+        unknown = names - {e["name"] for e in selected}
+        if unknown:
+            listed = ", ".join(sorted(unknown))
+            sys.exit("not in the set %s: %s" % (set_name, listed))
         selected = [e for e in selected if e["name"] in names]
     return selected
 
@@ -157,6 +170,10 @@ def command_of(args, entry, out, dump):
         str(args.mip_time_limit),
         "--threads",
         str(args.threads),
+        "--cost-variants",
+        str(args.cost_variants),
+        "--push-points",
+        str(args.push_points),
     ]
     if args.primal_only:
         command.append("--primal-only")
@@ -171,9 +188,9 @@ def command_of(args, entry, out, dump):
     return command, None
 
 
-def inputs_of(command):
-    """Return size and time of the solution files a check command reads."""
-    files = [
+def inputs_of(command, dump):
+    """Return size and time of the dump and the solution files of a command."""
+    files = [str(dump)] + [
         command[i + 1] for i, a in enumerate(command) if a == "--solutions"
     ]
     return [
@@ -195,7 +212,7 @@ def run_one(args, identity, entry, out):
     else:
         command, error = command_of(args, entry, out, dump)
         record["command"] = command
-        record["inputs"] = inputs_of(command)
+        record["inputs"] = inputs_of(command, dump)
         if error:
             record["error"] = error
     if args.skip_done and "error" not in record and record_path.is_file():
@@ -272,6 +289,11 @@ def run_summary(record):
     return {k: record.get(k) for k in keys}
 
 
+def has_solution(entry):
+    """Return whether the testbed lists the instance with a solution."""
+    return entry.get("objective") not in ("Infeasible", "Unbounded")
+
+
 def list_solutions(args, entries, out):
     """Print one line per instance and return rows and the failure count."""
     rows = []
@@ -327,9 +349,12 @@ def list_checks(args, entries, out):
         rows.append(row)
         failed = [k for k, v in r["checks"].items() if v == "FAIL"]
         passed = sum(1 for v in r["checks"].values() if v == "pass")
-        failures += 1 if failed else 0
         used = r["crush"]["points_used"]
         with_points += 1 if used else 0
+        if args.require_points and not used and has_solution(entry):
+            failed.append("no usable point")
+            row["no_usable_point"] = True
+        failures += 1 if failed else 0
         print(
             "%-24s %-10.10s lp %-12.12s -> %-12.12s mip %-18.18s points %2d "
             "passed %2d%s"
@@ -359,13 +384,10 @@ def main():
         entries = select(json.load(f), args.set, args.only)
     if args.make_solutions:
         # An instance without a solution has none to look for.
-        entries = [
-            e
-            for e in entries
-            if e.get("objective") not in ("Infeasible", "Unbounded")
-        ]
+        entries = [e for e in entries if has_solution(e)]
     out = Path(args.solutions_dir[0] if args.make_solutions else args.out)
     out.mkdir(parents=True, exist_ok=True)
+    (out / "summary.json").unlink(missing_ok=True)
     identity = run_info.run_identity(args.tool)
     if identity["tool_checksum"] is None:
         sys.exit("cannot read the tool %s" % args.tool)

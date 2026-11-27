@@ -8,7 +8,9 @@
 # other. A step that ended with exit code 0 leaves a marker with the identity of the source tree
 # (tools/run_info.py) and is skipped at the next start while the source tree is the same; the
 # runners skip what has a result of the same source tree and binary. A failed build ends the
-# run: nothing runs on a binary that is not the one of this source tree.
+# run: nothing runs on a binary that is not the one of this source tree. The two build steps
+# run at every start: the build directories are shared by all tags and source trees, so a
+# marker cannot say that the binaries in them are still those of this tree.
 #
 # Start it detached from the worktree root, inside the dev container:
 #   setsid nohup bash gpu_presolve/tools/stage1_host_runs.sh <tag> > /dev/null 2>&1 < /dev/null &
@@ -43,7 +45,6 @@ STATS=(--stats-dir "$DEPS/results/stage1/dumps_dev_stats"
   --stats-dir gpu_presolve/results/stage1/refs/stage1c_large)
 
 mkdir -p "$STATE"
-rm -f "$STATE/ENDED"
 FAILED=""
 say() { echo "$(date +%F\ %T) $(hostname) [$TAG] $*" >> "$LOG"; }
 
@@ -64,6 +65,8 @@ touch "$LOCK/heartbeat"
 done) &
 HEARTBEAT=$!
 trap 'kill $HEARTBEAT 2> /dev/null; rm -rf "$LOCK"' EXIT
+# From here on this run owns the tag: the list of an earlier run goes.
+rm -f "$STATE/ENDED"
 
 # The source tree the markers of this run stand for.
 if ! IDENTITY=$(python3 gpu_presolve/tools/run_info.py); then
@@ -77,10 +80,15 @@ say "start, pid $$, load $(cut -d' ' -f1-3 /proc/loadavg), source $IDENTITY"
 step() {
   local step_name=$1 code
   shift
-  if [ "$(cat "$STATE/$step_name.done" 2> /dev/null)" = "$IDENTITY" ]; then
-    say "step $step_name: already done for this source tree"
-    return 0
-  fi
+  case "$step_name" in
+    build | build_check) ;;
+    *)
+      if [ "$(cat "$STATE/$step_name.done" 2> /dev/null)" = "$IDENTITY" ]; then
+        say "step $step_name: already done for this source tree"
+        return 0
+      fi
+      ;;
+  esac
   rm -f "$STATE/$step_name.done"
   say "step $step_name: start, load $(cut -d' ' -f1-3 /proc/loadavg)"
   "$@" >> "$LOG" 2>&1
@@ -177,12 +185,16 @@ step check_status python3 "$RUN_CHECK" "${CHECK_ARGS[@]}" --out "$OUT/check_stat
   --only bnatt500,fhnw-binpack4-4,neos-2075418-temuka \
   --lp-time-limit 120 --mip-time-limit 300 --jobs 3 --threads 4
 step check_status_large python3 "$RUN_CHECK" "${CHECK_ARGS[@]}" --out "$OUT/check_status_large" \
-  --set status --only neos-3230511-yuna --lp-time-limit 0 --mip-time-limit 0 --jobs 1
-# Above 1e7 nonzeros: no solve of the reduced model, the crush check alone. Few points per
-# instance: a point of dlr2 is 290 MB.
+  --set status --only neos-3230511-yuna --lp-time-limit 0 --mip-time-limit 0 --cost-variants 0 \
+  --jobs 1
+# Above 1e7 nonzeros: no solve of the reduced model, structure and crush check alone, and one
+# cost variant (two more presolves). Few points per instance, and one pushed point for each: a
+# point of dlr2 is 290 MB. An instance without a usable point fails the step: its crush check
+# did not run.
 step solutions_large python3 "$RUN_CHECK" "${CHECK_ARGS[@]}" --set large --make-solutions \
   --solution-time-limit 1800 --max-points 4 --jobs 2 --threads 8
 step check_large python3 "$RUN_CHECK" "${CHECK_ARGS[@]}" --out "$OUT/check_large" --set large \
-  --lp-time-limit 0 --mip-time-limit 0 --jobs 2
+  --lp-time-limit 0 --mip-time-limit 0 --cost-variants 1 --push-points 1 --require-points \
+  --jobs 2
 
 finish

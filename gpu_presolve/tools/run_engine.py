@@ -11,9 +11,11 @@ every repetition. Results are written per repetition, so a restart with
 Every run record and the summary hold the identity of the run
 (run_info.py: commit of the source tree, checksum of the tool binary, host,
 start time, load average). --skip-done reuses a repetition only if source
-tree, tool binary and command are those of the stored run. On the main set
-a status without a reduced model (anything but reduced, unchanged,
-reduced_to_empty) is a failure.
+tree, tool binary, command and dump are those of the stored run. On the
+main set a status without a reduced model (anything but reduced, unchanged,
+reduced_to_empty) is a failure. The summary of an earlier run is removed
+before anything runs, so a run that is killed or ends with an error leaves
+no summary of other results.
 """
 
 import argparse
@@ -64,6 +66,10 @@ def select(testbed, set_name, only):
     selected = sets[set_name]
     if only:
         names = set(only.split(","))
+        unknown = names - {e["name"] for e in selected}
+        if unknown:
+            listed = ", ".join(sorted(unknown))
+            sys.exit("not in the set %s: %s" % (set_name, listed))
         selected = [e for e in selected if e["name"] in names]
     return selected
 
@@ -87,6 +93,9 @@ def run_one(args, identity, entry, rep, out):
     if args.time_limit is not None:
         command += ["--time-limit", str(args.time_limit)]
     command += args.tool_arg
+    inputs = None
+    if dump is not None:
+        inputs = [str(dump), dump.stat().st_size, dump.stat().st_mtime]
     if args.skip_done and record_path.is_file():
         with open(record_path) as f:
             old = json.load(f)
@@ -94,6 +103,7 @@ def run_one(args, identity, entry, rep, out):
             "report" in old
             and run_info.same_identity(old.get("identity"), identity)
             and old.get("command") == command
+            and old.get("inputs") == inputs
         ):
             return
     record = {"name": name, "rep": rep, "identity": identity}
@@ -101,6 +111,7 @@ def run_one(args, identity, entry, rep, out):
         record["error"] = "no dump"
     else:
         record["command"] = command
+        record["inputs"] = inputs
         record.update(run_info.host_state())
         report.unlink(missing_ok=True)
         start = time.time()
@@ -241,6 +252,7 @@ def main():
         entries = select(json.load(f), args.set, args.only)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    (out / "summary.json").unlink(missing_ok=True)
     identity = run_info.run_identity(args.tool)
     if identity["tool_checksum"] is None:
         sys.exit("cannot read the tool %s" % args.tool)

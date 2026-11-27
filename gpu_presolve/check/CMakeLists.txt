@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # cmake-format: on
 
-# Correctness check of the host engine with HiGHS as the solver (crush check with solution
-# files, LP relaxations, MIP solve of the reduced model, postsolve; solution files from a MIP
-# solve of the original model). Separate from the engine, which has no dependency.
+# Correctness check of the host engine with HiGHS as the solver (structure check, crush check
+# with solution files, LP relaxations, MIP solve of the reduced model, postsolve; solution files
+# from a MIP solve of the original model). Separate from the engine, which has no dependency.
 #   cmake -S gpu_presolve/check -B <build dir> -G Ninja [-DHIGHS_ROOT=<install prefix>]
 #         [-DGPRS_ENGINE_SRC=<src directory of a mutant, see make_mutants.py>]
 
