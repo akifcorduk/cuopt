@@ -35,6 +35,16 @@
 #                 off_leftout.csv), m4_b (the same with the dominated-column tests; the switch
 #                 set of off_leftout_minor.csv) and off5 (all cheap rules without the dominated,
 #                 weakly dominated and forcing column).
+# With the build diag3, which has one switch for each part of dual fixing beyond the lock rule
+# and a counter of free column substitutions by pivot kind (240 benchmark instances, and with
+# the prefix tb_ and the suffixes _dev and _large the testbed):
+#   d3_cheap      all cheap rules: must give the sizes of results/bench240/highs_cheap_all.
+#   d3_nine_a     the ladder step after m3_a with the dual-fixing extensions on except the
+#                 single-equation part: the nine rules of the design as far as HiGHS can
+#                 express them (it has no forcing column in this ladder).
+#   d3_m4_bs_a    the same with the binary substitution off as well: bound strengthening alone
+#                 on top of m3_a.
+#   d3_nodual     all cheap rules with the implied bounds on the row duals frozen.
 
 set -u -o pipefail
 
@@ -47,6 +57,8 @@ SCRATCH=$DEPS/results/stage1c/refs
 OUT_BENCH=gpu_presolve/results/bench240/stage1c_refs
 OUT_TESTBED=gpu_presolve/results/stage1c/refs
 DIAG2=$DEPS/build/baseline_diag2/baseline_tool
+DIAG3=$DEPS/build/baseline_diag3/baseline_tool
+TOOL=$DIAG2
 HEAVY=probing,enumeration,clique_substitutions,clique_merging,implied_integers,aggregator,sparsify,fourier_motzkin,strengthen_inequalities,dominated_columns
 MINOR=implied_equations,implied_integer_conversion
 M1_OFF=$HEAVY,$MINOR,dual_fixing_substitution,parallel_columns,simple_probing
@@ -93,7 +105,7 @@ step() {
     return 0
   fi
   say "step $step_name: start, load $(cut -d' ' -f1-3 /proc/loadavg)"
-  python3 "$RUN" --variant "$step_name" --tool "$DIAG2" --out "$SCRATCH/$step_name" --skip-done \
+  python3 "$RUN" --variant "$step_name" --tool "$TOOL" --out "$SCRATCH/$step_name" --skip-done \
     "$@" >> "$LOG" 2>&1
   code=$?
   if [ "$code" -eq 0 ]; then
@@ -142,6 +154,17 @@ testbed m3_a "$M3_OFF" "$LADDER_A"
 testbed m4_a "$HEAVY,$MINOR" "$LADDER_A"
 testbed m4_b "$HEAVY,$MINOR" "$LADDER_B"
 testbed off5 "$HEAVY" 32
+
+TOOL=$DIAG3
+NINE_OFF=$HEAVY,$MINOR,dual_fixing_single_equation
+BS_OFF=$NINE_OFF,dual_fixing_binary_substitution
+bench d3_cheap "$HEAVY" 0
+bench d3_nine_a "$NINE_OFF" "$LADDER_A"
+bench d3_m4_bs_a "$BS_OFF" "$LADDER_A"
+bench d3_nodual "$HEAVY,implied_row_dual_bounds" 0
+testbed d3_nine_a "$NINE_OFF" "$LADDER_A"
+testbed d3_m4_bs_a "$BS_OFF" "$LADDER_A"
+testbed d3_nodual "$HEAVY,implied_row_dual_bounds" 0
 
 echo "$FAILED" > "$STATE/ENDED"
 say "end; failed steps:${FAILED:- none}"

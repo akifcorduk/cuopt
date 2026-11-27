@@ -1,0 +1,3663 @@
+{
+ "variant": "tb_off5_large",
+ "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/baseline_diag2/baseline_tool",
+ "set": "large",
+ "time_limit": 3600.0,
+ "env": {
+  "HIGHS_DIAG_OFF": "probing,enumeration,clique_substitutions,clique_merging,implied_integers,aggregator,sparsify,fourier_motzkin,strengthen_inequalities,dominated_columns"
+ },
+ "presolve_rule_off": 32,
+ "stats_only": false,
+ "instances": [
+  {
+   "name": "usafa",
+   "band": "C",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 1377561,
+   "cols": 228648,
+   "nnz": 16485102,
+   "rows_after": 217400,
+   "cols_after": 226619,
+   "nnz_after": 3026726,
+   "rows_removed_pct": 84.21848469868122,
+   "cols_removed_pct": 0.8873902242748679,
+   "nnz_removed_pct": 81.63962831409839,
+   "presolve_seconds": 19.846621069,
+   "presolve_core_seconds": 19.586253478,
+   "read_seconds": 11.979335136,
+   "reached_time_limit": false,
+   "peak_rss_mb": 2276.64453125,
+   "tool_wall_seconds": 32.38242517400067,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 1.499995,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 5.659592,
+      "rows_removed": 15,
+      "cols_removed": 17,
+      "nnz_removed": 32
+     },
+     "fast_loop": {
+      "calls": 5,
+      "seconds": 5.973796,
+      "rows_removed": 2069,
+      "cols_removed": 2012,
+      "nnz_removed": 4496
+     },
+     "clique_substitutions": {
+      "calls": 2,
+      "seconds": 1e-06,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 2,
+      "seconds": 6.034976,
+      "rows_removed": 1158077,
+      "cols_removed": 0,
+      "nnz_removed": 13453848
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 3,
+      "seconds": 0.409621,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 0.000672,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.005078,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 15,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 2,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "fast_loop",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 1756,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 256,
+      "redundant_row": 2069,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "parallel_rows_cols",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 1158077,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 1771,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 258,
+      "redundant_row": 2069,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 1158077,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 15,
+      "setup": 0,
+      "initial_scan": 15,
+      "fast_loop": 0,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 0,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 1756
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 1158077,
+      "row_additions": 0,
+      "cols_merged": 0,
+      "cols_dominated": 0,
+      "rows_removed": 1158077,
+      "cols_removed": 0,
+      "hash_seconds": 2.966554,
+      "col_seconds": 0.057149,
+      "row_seconds": 2.992515
+     }
+    ],
+    "fixing": {
+     "empty_col": {
+      "count": 257,
+      "nnz": 0
+     },
+     "dual_fixing_lock": {
+      "count": 1,
+      "nnz": 2
+     },
+     "total": {
+      "count": 258,
+      "nnz": 2,
+      "fixed_col": 258
+     }
+    },
+    "bound_change": {
+     "dual_fixing": {
+      "count": 13949
+     },
+     "total": {
+      "count": 13949
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 19.58373,
+      "rows": "1377561:217400",
+      "cols": "228648:226619",
+      "nnz": "16485102:3026726",
+      "integer_cols": "228648:226619",
+      "implied_integer_cols": 0,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "a2864-99blp",
+   "band": "C",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 22117,
+   "cols": 200787,
+   "nnz": 20078717,
+   "rows_after": 20669,
+   "cols_after": 13824,
+   "nnz_after": 1378816,
+   "rows_removed_pct": 6.547000045214089,
+   "cols_removed_pct": 93.11509211253717,
+   "nnz_removed_pct": 93.1329476878428,
+   "presolve_seconds": 30.241924661,
+   "presolve_core_seconds": 29.844440225,
+   "read_seconds": 10.247947078,
+   "reached_time_limit": false,
+   "peak_rss_mb": 2369.5390625,
+   "tool_wall_seconds": 41.1472539910028,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 1.685162,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 10.704489,
+      "rows_removed": 17,
+      "cols_removed": 17,
+      "nnz_removed": 1717
+     },
+     "fast_loop": {
+      "calls": 5,
+      "seconds": 17.032369,
+      "rows_removed": 1207,
+      "cols_removed": 186946,
+      "nnz_removed": 18694600
+     },
+     "clique_substitutions": {
+      "calls": 2,
+      "seconds": 1e-06,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 2,
+      "seconds": 0.240526,
+      "rows_removed": 224,
+      "cols_removed": 0,
+      "nnz_removed": 3584
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 3,
+      "seconds": 0.17927,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 5.1e-05,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.002128,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 17,
+      "fixed_col": 17,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "fast_loop",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 186946,
+      "redundant_row": 1207,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "parallel_rows_cols",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 224,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 17,
+      "fixed_col": 186963,
+      "redundant_row": 1207,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 224,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 0,
+      "setup": 0,
+      "initial_scan": 0,
+      "fast_loop": 0,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 0,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 0
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 224,
+      "row_additions": 0,
+      "cols_merged": 0,
+      "cols_dominated": 0,
+      "rows_removed": 224,
+      "cols_removed": 0,
+      "hash_seconds": 0.233066,
+      "col_seconds": 0.002317,
+      "row_seconds": 0.004317
+     }
+    ],
+    "fixing": {
+     "singleton_row_bounds_equal": {
+      "count": 17,
+      "nnz": 1700
+     },
+     "bounds_equal_binary_row_test": {
+      "count": 186946,
+      "nnz": 17909306
+     },
+     "total": {
+      "count": 186963,
+      "nnz": 17911006,
+      "fixed_col": 186963
+     }
+    },
+    "bound_change": {
+     "binary_row_test": {
+      "count": 186946
+     },
+     "singleton_row": {
+      "count": 17
+     },
+     "total": {
+      "count": 186963
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 29.843997,
+      "rows": "22117:20669",
+      "cols": "200787:13824",
+      "nnz": "20078717:1378816",
+      "integer_cols": "200787:13824",
+      "implied_integer_cols": 0,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "neos-3740487-motru",
+   "band": "C",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 4936372,
+   "cols": 1689612,
+   "nnz": 26433474,
+   "rows_after": 4936248,
+   "cols_after": 1689550,
+   "nnz_after": 26433226,
+   "rows_removed_pct": 0.0025119662780681844,
+   "cols_removed_pct": 0.003669481514099095,
+   "nnz_removed_pct": 0.000938204338937818,
+   "presolve_seconds": 43.296940996,
+   "presolve_core_seconds": 41.676163213,
+   "read_seconds": 25.45933075,
+   "reached_time_limit": false,
+   "peak_rss_mb": 7077.66015625,
+   "tool_wall_seconds": 71.75169527500111,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 4.274852,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 12.539565,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fast_loop": {
+      "calls": 4,
+      "seconds": 8.333487,
+      "rows_removed": 62,
+      "cols_removed": 62,
+      "nnz_removed": 124
+     },
+     "clique_substitutions": {
+      "calls": 1,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 1,
+      "seconds": 12.558973,
+      "rows_removed": 62,
+      "cols_removed": 0,
+      "nnz_removed": 124
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 2,
+      "seconds": 1.716451,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 2.231335,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.020201,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "fast_loop",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 62,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "parallel_rows_cols",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 62,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 62,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 62,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 62,
+      "setup": 0,
+      "initial_scan": 0,
+      "fast_loop": 62,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 0,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 0
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 62,
+      "row_additions": 0,
+      "cols_merged": 0,
+      "cols_dominated": 0,
+      "rows_removed": 62,
+      "cols_removed": 0,
+      "hash_seconds": 9.37767,
+      "col_seconds": 0.824895,
+      "row_seconds": 1.433617
+     }
+    ],
+    "fixing": {
+     "total": {
+      "count": 0,
+      "nnz": 0,
+      "fixed_col": 0
+     }
+    },
+    "bound_change": {
+     "total": {
+      "count": 0
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 41.674864,
+      "rows": "4936372:4936248",
+      "cols": "1689612:1689550",
+      "nnz": "26433474:26433226",
+      "integer_cols": "75566:75566",
+      "implied_integer_cols": 0,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "square47",
+   "band": "C",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 61591,
+   "cols": 95030,
+   "nnz": 27329856,
+   "rows_after": 2294,
+   "cols_after": 35733,
+   "nnz_after": 8471002,
+   "rows_removed_pct": 96.27542985176406,
+   "cols_removed_pct": 62.39819004524887,
+   "nnz_removed_pct": 69.00458604684928,
+   "presolve_seconds": 28.977027808,
+   "presolve_core_seconds": 28.356222432,
+   "read_seconds": 14.162342322,
+   "reached_time_limit": false,
+   "peak_rss_mb": 2923.77734375,
+   "tool_wall_seconds": 44.17174595400866,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 3.233048,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 22.175116,
+      "rows_removed": 59297,
+      "cols_removed": 59297,
+      "nnz_removed": 18858854
+     },
+     "fast_loop": {
+      "calls": 4,
+      "seconds": 1.776846,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "clique_substitutions": {
+      "calls": 1,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 1,
+      "seconds": 0.614642,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 3,
+      "seconds": 0.554582,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 4.2e-05,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.001639,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 59297,
+      "fixed_col": 59297,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 59297,
+      "fixed_col": 59297,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 0,
+      "setup": 0,
+      "initial_scan": 0,
+      "fast_loop": 0,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 0,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 0
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 0,
+      "row_additions": 0,
+      "cols_merged": 0,
+      "cols_dominated": 0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "hash_seconds": 0.611564,
+      "col_seconds": 0.002461,
+      "row_seconds": 0.000581
+     }
+    ],
+    "fixing": {
+     "singleton_row_bounds_equal": {
+      "count": 59297,
+      "nnz": 18799557
+     },
+     "total": {
+      "count": 59297,
+      "nnz": 18799557,
+      "fixed_col": 59297
+     }
+    },
+    "bound_change": {
+     "implied_bound": {
+      "count": 43
+     },
+     "total": {
+      "count": 43
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 28.355916,
+      "rows": "61591:2294",
+      "cols": "95030:35733",
+      "nnz": "27329856:8471002",
+      "integer_cols": "95030:35733",
+      "implied_integer_cols": 0,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "t11nonreg",
+   "band": "C",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 27375,
+   "cols": 4596905,
+   "nnz": 46841437,
+   "rows_after": 20389,
+   "cols_after": 3266809,
+   "nnz_after": 32431422,
+   "rows_removed_pct": 25.519634703196346,
+   "cols_removed_pct": 28.934598387393258,
+   "nnz_removed_pct": 30.763392250327417,
+   "presolve_seconds": 76.25687057,
+   "presolve_core_seconds": 71.604929227,
+   "read_seconds": 49.267460453,
+   "reached_time_limit": false,
+   "peak_rss_mb": 7750.234375,
+   "tool_wall_seconds": 128.58358538699395,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 5.585711,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 25.055935,
+      "rows_removed": 4673,
+      "cols_removed": 1327781,
+      "nnz_removed": 13549670
+     },
+     "fast_loop": {
+      "calls": 5,
+      "seconds": 23.955499,
+      "rows_removed": 2214,
+      "cols_removed": 2218,
+      "nnz_removed": 4432
+     },
+     "clique_substitutions": {
+      "calls": 2,
+      "seconds": 1e-06,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 2,
+      "seconds": 14.143711,
+      "rows_removed": 99,
+      "cols_removed": 97,
+      "nnz_removed": 855913
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 2,
+      "seconds": 2.826951,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 0.006322,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.027595,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 0,
+      "free_col_substitution": 5,
+      "doubleton_equation": 2273,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 3,
+      "fixed_col": 1312434,
+      "redundant_row": 2392,
+      "implied_equation": 0,
+      "forcing_row": 2164,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 13069,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "fast_loop",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 702,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 1516,
+      "redundant_row": 2214,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "parallel_rows_cols",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 97,
+      "equality_row_addition": 97,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 2,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 0,
+      "free_col_substitution": 5,
+      "doubleton_equation": 3072,
+      "equality_row_addition": 97,
+      "equality_row_additions": 0,
+      "singleton_row": 3,
+      "fixed_col": 1313950,
+      "redundant_row": 4608,
+      "implied_equation": 0,
+      "forcing_row": 2164,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 13069,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 2142,
+      "setup": 0,
+      "initial_scan": 2045,
+      "fast_loop": 0,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 97,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 228,
+      "dual_fixing": 702
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 0,
+      "row_additions": 97,
+      "cols_merged": 0,
+      "cols_dominated": 0,
+      "rows_removed": 99,
+      "cols_removed": 0,
+      "hash_seconds": 9.676287,
+      "col_seconds": 3.24928,
+      "row_seconds": 1.19382
+     }
+    ],
+    "fixing": {
+     "forcing_row": {
+      "count": 94764,
+      "nnz": 869364
+     },
+     "dual_fixing_bound": {
+      "count": 1516,
+      "nnz": 3022
+     },
+     "singleton_row_bounds_equal": {
+      "count": 3,
+      "nnz": 3
+     },
+     "simple_probing": {
+      "count": 228,
+      "nnz": 456
+     },
+     "bounds_equal_input": {
+      "count": 47,
+      "nnz": 46
+     },
+     "bounds_equal_binary_row_test": {
+      "count": 1217392,
+      "nnz": 10037859
+     },
+     "total": {
+      "count": 1313950,
+      "nnz": 10910750,
+      "fixed_col": 1313950
+     }
+    },
+    "bound_change": {
+     "implied_bound": {
+      "count": 13
+     },
+     "binary_row_test": {
+      "count": 1305719
+     },
+     "doubleton": {
+      "count": 2
+     },
+     "dual_fixing": {
+      "count": 6241
+     },
+     "implied_integer": {
+      "count": 4207
+     },
+     "total": {
+      "count": 1316182
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 71.601724,
+      "rows": "27375:20389",
+      "cols": "4596905:3266809",
+      "nnz": "46841437:32431422",
+      "integer_cols": "4579625:3266809",
+      "implied_integer_cols": 0,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "neos-4332810-sesia",
+   "band": "C",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 19912111,
+   "cols": 20682487,
+   "nnz": 47513027,
+   "rows_after": 157874,
+   "cols_after": 94469,
+   "nnz_after": 407609,
+   "rows_removed_pct": 99.20714584204558,
+   "cols_removed_pct": 99.54324158405127,
+   "nnz_removed_pct": 99.14211106777095,
+   "presolve_seconds": 45.399471579,
+   "presolve_core_seconds": 41.040802837,
+   "read_seconds": 96.546827748,
+   "reached_time_limit": false,
+   "peak_rss_mb": 26762.37890625,
+   "tool_wall_seconds": 144.59297356099705,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 8.859534,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 27.202957,
+      "rows_removed": 6531939,
+      "cols_removed": 20537394,
+      "nnz_removed": 46889862
+     },
+     "fast_loop": {
+      "calls": 6,
+      "seconds": 3.387822,
+      "rows_removed": 13222046,
+      "cols_removed": 46736,
+      "nnz_removed": 211168
+     },
+     "clique_substitutions": {
+      "calls": 3,
+      "seconds": 1e-06,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 3,
+      "seconds": 0.2596,
+      "rows_removed": 252,
+      "cols_removed": 3888,
+      "nnz_removed": 4388
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 3,
+      "seconds": 1.106986,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 0.000708,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.158718,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 2,
+      "free_col_substitution": 2,
+      "doubleton_equation": 6662108,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 13875284,
+      "redundant_row": 2,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "fast_loop",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 244,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 7604,
+      "fixed_col": 46492,
+      "redundant_row": 13214198,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "parallel_rows_cols",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 3888,
+      "redundant_row": 4,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 248,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 2,
+      "free_col_substitution": 2,
+      "doubleton_equation": 6662352,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 7604,
+      "fixed_col": 13925664,
+      "redundant_row": 13214204,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 248,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 6532179,
+      "setup": 0,
+      "initial_scan": 6531935,
+      "fast_loop": 244,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 0,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 130173
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 248,
+      "row_additions": 0,
+      "cols_merged": 0,
+      "cols_dominated": 3888,
+      "rows_removed": 248,
+      "cols_removed": 3888,
+      "hash_seconds": 0.156794,
+      "col_seconds": 0.038698,
+      "row_seconds": 0.041852
+     }
+    ],
+    "fixing": {
+     "empty_col": {
+      "count": 934720,
+      "nnz": 0
+     },
+     "dual_fixing_lock": {
+      "count": 6509166,
+      "nnz": 12979448
+     },
+     "dual_fixing_bound": {
+      "count": 6470286,
+      "nnz": 12940576
+     },
+     "singleton_row_bounds_equal": {
+      "count": 7604,
+      "nnz": 30544
+     },
+     "parallel_columns": {
+      "count": 3888,
+      "nnz": 3888
+     },
+     "total": {
+      "count": 13925664,
+      "nnz": 25954456,
+      "fixed_col": 13925664
+     }
+    },
+    "bound_change": {
+     "implied_bound": {
+      "count": 4
+     },
+     "doubleton": {
+      "count": 2
+     },
+     "implied_integer": {
+      "count": 5
+     },
+     "total": {
+      "count": 11
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 40.976325,
+      "rows": "19912111:157874",
+      "cols": "20682487:94469",
+      "nnz": "47513027:407609",
+      "integer_cols": "20677425:92199",
+      "implied_integer_cols": 5,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "dlr2",
+   "band": "D",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 7132926,
+   "cols": 38868107,
+   "nnz": 78091589,
+   "rows_after": 3250859,
+   "cols_after": 3137652,
+   "nnz_after": 10542701,
+   "rows_removed_pct": 54.424607797697604,
+   "cols_removed_pct": 91.92743809210981,
+   "nnz_removed_pct": 86.49956911492734,
+   "presolve_seconds": 71.309121538,
+   "presolve_core_seconds": 63.575017613,
+   "read_seconds": 97.822306166,
+   "reached_time_limit": false,
+   "peak_rss_mb": 34298.08984375,
+   "tool_wall_seconds": 173.34116998000536,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 9.997981,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 18.73073,
+      "rows_removed": 2534201,
+      "cols_removed": 9013687,
+      "nnz_removed": 36687540
+     },
+     "fast_loop": {
+      "calls": 5,
+      "seconds": 20.260724,
+      "rows_removed": 1115945,
+      "cols_removed": 26616935,
+      "nnz_removed": 29830700
+     },
+     "clique_substitutions": {
+      "calls": 2,
+      "seconds": 1e-06,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 2,
+      "seconds": 8.923445,
+      "rows_removed": 231921,
+      "cols_removed": 99833,
+      "nnz_removed": 1030648
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 3,
+      "seconds": 5.199664,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 0.230832,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.160513,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 0,
+      "free_col_substitution": 36102,
+      "doubleton_equation": 562693,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 1825699,
+      "fixed_col": 8252296,
+      "redundant_row": 109707,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 162596,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "fast_loop",
+      "linear_transform": 0,
+      "free_col_substitution": 609397,
+      "doubleton_equation": 2188,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 15840,
+      "fixed_col": 25766870,
+      "redundant_row": 488548,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 238480,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "parallel_rows_cols",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 42516,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 231921,
+      "duplicate_column": 57317,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "final_scaling",
+      "linear_transform": 223284,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 223284,
+      "free_col_substitution": 645499,
+      "doubleton_equation": 564881,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 1841539,
+      "fixed_col": 34061682,
+      "redundant_row": 598255,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 231921,
+      "duplicate_column": 57317,
+      "zero_obj_singleton_col": 401076,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 564853,
+      "setup": 0,
+      "initial_scan": 562693,
+      "fast_loop": 2160,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 0,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 28
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 231921,
+      "row_additions": 0,
+      "cols_merged": 57317,
+      "cols_dominated": 42516,
+      "rows_removed": 231921,
+      "cols_removed": 99833,
+      "hash_seconds": 3.952047,
+      "col_seconds": 2.463222,
+      "row_seconds": 1.692414
+     }
+    ],
+    "fixing": {
+     "empty_col": {
+      "count": 48020,
+      "nnz": 0
+     },
+     "dual_fixing_lock": {
+      "count": 32385101,
+      "nnz": 32643472
+     },
+     "dual_fixing_single_equation": {
+      "count": 3170,
+      "nnz": 3452
+     },
+     "dual_fixing_bound": {
+      "count": 935,
+      "nnz": 2083
+     },
+     "singleton_row_bounds_equal": {
+      "count": 1552478,
+      "nnz": 194150
+     },
+     "parallel_columns": {
+      "count": 42516,
+      "nnz": 207783
+     },
+     "bounds_equal_doubleton": {
+      "count": 29462,
+      "nnz": 58924
+     },
+     "total": {
+      "count": 34061682,
+      "nnz": 33109864,
+      "fixed_col": 34061682
+     }
+    },
+    "bound_change": {
+     "implied_bound": {
+      "count": 290221
+     },
+     "doubleton": {
+      "count": 70052
+     },
+     "singleton_row": {
+      "count": 291526
+     },
+     "dual_fixing": {
+      "count": 262722
+     },
+     "parallel_columns": {
+      "count": 57317
+     },
+     "total": {
+      "count": 971838
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 63.50389,
+      "rows": "7132926:3250859",
+      "cols": "38868107:3137652",
+      "nnz": "78091589:10542701",
+      "integer_cols": "532697:358014",
+      "implied_integer_cols": 161550,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "hawaiiv10-130",
+   "band": "D",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 1388052,
+   "cols": 685130,
+   "nnz": 183263061,
+   "rows_after": 1241143,
+   "cols_after": 665813,
+   "nnz_after": 180916328,
+   "rows_removed_pct": 10.583825389826893,
+   "cols_removed_pct": 2.8194649190664545,
+   "nnz_removed_pct": 1.2805270124785266,
+   "presolve_seconds": 251.703826034,
+   "presolve_core_seconds": 246.52831271,
+   "read_seconds": 111.932020811,
+   "reached_time_limit": false,
+   "peak_rss_mb": 16504.23046875,
+   "tool_wall_seconds": 373.6229428220104,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 15.043418,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 57.119927,
+      "rows_removed": 139331,
+      "cols_removed": 15888,
+      "nnz_removed": 1840566
+     },
+     "fast_loop": {
+      "calls": 5,
+      "seconds": 111.478688,
+      "rows_removed": 3301,
+      "cols_removed": 3334,
+      "nnz_removed": 329597
+     },
+     "clique_substitutions": {
+      "calls": 2,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 2,
+      "seconds": 57.737021,
+      "rows_removed": 4277,
+      "cols_removed": 95,
+      "nnz_removed": 176570
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 2,
+      "seconds": 1.110564,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 4.031691,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.006444,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 0,
+      "free_col_substitution": 9840,
+      "doubleton_equation": 91,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 1682,
+      "fixed_col": 5957,
+      "redundant_row": 127718,
+      "implied_equation": 0,
+      "forcing_row": 414,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "fast_loop",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 2482,
+      "fixed_col": 884,
+      "redundant_row": 819,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 2450,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "parallel_rows_cols",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 72,
+      "equality_row_addition": 610,
+      "equality_row_additions": 0,
+      "singleton_row": 23,
+      "fixed_col": 23,
+      "redundant_row": 515,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 3667,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "final_scaling",
+      "linear_transform": 1648,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 0,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 0,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 1648,
+      "free_col_substitution": 9840,
+      "doubleton_equation": 163,
+      "equality_row_addition": 610,
+      "equality_row_additions": 0,
+      "singleton_row": 4187,
+      "fixed_col": 6864,
+      "redundant_row": 129052,
+      "implied_equation": 0,
+      "forcing_row": 414,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 3667,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 2450,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 163,
+      "setup": 0,
+      "initial_scan": 91,
+      "fast_loop": 0,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 72,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 0
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 3667,
+      "row_additions": 610,
+      "cols_merged": 0,
+      "cols_dominated": 0,
+      "rows_removed": 4277,
+      "cols_removed": 0,
+      "hash_seconds": 56.860891,
+      "col_seconds": 0.177932,
+      "row_seconds": 0.555003
+     }
+    ],
+    "fixing": {
+     "empty_col": {
+      "count": 466,
+      "nnz": 0
+     },
+     "forcing_row": {
+      "count": 1242,
+      "nnz": 5228
+     },
+     "dual_fixing_lock": {
+      "count": 3588,
+      "nnz": 4288
+     },
+     "dual_fixing_bound": {
+      "count": 610,
+      "nnz": 1186
+     },
+     "singleton_row_bounds_equal": {
+      "count": 958,
+      "nnz": 1551029
+     },
+     "total": {
+      "count": 6864,
+      "nnz": 1561731,
+      "fixed_col": 6864
+     }
+    },
+    "bound_change": {
+     "singleton_row": {
+      "count": 3252
+     },
+     "implied_integer": {
+      "count": 166
+     },
+     "total": {
+      "count": 3418
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 246.527754,
+      "rows": "1388052:1241143",
+      "cols": "685130:665813",
+      "nnz": "183263061:180916328",
+      "integer_cols": "578444:574804",
+      "implied_integer_cols": 0,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "neos-4535459-waipa",
+   "band": "D",
+   "where": "dev-large",
+   "status": "Reduced",
+   "rows": 163001,
+   "cols": 961401,
+   "nnz": 256963402,
+   "rows_after": 163001,
+   "cols_after": 960402,
+   "nnz_after": 256962403,
+   "rows_removed_pct": 0.0,
+   "cols_removed_pct": 0.1039108550958445,
+   "nnz_removed_pct": 0.00038877131615808853,
+   "presolve_seconds": 103.650903189,
+   "presolve_core_seconds": 96.692904243,
+   "read_seconds": 135.096107507,
+   "reached_time_limit": false,
+   "peak_rss_mb": 22263.98046875,
+   "tool_wall_seconds": 252.37178427899198,
+   "diag": {
+    "switches": [
+     {
+      "off": "strengthen_inequalities,dominated_columns,sparsify,aggregator,fourier_motzkin,enumeration,probing,clique_substitutions,implied_integers,clique_merging",
+      "probing_contingent": 1000,
+      "probing_nostop": 0,
+      "redundancy_explicit": 0,
+      "probe_rows": 1
+     }
+    ],
+    "stage": {
+     "setup": {
+      "calls": 2,
+      "seconds": 24.501209,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "initial_scan": {
+      "calls": 1,
+      "seconds": 18.696257,
+      "rows_removed": 0,
+      "cols_removed": 999,
+      "nnz_removed": 999
+     },
+     "fast_loop": {
+      "calls": 4,
+      "seconds": 4.226232,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "clique_substitutions": {
+      "calls": 1,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "fourier_motzkin": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "aggregator": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "sparsify": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "parallel_rows_cols": {
+      "calls": 1,
+      "seconds": 39.17861,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "strengthen_inequalities": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "dominated_columns": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "implied_integers": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "shrink": {
+      "calls": 2,
+      "seconds": 1.450654,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "final_scaling": {
+      "calls": 1,
+      "seconds": 8.635257,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     },
+     "other": {
+      "calls": 0,
+      "seconds": 0.00438,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "nnz_removed": 0
+     }
+    },
+    "reductions": [
+     {
+      "stage": "initial_scan",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 1,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 998,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     },
+     {
+      "stage": "all",
+      "linear_transform": 0,
+      "free_col_substitution": 0,
+      "doubleton_equation": 0,
+      "equality_row_addition": 0,
+      "equality_row_additions": 0,
+      "singleton_row": 0,
+      "fixed_col": 1,
+      "redundant_row": 0,
+      "implied_equation": 0,
+      "forcing_row": 0,
+      "forcing_column": 0,
+      "forcing_column_removed_row": 0,
+      "duplicate_row": 0,
+      "duplicate_column": 0,
+      "zero_obj_singleton_col": 998,
+      "fourier_motzkin_block": 0,
+      "fourier_motzkin_obj_col": 0
+     }
+    ],
+    "probing": [
+     {
+      "binaries": 0,
+      "probed": 0,
+      "rounds": 0,
+      "stop": "not_run",
+      "fixed": 0,
+      "substitutions": 0,
+      "cliques_before": 0,
+      "cliques_after": 0,
+      "implications": 0,
+      "seconds": 0.0,
+      "probing_work": 0,
+      "attempted": 0,
+      "bounds_tightened": 0,
+      "lifted_nonzeros": 0,
+      "loop_seconds": 0.0,
+      "prop_sweeps": 0,
+      "prop_rows": 0,
+      "prop_entries": 0,
+      "activity_entries": 0,
+      "max_probe_work": 0,
+      "max_probe_sweeps": 0,
+      "bound_changes": 0,
+      "rows_touched": 0,
+      "rows_touched_entries": 0,
+      "max_rows_touched": 0,
+      "max_rows_touched_entries": 0,
+      "probe_directions": 0,
+      "dir_rows_touched": 0,
+      "dir_rows_touched_entries": 0,
+      "max_dir_rows_touched": 0,
+      "max_dir_rows_touched_entries": 0,
+      "probe_reductions": 0
+     }
+    ],
+    "cliquemerge": [
+     {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_changed": 0,
+      "rows_deleted": 0,
+      "nnz_delta": 0,
+      "nnz_added": 0,
+      "nnz_removed": 0,
+      "fixings": 0
+     }
+    ],
+    "aggregator": [
+     {
+      "candidates": 0,
+      "substituted": 0,
+      "size2": 0,
+      "rejected_pivot": 0,
+      "rejected_fillin": 0,
+      "stopped_by_failures": 0,
+      "examined": 0,
+      "stale": 0,
+      "rejected_integer": 0
+     }
+    ],
+    "doubleton": [
+     {
+      "removed": 0,
+      "setup": 0,
+      "initial_scan": 0,
+      "fast_loop": 0,
+      "clique_substitutions": 0,
+      "fourier_motzkin": 0,
+      "aggregator": 0,
+      "sparsify": 0,
+      "parallel_rows_cols": 0,
+      "strengthen_inequalities": 0,
+      "dominated_columns": 0,
+      "enumeration": 0,
+      "implied_integers": 0,
+      "probing": 0,
+      "shrink": 0,
+      "final_scaling": 0,
+      "other": 0
+     }
+    ],
+    "substitutions": [
+     {
+      "applied": 0,
+      "from_implications": 0,
+      "from_cliques": 0,
+      "in_clique_substitutions": 0,
+      "in_enumeration": 0,
+      "in_probing": 0,
+      "simple_probing": 0,
+      "dual_fixing": 0
+     }
+    ],
+    "varbound_aggregation": {
+     "enumeration": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     },
+     "probing": {
+      "calls": 0,
+      "seconds": 0.0,
+      "rows_removed": 0,
+      "rows_modified": 0,
+      "vars_lifted": 0,
+      "nnz_removed": 0
+     }
+    },
+    "parallel": [
+     {
+      "duplicate_rows": 0,
+      "row_additions": 0,
+      "cols_merged": 0,
+      "cols_dominated": 0,
+      "rows_removed": 0,
+      "cols_removed": 0,
+      "hash_seconds": 38.976514,
+      "col_seconds": 0.158776,
+      "row_seconds": 0.04055
+     }
+    ],
+    "fixing": {
+     "dual_fixing_lock": {
+      "count": 1,
+      "nnz": 1
+     },
+     "total": {
+      "count": 1,
+      "nnz": 1,
+      "fixed_col": 1
+     }
+    },
+    "bound_change": {
+     "total": {
+      "count": 0
+     }
+    },
+    "dominated_columns": [
+     {
+      "pair_tests": 0,
+      "signature_rejects": 0,
+      "fixed": 0,
+      "bounds": 0,
+      "seconds": 0.0,
+      "calls": 0,
+      "type_rejects": 0,
+      "cost_rejects": 0,
+      "column_scans": 0,
+      "scan_entries": 0,
+      "dominations": 0
+     }
+    ],
+    "total": [
+     {
+      "presolve_seconds": 96.692599,
+      "rows": "163001:163001",
+      "cols": "961401:960402",
+      "nnz": "256963402:256962403",
+      "integer_cols": "640000:640000",
+      "implied_integer_cols": 0,
+      "status": "reduced",
+      "stopped": 0,
+      "restart": 0
+     }
+    ]
+   }
+  }
+ ]
+}
