@@ -1048,7 +1048,7 @@ eilA101-2, ex10, gfd-schedulen180f7d50m30k18, k1mushroom, mzzv11, mzzv42z, neos-
 neos-3402454-bohle, neos-4532248-waihi, neos-4647030-tutaki, neos-4722843-widden,
 neos-4763324-toguru, neos-5114902-kasavu, neos-631710, neos-787933, neos-848589, ns1644855,
 ns1760995, nursesched-medium-hint03, nw04, piperout-08, piperout-27, rd-rplusc-21, roi5alpha10n8,
-s100, s250r10, splice1k1, square41, square47, supportcase33 and var-smallemery-m6j6. Three
+s100, s250r10, splice1k1, square41, square47, supportcase33 and var-smallemery-m6j6. Four
 settings, presolve only through the tool, one thread, five runs at a time:
 
 - cheap: every cheap rule on, the reference of Stage 1c
@@ -1057,19 +1057,24 @@ settings, presolve only through the tool, one thread, five runs at a time:
 - Stage 1: the stored variant `stage1c` (`--presolve-rule-off 9175456`, the ten names above and
   `parallel_columns,simple_probing,dual_fixing_substitution,implied_equations,implied_integer_conversion`),
   on the 240;
+- left-out: the cheap setting with `implied_equations,implied_integer_conversion` and
+  `--presolve-rule-off 8913056` (rule bits 5, 7, 19 and 23), which is the switch set of
+  `results/bench240/cheap_ablation/off_leftout.csv`, on the 240;
 - full: no switch besides the ones under test, on the 204.
 
-5436 runs in all (twelve variants of cheap, three of Stage 1, nine of full), every one with exit
-code 0 and none at the time limit. Two runs are called equal when the exit code, the presolve
-status, the hash of the presolved model and every DIAG line agree, the fields with `seconds` in
-their key aside.
+6636 runs in all (twelve variants of cheap, three of Stage 1, five of left-out, nine of full),
+every one with exit code 0 and none at the time limit. Two runs are called equal when the exit
+code, the presolve status, the hash of the presolved model and every DIAG line agree, the fields
+with `seconds` in their key aside.
 
 The local build against the node. The old build in the cheap setting gives the sizes and the
 `DIAG fixing` and `DIAG bound_change` counts of the stored node run
 `results/bench240/highs_cheap_all` on 239 of the 240; fiball ends with 32397 columns and 99726
 nonzeros instead of 32399 and 99734. The new build gives those of `results/bench240/highs_stage1c`
 on all 240 in the Stage 1 setting and those of `highs_diag2_full` on 203 of the 204 in the full
-setting (fiball again).
+setting (fiball again). In the left-out setting the new build gives the sizes of `off_leftout.csv`
+on 239 of the 240, and the old build with the old name the sizes and counts of
+`results/bench240/stage1c_refs/m3_a` on 239 (fiball both times).
 
 No new switch set. The old and the new build are equal on the 240 in the cheap setting, on the 240
 in the Stage 1 setting and on the 204 in the full setting. The `DIAG switches` line is part of the
@@ -1079,7 +1084,8 @@ not.
 The old name. With `dual_fixing_substitution` added, the old and the new build are equal on the
 240 (cheap) and on the 204 (full); the Stage 1 setting contains the name. With the three new names
 in its place the new build is equal to itself with the old name on the 240 (cheap), the 240
-(Stage 1) and the 204 (full), the `DIAG switches` line aside.
+(Stage 1) and the 204 (full), the `DIAG switches` line aside. In the left-out setting the new
+build with the three names is equal to the old build with the old name on the 240.
 
 Each new name alone, cheap setting, the 240. With every cheap rule on the counters are: 13017
 fixings `dual_fixing_single_equation` on 11 instances (b1c1s1 2, icir97_tension 24,
@@ -1130,6 +1136,19 @@ column a rule fixes, substitutes or tightens; the base run is the one with all t
   substitution, 7242, 6867, 20733 and 29741, 28121, 84943, and is another model), and without the
   extension bound strengthening fixes nothing on savsched1 (4760). The falls were not traced.
 
+The left-out setting, the 240. There the dominated-column tests cannot stand in for the
+extension. It fixes 13032 columns on 9 instances (savsched1 11615, neos-827175 732,
+irish-electricity 630, icir97_tension 24, neos-3656078-kumeu 20, neos-5093327-huahum 6,
+snp-02-004-104 3, neos-3216931-puriri 1, triptim1 1). With `dual_fixing_single_equation` added
+the presolved model differs on 3 instances: icir97_tension 881, 1115, 15173 to 882, 1117, 15181,
+neos-5093327-huahum with six columns more, savsched1 with equal sizes. The traces say where its
+columns go: on savsched1 4731 to the lock rule and 6884 become empty columns, on neos-827175 all
+732 to the lock rule, on irish-electricity 420 to bound strengthening and 210 to singleton rows,
+on neos-3656078-kumeu all 20 to bound strengthening (35 to 55 fixings). With
+`dual_fixing_binary_substitution` added as well, which leaves bound strengthening alone, the sizes
+change on 28 instances, with all three names on 39. neos-3402294-bobin ends with 32932 rows, 792
+columns and 381000 nonzeros in all four.
+
 Time, as an observation only (sum of the tool's `core_seconds` over the 240 in the cheap setting,
 five runs at a time on a laptop that was in use): 315 s with every cheap rule, 146 s with
 `dual_fixing_substitution`, 144 s with the three names, 158 s with `dual_fixing_single_equation`
@@ -1141,7 +1160,7 @@ extension; neos-4647030-tutaki goes from 10.3 s to 1.8 s. So nearly all the time
 the three rules: an earlier build of the switch, which skipped `handleSingleEquation` and still set
 the mark, took 143 s on rd-rplusc-21 with all three names set.
 
-`DIAG free_col_substitution`. On all 4308 presolve calls of the new build (twelve variants on the
+`DIAG free_col_substitution`. On all 5268 presolve calls of the new build (sixteen variants on the
 240, seven on the 204) the three kinds add up to `count`, the sub-counts stay within their kinds,
 the two `count` fields add up to `free_col_substitution` of `DIAG reductions stage=all`, and
 `count` of the `aggregator` line equals `substituted` of `DIAG aggregator`. The longest of these
@@ -1150,15 +1169,17 @@ lines has 158 characters.
 | setting | line | count | equation | inequality_own | inequality_other | upper_side | ranged | own_zero_cost | integer |
 |---|---|---|---|---|---|---|---|---|---|
 | cheap, the 240 | `singleton_col` | 16881 on 59 instances | 11596 on 54 | 5285 on 13 | 0 | 288 on 4 | 0 | 0 | 699 on 22 |
+| left-out, the 240 | `singleton_col` | 16549 on 55 | 11380 on 53 | 5169 on 10 | 0 | 224 on 5 | 0 | 4 on 1 | 696 on 22 |
 | full, the 204 | `singleton_col` | 15519 on 54 | 10223 on 49 | 5296 on 13 | 0 | 290 on 5 | 0 | 0 | 705 on 19 |
 | full, the 204 | `aggregator` | 114851 on 89 | 101270 on 79 | 12399 on 21 | 1182 on 7 | 12279 on 21 | 0 | 12220 on 19 | 50384 on 53 |
 
-In the cheap setting the `aggregator` line is zero. The inequality pivots of singleton columns are
-on irish-electricity (4887 of its 10039 substitutions), supportcase42 (140), map10 and map16715-04
-(87 each), mushroom-best (44), neos-3046615-murg (9), uccase9 (8), snp-02-004-104 (7),
-physiciansched6-2 and physiciansched3-3 (5 each), rocII-5-11 (3), sct2 (2) and roll3000 (1).
-No singleton column was substituted through an inequality whose dual sign came from another
-column, and none of these pivot columns has a zero cost.
+In the cheap and the left-out setting the `aggregator` line is zero. In the cheap setting the
+inequality pivots of singleton columns are on irish-electricity (4887 of its 10039
+substitutions), supportcase42 (140), map10 and map16715-04 (87 each), mushroom-best (44),
+neos-3046615-murg (9), uccase9 (8), snp-02-004-104 (7), physiciansched6-2 and physiciansched3-3
+(5 each), rocII-5-11 (3), sct2 (2) and roll3000 (1). In none of the settings was a singleton
+column substituted through an inequality whose dual sign came from another column. Four of the
+inequality pivots have a pivot column with zero cost, all in the left-out setting on one instance.
 
 `implied_row_dual_bounds` alone. In the cheap setting the presolved model differs on 22 of the
 240, in size on 21: csched007 297, 1703, 6270 to 347, 1753, 6370; irish-electricity 70646, 40633,
