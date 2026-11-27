@@ -197,10 +197,11 @@ struct near_row_t {
   int32_t row = -1;
   // Coefficient in the smallest core column.
   double first = 0.;
-  // Free entries in singleton columns, and the last of them.
+  // Free entries in singleton columns, the last of them, and the smallest |a| among them.
   int32_t singles     = 0;
   int32_t single_col  = -1;
   double single_value = 0.;
+  double single_min   = inf;
   dd_t fixed_terms;
 };
 
@@ -224,6 +225,7 @@ inline bool core_entry(const state_t& st, int64_t e, bool near, near_row_t& of)
     ++of.singles;
     of.single_col   = col;
     of.single_value = st.csr.value[e];
+    of.single_min   = std::fmin(of.single_min, std::fabs(st.csr.value[e]));
     return false;
   }
   return true;
@@ -376,10 +378,11 @@ constexpr double max_dynamism = 1e6;
 // entries of the target leave, the entry of the equation's singleton column enters with
 // -factor times its coefficient, and the finite sides of the target move by factor times the
 // right-hand side of the equation less its fixed terms. The fixed terms of the target stay in
-// its entries; they are read only for the limit on their size when the step leads back into
-// the equation (|factor| < 1 and a singleton column of the equation).
-// False, with nothing changed, when a value involved is too large to hold the tolerance or the
-// step would multiply the error of a row that the presolve has changed.
+// its entries; they are read only for the limit on their size when the step multiplies the
+// error of the target.
+// False, with nothing changed, when a value involved is too large to hold the tolerance where
+// the step takes it, or the step would multiply the error of a row that the presolve has
+// changed.
 bool subtract(state_t& st,
               postsolve_t& ps,
               const tolerances_t& tol,
@@ -392,29 +395,40 @@ bool subtract(state_t& st,
   const line_store_t& csr = st.csr;
   double factor           = target.first / equation.first;
   if (!std::isfinite(factor) || factor == 0.) { return false; }
-  // A row that the presolve has changed holds the rounding of those changes: a side scaled
-  // next to a fixed term of 1e7 is off by 1e-9, which its own entries never show. The
-  // subtraction takes the error of the equation into the target times |factor|, and what the
-  // target then says of the equation's singleton column (a bound, a fixed value, an alias)
-  // goes back into the equation divided by it. Both ways the error must not grow: the row whose
-  // error is multiplied has to be as the model gave it.
-  double scale       = std::fabs(factor);
-  bool into_equation = equation.singles == 1 && scale < 1.;
-  if ((scale > 1. && st.row_version[equation.row] != 0) ||
-      (into_equation && st.row_version[target.row] != 0)) {
+  // From here on the target row of the model is the new target plus factor times the
+  // equation: whatever is done to the equation later, within its tolerance (a side rounded, a
+  // subtraction, a merge), reaches that row times |factor|. And once the singleton column of
+  // the equation has been taken out through the target, the equation is what the target was,
+  // divided by the factor: whatever is done to the target reaches it divided by |factor|.
+  // Neither may grow.
+  double scale = std::fabs(factor);
+  if (scale > 1. || (equation.singles == 1 && scale != 1.)) { return false; }
+  // The constants of a row are stored with an error: that of a double for a row as the model
+  // gave it, and the rounding of every change for a row that the presolve has changed (a side
+  // scaled next to a fixed term of 1e7 is off by 1e-9, which holds the tolerance in that row
+  // and nowhere else). The error of the equation goes into each singleton column of the target
+  // times |factor| and divided by the coefficient of that column; the error of the target into
+  // the singleton column of the equation divided by its coefficient.
+  double grow_equation = std::fmax(1., scale / target.single_min);
+  double grow_target   = 1.;
+  if (equation.singles == 1) { grow_target = std::fmax(1., 1. / std::fabs(equation.single_value)); }
+  // An error of unknown size must not grow: the row has to be as the model gave it.
+  if ((grow_equation > 1. && st.row_version[equation.row] != 0) ||
+      (grow_target > 1. && st.row_version[target.row] != 0)) {
     return false;
   }
-  // The constants of the target are then read in the units of the equation as well.
-  double shrink = into_equation ? scale : 1.;
-  double rhs    = dd_residual(st.row_upper[equation.row], equation.fixed_terms);
+  double rhs   = dd_residual(st.row_upper[equation.row], equation.fixed_terms);
   double lower = st.row_lower[target.row], upper = st.row_upper[target.row];
-  // The shift is rounded at the size of the right-hand side, of the fixed terms it is freed
-  // from, of the product and of the side that takes it.
-  if (!holds_tolerance(std::fabs(st.row_upper[equation.row]), tol) ||
-      !keeps_sides(equation.fixed_terms, tol) || !holds_tolerance(std::fabs(factor * rhs), tol) ||
-      (lower > -inf && !holds_tolerance(std::fabs(lower) / shrink, tol)) ||
-      (upper < inf && !holds_tolerance(std::fabs(upper) / shrink, tol)) ||
-      (into_equation && !holds_tolerance(std::fabs(dd_value(target.fixed_terms)) / scale, tol))) {
+  // The error of a double must hold the tolerance where it arrives. The shift is rounded at the
+  // size of the right-hand side, of the fixed terms it is freed from, of the product and of the
+  // side that takes it.
+  if (!holds_tolerance(std::fabs(st.row_upper[equation.row]) * grow_equation, tol) ||
+      !holds_tolerance(std::fabs(dd_value(equation.fixed_terms)) * grow_equation, tol) ||
+      !holds_tolerance(std::fabs(factor * rhs), tol) ||
+      (lower > -inf && !holds_tolerance(std::fabs(lower) * grow_target, tol)) ||
+      (upper < inf && !holds_tolerance(std::fabs(upper) * grow_target, tol)) ||
+      (grow_target > 1. &&
+       !holds_tolerance(std::fabs(dd_value(target.fixed_terms)) * grow_target, tol))) {
     return false;
   }
   double value = equation.singles == 1 ? -factor * equation.single_value : 0.;

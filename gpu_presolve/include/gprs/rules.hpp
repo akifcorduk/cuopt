@@ -244,22 +244,28 @@ struct doubleton_t {
 // equations. The two rows have the same solutions before and after, integer columns or not.
 // Such a step takes at least one entry from the model, since a core has two entries or more and
 // the equation brings at most one, and no family adds an entry: their number is finite.
+// After the step the target row of the model is the new target plus f times the equation, so
+// what a later step does to the equation within its tolerance reaches that row times |f|; and
+// once the singleton column of the equation is taken out through the target, the equation is
+// the old target divided by f, so what is done to the target reaches it divided by |f|. The
+// step is made only where neither grows: with |f| <= 1, and with |f| = 1 when the equation has
+// a singleton column.
+// The step also carries the errors with which the constants of the two rows are stored into
+// the singleton columns. That of the equation reaches a singleton column of the target with
+// the coefficient c times |f| / |c|: it grows by g_E = max(1, |f| / min |c|). That of the
+// target reaches the singleton column of the equation, with the coefficient a there, divided
+// by |a|: it grows by g_T = max(1, 1 / |a|), and by 1 without such a column.
 // The pair is left alone, and counts as not parallel towards the limit, when neither row
-// qualifies; when |v| * tol.side_error > tol.feasibility for v the right-hand side of the
-// equation, its fixed terms, the shift, or a finite side of the target (the fixed terms of the
-// target stay in its entries and are read only in the case below); when f or the new
-// coefficient is zero or not finite; or when max |a| / min |a| over the free entries of the
-// target would end above 1e6 and above its value before. That last test and the step read the
-// target once more and spend its used slots.
-// It is left alone as well when the step would multiply an error that a row holds. A row that
-// the presolve has changed (row_version != 0) holds the rounding of those changes, which keeps
-// the tolerance in the units of that row only: a side that was scaled next to a fixed term of
-// 1e7 is off by 1e-9. The step takes the error of the equation into the target times |f|. When
-// the equation has a singleton column, what the target then says of that column (a bound, a
-// fixed value, an alias) goes back into the equation divided by |f|. So with |f| > 1 the
-// equation must be as the model gave it. With |f| < 1 and a singleton column of the equation
-// the target must be, and the limit above is on |side| / |f| for its finite sides and holds
-// for its fixed terms divided by |f| too. With |f| = 1 either row may have been changed.
+// qualifies; when f or the new coefficient is zero or not finite; when |f| is not as above; when
+// |v| * tol.side_error > tol.feasibility for v the shift, g_E times the right-hand side of the
+// equation, g_E times its fixed terms, g_T times a finite side of the target or, with g_T > 1,
+// g_T times the fixed terms of the target (with g_T = 1 these stay in its entries and are not
+// read); when g_E > 1 and the presolve has changed the equation, or g_T > 1 and it has changed
+// the target (row_version != 0): such a row holds the rounding of those changes, which keeps
+// the tolerance in that row only (a side that was scaled next to a fixed term of 1e7 is off by
+// 1e-9), and no limit on a size bounds it; or when max |a| / min |a| over the free entries of
+// the target would end above 1e6 and above its value before. That last test and the step read
+// the target once more and spend its used slots.
 // A reduction can change the core of a row that stays: of the kept row or the equation, where a
 // column that only the two rows held becomes a singleton column, and of the equation, whose
 // singleton column gets a second entry. Such a row and the target have no key until the next

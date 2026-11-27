@@ -660,6 +660,96 @@ GPRS_TEST(e2e_case_near_parallel_rows_scaled_target)
   if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
 }
 
+// The factor is 1, and the target has the continuous singleton column y with the coefficient
+// 2^-21. Row 0 is again the row that the tightening has scaled, off by 5.6e-10: the bound that
+// the target gave y after the subtraction was off by 2^21 times that, and the optimal point of
+// the model, crushed, violated it by 1.2e-3.
+GPRS_TEST(e2e_case_near_parallel_rows_small_singleton_coefficient)
+{
+  model_t base;
+  base.nrows            = 2;
+  base.ncols            = 4;
+  base.row_start        = {0, 3, 6};
+  base.col_index        = {0, 1, 3, 0, 1, 2};
+  base.value            = {3., 3., 1., 1., 1., 1.};
+  base.row_lower        = {30000009., -inf};
+  base.row_upper        = {30000009., 4.};
+  base.col_lower        = {0., 0., 0., 30000000.};
+  base.col_upper        = {2., 2., 3., 30000000.};
+  base.cost             = {0., 0., -1., 0.};
+  base.col_type         = {1, 1, 0, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {}, {1., 1., 0x1p-21, 1.});
+  options_t options;
+  options.primal_only       = true;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// No row is changed by the presolve here (the tightening is off). Row 0 is 26.4 times
+// x0 + x1 - w = -99997 with w fixed at 1e5: as doubles, its right-hand side less its fixed term
+// is 79.2 up to the rounding of 2.6e6, 4e-11. Row 1 has the same core 3072000 / 26.4 times
+// larger: after the subtraction it was off by 5e-6, and so was the postsolved point.
+GPRS_TEST(e2e_case_near_parallel_rows_large_factor)
+{
+  model_t base;
+  base.nrows            = 2;
+  base.ncols            = 4;
+  base.row_start        = {0, 3, 6};
+  base.col_index        = {0, 1, 3, 0, 1, 2};
+  base.value            = {1., 1., -1., 3000., 3000., 1.};
+  base.row_lower        = {-99997., 9002.};
+  base.row_upper        = {-99997., 9002.};
+  base.col_lower        = {0., 0., 0., 100000.};
+  base.col_upper        = {2., 2., 10., 100000.};
+  base.cost             = {0., 0., 1., 0.};
+  base.col_type         = {1, 1, 0, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {1., 1024.}, {});
+  // Row 0 times a factor that is no power of two.
+  constexpr double factor = 26.4;
+  for (int64_t e = c.model.row_start[0]; e < c.model.row_start[1]; ++e) {
+    c.model.value[e] *= factor;
+  }
+  c.model.row_lower[0] *= factor;
+  c.model.row_upper[0] *= factor;
+  c.row_scale[0] *= factor;
+  options_t options;
+  options.enabled[rule::tightening] = false;
+  oracle::verdict_t verdict         = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
+// Row 1, x0 + x1 + x2 + y = 4, is as the model gave it, and row 2 has its core 4096 times
+// larger: subtracted with the factor 4096, row 1 is from then on what row 2 says of the core,
+// times 4096. y is its singleton column now, and row 0, which the tightening has scaled (off by
+// 5.6e-10), was subtracted from it with the factor 1: y = 1 - 5.6e-10, right for row 1 and
+// 2.3e-6 off for row 2. A subtraction with a factor above 1 makes the equation carry a row
+// that is stricter than itself.
+GPRS_TEST(e2e_case_near_parallel_rows_equation_changed_later)
+{
+  model_t base;
+  base.nrows            = 3;
+  base.ncols            = 6;
+  base.row_start        = {0, 4, 8, 13};
+  base.col_index        = {0, 1, 2, 5, 0, 1, 2, 3, 0, 1, 2, 3, 4};
+  base.value            = {3., 3., 3., 1., 1., 1., 1., 1., 4., 4., 4., 4., 1.};
+  base.row_lower        = {30000009., 4., 18.};
+  base.row_upper        = {30000009., 4., 18.};
+  base.col_lower        = {0., 0., 0., 0., 0., 30000000.};
+  base.col_upper        = {3., 3., 3., 10., 3., 30000000.};
+  base.cost             = {0., 0., 0., 1., 0., 0.};
+  base.col_type         = {1, 1, 1, 0, 1, 1};
+  base.objective_offset = 0.;
+
+  oracle::case_t c = oracle::make_case(base, {1., 1., 1024.}, {});
+  options_t options;
+  oracle::verdict_t verdict = oracle::check_presolve(c, options);
+  if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+}
+
 // Multi-round sequence: the reduced model is a model like any other. Its data need not be
 // integers, so the oracle compares with its tolerance here.
 GPRS_TEST(e2e_second_presolve_of_the_reduced_model)
