@@ -3,9 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # cmake-format: on
 
+# The host engine of the gprs presolve (GPRS_SOURCE_DIR) and its adapter. The engine sources are
+# found by pattern, as in its own CMakeLists.txt, so that the engine can add files.
+file(GLOB GPRS_ENGINE_SRC_FILES CONFIGURE_DEPENDS "${GPRS_SOURCE_DIR}/src/*.cpp")
+set(GPRS_SRC_FILES
+  ${GPRS_ENGINE_SRC_FILES}
+  ${CMAKE_CURRENT_SOURCE_DIR}/gprs_presolve.cpp
+)
+
 # Files necessary for Linear Programming functionality
 set(PRESOLVE_LP_NECESSARY_FILES
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party_presolve.cpp
+  ${GPRS_SRC_FILES}
   ${CMAKE_CURRENT_SOURCE_DIR}/single_lock_dual_aggregation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/gf2_presolve.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/bhw_coeff_reduce.cpp
@@ -32,5 +41,6 @@ else()
 endif()
 
 set(PRESOLVE_SRC_FILES ${PRESOLVE_SRC_FILES} PARENT_SCOPE)
+set(GPRS_SRC_FILES ${GPRS_SRC_FILES} PARENT_SCOPE)
 set(CUOPT_SRC_FILES ${CUOPT_SRC_FILES}
   ${PRESOLVE_SRC_FILES} PARENT_SCOPE)

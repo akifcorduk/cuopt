@@ -18,6 +18,7 @@
 #include <cuopt/mathematical_optimization/optimization_problem.hpp>
 #include <dual_simplex/simplex_solver_settings.hpp>
 #include <dual_simplex/user_problem.hpp>
+#include <presolve/gprs_presolve.hpp>
 #include <presolve/presolve_budget_policy.hpp>
 
 #include <PSLP/PSLP_API.h>
@@ -118,6 +119,9 @@ class third_party_presolve_t {
   void set_indicator_strengthening(bool enabled) { indicator_strengthening_ = enabled; }
   void set_dual_reductions(bool enabled) { dual_reductions_ = enabled; }
   void set_pslp_lp_fold(bool enabled) { pslp_lp_fold_ = enabled; }
+  // gprs runs on MIPs presolved with Papilo only. When its status is NOT_RUN, Papilo presolves
+  // the original problem in both modes.
+  void set_gprs_presolve(gprs_presolve_mode_t mode) { gprs_mode_ = mode; }
 
   // Apply the presolve on an simplex::user_problem in-place. Used in sub MIP and (in the future)
   // restarts.
@@ -195,6 +199,19 @@ class third_party_presolve_t {
   ~third_party_presolve_t();
 
  private:
+  // PSLP or Papilo on a host problem, without gprs.
+  third_party_presolve_host_result_t<i_t, f_t> apply_third_party_presolve(
+    io::mps_data_model_t<i_t, f_t> const& mps_problem,
+    problem_category_t category,
+    cuopt::mathematical_optimization::presolver_t presolver,
+    bool dual_postsolve,
+    f_t absolute_tolerance,
+    f_t relative_tolerance,
+    double time_limit,
+    i_t num_cpu_threads,
+    i_t max_rounds,
+    i_t max_badgesize);
+
   third_party_presolve_status_t apply_pslp(io::mps_data_model_t<i_t, f_t> const& mps,
                                            double time_limit);
 
@@ -248,6 +265,13 @@ class third_party_presolve_t {
   bool indicator_strengthening_{true};
   bool dual_reductions_{true};
   bool pslp_lp_fold_{true};
+
+  gprs_presolve_mode_t gprs_mode_{gprs_presolve_mode_t::OFF};
+  // Set while the problem the solver works on went through gprs: every map and every point that
+  // leaves this class then refers to the problem gprs was given.
+  std::unique_ptr<gprs_presolve_t<i_t, f_t>> gprs_presolve_;
+  // gprs_presolve_ is the whole reduction: Papilo did not run and has no postsolve storage.
+  bool gprs_only_{false};
 };
 
 // Just for testing the conversion: user_problem -> Papilo problem -> user_problem.
