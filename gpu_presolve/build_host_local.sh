@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Builds libgprs_host.a, gprs_tests and gprs_presolve with the system compiler, without CMake,
+# Builds libgprs_host.a, gprs_tests, gprs_presolve and gprs_fuzz with the system compiler, without CMake,
 # once with assertions (-DGPRS_ASSERT=1) and once without, and runs the tests of both builds.
 #
 #   ./build_host_local.sh [test name filter]
@@ -53,7 +53,9 @@ build() {
   ar rcs "$dir/libgprs_host.a" "$dir"/obj/src_*.o
   "$cxx" "${flags[@]}" "$dir"/obj/tests_*.o "$dir/libgprs_host.a" -o "$dir/gprs_tests"
   "$cxx" "${flags[@]}" "$dir/obj/tools_gprs_presolve.o" "$dir/libgprs_host.a" -o "$dir/gprs_presolve"
-  echo "== $name: built $dir/libgprs_host.a, gprs_tests, gprs_presolve"
+  "$cxx" "${flags[@]}" "$dir/obj/tools_gprs_fuzz.o" "$dir/obj/tests_oracle.o" "$dir/libgprs_host.a" \
+    -o "$dir/gprs_fuzz"
+  echo "== $name: built $dir/libgprs_host.a, gprs_tests, gprs_presolve, gprs_fuzz"
   if [[ -n "$filter" ]]; then
     "$dir/gprs_tests" "$filter"
   else

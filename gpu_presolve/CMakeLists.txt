@@ -27,7 +27,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 file(GLOB GPRS_HOST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 file(GLOB GPRS_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
 
-# The warnings are private to the three targets; what the inline numerics of the headers need
+# The warnings are private to the targets; what the inline numerics of the headers need
 # is public and reaches every target that links the library.
 set(GPRS_WARNINGS -Wall -Wextra -Werror)
 
@@ -52,6 +52,12 @@ target_link_libraries(gprs_tests PRIVATE gprs_host)
 add_executable(gprs_presolve tools/gprs_presolve.cpp)
 target_compile_options(gprs_presolve PRIVATE ${GPRS_WARNINGS})
 target_link_libraries(gprs_presolve PRIVATE gprs_host)
+
+# Long random runs (tools/run_campaign.sh): the generator and the exact oracle of the tests, and
+# the structure check of check/.
+add_executable(gprs_fuzz tools/gprs_fuzz.cpp tests/oracle.cpp)
+target_compile_options(gprs_fuzz PRIVATE ${GPRS_WARNINGS})
+target_link_libraries(gprs_fuzz PRIVATE gprs_host)
 
 enable_testing()
 add_test(NAME gprs_tests COMMAND gprs_tests)

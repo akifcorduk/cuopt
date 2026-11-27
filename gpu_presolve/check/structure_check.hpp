@@ -98,7 +98,8 @@ struct structure_report_t {
   double bound_worst      = 0.;  // relative to max(1, |bound|)
   int32_t bound_worst_col = -1;
 
-  // Rows that left the model. Violations are relative to max(1, largest term).
+  // Rows that left the model. Violations are relative to max(1, largest term of the end that
+  // is violated).
   int64_t rows_tested   = 0;
   int64_t row_failures  = 0;
   double row_worst      = 0.;
@@ -354,7 +355,9 @@ inline structure_report_t structure_check(const gprs::model_t& model, const gprs
     double below = -gprs::inf, above = -gprs::inf;
 
     if (k < 0) {
+      // Each end has its own size: a huge bound at one end says nothing about the other.
       sum_t low = constant, high = constant;
+      double largest_low = largest, largest_high = largest;
       bool low_infinite = false, high_infinite = false;
       for (int32_t col : touched) {
         double coefficient = g[col];
@@ -366,13 +369,13 @@ inline structure_report_t structure_check(const gprs::model_t& model, const gprs
         double at_high = coefficient > 0 ? reduced.col_upper[col] : reduced.col_lower[col];
         if (std::isfinite(at_low)) {
           low.add(coefficient, at_low);
-          raise_to(largest, std::fabs(coefficient * at_low));
+          raise_to(largest_low, std::fabs(coefficient * at_low));
         } else {
           low_infinite = true;
         }
         if (std::isfinite(at_high)) {
           high.add(coefficient, at_high);
-          raise_to(largest, std::fabs(coefficient * at_high));
+          raise_to(largest_high, std::fabs(coefficient * at_high));
         } else {
           high_infinite = true;
         }
@@ -383,7 +386,7 @@ inline structure_report_t structure_check(const gprs::model_t& model, const gprs
       double violation = !(below <= above) ? below : above;
       ++s.rows_tested;
       if (violation <= 0.) { continue; }
-      double scaled = violation / largest;
+      double scaled = violation / (!(below <= above) ? largest_low : largest_high);
       if (!(scaled <= s.row_worst)) { s.row_worst_row = i; }
       raise_to(s.row_worst, scaled);
       s.row_failures += !(scaled <= structure_tolerance);
