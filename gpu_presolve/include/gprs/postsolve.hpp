@@ -16,6 +16,7 @@ namespace gprs {
 
 // A record exists where a column disappears or where a later dual postsolve needs the step.
 // Deleted rows that are empty, redundant, singleton or forcing leave no record in Stage 1.
+// A reader of the stack names every kind it knows and takes any other as a broken stack.
 enum class record_kind_t : uint8_t { fixed_col, alias, parallel_row, row_addition };
 
 // x[col] = value.
@@ -24,14 +25,24 @@ struct fixed_col_record_t {
   double value;
 };
 
-// x[col] = scale * x[rep] + offset, from the doubleton equation `row`. rep is live when the
-// record is pushed.
+// The rule that an alias comes from.
+// doubleton: a doubleton equation, which holds at every feasible point.
+// probing: simple probing on an equation; the alias holds at every feasible point.
+// lock: a column with a single lock against its cost, aliased to a binary of its lock row; the
+// alias holds at an optimal point only, so no result of primal-only mode has one.
+enum class alias_origin_t : uint8_t { doubleton, probing, lock };
+
+// x[col] = scale * x[rep] + offset. rep is live when the record is pushed. `row` is the row that
+// leaves the model with the alias, -1 when none does: the equation of origin doubleton; the
+// equation of origin probing when its batch deletes it, else -1; always -1 for origin lock,
+// whose lock row stays.
 struct alias_record_t {
   int32_t col;
   int32_t rep;
   int32_t row;
   double scale;
   double offset;
+  alias_origin_t origin;
 };
 
 // removed_row = ratio * kept_row, entry by entry; the sides of the kept row were intersected.
@@ -78,9 +89,15 @@ struct postsolve_t {
   // record.
   // A fixed value is finite, and integral for an integer column. An alias has a finite scale
   // other than zero and a finite offset; an integer column has an integer rep and an integral
-  // scale and offset. A ratio and a factor are finite and not zero.
+  // scale and offset; its row is as alias_record_t says for its origin. A ratio and a factor are
+  // finite and not zero.
   void push_fixed_col(int32_t col, double value);
-  void push_alias(int32_t col, int32_t rep, int32_t row, double scale, double offset);
+  void push_alias(int32_t col,
+                  int32_t rep,
+                  int32_t row,
+                  double scale,
+                  double offset,
+                  alias_origin_t origin = alias_origin_t::doubleton);
   void push_parallel_row(int32_t removed_row, int32_t kept_row, double ratio);
   void push_row_addition(int32_t row, int32_t equation_row, double factor);
 
@@ -90,8 +107,10 @@ struct postsolve_t {
   void postsolve(const std::vector<double>& x_reduced, std::vector<double>& x_original) const;
 
   // Point of the original model -> point of the reduced model: the values of the columns that
-  // are left. In primal-only mode a feasible point gives a feasible point with the same
-  // objective value. O(reduced columns).
+  // are left. A feasible point gives a feasible point of the reduced model whose objective value
+  // there is not above that of the point, and equal to it when no reduction rests on a dual
+  // argument (result_t::dual_findings == 0, which primal-only mode guarantees).
+  // O(reduced columns).
   void crush(const std::vector<double>& x_original, std::vector<double>& x_reduced) const;
 };
 

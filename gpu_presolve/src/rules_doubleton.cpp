@@ -5,6 +5,8 @@
  */
 /* clang-format on */
 
+#include "saved_row.hpp"
+
 #include <gprs/assert.hpp>
 #include <gprs/presolve.hpp>
 #include <gprs/rules.hpp>
@@ -41,23 +43,17 @@ constexpr double transfer_error_units = 4.;
 // fixed columns, summed in storage order as rebuild() does.
 alias_edge_t read_edge(const state_t& st, int32_t row)
 {
-  const line_store_t& csr = st.csr;
   alias_edge_t edge{row, -1, -1, 0., 0., 0.};
-  dd_t fixed_terms;
-  for (int64_t e = csr.begin(row); e < csr.end(row); ++e) {
-    if (!csr.live(e)) { continue; }
-    int32_t col = csr.index[e];
-    if (!st.is_live(col)) {
-      dd_add_product(fixed_terms, csr.value[e], st.col_lower[col]);
-    } else if (edge.col_a < 0) {
+  dd_t fixed_terms = scan_row(st, row, [&edge](int32_t col, double value) {
+    if (edge.col_a < 0) {
       edge.col_a = col;
-      edge.a     = csr.value[e];
+      edge.a     = value;
     } else {
       gprs_assert(edge.col_b < 0);
       edge.col_b = col;
-      edge.b     = csr.value[e];
+      edge.b     = value;
     }
-  }
+  });
   gprs_assert(edge.col_b >= 0);
   if (edge.col_a > edge.col_b) {
     std::swap(edge.col_a, edge.col_b);
@@ -184,8 +180,8 @@ rule_result_t doubleton_t::run(state_t& st,
     w.tree_has_map.assign(st.ncols, 0);
   }
   if (w.root_slot.size() != (size_t)st.nrows) { w.root_slot.assign(st.nrows, -1); }
-  const tolerances_t& tol = opt.tol;
-  const uint8_t own_list  = list_bit(row_list::doubleton);
+  const tolerances_t& tol    = opt.tol;
+  const list_mask_t own_list = list_bit(row_list::doubleton);
   rule_result_t result;
 
   st.row_frontier.take(row_list::doubleton, w.rows);

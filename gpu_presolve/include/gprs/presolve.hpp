@@ -29,6 +29,9 @@
 //    tests/test_dual_*.cpp, test_engine_*.cpp, test_hash_*.cpp, test_io.cpp.
 // F  Oracle, generators, end-to-end tests: tests/oracle.hpp, oracle.cpp, test_oracle_*.cpp,
 //    test_e2e_*.cpp.
+// G  Column rules (Stage 1c): src/rules_simple_probing.cpp, rules_singleton_cols.cpp,
+//    rules_dual_cols.cpp, rules_parallel_cols.cpp and the internal headers they share with C
+//    and D, src/implied.hpp and saved_row.hpp; tests/test_columns_*.cpp.
 
 #include <gprs/numerics.hpp>
 #include <gprs/postsolve.hpp>
@@ -43,16 +46,36 @@ namespace gprs {
 
 // Rule families, in the order of the statistics.
 namespace rule {
-constexpr int32_t row_rules     = 0;
-constexpr int32_t propagation   = 1;
-constexpr int32_t tightening    = 2;
-constexpr int32_t doubleton     = 3;
-constexpr int32_t parallel_rows = 4;
-constexpr int32_t dual_fixing   = 5;
-constexpr int32_t count         = 6;
+constexpr int32_t row_rules      = 0;
+constexpr int32_t propagation    = 1;
+constexpr int32_t tightening     = 2;
+constexpr int32_t doubleton      = 3;
+constexpr int32_t parallel_rows  = 4;
+constexpr int32_t dual_fixing    = 5;
+constexpr int32_t simple_probing = 6;
+constexpr int32_t singleton_cols = 7;
+constexpr int32_t dual_cols      = 8;
+constexpr int32_t parallel_cols  = 9;
+constexpr int32_t count          = 10;
 }  // namespace rule
 
 const char* rule_name(int32_t rule);
+
+// What parallel_merge does with two integer columns. Two continuous columns, and an integer
+// column merged into a continuous one, are merged with every setting.
+// never: no integer pair is merged.
+// range_kept: only when the merged column gets the range of the kept column back in the same
+// step, so that two binaries stay one binary.
+// always: every pair whose merged values leave no hole, as a general integer column.
+enum class merge_integers_t : uint8_t { never, range_kept, always };
+
+template <size_t n>
+inline std::array<bool, n> all_on()
+{
+  std::array<bool, n> flags;
+  flags.fill(true);
+  return flags;
+}
 
 // Budget of one call of a family, in work units, from the work of one visit of every row and
 // column at the call, pass = free nonzeros + line_visit_work * (live rows + live columns):
@@ -80,20 +103,43 @@ inline work_budget_t make_budget(const budget_t& b, const state_t& st)
 struct options_t {
   tolerances_t tol;
 
-  // Lock arguments off: every feasible point of the original model crushes to a feasible point
-  // of the reduced model with the same objective value.
+  // Lock and cost arguments off: every feasible point of the original model crushes to a
+  // feasible point of the reduced model with the same objective value, and
+  // result_t::dual_findings is 0.
   bool primal_only = false;
 
-  std::array<bool, rule::count> enabled = {true, true, true, true, true, true};
+  std::array<bool, rule::count> enabled = all_on<rule::count>();
 
   std::array<budget_t, rule::count> budget = {{{16., 2., 100000},
                                                {16., 2., 100000},
                                                {16., 2., 100000},
                                                {16., 4., 100000},
                                                {8., 8., 100000},
-                                               {4., 2., 100000}}};
+                                               {4., 2., 100000},
+                                               {4., 2., 100000},
+                                               {8., 4., 100000},
+                                               {8., 4., 100000},
+                                               {8., 8., 100000}}};
 
-  // Rounds of cascade, parallel rows and doubleton equations, counted over the whole presolve.
+  // The reductions of the column rules, one switch each (sub_rule_active).
+  std::array<bool, sub_rule::count> sub_enabled = all_on<sub_rule::count>();
+
+  merge_integers_t merge_integers = merge_integers_t::range_kept;
+
+  // Entries that the records of the singleton-column rules may save of rows that stay in the
+  // model, in nonzeros of the input model. Beyond it such a row is left, and the family reports
+  // limited.
+  double saved_row_factor = 4.;
+
+  // Largest growth factor of a substituted free singleton column: the largest coefficient of its
+  // pivot row over its own, times the factor that earlier substitutions gave the column.
+  double pivot_growth_limit = 1000.;
+
+  // Free entries of a lock row above which the lock alias leaves the row; 0 for no limit.
+  int32_t lock_alias_row_limit = 0;
+
+  // Rounds of cascade, parallel rows, doubleton equations and column rules, counted over the
+  // whole presolve.
   int32_t max_rounds = 20;
   // Passes over the four cascade families within one round.
   int32_t max_cascade_passes = 100;
@@ -118,6 +164,17 @@ struct options_t {
   // Record a hash of state and postsolve stack after every phase in result_t::phase_hash.
   bool phase_hashes = false;
 };
+
+// A reduction of the column rules is tried when its switch is on and, in primal-only mode, when
+// it keeps every feasible point with its objective value: free_singleton and parallel_merge.
+// zero_cost_singleton and forcing_column are exact projections of the feasible set that the
+// plan counts among the dual rules; they are off in that mode like the four that rest on a lock
+// or cost argument.
+inline bool sub_rule_active(const options_t& opt, int32_t sub)
+{
+  bool primal = sub == sub_rule::free_singleton || sub == sub_rule::parallel_merge;
+  return opt.sub_enabled[sub] && (primal || !opt.primal_only);
+}
 
 // reduced, unchanged, reduced_to_empty and limit carry a valid reduced model and postsolve stack.
 // failed is an assertion in this project and is never returned.
@@ -154,6 +211,15 @@ struct result_t {
   // The start step: one call; findings are the sides and bounds it changed plus the columns it
   // fixed, seconds is seconds_start, and the removals are those of the fixed columns.
   rule_stats_t start;
+  // The findings that keep an optimal point and not every feasible one
+  // (rule_result_t::dual_findings): the fixings by locks and the dual reductions of the column
+  // rules. With 0, which primal-only mode guarantees, every feasible point of the model crushes
+  // to a feasible point of the reduced model with the same objective value; otherwise to a
+  // feasible point whose objective value is not above.
+  int64_t dual_findings = 0;
+  // Findings of each reduction of the column rules (sub_rule::), and their other counts.
+  std::array<int64_t, sub_rule::count> sub_findings = {};
+  column_stats_t columns;
   int32_t rounds = 0;
   // Of `rounds`: those after the switch to explicit bounds (bound_propagation_t::make_explicit).
   int32_t explicit_rounds = 0;
@@ -162,8 +228,9 @@ struct result_t {
   // of it stopped on its budget, no list of the cascade is left, no family reported limited
   // (rule_result_t::limited: a bound of a continuous column that has had its steps, a
   // subtraction of parallel rows left to a row that the presolve has changed, rows of a bucket
-  // of parallel rows that were not compared), no row holds a term of a fixed column that a
-  // family could read, and no limit (max_rounds, max_cascade_passes, time_limit) cut it short.
+  // of parallel rows that were not compared), no column family is left with a list, no row
+  // holds a term of a fixed column that a family could read, and no limit (max_rounds,
+  // max_cascade_passes, time_limit) cut it short.
   // presolve(reduced, options) then returns unchanged; see presolve().
   bool fixed_point = false;
   // From the input model to the finished reduced model.
@@ -197,7 +264,10 @@ struct result_t {
 // Round: (1) cascade: row rules, bound propagation, row tightening, then dual fixing on the
 // locks they leave, repeated until their lists are empty, a budget stops them or
 // max_cascade_passes is reached; (2) parallel rows on the state the cascade leaves; (3) doubleton
-// equations. Rounds repeat until one changes nothing or max_rounds is reached. Between phases
+// equations; (4) the column rules, each as a phase of its own: simple probing, singleton
+// columns, dual columns, parallel columns (rules.hpp, (g) to (j)). They come after the row
+// phases, so that the first round does on the input model what it did without them.
+// Rounds repeat until one changes nothing or max_rounds is reached. Between phases
 // the state compacts sparse lines and rebuilds by the two fractions above; it rebuilds only
 // when every row can take the terms of its fixed columns (state_t::fixed_terms_absorbable), so
 // that no rule reads a side that the move has rounded by more than the tolerance.
@@ -217,7 +287,8 @@ struct result_t {
 //    limit makes an activity infinite; the limits on the size of a side), so only this state
 //    is the one a second presolve would see. A rebuild between the phases lists such rows for
 //    the same reason (state_t::rebuild). Skipped when only dual fixing and doubleton equations
-//    are switched on, which read no side and no activity, and when a row cannot take its terms
+//    are switched on, which read no side and no activity (the column rules read both), and when
+//    a row cannot take its terms
 //    (state_t::fixed_terms_absorbable): the rules would read a side that the move has rounded
 //    by more than the tolerance. The terms then stay in the rows until the reduced model is
 //    read, as before the switch, and the presolve does not end at a fixed point.
@@ -249,6 +320,9 @@ struct result_t {
 // (refresh_activity). What it does not cover: a stored activity differs from the sum that the
 // second presolve starts with by its rounding, so a test that the last bits of an activity
 // decide can go the other way there.
+// The column rules add to what it rests on: none of them is left with a list, every premise of
+// theirs has an event (rules.hpp, before (g)), and a limit of theirs that is no function of the
+// state reports limited.
 // Added with the implementation:
 // - A family is called when it is switched on and its list is not empty; dual fixing never in
 //   primal-only mode. A call that stops on its budget ends the cascade after the pass it is in,
@@ -256,8 +330,8 @@ struct result_t {
 //   nothing when its calls report no finding; an implied bound that is only recorded is not a
 //   finding (rule_result_t::records) and does not start another round.
 // - Sparse lines are compacted after every cascade pass and after every phase. The state is
-//   rebuilt only after a phase (cascade, parallel rows, doubleton equations) and at the end: a
-//   rebuild costs O(rows + columns) of the input model, whatever is left of it.
+//   rebuilt only after a phase (cascade, parallel rows, doubleton equations, each column family)
+//   and at the end: a rebuild costs O(rows + columns) of the input model, whatever is left of it.
 // - Statistics: rows, columns and nonzeros removed by a call are the differences of live_rows,
 //   live_cols and free_nnz(). The start step has its own entry, result_t::start. make_explicit
 //   is booked under rule::propagation with its findings, seconds and removals, not as a call.
@@ -272,9 +346,10 @@ struct result_t {
 //   Otherwise unchanged when the reduced model equals the input in every array,
 //   reduced_to_empty when it has no row and no column, else reduced. Budgets and the limits on
 //   rounds and passes never give limit.
-// - phase_hash: one entry after the start step, three per round (after the cascade, parallel
-//   rows and doubleton equations, each after its compaction or rebuild, also when the family
-//   was not called) and one after the extraction; steps 2 and 3 add none of their own. A
+// - phase_hash: one entry after the start step, seven per round (after the cascade, parallel
+//   rows, doubleton equations and each of the four column families, each after its compaction
+//   or rebuild, also when the family was not called) and one after the extraction; steps 2 and
+//   3 add none of their own. A
 //   presolve that ends inside a round has the entries up to there and, with status limit, the
 //   last one.
 // - result_t::hash is model_hash(result_t::reduced) for every status.
@@ -304,8 +379,9 @@ uint64_t model_hash(const model_t& model);
 // storage order, flags, locks, cost and offset of the state.
 // Added with the implementation: and over everything else a later step reads, which is the
 // layout of both stores (start, used, capacity and size of every line, tombstones by position),
-// row versions, recorded implied bounds, the counters, the tolerances and the lists in their
-// order. Not hashed: slot_visits, lane_scratch, value and twin of a tombstone.
+// row versions, the singleton-column counts of the rows, recorded implied bounds, the counters,
+// the tolerances and the lists in their order. Not hashed: slot_visits, lane_scratch, value and
+// twin of a tombstone.
 uint64_t state_hash(const state_t& st);
 
 // Hash over the records of the stack in order.

@@ -103,15 +103,18 @@ struct side_sum_t {
   uint32_t terms    = 0;
 };
 
+// One bit per list of a frontier_set_t.
+using list_mask_t = uint16_t;
+
 // Lists of changed rows or columns, one list per consumer. A list holds an index at most once,
 // in the order of the first event since the consumer last took the list. An index can be on a
 // list after its row was deleted or its column fixed or removed; consumers test that.
 struct frontier_set_t {
-  std::vector<uint8_t> pending;  // bit l set while the index is on list l
+  std::vector<list_mask_t> pending;  // bit l set while the index is on list l
   std::vector<std::vector<int32_t>> list;
 
   // Every index, ascending, on the lists of the mask `lists`.
-  void init(int32_t n_lists, int32_t n_indices, uint8_t lists)
+  void init(int32_t n_lists, int32_t n_indices, list_mask_t lists)
   {
     pending.assign(n_indices, lists);
     list.assign(n_lists, std::vector<int32_t>());
@@ -125,9 +128,9 @@ struct frontier_set_t {
   }
 
   // O(1).
-  void push(uint8_t lists, int32_t index)
+  void push(list_mask_t lists, int32_t index)
   {
-    uint8_t add = lists & ~pending[index];
+    list_mask_t add = lists & ~pending[index];
     if (add == 0) { return; }
     pending[index] |= add;
     for (int32_t l = 0; add != 0; ++l, add >>= 1) {
@@ -141,7 +144,7 @@ struct frontier_set_t {
   {
     out.clear();
     out.swap(list[l]);
-    uint8_t keep = ~(1 << l);
+    list_mask_t keep = ~(1 << l);
     for (int32_t i : out) {
       pending[i] &= keep;
     }
@@ -150,7 +153,7 @@ struct frontier_set_t {
   bool empty(int32_t l) const { return list[l].empty(); }
 };
 
-constexpr uint8_t list_bit(int32_t list) { return 1 << list; }
+constexpr list_mask_t list_bit(int32_t list) { return 1 << list; }
 
 // Consumers of changed rows.
 namespace row_list {
@@ -163,45 +166,80 @@ constexpr int32_t compaction    = 5;  // rows with more tombstones than live ent
 // Rows with a column that became a singleton column or stopped being one (row_event::singleton).
 // Empty at construction.
 constexpr int32_t singletons = 6;
-constexpr int32_t count      = 7;
+// The column rules (rules.hpp, (g) to (j)). simple_probing reads the row itself. The other three
+// read the columns of a listed row, whose bounds changed with an activity of the row, and are
+// empty at construction, where every column is on their column lists.
+constexpr int32_t simple_probing = 7;
+constexpr int32_t singleton_cols = 8;
+constexpr int32_t dual_cols      = 9;
+constexpr int32_t parallel_cols  = 10;
+constexpr int32_t count          = 11;
 }  // namespace row_list
 
 // Consumers of changed columns.
 namespace col_list {
-constexpr int32_t dual_fixing = 0;
-constexpr int32_t compaction  = 1;  // columns with more tombstones than live entries
-constexpr int32_t count       = 2;
+constexpr int32_t dual_fixing    = 0;
+constexpr int32_t compaction     = 1;  // columns with more tombstones than live entries
+constexpr int32_t singleton_cols = 2;
+constexpr int32_t dual_cols      = 3;
+constexpr int32_t parallel_cols  = 4;
+constexpr int32_t count          = 5;
 }  // namespace col_list
+
+static_assert(row_list::count <= 8 * sizeof(list_mask_t) &&
+                col_list::count <= 8 * sizeof(list_mask_t),
+              "a list_mask_t has one bit per list");
 
 // Which lists an event feeds.
 namespace row_event {
+// The row lists of the column rules. They get every event of a row but sparse and singleton: a
+// change of a side, of an entry or of an activity, and with the activities every change of a
+// bound of a column of the row, which has no column event of its own.
+constexpr list_mask_t column_rules = (1 << row_list::simple_probing) |
+                                     (1 << row_list::singleton_cols) | (1 << row_list::dual_cols) |
+                                     (1 << row_list::parallel_cols);
 // A bound of a column of the row changed, and with it one activity of the row.
-constexpr uint8_t activity =
-  (1 << row_list::row_rules) | (1 << row_list::propagation) | (1 << row_list::tightening);
+constexpr list_mask_t activity = (1 << row_list::row_rules) | (1 << row_list::propagation) |
+                                 (1 << row_list::tightening) | column_rules;
 // The same when the side of the row that bound propagation reads that activity with is infinite
 // (the upper side for the minimum activity, the lower side for the maximum activity): the
 // bounds that the row implies are those of its last visit.
-constexpr uint8_t activity_unread = (1 << row_list::row_rules) | (1 << row_list::tightening);
+constexpr list_mask_t activity_unread =
+  (1 << row_list::row_rules) | (1 << row_list::tightening) | column_rules;
 // A side of the row changed. The parallel rows read the sides as well: whether a row is an
 // equation, and their size, decide whether it is subtracted from a row that is parallel to it
 // up to singleton columns (rules.hpp, (e)).
-constexpr uint8_t side = activity | (1 << row_list::doubleton) | (1 << row_list::parallel_rows);
+constexpr list_mask_t side = activity | (1 << row_list::doubleton) | (1 << row_list::parallel_rows);
 // An entry of the row was changed, moved or deleted, the row was scaled, or one of its columns
 // was fixed.
-constexpr uint8_t entries = side;
-constexpr uint8_t sparse  = 1 << row_list::compaction;
+constexpr list_mask_t entries = side;
+constexpr list_mask_t sparse  = 1 << row_list::compaction;
 // A singleton column is a live column with one live entry. The row of that entry gets this event
 // when the column becomes one (delete_row, delete_entry or move_entry took its other entries)
 // and when it stops being one (move_entry gives it a second entry). The row itself does not
 // change: its entries, sides and version stay. No event when the column is fixed or when its
-// only entry leaves, which are events of the row anyway.
-constexpr uint8_t singleton = (1 << row_list::parallel_rows) | (1 << row_list::singletons);
+// only entry leaves, which are events of the row anyway. The column rules read the event of the
+// column instead (col_event::locks).
+constexpr list_mask_t singleton = (1 << row_list::parallel_rows) | (1 << row_list::singletons);
+// The lists every row is on at construction.
+constexpr list_mask_t construction =
+  entries &
+  ~((1 << row_list::singleton_cols) | (1 << row_list::dual_cols) | (1 << row_list::parallel_cols));
 }  // namespace row_event
 
 namespace col_event {
-// A lock count or the cost of the column changed.
-constexpr uint8_t locks  = 1 << col_list::dual_fixing;
-constexpr uint8_t sparse = 1 << col_list::compaction;
+// The column lists of the column rules.
+constexpr list_mask_t column_rules =
+  (1 << col_list::singleton_cols) | (1 << col_list::dual_cols) | (1 << col_list::parallel_cols);
+// A lock count, the cost or the set of entries of the column changed. Every column is on these
+// lists at construction.
+constexpr list_mask_t locks = (1 << col_list::dual_fixing) | column_rules;
+// Entries of the column changed their value and nothing that locks covers changed: a row of
+// the column was scaled (scale_row). The coefficients of a column decide its key among the
+// parallel columns, its largest coefficient and the size of the sides that the column rules
+// test.
+constexpr list_mask_t entries = column_rules;
+constexpr list_mask_t sparse  = 1 << col_list::compaction;
 }  // namespace col_event
 
 // The presolve state shared by the host engine and the GPU engine. Rows and columns keep the
@@ -211,10 +249,11 @@ constexpr uint8_t sparse = 1 << col_list::compaction;
 // that leaves a live row or column with more tombstones than live entries puts it on its
 // compaction list (row_event::sparse, col_event::sparse).
 struct state_t {
-  // O(nonzeros). The model must be well_formed. Every row is on the five rule lists and every
-  // column on the dual-fixing list. Bounds and sides may cross and columns with lower == upper
-  // are live: presolve() deals with both before the first rule runs, and from then on
-  // lower <= upper holds for every live row and column and lower < upper for every live column.
+  // O(nonzeros). The model must be well_formed. Every row is on the lists of
+  // row_event::construction and every column on those of col_event::locks. Bounds and sides may
+  // cross and columns with lower == upper are live: presolve() deals with both before the first
+  // rule runs, and from then on lower <= upper holds for every live row and column and
+  // lower < upper for every live column.
   state_t(const model_t& model, const tolerances_t& tolerances);
 
   int32_t nrows;
@@ -235,6 +274,9 @@ struct state_t {
   // delete_row (a deleted source row voids the record) or rebuild (a fixed term moves into the
   // sides, the constraint stays the same).
   std::vector<uint32_t> row_version;
+  // Singleton columns of the row: live columns whose one live entry lies in it. 0 for a deleted
+  // row. A listed row without one costs the singleton-column rules a visit and no scan.
+  std::vector<int32_t> row_singletons;
   activity_t min_act;
   activity_t max_act;
 
@@ -323,7 +365,8 @@ struct state_t {
 
   // Fixes a live column at a finite value inside its bounds: both bounds become the value, the
   // status fixed, cost * value goes to the offset, its rows lose one free entry
-  // (row_event::entries). Its entries stay. O(csc.used[col]).
+  // (row_event::entries) and, when it was a singleton column, its row one singleton column. Its
+  // entries stay. O(csc.used[col]).
   void fix_col(int32_t col, double value);
 
   // Marks a live column without live entries and with zero cost as removed. O(1).
@@ -346,7 +389,9 @@ struct state_t {
   // (col_event::locks for its live columns). O(csr.used[row]): no column is walked.
   // Added with row_event::singleton: but for a live column that is left with one live entry,
   // whose used slots are read up to that entry to find its row. The same holds for delete_entry
-  // and for both columns of move_entry.
+  // and for both columns of move_entry. row_singletons follows in all three: the row of a column
+  // that becomes a singleton column gains one, and the row of a column that stops being one, or
+  // whose only entry leaves, loses one.
   void delete_row(int32_t row);
 
   // New side of a live row; lower <= upper must hold afterwards and the value must differ from
@@ -395,8 +440,9 @@ struct state_t {
   bool fixed_terms_absorbable() const;
 
   // Multiplies the entries and the finite sides of a live row by factor > 0 and recomputes its
-  // activities (row_event::entries). With integral set, each product a * factor is replaced by
-  // the nearest integer; the caller has checked that every product is one within its tolerance.
+  // activities (row_event::entries, col_event::entries for its live columns). With integral set,
+  // each product a * factor is replaced by the nearest integer; the caller has checked that
+  // every product is one within its tolerance.
   // The sides are multiplied, not rounded. O(csr.used[row]).
   // Only the products of live columns are rounded: the entry of a fixed column is a constant of
   // the row and gets the plain product.

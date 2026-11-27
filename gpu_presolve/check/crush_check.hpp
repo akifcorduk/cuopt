@@ -15,28 +15,38 @@
 //   2. crush(x) meets rows, bounds and integrality of the reduced model;
 //   3. z = postsolve(crush(x)) meets rows, bounds and integrality of the original model;
 //   4. objective(z) equals the reduced objective of crush(x), and is not above objective(x);
-//   5. primal-only mode: objective(z) equals objective(x) and z equals x.
+//   5. a result without a dual finding (result_t::dual_findings == 0, which primal-only mode
+//      guarantees): objective(z) equals objective(x) and z equals x.
 //
-// Why 2 to 4 hold in default mode although postsolve_t::crush promises them in primal-only mode
-// only. crush(x) is x on the columns that are left. Let M_t be the model after t reductions and
-// p_t the point x restricted to the columns of M_t. Every Stage 1 rule but one keeps every
-// feasible point of M_t: bound facts (start step, singleton and forcing rows, propagation,
-// recorded implied bounds, bounds from a doubleton equation) hold at every feasible point, so a
-// column they fix has its fixed value at p_t; row edits (redundancy, integral scaling, side
-// rounding, coefficient strengthening, parallel rows) keep the integer-feasible set of the row
-// under the explicit bounds; an equation subtracted from a row that is parallel to it up to
-// singleton columns leaves the points that meet both rows as they are; a doubleton substitution
-// removes a column whose value the equation gives. The exception is dual fixing by locks, which
-// fixes column j at a bound although p_t[j] may lie elsewhere. Dropping j from p_t is the same as
-// moving it to that bound, and no live row of M_t objects to the move (no lock in that direction)
-// and the objective of M_t does not rise with it. So p_(t+1) is feasible in M_(t+1) and its
-// objective there is not above that of p_t; a bound fact of M_t stays true on the smaller feasible
-// set. By induction crush(x) is feasible in the reduced model with a reduced objective not above
-// objective(x), and 3 and the first half of 4 are the contract of the postsolve. What is lost in
-// default mode is equality: z differs from x in the columns dual fixing moved and in their aliases.
-// This argument needs dual fixing to be the only rule that uses a lock or dual argument and to fix
-// at a finite bound; it has to be reread when a Stage 3 rule (dominated or free columns, stuffing,
-// fixing at infinity) is added.
+// Why 2 to 4 hold in both modes: an induction over the reductions in the order they were made.
+// Let M_t be the model after t reductions and p_t the image of x in M_t, with p_0 = x; crush(x)
+// is the last of them. The step from p_t to p_(t+1) is the forward map of reduction t, and the
+// claim of the step is: p_t feasible in M_t gives p_(t+1) feasible in M_(t+1) with an objective
+// there that is not above that of p_t in M_t.
+// A primal reduction keeps every feasible point of M_t, and its map only drops the columns it
+// removes; the objective stays. These are: bound facts (start step, singleton and forcing rows,
+// propagation, recorded implied bounds, bounds from a doubleton equation), which hold at every
+// feasible point, so a column they fix has its fixed value at p_t; row edits (redundancy,
+// integral scaling, side rounding, coefficient strengthening, parallel rows), which keep the
+// integer-feasible set of the row under the explicit bounds; an equation subtracted from a row
+// that is parallel to it up to singleton columns, which leaves the points that meet both rows
+// as they are; a doubleton substitution, which removes a column whose value the equation gives.
+// A dual reduction keeps an optimal point of M_t and not every feasible one. Its map first
+// moves p_t to a feasible point of M_t that the reduction keeps and that costs no more, then
+// drops the columns it removes. One sentence per dual rule says why such a move exists:
+//   - Fixing by locks (rules.hpp (f)) fixes column j at a finite bound although p_t[j] may lie
+//     elsewhere. The move takes j to that bound: no live row of M_t objects (no lock in that
+//     direction) and the objective of M_t does not rise with it. Dropping j is that move, so
+//     the map needs no record.
+// A bound fact of M_t stays true on the smaller feasible set of M_(t+1). By induction crush(x)
+// is feasible in the reduced model with a reduced objective not above objective(x), and 3 and
+// the first half of 4 are the contract of the postsolve. A dual reduction costs equality: z
+// differs from x in the columns it moved and in their aliases, which is why 5 asks for a result
+// without one.
+// A dual rule that is added brings its sentence, and where its move is more than dropping its
+// column (it moves a column that stays) a record that postsolve_t::crush replays; without the
+// record this check fails the right engine. It has to be reread for a rule whose reduction
+// keeps no forward map (a bound on a row dual, a fixing at infinity).
 //
 // With an optimal x the check proves that the optimum is not cut off. It sees no relaxation
 // (a row deleted that is not redundant) unless that makes a later lock argument move a column
@@ -336,6 +346,9 @@ struct crush_report_t {
   bool has_reduced = false;
   uint64_t hash    = 0;
   int32_t points   = 0;
+  // The result has no dual finding: requirement 5 applies.
+  bool exact            = false;
+  int64_t dual_findings = 0;
 
   double reduced_row         = 0.;  // scaled, as in point_report_t
   double reduced_bound       = 0.;
@@ -365,16 +378,20 @@ struct crush_report_t {
   int32_t first_failed_point = -1;
 };
 
+// The check of one result of a presolve in the given mode (options_t::primal_only). A dual
+// finding in a result of primal-only mode does not lift requirement 5.
 inline crush_report_t crush_check(const gprs::model_t& model,
                                   const gprs::result_t& result,
                                   bool primal_only,
                                   const point_set_t& set)
 {
   crush_report_t c;
-  c.ran         = true;
-  c.status      = gprs::status_name(result.status);
-  c.has_reduced = carries_model(result.status);
-  c.hash        = result.hash;
+  c.ran           = true;
+  c.status        = gprs::status_name(result.status);
+  c.has_reduced   = carries_model(result.status);
+  c.hash          = result.hash;
+  c.dual_findings = result.dual_findings;
+  c.exact         = primal_only || result.dual_findings == 0;
   if (!c.has_reduced) { return c; }
   std::vector<double> crushed, z;
   for (size_t k = 0; k < set.points.size(); ++k) {
@@ -415,7 +432,7 @@ inline crush_report_t crush_check(const gprs::model_t& model,
     raise_to(c.objective_rise, relative);
     if (!(relative >= c.objective_fall)) { c.objective_fall = relative; }
     if (!(identity <= identity_tolerance) || !(change <= allowed) ||
-        (primal_only && !(change >= -allowed))) {
+        (c.exact && !(change >= -allowed))) {
       ++c.failed_objective;
       failed = true;
     }
@@ -436,7 +453,7 @@ inline crush_report_t crush_check(const gprs::model_t& model,
     raise_to(c.moved_integer, moved_integer);
     raise_to(c.moved_continuous, moved_continuous);
     if (moved > c.moved_columns) { c.moved_columns = moved; }
-    if (primal_only && moved != 0) {
+    if (c.exact && moved != 0) {
       ++c.failed_round_trip;
       failed = true;
     }

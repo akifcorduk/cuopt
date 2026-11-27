@@ -112,9 +112,10 @@ inline void note_col_tombstone(state_t& st, int32_t col)
   }
 }
 
-// row_event::singleton for the row of the one live entry of a live column, if it has just one.
-// Called when the column has lost an entry, and before it gets another one.
-inline void note_singleton(state_t& st, int32_t col)
+// row_event::singleton for the row of the one live entry of a live column, if it has just one,
+// and `change` singleton columns more in that row. Called with 1 when the column has lost an
+// entry, and with -1 before it gets another one.
+inline void note_singleton(state_t& st, int32_t col, int32_t change)
 {
   const line_store_t& csc = st.csc;
   if (csc.size[col] != 1 || !st.is_live(col)) { return; }
@@ -124,7 +125,10 @@ inline void note_singleton(state_t& st, int32_t col)
     gprs_assert(p < csc.end(col));
   }
   st.slot_visits += p - csc.begin(col) + 1;
-  st.row_frontier.push(row_event::singleton, csc.index[p]);
+  int32_t row = csc.index[p];
+  st.row_singletons[row] += change;
+  gprs_assert(st.row_singletons[row] >= 0);
+  st.row_frontier.push(row_event::singleton, row);
 }
 
 inline int32_t row_of(const state_t& st, int64_t row_slot)
@@ -300,6 +304,10 @@ void state_t::fix_col(int32_t col, double value)
       add_term(max_act, row, slot, a, value, tol);
     }
     --row_free_size[row];
+    if (csc.size[col] == 1) {
+      gprs_assert(row_singletons[row] > 0);
+      --row_singletons[row];
+    }
     row_frontier.push(row_event::entries, row);
     refresh_stale_activity(*this, row);
   }
@@ -362,14 +370,15 @@ void state_t::delete_row(int32_t row)
     } else {
       col_frontier.push(col_event::locks, col);
       note_col_tombstone(*this, col);
-      note_singleton(*this, col);
+      note_singleton(*this, col, 1);
     }
   }
   slot_visits += csr.used[row];
   live_nnz -= csr.size[row];
-  csr.size[row]      = 0;
-  row_free_size[row] = 0;
-  row_alive[row]     = 0;
+  csr.size[row]       = 0;
+  row_free_size[row]  = 0;
+  row_singletons[row] = 0;
+  row_alive[row]      = 0;
   --live_rows;
   for (activity_t* act : {&min_act, &max_act}) {
     act->hi[row]        = 0.;
@@ -439,6 +448,7 @@ void state_t::scale_row(int32_t row, double factor, bool integral)
     gprs_assert(std::isfinite(value) && value != 0.);
     csr.value[e]           = value;
     csc.value[csr.twin[e]] = value;
+    if (is_live(csr.index[e])) { col_frontier.push(col_event::entries, csr.index[e]); }
   }
   if (row_lower[row] > -inf) {
     row_lower[row] *= factor;
@@ -493,6 +503,10 @@ void state_t::delete_entry(int64_t row_slot)
   --csc.size[col];
   --csr.size[row];
   --row_free_size[row];
+  if (csc.size[col] == 0) {
+    gprs_assert(row_singletons[row] > 0);
+    --row_singletons[row];
+  }
   --live_nnz;
   ++slot_visits;
   ++coefficient_changes;
@@ -501,7 +515,7 @@ void state_t::delete_entry(int64_t row_slot)
   col_frontier.push(col_event::locks, col);
   note_row_tombstone(*this, row);
   note_col_tombstone(*this, col);
-  note_singleton(*this, col);
+  note_singleton(*this, col, 1);
   refresh_stale_activity(*this, row);
 }
 
@@ -519,11 +533,15 @@ void state_t::move_entry(int64_t row_slot, int32_t col, double value)
   change_locks(*this, row, from, old, -1);
   csc.index[csr.twin[row_slot]] = dead_index;
   --csc.size[from];
+  if (csc.size[from] == 0) {
+    gprs_assert(row_singletons[row] > 0);
+    --row_singletons[row];
+  }
   col_frontier.push(col_event::locks, from);
   note_col_tombstone(*this, from);
-  note_singleton(*this, from);
+  note_singleton(*this, from, 1);
 
-  note_singleton(*this, col);
+  note_singleton(*this, col, -1);
   if (csc.used[col] == csc.capacity[col]) { move_column_to_end(*this, col); }
   int64_t p    = csc.end(col);
   csc.index[p] = row;
@@ -531,6 +549,7 @@ void state_t::move_entry(int64_t row_slot, int32_t col, double value)
   csc.twin[p]  = row_slot;
   ++csc.used[col];
   ++csc.size[col];
+  if (csc.size[col] == 1) { ++row_singletons[row]; }
   csr.index[row_slot] = col;
   csr.value[row_slot] = value;
   csr.twin[row_slot]  = p;

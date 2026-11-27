@@ -14,10 +14,10 @@
 //   Presolve status. A status without a reduced model fails when the instance has a known
 //     objective value or a usable point of a solution file; limit and failed always fail.
 //   Structure check (structure_check.hpp), in default and in primal-only mode: the postsolve
-//     stack, the column types, the bounds, and every original row against the bounds,
+//     stack for that mode, the column types, the bounds, every original row against the bounds,
 //     against its row of the reduced model or, when an equation was subtracted from it,
-//     against that row and the reduced rows of the equations. It needs neither a point nor a
-//     solver.
+//     against that row and the reduced rows of the equations, and the objective against the
+//     reduced objective. It needs neither a point nor a solver.
 //   Crush check (crush_check.hpp), in default and in primal-only mode, with every usable point
 //     of the solution files (solution_file.hpp) and up to --push-points (at most 4) points
 //     made from each by moving its columns to where bounds and rows stop them.
@@ -271,12 +271,13 @@ void put_crush(FILE* out, const char* name, const crush_report_t& c, bool last)
 {
   std::fprintf(out,
                "    \"%s\": {\"status\": \"%s\", \"hash\": \"%016llx\", \"points\": %d, "
-               "\"first_failed_point\": %d,\n",
+               "\"first_failed_point\": %d, \"dual_findings\": %lld,\n",
                name,
                c.status.c_str(),
                (unsigned long long)c.hash,
                c.points,
-               c.first_failed_point);
+               c.first_failed_point,
+               (long long)c.dual_findings);
   std::fprintf(out,
                "      \"reduced_point\": {\"row\": %s, \"bound\": %s, \"integrality\": %s, "
                "\"failed\": %d},\n",
@@ -350,6 +351,13 @@ void put_structure(FILE* out, const char* name, const structure_report_t& s, boo
                s.added_worst_row,
                (long long)s.added_failures);
   std::fprintf(out,
+               "      \"objective\": {\"worst\": %s, \"column\": %d, \"constant\": %s, "
+               "\"failed\": %lld},\n",
+               number(s.objective_worst, "%.3g").c_str(),
+               s.objective_worst_col,
+               number(s.objective_constant, "%.3g").c_str(),
+               (long long)s.objective_failures);
+  std::fprintf(out,
                "      \"postsolve\": {\"worst\": %s, \"column\": %d, \"failed\": %lld}}%s\n",
                number(s.postsolve_worst, "%.3g").c_str(),
                s.postsolve_worst_col,
@@ -381,7 +389,7 @@ mode_report_t solver_free_checks(const gprs::model_t& model,
   r.status      = gprs::status_name(result.status);
   r.has_reduced = gprs_check::carries_model(result.status);
   r.hash        = result.hash;
-  if (r.has_reduced) { r.structure = gprs_check::structure_check(model, result); }
+  if (r.has_reduced) { r.structure = gprs_check::structure_check(model, result, primal_only); }
   if (!points.empty()) { r.crush = gprs_check::crush_check(model, result, primal_only, points); }
   return r;
 }
@@ -403,6 +411,7 @@ void mode_verdicts(const mode_report_t& r, bool primal_only, std::vector<named_v
   out.push_back({"structure_" + mode + "rows", verdict(composed, s.row_failures == 0)});
   out.push_back({"structure_" + mode + "kept_rows", verdict(composed, s.kept_failures == 0)});
   out.push_back({"structure_" + mode + "added_rows", verdict(composed, s.added_failures == 0)});
+  out.push_back({"structure_" + mode + "objective", verdict(composed, s.objective_failures == 0)});
   out.push_back({"structure_" + mode + "postsolve", verdict(composed, s.postsolve_failures == 0)});
   const crush_report_t& c = r.crush;
   bool crushed            = c.ran && c.has_reduced;
@@ -410,7 +419,8 @@ void mode_verdicts(const mode_report_t& r, bool primal_only, std::vector<named_v
   out.push_back({"crush_" + mode + "reduced_point", verdict(crushed, c.failed_reduced == 0)});
   out.push_back({"crush_" + mode + "postsolved_point", verdict(crushed, c.failed_postsolved == 0)});
   out.push_back({"crush_" + mode + "objective", verdict(crushed, c.failed_objective == 0)});
-  if (primal_only) {
+  // The round trip is a requirement of a result without a dual finding, in either mode.
+  if (primal_only || (crushed && c.exact)) {
     out.push_back({"crush_" + mode + "round_trip", verdict(crushed, c.failed_round_trip == 0)});
   }
 }

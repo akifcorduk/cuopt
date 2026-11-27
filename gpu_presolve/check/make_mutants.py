@@ -3,9 +3,11 @@
 """Write deliberately wrong copies of the engine sources, to test the check.
 
 Usage: make_mutants.py <out dir> [name ...]
-Each mutant is <out dir>/<name>/src: the engine sources with one exact text
-replacement, or a few. The script stops when the text of a replacement is
-not found exactly once, so a mutant that the engine has outgrown is noticed.
+Each mutant is <out dir>/<name>/src: the engine sources, internal headers
+included, with one exact text replacement, or a few. The script stops when
+the text of a replacement is not found exactly once, so a mutant that the
+engine has outgrown is noticed. A replacement in a header changes every
+source that includes it: a build of a mutant compiles all of its sources.
 
 A check tool with a mutant engine is built with
   cmake -S gpu_presolve/check -B <build dir> -DGPRS_ENGINE_SRC=<out dir>/<name>/src
@@ -292,7 +294,10 @@ MUTANTS = {
         "    c.work.values.push_back(!at_minimum",
     ),
     # Propagation over a row with one infinite term as if it had none,
-    # one row in three.
+    # one row in three. The candidate of an entry is computed in implied.hpp,
+    # by the function that bound propagation shares with the column rules:
+    # candidate_of_finite_rest, which tests no infinite term itself. The
+    # test of candidate(), which the column rules call, stays as it is.
     "r_prop_inf": [
         (
             "rules_propagation.cpp",
@@ -300,7 +305,7 @@ MUTANTS = {
             "  if (act.inf_count[row] == 1 && row % 3 != 0) {",
         ),
         (
-            "rules_propagation.cpp",
+            "implied.hpp",
             "  if (infinite == 0) {",
             "  if (infinite == 0 || act.inf_slot[row] != e) {",
         ),
@@ -446,6 +451,33 @@ MUTANTS = {
         "  bool is_upper = ((st.csr.value[e] > 0) == upper_side) !=\n"
         "                  (c.work.explicit_bounds && !st.is_integer(col) &&\n"
         "                   row % 3 == 0);",
+    ),
+    # The mutants of the groundwork of the column rules (ev_*): an event
+    # that their lists do not get. A presolve result shows such an engine
+    # only through a reduction that reads the list: a second presolve of a
+    # fixed point then still reduces. Until the families hold reductions,
+    # the tests of the state are what fails (tests/test_state_ops.cpp,
+    # test_state_random.cpp, test_bounds_tighten.cpp), with gprs_tests built
+    # on the mutant sources.
+    # A bound change whose activity propagation does not read (the side
+    # that reads it is infinite) does not list the row for the column rules.
+    "ev_unread": (
+        "state_ops.cpp",
+        "st.row_frontier.push(propagates ? row_event::activity "
+        ": row_event::activity_unread, row);",
+        "st.row_frontier.push(\n"
+        "      propagates\n"
+        "        ? row_event::activity\n"
+        "        : (list_mask_t)(row_event::activity_unread &\n"
+        "                        ~row_event::column_rules),\n"
+        "      row);",
+    ),
+    # scale_row lists no column.
+    "ev_scale": (
+        "state_ops.cpp",
+        "    if (is_live(csr.index[e])) { "
+        "col_frontier.push(col_event::entries, csr.index[e]); }\n",
+        "",
     ),
 }
 

@@ -10,6 +10,7 @@
 #include <gprs/postsolve.hpp>
 #include <gprs/state.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 
@@ -36,12 +37,62 @@ struct work_budget_t {
 
 enum class rule_outcome_t : uint8_t { ok, infeasible, unbounded_or_infeasible };
 
+// The reductions of the column rules, (g) to (j) below, which hold more than one: each has its
+// switch (options_t::sub_enabled, sub_rule_active) and its finding counter
+// (result_t::sub_findings). Simple probing is a family with one reduction and has neither.
+namespace sub_rule {
+// (h) A singleton column implied free by its row: an equation as pivot row.
+constexpr int32_t free_singleton = 0;
+// (h) The zero-cost continuous singleton columns of a row with two finite sides.
+constexpr int32_t zero_cost_singleton = 1;
+// (h) A zero-cost column without a lock in a direction in which its bound is infinite.
+constexpr int32_t forcing_column = 2;
+// (h) free_singleton with an inequality as pivot row, tight by the cost of the column.
+constexpr int32_t free_singleton_dual = 3;
+// (j) Of two parallel columns the one that the other dominates is fixed.
+constexpr int32_t parallel_dominance = 4;
+// (i) A bound of a column from the rows that lock it against its cost.
+constexpr int32_t dual_bound = 5;
+// (i) A column with a single lock against its cost, aliased to a binary of its lock row.
+constexpr int32_t lock_alias = 6;
+// (j) Two parallel columns with equal cost become one.
+constexpr int32_t parallel_merge = 7;
+constexpr int32_t count          = 8;
+}  // namespace sub_rule
+
+const char* sub_rule_name(int32_t sub);
+
+// What the column rules count besides their findings, for one call (rule_result_t) and summed
+// or, for the two largest values, taken over the calls of a presolve (result_t).
+struct column_stats_t {
+  // Columns whose cost became nonzero when a free singleton column took its pivot row out of
+  // the matrix and into the objective.
+  int64_t cost_fill = 0;
+  // Entries of the rows that records saved.
+  int64_t saved_entries = 0;
+  // Largest growth factor of a substituted free singleton column: what a restored value can
+  // multiply a deviation of the reduced point by.
+  double max_growth = 0.;
+  // Largest depth of a tree in the alias forest of one call of simple probing: the aliases
+  // composed between a substituted column and its root.
+  int32_t alias_depth = 0;
+  // Singleton columns that the implied-free test refused after the switch to explicit bounds
+  // (bound_propagation_t::make_explicit).
+  int64_t free_singleton_rejected_explicit = 0;
+};
+
 struct rule_result_t {
   rule_outcome_t outcome = rule_outcome_t::ok;
   // Changes of the model: rows deleted, columns fixed or substituted, bounds, sides or
   // coefficients changed. Removed rows, columns and nonzeros are read from the counters of the
   // state.
   int64_t findings = 0;
+  // Of the findings, those that keep an optimal point and not every feasible one: a reduction by
+  // a lock or cost argument. None in primal-only mode.
+  int64_t dual_findings = 0;
+  // Of the findings of a column rule, those of each of its reductions (sub_rule::).
+  std::array<int64_t, sub_rule::count> sub_findings = {};
+  column_stats_t columns;
   // Implied bounds recorded (state_t::record_implied_lower / record_implied_upper). A record
   // changes no row, column or explicit bound and is not a finding.
   int64_t records = 0;
@@ -307,11 +358,77 @@ struct parallel_rows_t {
 // without locks. A finite target bound: the column is fixed there (zero cost and no lock at all:
 // the lower bound if finite, else the upper bound, else 0). An infinite target bound: cost != 0
 // gives unbounded_or_infeasible; cost == 0 with a lock in the other direction leaves the column
-// (Stage 3 removes it with its rows). Not called in primal-only mode.
+// (Stage 3 removes it with its rows). Not called in primal-only mode. Every finding is a dual
+// finding (rule_result_t::dual_findings).
 struct dual_fixing_t {
   struct work_t;
   dual_fixing_t();
   ~dual_fixing_t();
+  rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
+  std::unique_ptr<work_t> work;
+};
+
+// The column rules, (g) to (j). Each is called once per round, in this order, after the
+// doubleton equations, on the state that the row rules of the round leave; dual fixing stays in
+// the cascade and so runs before them on every state. They are called in primal-only mode as
+// well, where each of their reductions decides for itself (sub_rule_active).
+// What every test of them reads, and nothing else: explicit bounds, sides, entries, lock counts,
+// costs, types and the stored activities of the state as it is. A bound counts as implied by a
+// row when the candidate of that row, recomputed at the test (src/implied.hpp), is within
+// implied_tolerance of it; a recorded implied bound is never read, since records depend on the
+// order of the visits. Each premise has an event that lists what reads it: cost, locks and
+// entries of a column its column lists (col_event::locks, col_event::entries); sides, entries
+// and both activities of a row, and with the activities the bounds of every column of the row,
+// its row lists (row_event::column_rules). A family that reads columns through a row list
+// expands the listed rows to their live columns.
+// A family takes its lists when it is called and, when it stops on its budget, returns the part
+// it has not served. A reduction that it leaves undone for a reason that is no function of the
+// state reports limited.
+// A family whose reductions are not built takes its lists and reports nothing: none of the four
+// holds a reduction so far.
+
+// Largest range upper - lower of a column that simple probing or the lock alias replaces by a
+// binary: it is the scale of the alias, which multiplies every coefficient of the column into
+// the rows of the binary.
+constexpr double alias_scale_limit = 1e6;
+
+// (g) Rows of row_list::simple_probing, which holds every row at construction.
+struct simple_probing_t {
+  struct work_t;
+  simple_probing_t();
+  ~simple_probing_t();
+  rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
+  std::unique_ptr<work_t> work;
+};
+
+// (h) Columns of col_list::singleton_cols and rows of row_list::singleton_cols. The reductions
+// sub_rule::free_singleton, zero_cost_singleton, forcing_column and free_singleton_dual belong
+// here. state_t::row_singletons tells for a listed row, in O(1), whether it holds a singleton
+// column at all.
+struct singleton_cols_t {
+  struct work_t;
+  singleton_cols_t();
+  ~singleton_cols_t();
+  rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
+  std::unique_ptr<work_t> work;
+};
+
+// (i) Columns of col_list::dual_cols and rows of row_list::dual_cols. The reductions
+// sub_rule::dual_bound and lock_alias belong here.
+struct dual_cols_t {
+  struct work_t;
+  dual_cols_t();
+  ~dual_cols_t();
+  rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
+  std::unique_ptr<work_t> work;
+};
+
+// (j) Columns of col_list::parallel_cols and rows of row_list::parallel_cols. The reductions
+// sub_rule::parallel_dominance and parallel_merge belong here.
+struct parallel_cols_t {
+  struct work_t;
+  parallel_cols_t();
+  ~parallel_cols_t();
   rule_result_t run(state_t& st, work_budget_t& budget, postsolve_t& ps, const options_t& opt);
   std::unique_ptr<work_t> work;
 };

@@ -8,25 +8,33 @@
 // gprs_fuzz <first seed> <seeds per profile> [--singletons] [--profile <name>]
 // Long random runs of the engine, for every rule change (tools/run_campaign.sh splits one run
 // over processes). For each seed and each generator profile: one generated model, the presolve
-// with options chosen by the seed, and two verdicts.
-//   oracle     tests/oracle.hpp, exact by enumeration: status, optimal value, postsolved points.
+// with options chosen by the seed, and three verdicts.
+//   oracle     tests/oracle.hpp, exact by enumeration: status, optimal value, postsolved points,
+//              and crushed points of the base model, which must be feasible for the reduced
+//              model and cost the same there, or no more when the result has a dual finding.
+//              The line "crush" counts the results where that test ran and those among them
+//              with a dual finding.
+//   second     On one seed in four: when the result is a fixed point (result_t::fixed_point),
+//              the presolve of its reduced model returns unchanged.
 //   structure  check/structure_check.hpp on a result that carries a reduced model. It is the
-//              check that runs on real instances without a solver, and it sees relaxations only.
+//              check that runs on real instances without a solver, and it sees relaxations
+//              and, with its objective part, a cost or an offset that a reduction lost.
 //              Its summary line ends with the results that have a row addition record
 //              (subtracted), the rows that are made of equations as well (added), those tested
 //              against the reduced row of such an equation and those not tested, and the
 //              largest multiplier of an equation in those tests.
-// With the engine as it is, both must be silent. A structure failure that the oracle does not
-// share is a false alarm of the structure check (or a relaxation without effect on the optimum);
-// an oracle failure that the structure check does not share is, on a result with a reduced model,
-// a restriction or an objective error, which the structure check cannot see by design, or a
-// relaxation that it missed. The two are told apart on the feasible points of the reduced
-// model, all that the solver of the oracle lists and not the sample that the oracle takes: a
-// result is relaxed when one of them postsolves to a point that the model rejects.
+// With the engine as it is, all three must be silent. A structure failure that the oracle does
+// not share is a false alarm of the structure check (or a relaxation without effect on the
+// optimum); an oracle failure that the structure check does not share is, on a result with a
+// reduced model, a restriction, which the structure check cannot see by design, or a
+// relaxation or an objective error that it missed. The two are told apart on the feasible
+// points of the reduced model, all that the solver of the oracle lists and not the sample that
+// the oracle takes: a result is relaxed when one of them postsolves to a point that the model
+// rejects.
 // --singletons adds columns with one entry to the generated model (rows parallel up to singleton
 // columns). GPRS_FUZZ_SHOW=<n> prints the first n models of each kind of disagreement.
 // The profiles are those of tests/test_e2e_presolve.cpp and four more.
-// Exit code 1 when the oracle or the structure check failed on any model.
+// Exit code 1 when the oracle, the second presolve or the structure check failed on any model.
 
 #include "../check/structure_check.hpp"
 #include "../tests/oracle.hpp"
@@ -217,19 +225,37 @@ case_t add_singletons(const case_t& c, uint64_t seed, const generator_options_t&
   return oracle::make_case(m, c.row_scale, col_scale);
 }
 
+// The options of a seed: three seeds in ten keep the defaults; one each has primal-only mode;
+// one family or one reduction of the column rules switched off; a random subset of the families
+// and of those reductions (each on with probability 3/4), a random mode and a random setting of
+// merge_integers; a rebuild after every phase; no rebuild; tiny budgets; few rounds and passes.
 options_t variant(uint64_t seed)
 {
   options_t o;
   uint64_t v = seed % 10, w = seed / 10;
   switch (v) {
     case 3: o.primal_only = true; break;
-    case 4: o.enabled[w % rule::count] = false; break;
-    case 5:
-      for (int32_t r = 0; r < rule::count; ++r) {
-        o.enabled[r] = ((w >> r) & 1) || ((w >> (r + 6)) & 1);
+    case 4: {
+      uint64_t pick = w % (rule::count + sub_rule::count);
+      if (pick < rule::count) {
+        o.enabled[pick] = false;
+      } else {
+        o.sub_enabled[pick - rule::count] = false;
       }
-      o.primal_only = (w >> 12) & 1;
       break;
+    }
+    case 5: {
+      oracle::rng_t rng(w);
+      for (int32_t r = 0; r < rule::count; ++r) {
+        o.enabled[r] = rng.chance(0.75);
+      }
+      for (int32_t s = 0; s < sub_rule::count; ++s) {
+        o.sub_enabled[s] = rng.chance(0.75);
+      }
+      o.primal_only    = rng.chance(0.5);
+      o.merge_integers = (merge_integers_t)rng.uniform(0, 2);
+      break;
+    }
     case 6:
       o.rebuild_dead_fraction  = 0.;
       o.rebuild_fixed_fraction = 0.;
@@ -252,6 +278,9 @@ options_t variant(uint64_t seed)
   }
   return o;
 }
+
+// One seed in four, whatever its variant is: the reduced model of its result is presolved again.
+bool sampled(uint64_t seed) { return ((seed * 0x9e3779b97f4a7c15ull) >> 62) == 0; }
 
 // A feasible point of the reduced model, or its far point, postsolves to a point that the model
 // rejects. The stack keeps its contract. False for a reduced model outside the oracle class.
@@ -296,7 +325,10 @@ int main(int argc, char** argv)
   }
   std::map<std::string, int64_t> tally;
   int64_t models = 0, outside = 0, base_outside = 0, failures = 0, reduced = 0, mutated = 0;
-  int64_t findings[rule::count] = {0, 0, 0, 0, 0, 0};
+  int64_t findings[rule::count] = {};
+  int64_t dual_findings         = 0;
+  int64_t crush_results = 0, crush_dual = 0, crush_points = 0, crush_skipped = 0;
+  int64_t second_runs = 0, second_changed = 0;
   int64_t o_only_carried = 0, carried = 0, s_fail = 0, s_only = 0, s_outside = 0, both = 0,
           o_only = 0, missed_relaxed = 0;
   int64_t rows_tested = 0, kept_tested = 0, kept_parallel = 0, kept_untested = 0;
@@ -318,11 +350,33 @@ int main(int argc, char** argv)
       result_t result   = presolve(c.model, options);
       verdict_t v       = oracle::check_result(c, options, result);
       ++models;
+      dual_findings += result.dual_findings;
+      if (v.ok && v.crushed_points > 0) {
+        ++crush_results;
+        crush_dual += result.dual_findings > 0;
+        crush_points += v.crushed_points;
+      }
+      crush_skipped += v.skipped_points;
+      if (result.fixed_point && gprs_check::carries_model(result.status) && sampled(seed)) {
+        ++second_runs;
+        if (presolve(result.reduced, options).status != status_t::unchanged) {
+          if (++second_changed <= show_missed + 3) {
+            std::printf(
+              "SECOND profile %s seed %llu variant %llu: the presolve of the reduced "
+              "model of a fixed point changes it\n%s\n",
+              profile.name,
+              (unsigned long long)seed,
+              (unsigned long long)(seed % 10),
+              second_changed <= show_missed ? oracle::to_code(c).c_str() : "");
+          }
+        }
+      }
       bool s_bad = false;
       std::string part;
       if (gprs_check::carries_model(result.status)) {
         ++carried;
-        gprs_check::structure_report_t s = gprs_check::structure_check(c.model, result);
+        gprs_check::structure_report_t s =
+          gprs_check::structure_check(c.model, result, options.primal_only);
         rows_tested += s.rows_tested;
         kept_tested += s.kept_tested;
         kept_parallel += s.kept_parallel;
@@ -338,6 +392,7 @@ int main(int argc, char** argv)
         if (s.row_failures) { part += " rows"; }
         if (s.kept_failures) { part += " kept_rows"; }
         if (s.added_failures) { part += " added_rows"; }
+        if (s.objective_failures) { part += " objective"; }
         if (s.postsolve_failures) { part += " postsolve"; }
         s_bad = !part.empty();
         double w =
@@ -354,7 +409,8 @@ int main(int argc, char** argv)
             if (++s_only <= show_missed) {
               std::printf(
                 "STRUCTURE-ONLY profile %s seed %llu variant %llu:%s | %s | bound %g col %d "
-                "row %g row %d kept %g row %d added %g row %d post %g col %d\n%s\n",
+                "row %g row %d kept %g row %d added %g row %d objective %g col %d constant %g "
+                "post %g col %d\n%s\n",
                 profile.name,
                 (unsigned long long)seed,
                 (unsigned long long)(seed % 10),
@@ -368,6 +424,9 @@ int main(int argc, char** argv)
                 s.kept_worst_row,
                 s.added_worst,
                 s.added_worst_row,
+                s.objective_worst,
+                s.objective_worst_col,
+                s.objective_constant,
                 s.postsolve_worst,
                 s.postsolve_worst_col,
                 oracle::to_code(c).c_str());
@@ -458,11 +517,25 @@ int main(int argc, char** argv)
     (long long)added_untested,
     multiplier,
     (long long)missed_relaxed);
+  // results: those whose crush test ran and passed; with_dual: of them, the results with a dual
+  // finding, where a crushed point need only cost no more; points: base points crushed;
+  // skipped: base points that the scaled model rejects. second: presolves of the reduced model
+  // of a sampled fixed point; changed: those that did not return unchanged.
+  std::printf(
+    "crush results %lld with_dual %lld points %lld skipped %lld dual_findings %lld "
+    "second %lld changed %lld\n",
+    (long long)crush_results,
+    (long long)crush_dual,
+    (long long)crush_points,
+    (long long)crush_skipped,
+    (long long)dual_findings,
+    (long long)second_runs,
+    (long long)second_changed);
   for (const auto& t : parts) {
     std::printf("  part %lld x%s\n", (long long)t.second, t.first.c_str());
   }
   for (const auto& t : tally) {
     std::printf("  %lld x %s\n", (long long)t.second, t.first.c_str());
   }
-  return failures != 0 || s_fail != 0;
+  return failures != 0 || s_fail != 0 || second_changed != 0;
 }

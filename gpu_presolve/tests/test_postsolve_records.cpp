@@ -140,6 +140,8 @@ GPRS_TEST(postsolve_push_keeps_kinds_in_order)
   GPRS_CHECK_EQ(ps.aliases[1].row, 3);
   GPRS_CHECK_EQ(ps.aliases[1].scale, 0.5);
   GPRS_CHECK_EQ(ps.aliases[1].offset, -1.);
+  GPRS_CHECK_EQ(ps.aliases[0].origin, alias_origin_t::doubleton);
+  GPRS_CHECK_EQ(ps.aliases[1].origin, alias_origin_t::doubleton);
   GPRS_CHECK_EQ(ps.parallel_rows[0].removed_row, 1);
   GPRS_CHECK_EQ(ps.parallel_rows[0].kept_row, 0);
   GPRS_CHECK_EQ(ps.parallel_rows[0].ratio, 3.);
@@ -148,6 +150,33 @@ GPRS_TEST(postsolve_push_keeps_kinds_in_order)
   GPRS_CHECK_EQ(ps.parallel_rows[1].ratio, -0.5);
   // Column 4 is only a representative.
   GPRS_CHECK(ps.col_removed == std::vector<uint8_t>({1, 1, 1, 1, 0}));
+}
+
+// An alias carries its origin, and the row that leaves the model with it or none: a lock alias
+// never has one, an alias of simple probing may. The undo is the same for every origin.
+GPRS_TEST(postsolve_alias_origins)
+{
+  postsolve_t ps;
+  ps.init(bare_model({0, 0, 0, 0, 1, 1}, 2));
+  ps.push_alias(0, 3, 1, 2., 1.);
+  ps.push_alias(1, 3, -1, -1., 0.5, alias_origin_t::probing);
+  ps.push_alias(2, 3, 0, 4., 0., alias_origin_t::probing);
+  ps.push_alias(4, 5, -1, -3., 2., alias_origin_t::lock);
+  GPRS_REQUIRE(ps.aliases.size() == 4);
+  GPRS_CHECK_EQ(ps.aliases[0].origin, alias_origin_t::doubleton);
+  GPRS_CHECK_EQ(ps.aliases[1].origin, alias_origin_t::probing);
+  GPRS_CHECK_EQ(ps.aliases[1].row, -1);
+  GPRS_CHECK_EQ(ps.aliases[2].origin, alias_origin_t::probing);
+  GPRS_CHECK_EQ(ps.aliases[2].row, 0);
+  GPRS_CHECK_EQ(ps.aliases[3].origin, alias_origin_t::lock);
+  GPRS_CHECK_EQ(ps.aliases[3].row, -1);
+  GPRS_CHECK(ps.col_removed == std::vector<uint8_t>({1, 1, 1, 0, 1, 0}));
+  ps.col_origin = {3, 5};
+  std::vector<double> x, crushed;
+  ps.postsolve({1.5, 2.}, x);
+  GPRS_CHECK(x == std::vector<double>({4., -1., 6., 1.5, -4., 2.}));
+  ps.crush(x, crushed);
+  GPRS_CHECK(crushed == std::vector<double>({1.5, 2.}));
 }
 
 // A row addition has its own array and place in the order, removes no column, and the primal

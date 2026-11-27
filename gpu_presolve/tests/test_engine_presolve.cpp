@@ -109,13 +109,36 @@ model_t start_columns()
 
 GPRS_TEST(engine_names)
 {
-  const char* rules[rule::count] = {
-    "row_rules", "propagation", "tightening", "doubleton", "parallel_rows", "dual_fixing"};
+  const std::vector<std::string> rules = {"row_rules",
+                                          "propagation",
+                                          "tightening",
+                                          "doubleton",
+                                          "parallel_rows",
+                                          "dual_fixing",
+                                          "simple_probing",
+                                          "singleton_cols",
+                                          "dual_cols",
+                                          "parallel_cols"};
+  GPRS_REQUIRE(rules.size() == (size_t)rule::count);
   for (int32_t r = 0; r < rule::count; ++r) {
-    GPRS_CHECK_EQ(std::string(rule_name(r)), std::string(rules[r]));
+    GPRS_CHECK_EQ(std::string(rule_name(r)), rules[r]);
   }
   GPRS_CHECK_EQ(std::string(rule_name(rule::tightening)), std::string("tightening"));
   GPRS_CHECK_EQ(std::string(rule_name(rule::dual_fixing)), std::string("dual_fixing"));
+  GPRS_CHECK_EQ(std::string(rule_name(rule::parallel_cols)), std::string("parallel_cols"));
+  const std::vector<std::string> subs = {"free_singleton",
+                                         "zero_cost_singleton",
+                                         "forcing_column",
+                                         "free_singleton_dual",
+                                         "parallel_dominance",
+                                         "dual_bound",
+                                         "lock_alias",
+                                         "parallel_merge"};
+  GPRS_REQUIRE(subs.size() == (size_t)sub_rule::count);
+  for (int32_t s = 0; s < sub_rule::count; ++s) {
+    GPRS_CHECK_EQ(std::string(sub_rule_name(s)), subs[s]);
+  }
+  GPRS_CHECK_EQ(std::string(sub_rule_name(sub_rule::lock_alias)), std::string("lock_alias"));
   GPRS_CHECK_EQ(std::string(status_name(status_t::reduced)), std::string("reduced"));
   GPRS_CHECK_EQ(std::string(status_name(status_t::unchanged)), std::string("unchanged"));
   GPRS_CHECK_EQ(std::string(status_name(status_t::reduced_to_empty)),
@@ -525,7 +548,7 @@ GPRS_TEST(engine_cascade_repeats_on_released_locks)
   GPRS_CHECK_EQ(result.rounds, 2);
 }
 
-// One hash after the start step, one after each of the three phases of a round and one at the
+// One hash after the start step, one after each of the seven phases of a round and one at the
 // end; the same on every run.
 GPRS_TEST(engine_phase_hashes)
 {
@@ -537,27 +560,39 @@ GPRS_TEST(engine_phase_hashes)
   result_t a           = presolve(m, options);
   result_t b           = presolve(model_t(m), options);
   GPRS_CHECK_EQ(a.rounds, 2);
-  GPRS_REQUIRE(a.phase_hash.size() == 8);
+  const size_t entries = 1 + 2 * 7 + 1;
+  GPRS_REQUIRE(a.phase_hash.size() == entries);
   GPRS_CHECK(a.phase_hash == b.phase_hash);
   GPRS_CHECK_EQ(a.hash, b.hash);
   GPRS_CHECK_EQ(postsolve_hash(a.postsolve), postsolve_hash(b.postsolve));
   // The cascade of round 1 changes the state; nothing does until the end, where the reduced
   // model gets its origins.
   GPRS_CHECK(a.phase_hash[0] != a.phase_hash[1]);
-  for (size_t k = 2; k < 7; ++k) {
+  for (size_t k = 2; k + 1 < entries; ++k) {
     GPRS_CHECK_EQ(a.phase_hash[k], a.phase_hash[1]);
   }
-  GPRS_CHECK(a.phase_hash[7] != a.phase_hash[6]);
+  GPRS_CHECK(a.phase_hash[entries - 1] != a.phase_hash[entries - 2]);
 
   // The hashes follow the model.
   model_t other = m;
   other.cost[1] = -2.;
   result_t c    = presolve(other, options);
-  GPRS_REQUIRE(c.phase_hash.size() == 8);
-  for (size_t k = 0; k < 8; ++k) {
+  GPRS_REQUIRE(c.phase_hash.size() == entries);
+  for (size_t k = 0; k < entries; ++k) {
     GPRS_CHECK(c.phase_hash[k] != a.phase_hash[k]);
   }
   GPRS_CHECK(c.hash != a.hash);
+
+  // A column family that is switched on takes its lists in its phase of the first round: the
+  // state after it is another one, and the reduced model is the same.
+  options.enabled[rule::singleton_cols] = true;
+  result_t d                            = presolve(m, options);
+  GPRS_REQUIRE(d.phase_hash.size() == entries);
+  GPRS_CHECK_EQ(d.phase_hash[4], a.phase_hash[4]);
+  GPRS_CHECK(d.phase_hash[5] != a.phase_hash[5]);
+  GPRS_CHECK_EQ(d.hash, a.hash);
+  GPRS_CHECK_EQ(d.stats[rule::singleton_cols].calls, 1);
+  GPRS_CHECK_EQ(d.stats[rule::singleton_cols].findings, 0);
 }
 
 namespace {

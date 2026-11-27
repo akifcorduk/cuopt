@@ -312,6 +312,10 @@ state_t::state_t(const model_t& model, const tolerances_t& tolerances)
   row_alive.assign(nrows, 1);
   row_free_size = csr.size;
   row_version.assign(nrows, 0);
+  row_singletons.assign(nrows, 0);
+  for (int32_t j = 0; j < ncols; ++j) {
+    if (csc.size[j] == 1) { ++row_singletons[csc.index[csc.start[j]]]; }
+  }
 
   col_type.resize(ncols);
   for (int32_t j = 0; j < ncols; ++j) {
@@ -332,7 +336,7 @@ state_t::state_t(const model_t& model, const tolerances_t& tolerances)
     store_row_activity(*this, i);
   }
 
-  row_frontier.init(row_list::count, nrows, row_event::entries);
+  row_frontier.init(row_list::count, nrows, row_event::construction);
   col_frontier.init(col_list::count, ncols, col_event::locks);
 }
 

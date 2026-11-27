@@ -230,6 +230,11 @@ solution_t solve(const model_t& model,
 struct verdict_t {
   bool ok = true;
   std::string message;
+  // The crush test of a passed check: points of the base model that were crushed, and points
+  // left out because c.model rejects them. Both 0 where the test does not run: a result without
+  // a reduced model, an infeasible base model.
+  int32_t crushed_points = 0;
+  int32_t skipped_points = 0;
 };
 
 // Feasible points of the reduced model that check_presolve postsolves.
@@ -246,9 +251,11 @@ constexpr double check_max_assignments = 16384.;
 //   options.tol) with that objective value;
 // - every point of solve(reduced, ..., checked_points).feasible, postsolved, is feasible for
 //   c.model;
-// - with options.primal_only and a feasible base model: the optimal point of the base model
-//   (or its first feasible point when it is unbounded), taken to c.model by col_scale and
-//   crushed, is feasible for the reduced model and has the same objective value there.
+// - with a feasible base model, the crush test: the optimal point of the base model (or its
+//   first feasible point when it is unbounded), taken to c.model by col_scale and crushed, is
+//   feasible for the reduced model, and its objective value there is the same when the result
+//   has no dual finding (result_t::dual_findings) and not above otherwise; a result of
+//   primal-only mode has no dual finding.
 // Objective values are compared with a relative tolerance of 1e-9.
 // In addition to the above:
 // - the base model is classified by classify_widest(..., check_max_assignments) and the reduced
@@ -258,9 +265,11 @@ constexpr double check_max_assignments = 16384.;
 //   model, evenly spaced in enumeration order (all of them when there are fewer), each with
 //   its point of solution_t::far: a constraint that the reduced model lost on the side of a
 //   line column that its cost does not push against shows only there;
-// - the crush test also runs when the dual-fixing family is disabled or reports no finding,
-//   and it takes the optimal point and checked_points evenly spaced feasible points of the
-//   base model, each with its point of solution_t::far;
+// - the crush test runs on every result with a reduced model, and it takes the optimal point
+//   and checked_points evenly spaced feasible points of the base model, each with its point of
+//   solution_t::far; a point is used when check_point accepts it for c.model with options.tol
+//   (a huge value of a line column, divided by its column scale, can leave the model in
+//   doubles), and verdict_t counts the points used and left out;
 // - status failed fails, and so does a postsolve stack whose sizes are not those of c.model or
 //   whose row_origin / col_origin are not distinct rows / columns of c.model, one per row /
 //   column of the reduced model.

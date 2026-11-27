@@ -11,8 +11,10 @@
 // needed:
 // - the presolve does not report infeasible;
 // - a planted point, crushed, is feasible for the reduced model, and taken back by postsolve it
-//   is feasible for the model and costs no more (a dual fixing moves a feasible point to a
-//   feasible one that is not worse; every other Stage 1 rule keeps every feasible point);
+//   is feasible for the model and costs no more: a dual reduction moves a feasible point to a
+//   feasible one that is not worse, and every other reduction keeps every feasible point. It
+//   costs the same when the result has no dual finding (result_t::dual_findings), which
+//   primal-only mode guarantees;
 // - with result_t::fixed_point a second presolve returns unchanged.
 // Bound propagation writes explicit bounds of continuous columns along such chains, which the
 // classes of the oracle (one continuous column per row) never reach.
@@ -269,6 +271,9 @@ std::string planted_problem(const planted_t& c, const options_t& options)
   result_t result = presolve(c.model, options);
   if (result.status == status_t::infeasible) { return "infeasible, with a feasible point"; }
   if (result.status == status_t::unbounded_or_infeasible) { return std::string(); }
+  if (options.primal_only && result.dual_findings != 0) {
+    return "a dual finding in primal-only mode";
+  }
   for (const std::vector<double>& x : c.points) {
     std::vector<double> crushed, back;
     result.postsolve.crush(x, crushed);
@@ -280,8 +285,9 @@ std::string planted_problem(const planted_t& c, const options_t& options)
       return "a feasible point violates the model after crush and postsolve";
     }
     double before = objective(c.model, x), after = objective(c.model, back);
-    if (after > before + 1e-5 || (options.primal_only && after < before - 1e-5)) {
-      return "a feasible point changes its cost through crush and postsolve";
+    if (after > before + 1e-5) { return "a feasible point costs more after crush and postsolve"; }
+    if (result.dual_findings == 0 && after < before - 1e-5) {
+      return "a feasible point costs less after crush and postsolve, without a dual finding";
     }
   }
   if (result.fixed_point && presolve(result.reduced, options).status != status_t::unchanged) {

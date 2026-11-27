@@ -155,13 +155,13 @@ GPRS_TEST(engine_last_phase_hash_is_over_the_rebuilt_state)
     result_t b = presolve(m, late);
     GPRS_CHECK_EQ(a.status, b.status);
     if (a.status == status_t::infeasible) { continue; }
-    // After the start step, the three phases of the one round and the end.
-    GPRS_REQUIRE(a.phase_hash.size() == 5 && b.phase_hash.size() == 5);
-    GPRS_CHECK_EQ(a.phase_hash[4], b.phase_hash[4]);
+    // After the start step, the seven phases of the one round and the end.
+    GPRS_REQUIRE(a.phase_hash.size() == 9 && b.phase_hash.size() == 9);
+    GPRS_CHECK_EQ(a.phase_hash[8], b.phase_hash[8]);
     GPRS_CHECK_EQ(a.hash, b.hash);
     GPRS_CHECK_EQ(b.rebuilds, 1);
     if (a.rebuilds == 2) {
-      GPRS_CHECK(a.phase_hash[3] != b.phase_hash[3]);
+      GPRS_CHECK(a.phase_hash[7] != b.phase_hash[7]);
       ++carried;
     }
   }

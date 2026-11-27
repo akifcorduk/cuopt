@@ -726,9 +726,9 @@ rule_result_t parallel_rows_t::run(state_t& st,
   // The keys of the earlier calls are keys of the same kind.
   gprs_assert(w.near == near);
   if (w.coefficient.size() != (size_t)st.ncols) { w.coefficient.assign(st.ncols, 0.); }
-  const tolerances_t& tol      = opt.tol;
-  const uint8_t own_list       = list_bit(row_list::parallel_rows);
-  const uint8_t singleton_list = list_bit(row_list::singletons);
+  const tolerances_t& tol          = opt.tol;
+  const list_mask_t own_list       = list_bit(row_list::parallel_rows);
+  const list_mask_t singleton_list = list_bit(row_list::singletons);
   rule_result_t result;
 
   // A row of row_list::singletons has another core than the one its key was taken from, with

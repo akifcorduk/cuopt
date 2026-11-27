@@ -1002,9 +1002,14 @@ verdict_t check_result(const case_t& c, const options_t& options, const result_t
     if (!error.empty()) { return failure("far point " + std::to_string(k) + ": " + error); }
   }
 
-  bool primal = options.primal_only || !options.enabled[rule::dual_fixing] ||
-                result.stats[rule::dual_fixing].findings == 0;
-  if (!primal || base.outcome == outcome_t::infeasible) { return verdict_t(); }
+  verdict_t verdict;
+  if (base.outcome == outcome_t::infeasible) { return verdict; }
+  if (options.primal_only && result.dual_findings != 0) {
+    return failure("a result of primal-only mode reports " + std::to_string(result.dual_findings) +
+                   " dual findings");
+  }
+  // Without a dual finding every reduction keeps every feasible point and its objective value.
+  bool exact = result.dual_findings == 0;
   std::vector<const std::vector<double>*> points;
   if (base.outcome == outcome_t::optimal) { points.push_back(&base.x); }
   for (int64_t k : sample(base.feasible.size())) {
@@ -1016,6 +1021,13 @@ verdict_t check_result(const case_t& c, const options_t& options, const result_t
     for (int32_t j = 0; j < c.model.ncols; ++j) {
       x_model[j] = (*point)[j] / c.col_scale[j];
     }
+    // A point of the base model with a huge value is no point of the scaled model in doubles.
+    point_check_t model_check = check_point(c.model, x_model);
+    if (!point_feasible(model_check, options.tol)) {
+      ++verdict.skipped_points;
+      continue;
+    }
+    ++verdict.crushed_points;
     ps.crush(x_model, x_reduced);
     if ((int32_t)x_reduced.size() != reduced.ncols) {
       return failure("the crushed point has the wrong size");
@@ -1026,13 +1038,19 @@ verdict_t check_result(const case_t& c, const options_t& options, const result_t
                      point_text(x_reduced) +
                      ", infeasible for the reduced model: " + violation_text(check));
     }
-    double original = check_point(c.model, x_model).objective;
-    if (!close(check.objective, original)) {
+    double original = model_check.objective;
+    if (close(check.objective, original)) { continue; }
+    if (exact) {
       return failure("feasible point " + point_text(x_model) + " of the model has objective " +
                      number(original) + ", its crushed point " + number(check.objective));
     }
+    if (check.objective > original) {
+      return failure("feasible point " + point_text(x_model) + " of the model has objective " +
+                     number(original) + ", its crushed point the higher " +
+                     number(check.objective));
+    }
   }
-  return verdict_t();
+  return verdict;
 }
 
 verdict_t check_presolve(const case_t& c, const options_t& options)

@@ -214,6 +214,12 @@ GPRS_TEST(hash_state_depends_on_every_operation)
             [&taken](state_t& st) { st.row_frontier.take(row_list::tightening, taken); }},
      change{"column list taken",
             [&taken](state_t& st) { st.col_frontier.take(col_list::dual_fixing, taken); }},
+     change{"row list of a column rule taken",
+            [&taken](state_t& st) { st.row_frontier.take(row_list::simple_probing, taken); }},
+     change{"column list of a column rule taken",
+            [&taken](state_t& st) { st.col_frontier.take(col_list::parallel_cols, taken); }},
+     change{"row on the list of a column rule",
+            [](state_t& st) { st.row_frontier.push(list_bit(row_list::dual_cols), 1); }},
      change{"column list in another order",
             [&taken](state_t& st) {
               st.col_frontier.take(col_list::dual_fixing, taken);
@@ -244,6 +250,7 @@ GPRS_TEST(hash_state_depends_on_every_array)
     change{"row_alive", [](state_t& st) { st.row_alive[1] = 0; }},
     change{"row_free_size", [](state_t& st) { ++st.row_free_size[1]; }},
     change{"row_version", [](state_t& st) { ++st.row_version[1]; }},
+    change{"row_singletons", [](state_t& st) { ++st.row_singletons[1]; }},
     change{"col_lower", [](state_t& st) { st.col_lower[1] = 0.5; }},
     change{"col_upper", [](state_t& st) { st.col_upper[1] = 0.5; }},
     change{"cost", [](state_t& st) { st.cost[1] = 0.5; }},
@@ -307,7 +314,7 @@ GPRS_TEST(hash_state_depends_on_every_array)
   for (int32_t l = 0; l < col_list::count; ++l) {
     changes.push_back({"column list", [l](state_t& st) { st.col_frontier.list[l].push_back(1); }});
   }
-  GPRS_CHECK_EQ(changes.size(), (size_t)(41 + 2 * 8 + 2 * 6 + 7 + 2));
+  GPRS_CHECK_EQ(changes.size(), (size_t)(42 + 2 * 8 + 2 * 6 + row_list::count + col_list::count));
   check_changes<state_t>(base, hash_of_state, changes);
 }
 
@@ -395,6 +402,12 @@ GPRS_TEST(hash_postsolve_depends_on_the_records_and_their_order)
      change{"alias, offset", [](postsolve_t& ps) { ps.push_alias(1, 2, 0, 2., 0.); }},
      change{"alias, scale and offset swapped",
             [](postsolve_t& ps) { ps.push_alias(1, 2, 0, 1., 2.); }},
+     change{"alias, origin",
+            [](postsolve_t& ps) { ps.push_alias(1, 2, 0, 2., 1., alias_origin_t::probing); }},
+     change{"alias, origin without a row",
+            [](postsolve_t& ps) { ps.push_alias(1, 2, -1, 2., 1., alias_origin_t::probing); }},
+     change{"alias, lock",
+            [](postsolve_t& ps) { ps.push_alias(1, 2, -1, 2., 1., alias_origin_t::lock); }},
      change{"parallel", [](postsolve_t& ps) { ps.push_parallel_row(2, 0, 0.5); }},
      change{"parallel, rows swapped", [](postsolve_t& ps) { ps.push_parallel_row(0, 2, 0.5); }},
      change{"parallel, kept row", [](postsolve_t& ps) { ps.push_parallel_row(2, 1, 0.5); }},

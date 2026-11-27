@@ -15,14 +15,18 @@
 // the points that its search visits, see added_rows).
 // It sees what the crush check cannot: a reduction that relaxes.
 //
-//   stack      The stack and the maps keep the contract of postsolve.hpp: every column is left
-//              in the reduced model or removed by exactly one record and named by no later
-//              record; a fixed value is finite, and integral for an integer column; an alias
-//              has a finite scale other than zero and a finite offset, and an integer column an
-//              integer rep with an integral scale and offset; a ratio is finite and not zero; a
+//   stack      The stack and the maps keep the contract of postsolve.hpp: every record is of a
+//              kind that this check reads; every column is left in the reduced model or removed
+//              by exactly one record and named by no later record; a fixed value is finite, and
+//              integral for an integer column; an alias has a finite scale other than zero and
+//              a finite offset, an integer column an integer rep with an integral scale and
+//              offset, and the row that its origin asks for (a row for a doubleton equation,
+//              none for a lock, either for simple probing); a ratio is finite and not zero; a
 //              row addition has a finite factor other than zero and names two different rows,
 //              neither of which an earlier record took out of the model (the removed row of a
-//              parallel record, the row of an alias).
+//              parallel record, the row of an alias that has one).
+//              A result of primal-only mode has no dual finding (result_t::dual_findings) and
+//              no alias of origin lock.
 //   types      A column that is integer in the original model is integer in the reduced model.
 //   bounds     With the records composed, every original column is a constant or
 //              scale * (one reduced column) + offset. Over the bounds of that reduced column it
@@ -75,6 +79,14 @@
 //              substituted) gets no multiplier: its part of g is then tested over the bounds
 //              like the rest. A row all of whose equations are without one is tested as a row
 //              that left the model or as a kept row.
+//   objective  The objective of the original model at a postsolved point is the reduced
+//              objective at the reduced point: with the records composed, the difference of the
+//              two is a linear function D of the reduced columns, and it is the zero function.
+//              Every coefficient of D is zero within composed_zero of the sum of the absolute
+//              values it is made of, and its constant within identity_tolerance of the sum of
+//              the absolute values of its terms, an offset counted with the terms that the
+//              aliases composed it of. This reads what the bounds and the rows do not: the cost
+//              that a substitution moves to the root and the offset that it and a fixing leave.
 //   postsolve  postsolve_t::postsolve of one point within the bounds of the reduced model gives
 //              what the composed records give.
 //
@@ -97,6 +109,11 @@
 // have a smallest one, the search finds it, and it is not above the bound of that proof. They
 // have none only when no point within the bounds meets the rows the row is made of, and the
 // row is then counted as not tested unless the search proves it.
+// Why objective holds: a fixing puts cost * value into the offset, a substitution puts
+// cost * scale onto the cost of the root and cost * offset into the offset, and no other
+// Stage 1 rule touches a cost; a fixing by locks is a fixing here. What the check cannot see is
+// a restriction: a column fixed or aliased where it must not be passes every part as long as it
+// stays inside its bounds, and the crush check and the oracle test that.
 // Like the crush check, this has to be reread when a rule is added that relaxes a bound,
 // deletes a row for another reason or combines rows in another way (Stage 3: free column
 // substitution, dominated columns, sparsification).
@@ -121,6 +138,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -151,6 +169,9 @@ constexpr double rounding_zero = 1e-12;
 // The share of a term of a bound that its rounding can reach, in units of structure_tolerance:
 // a side or a bound of the reduced model is stored with a relative error far below 1e-14.
 constexpr double rounding_share = 1e-9;
+// A difference of costs up to the smallest normal double is what a product loses when it
+// underflows, whatever the sizes of its terms are.
+constexpr double underflow_size = std::numeric_limits<double>::min();
 
 // x[original column] = scale * x_reduced[root] + offset; root -1 for a constant.
 struct column_map_t {
@@ -204,6 +225,15 @@ struct structure_report_t {
   // Largest multiplier of an equation in the bound that a tested row passed or failed with.
   double added_multiplier = 0.;
 
+  // Coefficients of the objective difference that fail, and one more when its constant fails.
+  // The largest coefficient is relative to the sum of its parts and belongs to the reduced
+  // column of the original index objective_worst_col; the constant is relative to the sum of
+  // its terms.
+  int64_t objective_failures  = 0;
+  double objective_worst      = 0.;
+  int32_t objective_worst_col = -1;
+  double objective_constant   = 0.;
+
   int64_t postsolve_failures  = 0;
   double postsolve_worst      = 0.;  // relative to max(1, largest term)
   int32_t postsolve_worst_col = -1;
@@ -211,10 +241,11 @@ struct structure_report_t {
 
 inline bool is_integral(double v) { return v == std::round(v); }
 
-// Tests the contract of the stack and composes its records. On a broken contract `error` says
-// which part, with the index of the record or column.
+// Tests the contract of the stack, for a result of the given mode, and composes its records. On
+// a broken contract `error` says which part, with the index of the record or column.
 inline bool compose_records(const gprs::model_t& model,
                             const gprs::result_t& result,
+                            bool primal_only,
                             std::vector<column_map_t>& map,
                             std::string& error)
 {
@@ -225,6 +256,9 @@ inline bool compose_records(const gprs::model_t& model,
     return false;
   };
   if (ps.ncols != model.ncols || ps.nrows != model.nrows) { return fail("sizes of the stack", 0); }
+  if (primal_only && result.dual_findings != 0) {
+    return fail("dual findings in a primal-only result:", result.dual_findings);
+  }
   if (ps.col_origin.size() != (size_t)reduced.ncols ||
       ps.row_origin.size() != (size_t)reduced.nrows) {
     return fail("sizes of the origin maps", 0);
@@ -268,9 +302,16 @@ inline bool compose_records(const gprs::model_t& model,
       if (alias == ps.aliases.size()) { return fail("alias records missing at", k); }
       const gprs::alias_record_t& r = ps.aliases[alias++];
       if (!column_ok(r.col) || !column_ok(r.rep) || r.col == r.rep || removed[r.col] ||
-          removed[r.rep] || map[r.col].root != unset || !row_ok(r.row)) {
+          removed[r.rep] || map[r.col].root != unset) {
         return fail("columns of alias record", k);
       }
+      bool doubleton = r.origin == gprs::alias_origin_t::doubleton;
+      bool probing   = r.origin == gprs::alias_origin_t::probing;
+      bool lock      = r.origin == gprs::alias_origin_t::lock;
+      if (!doubleton && !probing && !lock) { return fail("origin of alias record", k); }
+      if (lock && primal_only) { return fail("lock alias in a primal-only result at", k); }
+      bool has_row = doubleton || (probing && r.row != -1);
+      if (has_row ? !row_ok(r.row) : r.row != -1) { return fail("row of alias record", k); }
       if (!std::isfinite(r.scale) || r.scale == 0. || !std::isfinite(r.offset)) {
         return fail("scale or offset of alias record", k);
       }
@@ -278,8 +319,8 @@ inline bool compose_records(const gprs::model_t& model,
           !(model.col_type[r.rep] && is_integral(r.scale) && is_integral(r.offset))) {
         return fail("integer column of alias record", k);
       }
-      removed[r.col]  = 1;
-      row_gone[r.row] = 1;
+      removed[r.col] = 1;
+      if (has_row) { row_gone[r.row] = 1; }
       --left;
     } else if (ps.order[k] == gprs::record_kind_t::parallel_row) {
       if (parallel == ps.parallel_rows.size()) { return fail("parallel records missing at", k); }
@@ -289,7 +330,7 @@ inline bool compose_records(const gprs::model_t& model,
         return fail("parallel record", k);
       }
       row_gone[r.removed_row] = 1;
-    } else {
+    } else if (ps.order[k] == gprs::record_kind_t::row_addition) {
       if (addition == ps.row_additions.size()) {
         return fail("row addition records missing at", k);
       }
@@ -301,6 +342,8 @@ inline bool compose_records(const gprs::model_t& model,
       if (row_gone[r.row] || row_gone[r.equation_row]) {
         return fail("rows of row addition record", k);
       }
+    } else {
+      return fail("unknown record kind at", k);
     }
   }
   if (fixed != ps.fixed_cols.size() || alias != ps.aliases.size() ||
@@ -748,12 +791,71 @@ inline bool no_common_point(combined_t p)
   return negative;
 }
 
-inline structure_report_t structure_check(const gprs::model_t& model, const gprs::result_t& result)
+// The objective part of the check. The stack keeps its contract and `map` holds its records
+// composed (compose_records). O(columns + records).
+inline void objective_check(const gprs::model_t& model,
+                            const gprs::result_t& result,
+                            const std::vector<column_map_t>& map,
+                            structure_report_t& s)
+{
+  const gprs::postsolve_t& ps  = result.postsolve;
+  const gprs::model_t& reduced = result.reduced;
+  // The sum of the absolute values that the composed offset of a column is made of: an alias
+  // adds its own offset to the scaled offset of its rep, and the two can cancel.
+  std::vector<double> offset_parts(model.ncols, 0.);
+  size_t fixed = ps.fixed_cols.size(), alias = ps.aliases.size();
+  for (size_t k = ps.order.size(); k-- > 0;) {
+    if (ps.order[k] == gprs::record_kind_t::fixed_col) {
+      const gprs::fixed_col_record_t& r = ps.fixed_cols[--fixed];
+      offset_parts[r.col]               = std::fabs(r.value);
+    } else if (ps.order[k] == gprs::record_kind_t::alias) {
+      const gprs::alias_record_t& r = ps.aliases[--alias];
+      offset_parts[r.col] = std::fabs(r.scale) * offset_parts[r.rep] + std::fabs(r.offset);
+    }
+  }
+
+  std::vector<sum_t> coefficient(reduced.ncols);
+  std::vector<double> parts(reduced.ncols, 0.);
+  sum_t constant;
+  constant.add(model.objective_offset, 1.);
+  constant.add(-reduced.objective_offset, 1.);
+  double terms = std::fabs(model.objective_offset) + std::fabs(reduced.objective_offset);
+  for (int32_t j = 0; j < model.ncols; ++j) {
+    double cost = model.cost[j];
+    if (cost == 0.) { continue; }
+    const column_map_t& m = map[j];
+    constant.add(cost, m.offset);
+    terms += std::fabs(cost) * offset_parts[j];
+    if (m.root < 0) { continue; }
+    coefficient[m.root].add(cost, m.scale);
+    parts[m.root] += std::fabs(cost * m.scale);
+  }
+  for (int32_t k = 0; k < reduced.ncols; ++k) {
+    coefficient[k].add(-reduced.cost[k], 1.);
+    parts[k] += std::fabs(reduced.cost[k]);
+    double difference = std::fabs(coefficient[k].value());
+    if (difference <= underflow_size) { continue; }
+    double relative = difference / parts[k];
+    if (!(relative <= s.objective_worst)) { s.objective_worst_col = ps.col_origin[k]; }
+    raise_to(s.objective_worst, relative);
+    s.objective_failures += !(relative <= composed_zero);
+  }
+  double difference = std::fabs(constant.value());
+  if (!(difference <= underflow_size)) {
+    s.objective_constant = difference / terms;
+    s.objective_failures += !(s.objective_constant <= identity_tolerance);
+  }
+}
+
+// The check of one result of a presolve in the given mode (options_t::primal_only).
+inline structure_report_t structure_check(const gprs::model_t& model,
+                                          const gprs::result_t& result,
+                                          bool primal_only)
 {
   structure_report_t s;
   s.ran = true;
   std::vector<column_map_t> map;
-  if (!compose_records(model, result, map, s.stack_error)) { return s; }
+  if (!compose_records(model, result, primal_only, map, s.stack_error)) { return s; }
   s.composed                   = true;
   const gprs::postsolve_t& ps  = result.postsolve;
   const gprs::model_t& reduced = result.reduced;
@@ -764,6 +866,8 @@ inline structure_report_t structure_check(const gprs::model_t& model, const gprs
       if (s.lost_integers++ == 0) { s.first_lost_integer = col; }
     }
   }
+
+  objective_check(model, result, map, s);
 
   for (int32_t j = 0; j < model.ncols; ++j) {
     const column_map_t& m = map[j];
