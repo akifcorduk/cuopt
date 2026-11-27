@@ -1,0 +1,771 @@
+{
+ "identity": {
+  "commit": null,
+  "source_commit": null,
+  "source_dirty": null,
+  "source_checksum": "6edd0693d2441adc7a6211bd9679de4b842f0347d1ae3824b005f6a5a566908f",
+  "tool": "/home/scratch.acoerduek_sw/gpu_presolve_deps/build/gprs_check/gprs_check",
+  "tool_checksum": "cbe34664835fa90a112a60a4d7ea84f6752ee65daeedb3a41a8b9a835b9658cd"
+ },
+ "host": "fad86b7cd20d",
+ "start_time": "2026-11-27T14:48:20+0000",
+ "load_average": [
+  35.05224609375,
+  33.287109375,
+  30.63134765625
+ ],
+ "arguments": {
+  "dumps": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev",
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps"
+  ],
+  "stats_dir": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/results/stage1/dumps_dev_stats",
+   "gpu_presolve/results/stage1/refs/stage1c",
+   "gpu_presolve/results/stage1/refs/stage1c_large"
+  ],
+  "out": "gpu_presolve/results/stage1/host/v4/check_status",
+  "set": "status",
+  "only": "bnatt500,fhnw-binpack4-4,neos-2075418-temuka",
+  "jobs": 3,
+  "threads": 4,
+  "lp_time_limit": 120.0,
+  "mip_time_limit": 300.0,
+  "primal_only": false,
+  "solutions_dir": [
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions",
+   "/home/scratch.acoerduek_sw/gpu_presolve_deps/solutions_external"
+  ],
+  "make_solutions": false,
+  "solution_time_limit": 300.0,
+  "max_points": 20,
+  "cost_variants": 2,
+  "push_points": 4,
+  "require_points": false,
+  "kill_after": 2280.0,
+  "skip_done": true
+ },
+ "end_time": "2026-11-27T14:55:13+0000",
+ "end_load_average": [
+  32.71337890625,
+  34.71826171875,
+  32.57373046875
+ ],
+ "failures": 0,
+ "instances": [
+  {
+   "name": "bnatt500",
+   "run": {
+    "host": "fad86b7cd20d",
+    "start_time": "2026-11-27T14:48:20+0000",
+    "load_average": [
+     35.05224609375,
+     33.287109375,
+     30.63134765625
+    ],
+    "end_load_average": [
+     37.90673828125,
+     36.53466796875,
+     32.8173828125
+    ],
+    "wall_seconds": 300.45157074928284,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/bnatt500.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.003656,
+   "hash": "1cf896818a9768fd",
+   "original": {
+    "rows": 7029,
+    "cols": 4500,
+    "nnz": 27203
+   },
+   "reduced": {
+    "rows": 5034,
+    "cols": 2517,
+    "nnz": 21242
+   },
+   "expect": "infeasible",
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 0.177
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 0.157
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": 0,
+    "seconds": 300.02
+   },
+   "crush": {
+    "files": [],
+    "points": 0,
+    "points_used": 0,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": null
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 1995,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 5034,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 1995,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 5034,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "a787936f69a546a6",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "a787936f69a546a6",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "062a2287be3236f0",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "062a2287be3236f0",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "pass",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "skipped",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "skipped",
+    "crush_default_reduced_point": "skipped",
+    "crush_default_postsolved_point": "skipped",
+    "crush_default_objective": "skipped",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "skipped",
+    "crush_primal_reduced_point": "skipped",
+    "crush_primal_postsolved_point": "skipped",
+    "crush_primal_objective": "skipped",
+    "crush_primal_round_trip": "skipped",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "fhnw-binpack4-4",
+   "run": {
+    "host": "fad86b7cd20d",
+    "start_time": "2026-11-27T14:48:20+0000",
+    "load_average": [
+     35.05224609375,
+     33.287109375,
+     30.63134765625
+    ],
+    "end_load_average": [
+     37.90673828125,
+     36.53466796875,
+     32.8173828125
+    ],
+    "wall_seconds": 300.10134291648865,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/fhnw-binpack4-4.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "reduced",
+   "presolve_seconds": 0.000182,
+   "hash": "f23cc7175f28b19b",
+   "original": {
+    "rows": 620,
+    "cols": 520,
+    "nnz": 2332
+   },
+   "reduced": {
+    "rows": 465,
+    "cols": 420,
+    "nnz": 1602
+   },
+   "expect": "infeasible",
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 0.011
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 0.005
+   },
+   "mip_reduced": {
+    "status": "Time limit reached",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": 0,
+    "seconds": 300.036
+   },
+   "crush": {
+    "files": [],
+    "points": 0,
+    "points_used": 0,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": null
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "reduced",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 155,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 465,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 155,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 465,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "e1fb475b721ef165",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "e1fb475b721ef165",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "default",
+     "status": "reduced",
+     "hash": "363ef044dc433438",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "primal_only",
+     "status": "reduced",
+     "hash": "363ef044dc433438",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "pass",
+    "reduced_mip_status": "skipped",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "skipped",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "skipped",
+    "crush_default_reduced_point": "skipped",
+    "crush_default_postsolved_point": "skipped",
+    "crush_default_objective": "skipped",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "skipped",
+    "crush_primal_reduced_point": "skipped",
+    "crush_primal_postsolved_point": "skipped",
+    "crush_primal_objective": "skipped",
+    "crush_primal_round_trip": "skipped",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  },
+  {
+   "name": "neos-2075418-temuka",
+   "run": {
+    "host": "fad86b7cd20d",
+    "start_time": "2026-11-27T14:48:20+0000",
+    "load_average": [
+     35.05224609375,
+     33.287109375,
+     30.63134765625
+    ],
+    "end_load_average": [
+     32.71337890625,
+     34.71826171875,
+     32.57373046875
+    ],
+    "wall_seconds": 413.28741931915283,
+    "exit_code": 0
+   },
+   "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps_dev/neos-2075418-temuka.csr",
+   "highs": {
+    "version": "1.16.0",
+    "githash": "283bfc859",
+    "int_bytes": 8
+   },
+   "presolve_mode": "default",
+   "presolve_status": "unchanged",
+   "presolve_seconds": 0.627381,
+   "hash": "421e059886e9bc16",
+   "original": {
+    "rows": 349602,
+    "cols": 122304,
+    "nnz": 7610261
+   },
+   "reduced": {
+    "rows": 349602,
+    "cols": 122304,
+    "nnz": 7610261
+   },
+   "expect": "infeasible",
+   "tolerances": {
+    "point": 1e-07,
+    "check": 1e-06,
+    "objective": 1e-06,
+    "objective_identity": 1e-09,
+    "reduced_mip": 1e-07
+   },
+   "lp_original": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 93.168
+   },
+   "lp_reduced": {
+    "status": "Optimal",
+    "has_solution": true,
+    "objective": 0,
+    "dual_bound": 0,
+    "seconds": 92.191
+   },
+   "mip_reduced": {
+    "status": "Infeasible",
+    "has_solution": false,
+    "objective": null,
+    "dual_bound": null,
+    "seconds": 222.089
+   },
+   "crush": {
+    "files": [],
+    "points": 0,
+    "points_used": 0,
+    "points_rejected": 0,
+    "points_pushed": 0,
+    "rejected": {
+     "row": 0,
+     "bound": 0,
+     "integrality": 0
+    },
+    "best_objective": null
+   },
+   "structure": {
+    "tolerance": 1e-05,
+    "other_mode_status": "unchanged",
+    "default": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 349602,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    },
+    "primal_only": {
+     "ran": true,
+     "stack_error": "",
+     "lost_integers": 0,
+     "first_lost_integer": -1,
+     "bounds": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     },
+     "rows": {
+      "tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "kept_rows": {
+      "tested": 349602,
+      "parallel": 0,
+      "not_tested": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "added_rows": {
+      "rows": 0,
+      "tested": 0,
+      "not_tested": 0,
+      "multiplier": 0,
+      "worst": 0,
+      "row": -1,
+      "failed": 0
+     },
+     "postsolve": {
+      "worst": 0,
+      "column": -1,
+      "failed": 0
+     }
+    }
+   },
+   "cost_variants": [
+    {
+     "variant": 1,
+     "mode": "default",
+     "status": "unchanged",
+     "hash": "3daf258ea47e2ffa",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 1,
+     "mode": "primal_only",
+     "status": "unchanged",
+     "hash": "3daf258ea47e2ffa",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "default",
+     "status": "unchanged",
+     "hash": "3966fb0681e2911f",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    },
+    {
+     "variant": 2,
+     "mode": "primal_only",
+     "status": "unchanged",
+     "hash": "3966fb0681e2911f",
+     "moved_columns": 0,
+     "objective_fall": null,
+     "failed": []
+    }
+   ],
+   "checks": {
+    "presolve_status": "pass",
+    "relaxation_not_weaker": "pass",
+    "relaxation_below_known": "skipped",
+    "reduced_relaxation_status": "pass",
+    "reduced_mip_status": "pass",
+    "postsolved_point_feasible": "skipped",
+    "postsolved_point_objective": "skipped",
+    "optimum_equals_known": "skipped",
+    "dual_bound_below_known": "skipped",
+    "solution_points": "skipped",
+    "structure_default_stack": "pass",
+    "structure_default_types": "pass",
+    "structure_default_bounds": "pass",
+    "structure_default_rows": "pass",
+    "structure_default_kept_rows": "pass",
+    "structure_default_added_rows": "pass",
+    "structure_default_postsolve": "pass",
+    "crush_default_status": "skipped",
+    "crush_default_reduced_point": "skipped",
+    "crush_default_postsolved_point": "skipped",
+    "crush_default_objective": "skipped",
+    "structure_primal_stack": "pass",
+    "structure_primal_types": "pass",
+    "structure_primal_bounds": "pass",
+    "structure_primal_rows": "pass",
+    "structure_primal_kept_rows": "pass",
+    "structure_primal_added_rows": "pass",
+    "structure_primal_postsolve": "pass",
+    "crush_primal_status": "skipped",
+    "crush_primal_reduced_point": "skipped",
+    "crush_primal_postsolved_point": "skipped",
+    "crush_primal_objective": "skipped",
+    "crush_primal_round_trip": "skipped",
+    "cost_variants_default": "pass",
+    "cost_variants_primal": "pass"
+   }
+  }
+ ]
+}

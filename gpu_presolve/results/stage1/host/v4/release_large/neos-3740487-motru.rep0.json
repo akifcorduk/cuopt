@@ -1,0 +1,23 @@
+{
+  "instance": "/home/scratch.acoerduek_sw/gpu_presolve_deps/csr_dumps/neos-3740487-motru.csr",
+  "status": "reduced",
+  "original": {"rows": 4936372, "cols": 1689612, "nnz": 26433474},
+  "reduced": {"rows": 4936248, "cols": 1689550, "nnz": 26433226},
+  "seconds": 5.126747,
+  "seconds_outside_rules": {"state": 2.238003, "start": 0.010655, "storage": 0.000003, "finish": 0.338328, "hash": 0.288194},
+  "hash": "9b952af497b763aa",
+  "rounds": 2,
+  "rebuilds": 1,
+  "fixed_point": true,
+  "explicit": {"rounds": 0, "seconds": 0.000808},
+  "parallel_rows": {"merges": 62, "subtractions": 0},
+  "start": {"calls": 1, "work": 0, "findings": 0, "records": 0, "seconds": 0.010655, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+  "rules": {
+    "row_rules": {"calls": 3, "work": 39540928, "findings": 0, "records": 0, "seconds": 0.050873, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "propagation": {"calls": 3, "work": 72932160, "findings": 0, "records": 3228092, "seconds": 1.071447, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "tightening": {"calls": 2, "work": 106558928, "findings": 5028, "records": 0, "seconds": 0.154790, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0},
+    "doubleton": {"calls": 2, "work": 39502170, "findings": 62, "records": 0, "seconds": 0.314979, "rows_removed": 62, "cols_removed": 62, "nnz_removed": 124},
+    "parallel_rows": {"calls": 2, "work": 178946892, "findings": 62, "records": 0, "seconds": 0.654825, "rows_removed": 62, "cols_removed": 0, "nnz_removed": 124},
+    "dual_fixing": {"calls": 2, "work": 13517392, "findings": 0, "records": 0, "seconds": 0.004643, "rows_removed": 0, "cols_removed": 0, "nnz_removed": 0}
+  }
+}
