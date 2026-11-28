@@ -3010,3 +3010,71 @@ Still to run: `--columns` in the release build and the three kinds in the assert
   parallel rows turns a violation of 1.6e-3 on extreme models into wrong "infeasible"
   answers on other models. A repair is attacked before it is merged, also when the attack
   was cut once.
+
+## Entry 52 — 2026-11-28 — The campaign of the singleton-column engine on the node ended: 5.4 billion models, 18 failures, one of them a lost optimum at an ordinary point
+
+### The owner's messages (verbatim)
+
+None. This entry follows the end of the campaign watcher (13:35 CET).
+
+### What ran
+
+- `tools/node_campaign.sh s1c_m1 big1 1000000000000 100000000 24` on slot b (node
+  viking-cr-194, 24 processes, engine `daa4f5d68`), 09:49 to 12:34 node time (UTC).
+- Six runs. Release build: 1,199,999,808 models each with no profile option, `--singletons`
+  and `--columns`. Assertion build: 599,999,904 each. Total 5,399,999,136 models.
+
+### Results
+
+| run | models | oracle failures |
+|---|---|---|
+| release, no option | 1,199,999,808 | 5 |
+| release, `--singletons` | 1,199,999,808 | 4 |
+| release, `--columns` | 1,199,999,808 | 4 |
+| assert, no option | 599,999,904 | 1 |
+| assert, `--singletons` | 599,999,904 | 4 |
+| assert, `--columns` | 599,999,904 | 0 |
+
+- 18 failures, one in 300 million models. No assertion fired. The structure check failed on
+  none and missed all 18 (it carries no objective test and no huge points).
+- Second presolves of a fixed point: 618 million, none changed the model.
+- By class (my reading of the failure lines, not yet the triage's verdict):
+  - 6 objective differences of 1.1e-9 to 2.5e-9 against the oracle's threshold of 1e-9
+    (profiles dense, huge_parallel, huge_equations, open_ends, bounded_continuous).
+  - 11 crush failures at feasible points with entries of 2.9e16 to 1e23 (the crushed point
+    has a higher objective).
+  - 1 lost optimum with default options: profile huge_parallel, seed 1000213883241,
+    `--columns`: reduced optimum -8, base optimum -10.
+
+### The lost optimum (first look, on the Mac, both builds)
+
+- Model: x0 integer in [3, 5] with cost -2, x1 continuous in [-3e19, 2e20], x2, x3, x4
+  binary; rows -2 x0 + 2 x1 <= -2, -2 x0 + 3 x1 - 2 x2 + 2 x3 = -1, 2 x0 - 3 x1 + x4 <= -1.
+  The optimum is x0 = 5, x1 = 11/3; the engine reduces the model to empty with x0 = 4.
+- It depends on the finite lower bound -3e19 alone: with x1 in (-3e19, inf) it fails; with
+  (-inf, 2e20), free, (-100, 100) and (-3e15, 2e16) the result is right.
+- It needs propagation, tightening, doubleton, parallel rows and dual fixing together: with
+  any one of them off, and in primal-only mode, the result is right. The singleton-column
+  rules of this milestone make no finding on the model.
+- Not traced: which arithmetic step reads the bound (a row activity that still holds -6e19
+  has a unit in the last place of 8192). This is the triage's task.
+- Why it weighs more than the other 17: the wrong answer is at an ordinary point, and the
+  only extreme value in the model is a bound that never binds.
+
+### What I did
+
+- Stored the campaign in the repository: `gpu_presolve/results/stage1c/campaign/s1c_m1_big1`
+  (log, totals of each run, every failure line, the part files with the printed models);
+  commit `255e91ff2` on `feat/gpu-presolve`, pushed.
+- Wrote the nine further seeds and the first look at the lost optimum into a note for the
+  triage agent of the running M2 workflow (it has the first nine in its task text); a watcher
+  tells me when that agent starts, then I send it the note.
+- Register: AS-336 (milestone merged on Mac results only) closed with the node results.
+
+### Lessons
+
+- A campaign of this size is worth its 2.75 hours on a shared node: the 168 million models
+  of a milestone's own campaign could not find a one-in-5-billion wrong result.
+- The profiles with huge values give two different things: failures at huge points, which a
+  solver would not visit, and a wrong answer at an ordinary point caused by a huge bound.
+  They must be counted apart; I had put all of them into one "extreme values" class.
