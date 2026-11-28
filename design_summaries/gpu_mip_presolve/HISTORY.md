@@ -3037,12 +3037,12 @@ None. This entry follows the end of the campaign watcher (13:35 CET).
 
 - 18 failures, one in 300 million models. No assertion fired. The structure check failed on
   none and missed all 18 (it carries no objective test and no huge points).
-- Second presolves of a fixed point: 618 million, none changed the model.
+- Second presolves of a fixed point: 617 million, none changed the model.
 - By class (my reading of the failure lines, not yet the triage's verdict):
-  - 6 objective differences of 1.1e-9 to 2.5e-9 against the oracle's threshold of 1e-9
+  - 6 objective differences of 1.1e-9 to 2.2e-9 against the oracle's relative threshold of 1e-9
     (profiles dense, huge_parallel, huge_equations, open_ends, bounded_continuous).
-  - 11 crush failures at feasible points with entries of 2.9e16 to 1e23 (the crushed point
-    has a higher objective).
+  - 11 crush failures at feasible points with entries of 3e19 to 1e23 (the crushed point
+    has a higher objective; in one of them by 2.5e-9 only).
   - 1 lost optimum with default options: profile huge_parallel, seed 1000213883241,
     `--columns`: reduced optimum -8, base optimum -10.
 
