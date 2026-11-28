@@ -1,0 +1,15 @@
+the 240 benchmark instances: 240 instances in every side, passes base 3, new 3
+  base    19.508 s   +0.00%   rules   10.334 s, outside    9.155 s, work of the shared families 2041111657
+  new     19.521 s   +0.06%   rules   10.359 s, outside    9.142 s, work of the shared families 2041111657
+       largest changes: singleton_cols +0.024 s, row_rules -0.020 s, tightening +0.010 s, state -0.008 s, doubleton +0.008 s, start -0.006 s
+       above +3% among the 139 instances of at least 10 ms: 2 (thor50dday +4.8%, cryptanalysiskb128n5obj14 +3.5%)
+testbed below 1e7 nonzeros: 31 instances in every side, passes base 3, new 3
+  base     4.987 s   +0.00%   rules    2.757 s, outside    2.229 s, work of the shared families 569723620
+  new      4.989 s   +0.04%   rules    2.757 s, outside    2.231 s, work of the shared families 569723620
+       largest changes: row_rules -0.006 s, tightening +0.004 s, state +0.004 s, propagation +0.002 s, start -0.001 s, singleton_cols +0.001 s
+       above +3% among the 28 instances of at least 10 ms: 0
+testbed above 1e7 nonzeros: 9 instances in every side, passes base 3, new 3
+  base    87.886 s   +0.00%   rules   45.531 s, outside   42.132 s, work of the shared families 9131992889
+  new     88.183 s   +0.34%   rules   45.877 s, outside   42.088 s, work of the shared families 9131992889
+       largest changes: singleton_cols +0.199 s, tightening +0.080 s, row_rules -0.056 s, doubleton +0.050 s, propagation +0.043 s, storage -0.040 s
+       above +3% among the 9 instances of at least 10 ms: 0

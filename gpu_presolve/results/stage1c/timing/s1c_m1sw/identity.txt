@@ -1,0 +1,4 @@
+the 240 benchmark instances: 240 compared, 240 equal, 0 differ, 0 only in one version
+testbed below 1e7 nonzeros: 31 compared, 31 equal, 0 differ, 0 only in one version
+testbed above 1e7 nonzeros: 9 compared, 9 equal, 0 differ, 0 only in one version
+s1c_m1sw against s1c_m1, all counts: identical
