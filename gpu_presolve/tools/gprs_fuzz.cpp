@@ -33,8 +33,9 @@
 //   probing, those aliases, and those of them that name no row; the rows that entered a batch,
 //   those that a batch deleted and those that stayed with a cut edge; the visits of a row that
 //   was left because two of its columns were connected, for a column with bounds one apart
-//   that are not 0 and 1, for the limit on the scale, or for the size of an offset; the calls
-//   with an alias depth above 1, and the largest depth.
+//   that are not 0 and 1, for the limit on the scale, for a continuous column whose range is
+//   rounding, or for the size of an offset; the calls with an alias depth above 1, and the
+//   largest depth.
 // With the engine as it is, all three must be silent. A structure failure that the oracle does
 // not share is a false alarm of the structure check (or a relaxation without effect on the
 // optimum); an oracle failure that the structure check does not share is, on a result with a
@@ -464,6 +465,7 @@ int main(int argc, char** argv)
       probing_sum.probing_connected += result.columns.probing_connected;
       probing_sum.probing_unit_refused += result.columns.probing_unit_refused;
       probing_sum.probing_scale_refused += result.columns.probing_scale_refused;
+      probing_sum.probing_narrow_refused += result.columns.probing_narrow_refused;
       probing_sum.probing_size_refused += result.columns.probing_size_refused;
       probing_sum.probing_deep_batches += result.columns.probing_deep_batches;
       if (result.columns.alias_depth > probing_depth) {
@@ -686,8 +688,8 @@ int main(int argc, char** argv)
     (long long)limited_results);
   std::printf(
     "probing results %lld aliases %lld without_row %lld | rows %lld deleted %lld cut %lld | "
-    "connected %lld unit_refused %lld scale_refused %lld size_refused %lld | "
-    "deep_batches %lld depth %lld\n",
+    "connected %lld unit_refused %lld scale_refused %lld narrow_refused %lld "
+    "size_refused %lld | deep_batches %lld depth %lld\n",
     (long long)probing_results,
     (long long)probing_aliases,
     (long long)probing_no_row,
@@ -697,6 +699,7 @@ int main(int argc, char** argv)
     (long long)probing_sum.probing_connected,
     (long long)probing_sum.probing_unit_refused,
     (long long)probing_sum.probing_scale_refused,
+    (long long)probing_sum.probing_narrow_refused,
     (long long)probing_sum.probing_size_refused,
     (long long)probing_sum.probing_deep_batches,
     (long long)probing_depth);

@@ -42,7 +42,9 @@
 // that is parallel to it up to singleton columns, which leaves the points that meet both rows
 // as they are; a doubleton substitution, and a free singleton column with an equation as pivot
 // row, which remove a column whose value the equation gives and move its cost onto the columns
-// that the equation names; the zero-cost singleton columns of a row and a forcing column
+// that the equation names; the aliases of simple probing (rules.hpp (g)), which do the same
+// with the value that an equation and the bounds of its columns give a column for each value
+// of its binary; the zero-cost singleton columns of a row and a forcing column
 // (rules.hpp (h)), which are projections: the rows that M_(t+1) has in place of theirs are what
 // the other columns must meet for values of the removed columns to exist, which they do at
 // p_t, and the removed columns cost nothing.

@@ -133,7 +133,7 @@ bool offset_fits(context_t& c, int32_t col, double size)
   return size * reach(c, col) * c.tol.side_error <= c.tol.feasibility;
 }
 
-enum class probe_t : uint8_t { no, unit_refused, scale_refused, size_refused, yes };
+enum class probe_t : uint8_t { no, unit_refused, scale_refused, narrow_refused, size_refused, yes };
 
 // The equation with p as its binary: yes when the other free entries are forcing at both values
 // of the term of p and the aliases pass their limits; they are then in w.edges.
@@ -145,6 +145,10 @@ probe_t probe(context_t& c, int32_t row, double side, const binary_t& p)
   // The other entries at the bounds of the minimum activity and at those of the maximum one.
   forcing_entries_t at_min, at_max;
   bool units = is_unit(st, p.col), in_range = true;
+  // Of the continuous columns among them: each range is wide against the rounding of its two
+  // bounds, and the smallest range of a term.
+  bool wide        = true;
+  double narrowest = inf;
   c.w.edges.clear();
   c.budget.spend(csr.used[row]);
   for (int64_t e = csr.begin(row); e < csr.end(row); ++e) {
@@ -166,6 +170,10 @@ probe_t probe(context_t& c, int32_t row, double side, const binary_t& p)
     double start = falls ? upper : lower;
     if (!(range <= c.opt.alias_scale_limit)) { in_range = false; }
     if (!continuous && range == 1. && !is_unit(st, col)) { units = false; }
+    if (continuous) {
+      if (!(bound_rounding(lower) + bound_rounding(upper) <= c.tol.zero * range)) { wide = false; }
+      if (std::fabs(a) * range < narrowest) { narrowest = std::fabs(a) * range; }
+    }
     // x[col] = start + scale * x[p].
     c.w.edges.push_back(col < p.col ? alias_edge_t{row, col, p.col, 1., -scale, start}
                                     : alias_edge_t{row, p.col, col, -scale, 1., start});
@@ -176,6 +184,14 @@ probe_t probe(context_t& c, int32_t row, double side, const binary_t& p)
   }
   if (!units) { return probe_t::unit_refused; }
   if (!in_range) { return probe_t::scale_refused; }
+  // The forcing test lets a continuous column sit off its bound by the rounding of the row, and
+  // a bound of such a column is itself rounded. Fixed at the bound, that is rounding. As an
+  // alias it is the scale that carries it: where the range of the column, or of its term, is
+  // not far above that rounding, the two bounds are one value as far as the row can tell, and
+  // an alias between them puts coefficients of rounding size into the other rows of the column.
+  double slack =
+    std::fmax(std::fmax(g.low, 0.) + g.low_error, std::fmax(g.high, 0.) + g.high_error);
+  if (!wide || !(slack <= c.tol.zero * narrowest)) { return probe_t::narrow_refused; }
   // Whichever column the batch makes the root, the alias of a column to it has one of the two
   // bounds of the column as its offset, and 0 or 1 for the binary and the other columns with
   // those bounds.
@@ -270,22 +286,26 @@ void collect(context_t& c, int32_t row)
   }
   // What the row was left for, when a binary splits it into two forcing rows and none is taken:
   // the first of these that a binary met.
-  bool unit_refused = false, scale_refused = false, size_refused = false;
+  bool unit_refused = false, scale_refused = false, narrow_refused = false;
+  bool size_refused = false;
   for (const binary_t& p : binaries) {
     probe_t found = probe(c, row, side, p);
     if (found == probe_t::yes) {
       take(c, row, p);
       return;
     }
-    unit_refused  = unit_refused || found == probe_t::unit_refused;
-    scale_refused = scale_refused || found == probe_t::scale_refused;
-    size_refused  = size_refused || found == probe_t::size_refused;
+    unit_refused   = unit_refused || found == probe_t::unit_refused;
+    scale_refused  = scale_refused || found == probe_t::scale_refused;
+    narrow_refused = narrow_refused || found == probe_t::narrow_refused;
+    size_refused   = size_refused || found == probe_t::size_refused;
   }
   column_stats_t& stats = c.result.columns;
   if (unit_refused) {
     ++stats.probing_unit_refused;
   } else if (scale_refused) {
     ++stats.probing_scale_refused;
+  } else if (narrow_refused) {
+    ++stats.probing_narrow_refused;
   } else if (size_refused) {
     ++stats.probing_size_refused;
     // The size test reads the other rows of the columns, which change without an event of this

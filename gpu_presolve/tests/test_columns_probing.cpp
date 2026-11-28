@@ -756,3 +756,150 @@ GPRS_TEST(columns_probing_on_generated_rows)
   GPRS_CHECK(fired > 800 && deleted > 800 && cut >= 1 && connected > 400 && deep > 200);
   GPRS_CHECK(without_row >= 1 && refused > 40 && units > 400);
 }
+
+// The knob p_probing_row: without it a seed gives the case it gave before; with it the rows
+// counted before come out as they were and equations follow them, most of them with the two
+// activities equally far from the side and an enumerated column with two values that carries
+// half of the range.
+GPRS_TEST(columns_probing_generator_knob)
+{
+  oracle::generator_options_t plain, none, with;
+  none.p_probing_row    = 1.;
+  none.max_probing_rows = 0;
+  with.p_probing_row    = 1.;
+  with.p_scaled         = 0.;
+  with.p_crossing       = 0.;
+  plain.p_scaled        = 0.;
+  plain.p_crossing      = 0.;
+  int64_t added = 0, balanced = 0, carried = 0;
+  for (uint64_t seed = 7600000; seed < 7602000; ++seed) {
+    oracle::generator_options_t defaults;
+    GPRS_CHECK_EQ(model_hash(oracle::generate(seed, defaults).model),
+                  model_hash(oracle::generate(seed, none).model));
+    model_t before = oracle::generate(seed, plain).base;
+    model_t m      = oracle::generate(seed, with).base;
+    GPRS_REQUIRE(m.nrows >= before.nrows && m.nrows <= before.nrows + with.max_probing_rows);
+    GPRS_CHECK_EQ(m.ncols, before.ncols);
+    std::vector<uint8_t> line;
+    GPRS_CHECK(oracle::classify(m, with.max_width, line));
+    for (int32_t i = 0; i < before.nrows; ++i) {
+      int64_t length = before.row_start[i + 1] - before.row_start[i];
+      GPRS_REQUIRE(m.row_start[i + 1] - m.row_start[i] == length);
+      for (int64_t k = 0; k < length; ++k) {
+        GPRS_CHECK_EQ(m.col_index[m.row_start[i] + k], before.col_index[before.row_start[i] + k]);
+        GPRS_CHECK_EQ(m.value[m.row_start[i] + k], before.value[before.row_start[i] + k]);
+      }
+    }
+    for (int32_t i = before.nrows; i < m.nrows; ++i) {
+      ++added;
+      GPRS_CHECK_EQ(m.row_lower[i], m.row_upper[i]);
+      double low = 0., high = 0.;
+      bool finite = true;
+      for (int64_t e = m.row_start[i]; e < m.row_start[i + 1]; ++e) {
+        int32_t j = m.col_index[e];
+        double a  = m.value[e];
+        double l = std::ceil(m.col_lower[j]), u = std::floor(m.col_upper[j]);
+        finite = finite && std::fabs(l) <= 13. && std::fabs(u) <= 13.;
+        low += a > 0 ? a * l : a * u;
+        high += a > 0 ? a * u : a * l;
+      }
+      if (!finite || high - m.row_upper[i] != m.row_upper[i] - low) { continue; }
+      ++balanced;
+      for (int64_t e = m.row_start[i]; e < m.row_start[i + 1]; ++e) {
+        int32_t j = m.col_index[e];
+        if (m.col_type[j] == 1 && std::floor(m.col_upper[j]) - std::ceil(m.col_lower[j]) == 1. &&
+            std::fabs(m.value[e]) == high - m.row_upper[i]) {
+          ++carried;
+          break;
+        }
+      }
+    }
+  }
+  if (std::getenv("GPRS_ORACLE_CENSUS")) {
+    std::printf("    probing rows %lld, balanced %lld, with a column that carries half %lld\n",
+                (long long)added,
+                (long long)balanced,
+                (long long)carried);
+  }
+  GPRS_CHECK(added > 1500 && balanced > added / 4 && carried > added / 5);
+}
+
+// A continuous column whose two bounds are rounding apart is one value as far as its row can
+// tell. The forcing test passes it, as it passes a column that it then fixes; an alias between
+// the two bounds would have a scale of rounding size, and with it the other rows of the column
+// would get coefficients of rounding size that decide the binary by a quotient of two
+// roundings. The row is left.
+GPRS_TEST(columns_probing_leaves_a_column_whose_range_is_rounding)
+{
+  // 3 x + 2 p - 2 y = 2 with x within six rounding steps of 2 / 3: p = y whatever x is.
+  const double low = 0.66666666666666663, high = 0.66666666666666696;
+  {
+    call_t c({{low, high, false}, binary, binary}, {{{{0, 3.}, {1, 2.}, {2, -2.}}, 2., 2.}});
+    c.run();
+    GPRS_CHECK_EQ(c.result.findings, 0);
+    GPRS_CHECK_EQ(c.result.columns.probing_narrow_refused, 1);
+    GPRS_CHECK(!c.result.limited);
+  }
+  // The same with an exact range of 2^-40, which is far above the rounding of its bounds 0 and
+  // 2^-40: the row is exact and is taken.
+  {
+    const double narrow = 0x1p-40;
+    call_t c({{0., narrow, false}, binary, binary},
+             {{{{0, 1.}, {1, 1. + narrow}, {2, 1.}}, 1. + narrow, 1. + narrow}});
+    c.run();
+    GPRS_CHECK_EQ(c.result.findings, 2);
+    GPRS_CHECK_EQ(c.result.columns.probing_narrow_refused, 0);
+    GPRS_CHECK(silent(c.structure()));
+  }
+  // That range next to bounds of size 3: 2^-40 is not far above the rounding of 3.
+  {
+    const double narrow = 0x1p-40;
+    call_t c({{3., 3. + narrow, false}, binary, binary},
+             {{{{0, 1.}, {1, 1. + narrow}, {2, 1.}}, 4. + narrow, 4. + narrow}});
+    c.run();
+    GPRS_CHECK_EQ(c.result.findings, 0);
+    GPRS_CHECK_EQ(c.result.columns.probing_narrow_refused, 1);
+  }
+  // A gap that is positive by one rounding step of the side is rounding against the terms of
+  // the row, which are 3 and more, and as large as the whole range of z, 2^-50: the row cannot
+  // tell at which of its bounds z sits. With the exact side it can.
+  {
+    const double tiny = 0x1p-50;
+    for (bool exact : {false, true}) {
+      double side = exact ? 5. + tiny : std::nextafter(5. + tiny, 9.);
+      call_t c({{3., 4., false}, binary, binary, {0., tiny, false}},
+               {{{{0, 1.}, {1, 2. + tiny}, {2, 1.}, {3, 1.}}, side, side}});
+      c.run();
+      GPRS_CHECK_EQ(c.result.findings, exact ? 3 : 0);
+      GPRS_CHECK_EQ(c.result.columns.probing_narrow_refused, exact ? 0 : 1);
+    }
+  }
+  // The model of the campaign that showed it, with the rules of its seed: without the row
+  // rules no singleton row fixes x0, which row 1 gives the value 2 / 3 once x3 is fixed, and
+  // propagation leaves it bounds that are rounding apart.
+  //   r0:  3 x0 + 2 x1 - 2 x2 = 2
+  //   r1: -3 x0 - 3 x3       = -2
+  //   r2:   -x0             <= 2
+  model_t base     = rule_test::make_model({{-inf, inf, false}, binary, binary, binary},
+                                           {{{{0, 3.}, {1, 2.}, {2, -2.}}, 2., 2.},
+                                            {{{0, -3.}, {3, -3.}}, -2., -2.},
+                                            {{{0, -1.}}, -inf, 2.}});
+  base.cost        = {-1., 2., 0., -3.};
+  oracle::case_t c = oracle::make_case(base, {}, {});
+  options_t options;
+  options.enabled.fill(false);
+  for (int32_t r : {rule::propagation,
+                    rule::tightening,
+                    rule::parallel_rows,
+                    rule::dual_fixing,
+                    rule::simple_probing,
+                    rule::parallel_cols}) {
+    options.enabled[r] = true;
+  }
+  result_t result     = presolve(c.model, options);
+  oracle::verdict_t v = oracle::check_result(c, options, result);
+  GPRS_CHECK(v.ok);
+  if (!v.ok) { std::printf("    %s\n", v.message.c_str()); }
+  GPRS_CHECK_EQ(result.stats[rule::simple_probing].findings, 0);
+  GPRS_CHECK(result.columns.probing_narrow_refused >= 1);
+}

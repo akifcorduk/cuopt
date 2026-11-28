@@ -1075,6 +1075,7 @@ def print_probing_statistics(rows):
         ("visits left: two columns connected", "probing.connected"),
         ("visits left: bounds one apart, not 0 and 1", "probing.unit_refused"),
         ("visits left: scale limit", "probing.scale_refused"),
+        ("visits left: range of rounding size", "probing.narrow_refused"),
         ("visits left: size of an offset", "probing.size_refused"),
         ("calls with an alias depth above 1", "probing.deep_batches"),
         ("changes of entries by the substitutions", "probing.entry_changes"),

@@ -231,6 +231,7 @@ struct engine_t {
     columns.probing_connected += r.columns.probing_connected;
     columns.probing_unit_refused += r.columns.probing_unit_refused;
     columns.probing_scale_refused += r.columns.probing_scale_refused;
+    columns.probing_narrow_refused += r.columns.probing_narrow_refused;
     columns.probing_size_refused += r.columns.probing_size_refused;
     columns.probing_deep_batches += r.columns.probing_deep_batches;
     columns.probing_entry_changes += r.columns.probing_entry_changes;

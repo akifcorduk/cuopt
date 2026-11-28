@@ -1077,7 +1077,7 @@ MUTANTS = {
     "sp_unit": (
         "rules_simple_probing.cpp",
         "  if (!units) { return probe_t::unit_refused; }\n",
-        "",
+        "  (void)units;\n",
     ),
     # Wrong engines of simple probing that the generator of the campaign
     # does not reach: each fails the unit test named for it. No test of the
@@ -1087,6 +1087,16 @@ MUTANTS = {
         "rules_simple_probing.cpp",
         "  return size * reach(c, col) * c.tol.side_error <= c.tol.feasibility;",
         "  return size * reach(c, col) * c.tol.side_error <= inf;",
+    ),
+    # No test of the range of a continuous column against rounding: an
+    # alias with a scale of rounding size
+    # (columns_probing_leaves_a_column_whose_range_is_rounding, a model that
+    # the campaign met six times in twenty million with --columns).
+    "sp_narrow": (
+        "rules_simple_probing.cpp",
+        "  if (!wide || !(slack <= c.tol.zero * narrowest)) "
+        "{ return probe_t::narrow_refused; }\n",
+        "",
     ),
     # A row that is left for the size of an offset does not report limited
     # (columns_probing_size_of_an_offset).

@@ -122,7 +122,7 @@ void write_report(FILE* out,
   std::fprintf(out,
                "  \"probing\": {\"rows\": %lld, \"rows_deleted\": %lld, \"rows_cut\": %lld, "
                "\"connected\": %lld, \"unit_refused\": %lld, \"scale_refused\": %lld, "
-               "\"size_refused\": %lld, "
+               "\"narrow_refused\": %lld, \"size_refused\": %lld, "
                "\"deep_batches\": %lld, \"entry_changes\": %lld, \"max_scale\": %.17g, "
                "\"aliases\": %lld, \"aliases_with_row\": %lld},\n",
                (long long)result.columns.probing_rows,
@@ -131,6 +131,7 @@ void write_report(FILE* out,
                (long long)result.columns.probing_connected,
                (long long)result.columns.probing_unit_refused,
                (long long)result.columns.probing_scale_refused,
+               (long long)result.columns.probing_narrow_refused,
                (long long)result.columns.probing_size_refused,
                (long long)result.columns.probing_deep_batches,
                (long long)result.columns.probing_entry_changes,

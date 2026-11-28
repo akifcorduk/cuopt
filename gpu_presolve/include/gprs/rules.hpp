@@ -95,10 +95,12 @@ struct column_stats_t {
   int64_t probing_connected = 0;
   // Visits of a row whose other entries are forcing at both values of a binary and that was
   // left: for an integer column with bounds one apart that are not 0 and 1; else for
-  // opt.alias_scale_limit; else for the size of an offset (the call then reports limited).
-  int64_t probing_unit_refused  = 0;
-  int64_t probing_scale_refused = 0;
-  int64_t probing_size_refused  = 0;
+  // opt.alias_scale_limit; else for a continuous column whose range is rounding; else for the
+  // size of an offset (the call then reports limited).
+  int64_t probing_unit_refused   = 0;
+  int64_t probing_scale_refused  = 0;
+  int64_t probing_narrow_refused = 0;
+  int64_t probing_size_refused   = 0;
   // Calls whose alias depth is above 1.
   int64_t probing_deep_batches = 0;
   // Changes of entries (state_t::coefficient_changes) by the substitutions: one for an entry
@@ -461,6 +463,16 @@ struct dual_fixing_t {
 //   differences that the scale of a column multiplies.)
 //   upper - lower <= opt.alias_scale_limit for every other column: the scale multiplies every
 //   coefficient of the column into the rows of its root.
+//   The range of every other continuous column is far above rounding. The forcing test lets
+//   such a column sit off its bound by the rounding of the row (the positive part of a gap),
+//   and its bounds are themselves rounded, by up to bound_rounding (src/implied.hpp) each.
+//   Fixed at the bound, as by a forcing row, the column is right to that rounding; as an alias
+//   the difference of the two bounds becomes a scale, and a range of rounding size becomes
+//   coefficients of rounding size in the other rows of the column, which then decide the binary
+//   by a quotient of two roundings (x in [2/3, 2/3 + 7e-16] next to a row that gives x = 2/3).
+//   So: bound_rounding(lower) + bound_rounding(upper) <= tol.zero * (upper - lower), and the
+//   larger positive part of the two gaps, with its error bound, is at most tol.zero times the
+//   smallest |a| * (upper - lower) among those columns.
 //   The size of the offset fits the rows of the column, for the binary and every other column:
 //   max(|lower|, |upper|) * r * tol.side_error <= tol.feasibility, r being the largest
 //   coefficient of the column, and every finite side of a row of the column is readable. The
