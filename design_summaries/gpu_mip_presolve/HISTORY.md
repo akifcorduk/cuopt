@@ -2601,3 +2601,122 @@ No new user message.
   then fixed differ (the integer merge was reported as "a switch that is off inside cuOpt"
   and became `range_kept` everywhere). A register entry has to say what the owner was told,
   not only what is in the design.
+
+## Entry 48 — 2026-11-28 — The singleton-column rules (M1) are back, merged and pushed; the node reservation ended; M2 and a parallel-row repair started
+
+No new user message. The turn started with the notification that workflow `wf_baf55528-756`
+had ended.
+
+### What came back
+
+- The workflow ran 5 h 4 min with three agents (1.6 million tokens, 939 tool calls):
+  the implementer (commit `7953d4a9d`, branch `stage1c-m1`), the validity reviewer (one
+  commit on top, `3d61c548d`, branch `review-stage1c-m1-validity`) and the worth-and-cost
+  reviewer (no change). No integration step was needed. The three reports are stored as
+  `stage1c_reports/m1/{impl_m1,attack_validity,attack_worth}.json` in this directory.
+- Built: the family `singleton_cols` with the free singleton column on an equation (R2) and
+  on an inequality (R5, the first new dual rule), the zero-cost singleton columns (R3) and
+  the forcing column (R4); the record `col_from_rows` with the kinds defined, interval and
+  forcing and their undo; the limits `pivot_growth_limit` (1000) and `saved_row_factor` (4);
+  `integral_for` with the drift guard in `src/integral.hpp`, also used to repair the edge
+  test of the alias forest; the extensions of the structure check and of the crush check;
+  the generator knobs and the campaign profile `--columns`; 473 tests; 99 wrong engines in
+  `check/make_mutants.py` (58 before).
+- The author's own campaign found one wrong result of the new code (1 in 20 million
+  models): the undo of an interval record stepped from a start value of -1.28e9 and lost
+  eight digits. The undo now takes the quotient of the row.
+- The validity reviewer found and repaired four defects, each with a test that failed
+  first: (1) the forcing column broke the fixed-point contract when a side of one of its
+  rows became readable without an event of the column; (2) a cost that underflows
+  (4.9e-324) was dropped with its column; (3) the family with none of its reductions
+  active still charged work and could stop on its budget, which cleared the fixed-point
+  flag (986 of 2,160 chunks of 1,000 random models differed from the base in that flag);
+  (4) the integral side and the drift guard of an integer column each used the tolerance
+  on their own, which left a row off by 1.08e-6 at an exactly feasible reduced point (a
+  defect of the design text F.2 that the code had inherited).
+- One wrong result is NOT repaired and is not this milestone's: a row removed as a
+  parallel row of 2^18 times the scale of its kept row is violated by 1.56e-3 after a
+  later reduction rounds a side of the kept row (sides near 9e7). The base commit gives
+  the same 1.56e-3 with Stage 1 rules only (parallel rows, then a doubleton substitution).
+  Cause: the parallel rows keep the row with the smaller index whatever the scales. The
+  models are stored in `stage1c_reports/m1/probes/`.
+- Evidence of the reviewers, all on the Mac: 122 million release and 47 million assertion
+  campaign models with the reviewer's seeds, 60,000 tiny models applied by hand in exact
+  rational arithmetic and 100,000 through the engine judged in exact arithmetic: no
+  changed optimum and no infeasible postsolve from the four rules. 90 of the 99 wrong
+  engines are caught by a campaign check, the other 9 by unit tests only (the generator
+  has no side beyond 1e8, no ratio off an integer by less than 1e-9, no chain of pivot
+  ratios above 1000). Nothing ran with a solver, nothing on the node.
+
+### Numbers (the 240 benchmark instances as local dumps, presolve only, no scaling)
+
+- Checked by me on the merged tree (`daa4f5d68`): 473 tests pass in the assertion and in
+  the release build; the engine ran on all 240 in default mode, with the family off and in
+  primal-only mode, 0 failures.
+- Geometric mean of reference / engine over 237 instances (without ex9, ex10,
+  enlight_hard) in nonzeros / rows / columns: against the ladder step `m1_a` (HiGHS with
+  the Stage 1 rules and the singleton column rules) 1.0020 / 1.0022 / 1.0022 (before
+  0.9832 / 0.9862 / 0.9855); against HiGHS with all cheap rules 0.9746 / 0.9810 / 0.9584
+  (before 0.9563 / 0.9653 / 0.9424). Remaining nonzeros over input nonzeros, geometric
+  mean: 0.774 (before 0.788; HiGHS with all cheap rules 0.753).
+- Sums over the 240: 103,185,105 to 101,227,465 nonzeros, 11,038,691 to 10,472,693 rows,
+  9,743,308 to 9,674,821 columns. No instance is larger than before in any measure. With
+  the family off the result equals the groundwork (M0) on 240 of 240 instances. The
+  fixed-point flag is set on 234 instances as before.
+- neos-3402294-bobin: 381,000 nonzeros, 32,932 rows, 792 columns, exactly the reference
+  (before 2,003,808 / 577,300 / 2,904).
+- Below 0.99 of `m1_a` in a measure: 4 instances; below 0.95: irish-electricity in rows
+  (0.935) and columns (0.894). The cause on eight of the nine instances behind is the
+  growth limit of 1000, which HiGHS does not have (5,270 columns refused); with the limit
+  doubled 4 instances stay behind, with the limit off none that this rule causes. The
+  ninth, traininstance2, is one row behind before and after the milestone.
+- Share of each rule on the 240 (mean of without / with, taken out of the full family):
+  R2 1.0059 / 1.0015 / 1.0013, R3 1.0086 / 1.0122 / 1.0134, R4 1.0002 / 1.0005 / 1.0000,
+  R5 1.0010 / 1.0015 / 1.0013.
+- R3 and R4 switched on in primal-only mode (they are off there, decision 4 of the
+  design, taken as recommended) would give 1.0017 / 1.0005 / 1.0073 over that mode, 22
+  instances smaller, none larger (scratch switch of the worth reviewer).
+- Cost on the Mac: +2.3% engine time on the 240 (7.43 s to 7.60 s, minimum of three
+  alternating passes), the family itself 1.4%; work units +7.4%; no call stopped on its
+  budget, no round limit reached.
+- Side effect on the reduced models: the free singleton column on an objective-defining
+  row makes the objective dense on 13 instances (blp-ar98 1 to 15,806 objective nonzeros),
+  and the cost range grows on 32 instances; the matrix coefficient ranges do not grow on
+  any instance.
+
+### What I did
+
+- Pushed `3d61c548d` to the fork as branch `stage1c-m1`; cherry-picked the two commits
+  onto `feat/gpu-presolve` (`c6df2718d`, `daa4f5d68`); stored my run on the 240 as
+  `gpu_presolve/results/bench240/s1c_m1_mac/{default,off,primal}` (commit `fa8430e24`);
+  pushed.
+- The node: `cuopt exec` failed at the sync flush ("session is not currently able to
+  synchronize"). `cuopt nodes status` shows that the reservation of both slots on
+  viking-cr-194 ended at its time limit. I changed nothing on the connection. Not done
+  because of it: the M1 chain on the node (`stage1c_engine_runs.sh s1c_m1`: the 40 testbed
+  instances with the 9 large ones, the assertion build on all sets, the structure and
+  crush check with the stored points, the check with a solver, the time on the node) and
+  the build of the cuOpt adapter and of the device code against M1.
+- Started workflow `wf_f36af1da-339` on the base `fa8430e24`: milestone M2 (simple
+  probing on equations, R1: implementer, validity and worth attack, integration); beside
+  it the repair of the parallel rows (keep the row of larger scale), its attack, and a
+  triage of the known failing campaign seeds (the three seeds off by 1.1e-9 in the
+  objective and profile open_ends seed 403349198, objective -1 against 9); then one merged
+  commit.
+
+### Open, for the owner
+
+- The growth limit (1000) of the free singleton column: a numerical guard of the design
+  that costs irish-electricity and seven smaller cases against HiGHS. Entry AS-094.
+- R3 and R4 in primal-only mode (AS-004), now with a number.
+- The dense objective that R2 creates on 13 instances: nothing limits it today.
+
+### Lessons
+
+- 300 million campaign models did not reach the parallel-row scale class, because the
+  generator draws no side beyond 1e8 next to a ratio of 2^18. Every class that a review
+  finds by hand must become a generator knob, with a wrong engine that only that knob
+  catches.
+- The node reservation ended while the workflow ran. Nothing was lost (the node results
+  are on the scratch, the engine work is local and pushed), but a node step can only be
+  planned after `cuopt ctx` and a first `cuopt exec` at the time of the step.
