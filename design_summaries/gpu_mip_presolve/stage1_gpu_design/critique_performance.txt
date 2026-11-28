@@ -1,0 +1,276 @@
+======== SUMMARY ========
+Lens: performance. Nothing in the project tree was changed; no device run was made by me or by any designer, so every time below is a model.
+
+WHAT I RAN (all in /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/critique_performance):
+- model.py: expected time of each design on the 240 benchmark instances. Host seconds are those of the stored node run (EPYC 7413, results/bench240/s1c_m1/release_all/summary.json); the step structure (every take of a list, every call, with work units) is the measurement agent's trace, scaled per instance and family to the node; device costs are the Stage 0 figures of one H200 (launch 9.0 us, read-back 13.8, compaction 41 to 46, sort 0.9 ms per 1e6 pairs, sweep about 0.16 ns per nonzero, pageable copy about 10 GB/s). Each design's own hybrid rule is simulated on the recorded steps. Three settings: base (my launch counts, 0.25 ns per work unit on the device, rewritten host path 10% slower), fixed costs doubled, and pessimistic (fixed costs x3, 0.5 ns per unit, host path 25% slower).
+- large9.py: the nine testbed instances above 1e7 nonzeros from the stored node totals (no trace exists).
+- handover.py, nomirror.py, extras.py: the hand-over rules per family, the cost of the host mirror, where a presolve ends, rebuilds after alias batches.
+- regress.py: split of each family's seconds into testing and applying (least squares over the 6,027 calls of the trace). refold.py: how much a "fold every touched row again" rule reads. fanout.py and narrow.py: what a column-driven candidate step touches (input matrices of the 147 dumps from 5e4 nonzeros) and what narrow steps cost on the device.
+I also read STAGE0_REPORT.md section 6, README_fixed_costs.md, fixed_costs.json, HISTORY Entry 32, the three model scripts of the designers and the batch prototype's result tables.
+
+EXPECTED TIME PER SIZE CLASS (240 benchmark instances, node seconds today -> model; in brackets the pessimistic setting):
+- below 5e4 (93 instances, 0.282 s): one-algorithm and device-native 0.300 s (the rewritten host path, 0.94 of today's speed; 0.82 pessimistic); bulk-first unchanged.
+- 5e4 to 1e5 (21, 0.235 s): the same picture; no design uses the device.
+- 1e5 to 2e5 (29, 0.780 s): one-algorithm 0.40 s, x2.0 (x1.1; x1.6 when the host mirror is created inside the call); device-native and bulk-first stay on the host (0.83 s and 0.76 s).
+- 2e5 to 1e6 (67, 4.896 s): one-algorithm 1.75 s, x2.8 (x1.9; x2.0 with the mirror counted); device-native 1.46 s, x3.4 (x1.7; x2.6 with the mirror); bulk-first 3.03 s, x1.6 (x1.4).
+- 1e6 to 1e7 (28, 10.210 s): one-algorithm 1.53 s, x6.7 (x4.3; x4.8 with the mirror); device-native 1.01 s, x10 (x5.3); bulk-first 4.41 s, x2.3 (x2.1; x2.8 with huge pages).
+- above 1e7 (2, 3.064 s): one-algorithm 0.20 s, device-native 0.22 s (x14 to x15; x11 pessimistic); bulk-first 1.62 s, x1.9.
+- all 240 (19.47 s): one-algorithm 4.4 s (x4.4; x2.9), device-native 4.1 s (x4.8; x2.9), bulk-first 10.3 s (x1.9; x1.7), of which 8.7 s is host time.
+- the nine testbed instances above 1e7 (88.3 s): one-algorithm 6.1 s and device-native 6.5 s (x14; x5.9 pessimistic), plus 2.95 s if the reduced models must land in fresh host memory (hawaiiv10-130 0.82 s, waipa 1.15 s), which gives about x9.5 (x4.9); bulk-first 51.7 s, x1.7 (x1.5; x1.9 with huge pages), sesia x1.3 to 1.5 and dlr2 x1.1 to 1.2.
+
+MAIN FINDINGS
+1. Bulk-first has a ceiling near 2 on x86 and misses its own time criterion on the nine large instances. The cause is structural: the host owns the state, so the state build, storage and every application stay at host speed.
+2. One-algorithm and device-native reach the same end state within the noise of the model. They differ in the hybrid rule. One-algorithm's rule (return to the device only at 16 times the family's threshold) leaves 34 to 84% of the work of the structural families on the host between 1e5 and 1e6 nonzeros and misses its own 85% criterion (84.4% in the sum, 64 of 114 instances below it). One line fixes it.
+3. Both rewrite designs leave the creation of the host mirror out of the rule. Created inside the call it costs 1.3 to 1.4 s on the 106 instances of one-algorithm that hand over (44% on top of the modelled time of that regime). Counted, staying on the device for every step ties or wins from about 2e5 nonzeros.
+4. Device-native's rebuild after every structural phase with inserts is slower than the host on large matrices with small batches (hawaiiv10-130: up to 0.44 s of rebuilds for 145 aliases; today's storage time there is 0.05 s).
+5. A column-driven candidate step reaches the whole column store from a few thousand frontier entries on (median 4,853 / 13,211 / 40,528 entries by class), so thresholds in work units do not describe its device cost. On the 240 this is small; on the nine large it is unmeasured.
+6. Two fears did not hold up. Folding touched rows again instead of updating activities reads about 1.15e8 entries on the 240 (0.76 of the input nonzeros), about 2.4% of the node time against about 6.9% for today's updates, with single outliers (var-smallemery-m6j6). Batch rounds need few more rounds (the one-algorithm prototype: row rules +5.7%, propagation +0.9%).
+
+======== DEFECTS ========
+--- 1
+design: bulk-first
+severity: fatal
+where: Principle (section 1), sections 5 to 7, acceptance criterion 4
+defect: As the complete design it cannot reach the speed the directive is after. The host keeps the state, so on x86 at least half of the state build, all storage steps, every application of a finding and 89% of the doubleton rule stay at host speed. The second step (device application of scripts) cannot lift this, as the design says itself: the host copy must follow every change.
+evidence: My model on the stored node run: 240 benchmark instances 19.47 s -> 10.3 s (x1.9; x2.1 with huge pages; x1.7 pessimistic), of which 8.74 s is host time. By class: 2e5 to 1e6 nonzeros x1.6, 1e6 to 1e7 x2.3, the two above 1e7 x1.9. Nine testbed instances above 1e7: 88.3 s -> 51.7 s (x1.7; x1.9 with huge pages), neos-4332810-sesia x1.3 to 1.5 (7.5 s of host application: 6.5 million aliases, 13 million row deletions, 13.9 million fixings), dlr2 x1.1 to 1.2 (26 million fixings, 7.5 million singleton-column reductions). Its own criterion 4 (at most 0.5 of the host time from 1e6 nonzeros, the nine included) gives 0.57 in my model, 0.50 with huge pages, 0.66 pessimistic. The same model gives x6 to x14 on the nine for the two designs whose state lives on the device.
+fix: Keep its first two milestones (split of each visit into evaluation and application, the audit, the device state build with moved-in arrays, keys and sort of the parallel rows) as early milestones of a design whose state lives on the device. Inside bulk-first there is no small fix.
+
+--- 2
+design: bulk-first
+severity: serious
+where: Per-part table (row rules, dual fixing, tightening, parallel rows, doubleton, singleton columns, storage, start step, make_explicit), milestone M5
+defect: Work that the measurement shows to be wide is left on the host: the applications of the families whose findings do not depend on each other, the storage steps (maps and sorts, also repeated on the device image), make_explicit and the start step. M5 moves them only where the host application is above 2% of the hybrid time; by my model it is far above that everywhere it matters.
+evidence: Measured width (240 benchmark instances): dual fixing fits one batch in all 457 calls under every rule; parallel rows and the doubleton rule have chain length 1 in every call; tightening 97.3% and singleton columns 94.2% of the units at level 1; 68.8% of 7.2 million findings at level 1. My regression of seconds on work and apply counts (Mac trace, 6,027 calls; it explains 66 to 93% of each family's seconds): applying is 31% of the row-rule seconds (39% on the 30 instances from 1e6), 46% of dual fixing, 18% of the singleton columns, 10% of propagation, 7% of tightening. Stored node run, nine large: doubleton 5.2 s, dual fixing 2.4 s (39.9 million fixings), singleton columns 5.3 s, storage 3.7 s. make_explicit: 2,069,123 bound changes on the 240, a map over columns.
+fix: Application on the device for every family with chain length 1 as part of the base plan, which needs the state on the device (see the fatal item).
+
+--- 3
+design: bulk-first
+severity: serious
+where: State build part, hybrid rule item 1 (N_min = 2e5), milestone M1
+defect: The device state build is switched on from 2e5 nonzeros, but as measured it loses to the host up to 8.5e5 nonzeros and wins only from 1.3e6, because the host still creates 40 bytes per nonzero. After the whole plan the state build is still the largest single part.
+evidence: HISTORY Entry 32 (15 instances, one H200): end to end 2.0 times, 3.3 with huge pages; three quarters of the device path is the host's first touch at 2.7 GB/s; loses up to 8.5e5 nonzeros as a first call. The state build is 31.4% of the node seconds on the 240 and 34.2% on the nine large, so about 15% of today's time remains (about 10% with huge pages).
+fix: A threshold for the state build of its own (1.3e6 nonzeros until the warm crossover is measured in M1), and huge pages behind the large arrays as part of the plan, not as an open question.
+
+--- 4
+design: bulk-first
+severity: minor
+where: Section 3 (sync), hybrid rule 'fixed costs against it'
+defect: The cost of bringing the device image current before each bulk step is put at 100 to 250 microseconds with the step. The device needs the host's incrementally updated activities as data, so after a first pass with many findings the sync is a large part of the row arrays, not a small list. The record kernel of propagation is column-driven and its threshold does not see the matrix size.
+evidence: 4.47e7 activity updates on the 240 benchmark instances (trace). Stage 0 dirty list, host to device: 592 us for 1e5 records, 5.75 ms for 1e6, 65 ms for 1e7 (24-byte records). My model books 0.48 s of transfers on the 240, 4.7% of the modelled bulk-first time.
+fix: Measure the sync in M2 and put its cost into the step threshold; give the record kernel a threshold that includes the entries of the touched columns.
+
+--- 5
+design: one-algorithm
+severity: serious
+where: Hybrid rule, regime 2 (T_up = 16 T_down), acceptance criterion 3
+defect: After the first hand-over to the host the structural steps can return to the device only at 3.2 million work units, which a model of regime 2 (at most about 3e6 nonzeros) rarely reaches. The cascade always ends with small steps on the host, so parallel rows, the alias machinery and the singleton columns run on the host on most instances of the regime, including their first, wide call.
+evidence: handover.py on the recorded steps of the 240 benchmark instances: share of the family's work on the host between 1e5 and 2e5 / 2e5 and 1e6 nonzeros: parallel rows 54.6% / 34.2%, doubleton 64.8% / 31.6%, singleton columns 83.6% / 60.1%; the first parallel-rows call (91.5% of that family's work) runs on the host on 15 of 29 and 31 of 67 instances. Rule work on the device 66.4% and 80.3% in these classes, 84.4% in the sum of regime 2, and 64 of 114 instances below 85%: criterion 3 (at least 85%) is missed.
+fix: One return threshold of 200,000 work units for every family. In the model this gives 90.2% / 96.2% / 99.0% of the rule work on the device and x2.2 / x3.4 / x4.7 in place of x2.0 / x2.8 / x4.1 (classes 1e5 to 2e5, 2e5 to 1e6, and the 18 instances of regime 2 above 1e6).
+
+--- 6
+design: one-algorithm
+severity: serious
+where: Hybrid rule regime 2, data layout (pinned mirror pool 'created once outside the timed call'), B_mirror = 128 MiB
+defect: The host mirror is not free and is left out of the rule. For one solve per process its creation is paid by the user. With it counted, the mirror regime loses against staying on the device for every step from about 2e5 nonzeros, and 128 MiB (about 3e6 nonzeros) is far too high.
+evidence: Stage 0: pinned allocation 0.38 s per GB (64 MB: 18 ms); HISTORY Entry 32: first touch of fresh host memory 2.7 GB/s. extras.py: for the 106 instances of the 240 that hand over, a mirror sized to the model costs 1.32 s pinned or 1.38 s by first touch, 42 to 44% on top of the modelled 3.16 s of the regime; a fixed 128 MiB pool per presolve context costs about 36 to 47 ms per call, more than the modelled time of the regime in sum. nomirror.py: 2e5 to 1e6 nonzeros x2.8 with a free mirror, x2.0 with the mirror created in the call, x4.0 with every step on the device (x2.3 with fixed costs doubled); 1e6 to 1e7: x6.7, x4.8, x10.8. Only between 1e5 and 2e5 the hand-over wins (x1.6 against x1.0).
+fix: Count the mirror creation in the overheads and in the gate of G4; lower B_mirror to the size where the measurement shows a win (in the model about 8 to 20 MiB, 2e5 to 5e5 nonzeros) or drop regime 2; state who owns the pool inside cuOpt.
+
+--- 7
+design: one-algorithm
+severity: serious
+where: Per-part table: output ('with the executor that owns the state at the end'), hash, storage
+defect: In regime 2 the presolve nearly always ends with the state on the host, so the output, the hash and the storage steps stay host work, although each is a whole-matrix map.
+evidence: extras.py: 100 of the 114 instances of regime 2 end on the host; their storage, output and hash are 1.28 s today, 13.0% of today's time of the regime (node, 240 benchmark instances).
+fix: Treat output plus hash as a step under the hand-over rule (its work is the live nonzeros). Together with the return threshold of 200,000 the model gives x3.9 between 2e5 and 1e6 nonzeros and x6.1 for the instances of regime 2 above 1e6.
+
+--- 8
+design: one-algorithm
+severity: serious
+where: Rule K1 (the column's thread group reduces), bound propagation and row rules on the device, thresholds in work units
+defect: Only the column-driven form exists. A narrow step then walks every touched column in full, which is the whole column store from a few thousand frontier entries on, so the device cost of a narrow step grows with the matrix and not with the work the threshold counts. In regime 3 there is no host to send it to.
+evidence: fanout.py (147 input matrices from 5e4 nonzeros): entry-weighted mean column length, median 21 / 30 / 65 and upper quartile 56 / 170 / 484 for the classes 5e4 to 2e5, 2e5 to 1e6, from 1e6; the touched columns hold as many entries as the matrix from a median of 4,853 / 13,211 / 40,528 frontier entries. Stage 0 report section 6: on the 16 matrices below 5e5 nonzeros the frontier path is slower than recomputing all rows at every frontier size; a sweep costs about 0.16 ns per nonzero (741 us median in band B3), so about 29 ms per narrow step on hawaiiv10-130 (1.83e8 nonzeros). narrow.py, 240: between 1e6 and 1e7 nonzeros 156 of 301 row-rule and propagation steps read less than a twentieth of the matrix; column-driven they cost 0.070 s against 0.032 s on the host (0.7% of the class time). The nine large instances are not measured.
+fix: Add the row-driven form (candidates of the flagged entries, sort by column, reduction by key) and choose between the two by an integer count of touched-column entries against frontier entries; or, if the owner allows it, an integer atomic minimum on the order-preserving 64-bit image of a double.
+
+--- 9
+design: one-algorithm
+severity: minor
+where: Per-part table: state build ('upload at 52 GB/s pinned'), output ('download at 52 GB/s pinned'), hybrid rule (first hand-over '128 MiB at 52 GB/s')
+defect: The pinned rate is used for memory that is not pinned. The caller's model is pageable, and a pinned destination for the reduced model has to be pinned first.
+evidence: fixed_costs.json: pageable copy 16 MB in 1.4 to 1.6 ms and 2 GB in 0.20 to 0.21 s (about 10 GB/s); HISTORY Entry 32 gives 18 GB/s for the download. The upload of waipa (3.1 GB) is then about 0.2 to 0.3 s, not 0.06 s. The state build is about 1.7 ns per nonzero in place of 'below 1 ns'; it is still more than 20 times faster than the host's 40 ns.
+fix: Use the pageable rate in the plan and the acceptance factors.
+
+--- 10
+design: one-algorithm
+severity: minor
+where: Per-part table (fixed cost of a round 100 to 150 us), hybrid rule (one threshold of 20,000 units for all cascade families), four separate family rounds per cascade pass
+defect: The fixed cost of a round is understated and one threshold is used for families whose host cost per unit differs by a factor of nine.
+evidence: The round as described has 10 to 12 launches, three compactions (41 to 46 us each measured) and a read-back: 190 to 250 us by the Stage 0 figures. Node cost per work unit: propagation 9.7 ns, row rules and tightening 5.1, dual fixing 1.1; the break-even of a dual-fixing step is then about 140,000 to 180,000 units, not 20,000. A cascade pass of four family rounds costs about 0.75 ms fixed.
+fix: Thresholds per family from the cost per unit (as bulk-first does); consider device-native's fused wave with one read-back.
+
+--- 11
+design: one-algorithm
+severity: minor
+where: Alias machinery: 'the CSC is rebuilt by the radix sort' after every substitution step
+defect: A full re-sort of the column store follows every alias batch, however small.
+evidence: extras.py, 240 benchmark instances: 120 of the 151 doubleton calls with a substitution substitute fewer than nnz/50 columns; their re-sorts cost 0.069 s (467 us + 0.279 ns per nonzero) against 0.337 s of host time for those calls, so it still pays there. hawaiiv10-130 (stored node run): 145 aliases in 3 calls, 51 ms per re-sort.
+fix: Merge the inserts into the touched columns only when the batch is below a share of the nonzeros.
+
+--- 12
+design: one-algorithm
+severity: minor
+where: Section 12 and gate of G2 (host path at most 1.10 times today's)
+defect: The host path that carries everything below 1e5 nonzeros (114 of the 240 instances) and every tail gets slower; the size is known for two families only.
+evidence: Its prototype: engine seconds +11.8% (loaded Mac), propagation +22% to +70% seconds for +16.7% work. Sorted takes alone (mode 4) are neutral in sum (13.69 -> 13.48 s) but cost dual fixing +38% and the singleton columns +60%. My estimate for activities folded from scratch (refold.py): neutral in sum (about 2.4% of the node seconds against about 6.9% for today's updates), but var-smallemery-m6j6 would read 8.4 times its nonzeros (about 46% of its 62 ms), ns1644855 12%, supportcase12 10%.
+fix: Keep the 1.10 gate per size class and add the three outlier instances to it by name; take a list in mask order (no sort) when it is long.
+
+--- 13
+design: device-native
+severity: serious
+where: Section 6 (inserts applied by a rebuild at end_phase, version 1), storage part
+defect: Every structural phase that produces inserts is followed by a full rebuild: gather, sort of all entries by (row, column, origin), transpose. On a large matrix with a small batch the device then does far more work than the host does today.
+evidence: Its own estimate is 1 ms + 0.6 to 1 ns per nonzero (sort measured at 5.26 ms per 1e7 pairs, transpose 0.279 ns per nonzero). hawaiiv10-130 (1.83e8 nonzeros, stored node run): 145 aliases in 3 doubleton calls; three rebuilds cost about 0.44 s, where today's whole storage time is 0.05 s and my modelled device time of the instance is about 1.4 s. 240 benchmark instances: 120 of 151 doubleton calls with a substitution have fewer than nnz/50 substituted columns; their rebuilds cost 0.155 s.
+fix: Build the rewrite of the affected lines (version 2) from the start for large matrices, or collect inserts in a small overlay that the row kernels read until the dead-share rule asks for a rebuild.
+
+--- 14
+design: device-native
+severity: serious
+where: Hybrid rule H2 (hand-back with a mirror up to 64 MiB), data layout 'on the host'
+defect: The creation of the host mirror at the first hand-back is not in the model or the rule. With it counted the hand-back loses against staying on the device in the class where it is meant to help.
+evidence: extras.py and nomirror.py, 240 benchmark instances: 42 instances hand back; their mirror costs 0.47 s by first touch at 2.7 GB/s (0.45 s pinned), 33% on top of the modelled 1.43 s of the regime. Class 2e5 to 1e6 nonzeros: x3.4 with a free mirror, x2.6 with the mirror created in the call, x3.9 with every step on the device (x2.2 with fixed costs doubled). The device layout is binned and the host layout is in index order, so a matrix hand-over is a permuted gather, not a copy.
+fix: Default to no mirror on x86; milestone 9 measures three settings (no mirror, mirror created in the call, warm pool) and keeps a mirror only for a class where it wins with its creation counted.
+
+--- 15
+design: device-native
+severity: serious
+where: Section 9 (model of the hybrid rule), milestones 0 to 4
+defect: The model charges 120 us for every recorded step, also for the structural ones that the design itself puts at 1 to 3.5 ms, and the first measurement of a wave's fixed cost comes at milestone 4, after two rewrite milestones. The number on which device_min_nnz and the hand-back rest is unknown until then.
+evidence: With the design's own step costs (parallel rows 1.5 ms, alias batch with rebuild 3.5 ms, rebuild 1 ms) the fixed costs between 2e5 and 1e6 nonzeros are 0.59 s on 67 instances, 12% of the node time (1.18 s and 24% when doubled; atlanta-ip is then 1.2 times slower than today), where its model says 6.7% of the Mac time. My launch count of a fused wave is 15 to 17 launches, two or three compactions and a read-back: 165 to 300 us against the 150 to 200 us of the text.
+fix: Milestone 0 measures a mock fused wave and mock structural steps (right number of launches, compactions, sorts and read-backs on recorded frontier sizes) with the Stage 0 harness, and the model is redone with them before any rewrite.
+
+--- 16
+design: device-native
+severity: minor
+where: Bound propagation part (column-driven and row-driven candidate forms)
+defect: Two forms exist but no rule says which one a wave takes; the column-driven one is a full sweep from a few thousand frontier entries on.
+evidence: The fan-out figures of fanout.py given under one-algorithm; the row-driven form costs a sort (0.43 to 0.50 ms for 1e4 to 1e5 pairs, Stage 0).
+fix: Choose by an integer count that the wave status already can carry: entries of the touched columns against frontier entries.
+
+--- 17
+design: device-native
+severity: minor
+where: Hybrid rule H1 (device_min_nnz = 200,000) and the wave engine on the seq executor below it
+defect: Between 1e5 and 2e5 nonzeros the model shows a gain that the rule gives away, and below the threshold 143 of the 240 instances run a rewritten host engine whose speed is unknown until milestone 2.
+evidence: Model with the device forced from 5e4 (mirror creation not counted): 1e5 to 2e5 nonzeros 0.780 -> 0.344 s, faster on 29 of 29; 5e4 to 1e5 0.235 -> 0.192 s, faster on 18 of 21. Both are within the uncertainty of the fixed costs. The only evidence for the host cost of a batch engine is the one-algorithm prototype (+11.8% engine seconds, two families).
+fix: Fix device_min_nnz by measurement as planned, with 1e5 as a candidate; keep the per-class 1.1 gate for the seq executor.
+
+--- 18
+design: one-algorithm and device-native
+severity: minor
+where: Acceptance factors above 1e7 nonzeros (at least 5; a quarter of 87.8 s), output part
+defect: The factors hold only if the reduced model does not have to land in fresh host memory. Where the model hardly shrinks, creating the host arrays for it costs about as much as the whole device presolve.
+evidence: Nine testbed instances (stored node run): reduced models of hawaiiv10-130 (2.1 GB) and waipa (2.9 GB) cost 0.82 s and 1.15 s at the measured first touch of 2.7 GB/s, 2.95 s over the nine, against 6.1 to 6.5 s modelled device time (15 s pessimistic). The factor on the nine goes from about 14 to about 9.5, pessimistic from 5.9 to 4.9. Today's host output of the two is 1.06 s and 1.51 s, so this part gains almost nothing in the standalone tool.
+fix: State the acceptance factor for both deliveries (device arrays to the cuOpt adapter; host arrays in the standalone tool) and take the destination from a warm pool or the caller.
+
+
+======== BEST_PARTS ========
+--- 1
+design: one-algorithm
+part: The batch prototype on the 240 benchmark dumps
+why: It is the only measurement of what a snapshot order costs: rounds +5.7% (row rules) and +0.9% (propagation), work +2.8%, no instance larger, 234 of 240 hashes equal. It removes the largest performance doubt of both rewrite designs (many more rounds for chains) for these two families.
+
+--- 2
+design: one-algorithm
+part: Milestone G1: the device state build with the start step and the first fold under today's engine
+why: It attacks the largest part (31.4% of the node seconds on the 240, 34.2% on the nine large) before any rewrite and gives the first integrated device timing early.
+
+--- 3
+design: one-algorithm
+part: Ordered fold for sums into one cell (K2), so that all alias trees are applied in one step
+why: Under any rule that gives a row to one tree per batch only 32% of the trees fit a first batch and 13% of the calls need more than 64 batches (measured, 240). With the fold the substitution, 79% of the family's host time, is one sort and one reduction.
+
+--- 4
+design: one-algorithm
+part: Regime 3: no host mirror above a state size, small steps stay on the device
+why: In my model staying on the device is as fast as or faster than any hand-over from about 2e5 nonzeros once the mirror's creation is counted; the regime should start much lower than 128 MiB.
+
+--- 5
+design: one-algorithm
+part: Activities as values (fold a touched row again)
+why: My estimate from the trace says it is about neutral on the host in sum (about 2.4% of the node seconds against about 6.9% for today's two-term updates, 240 benchmark instances) and it removes every activity transfer and the history from the device.
+
+--- 6
+design: device-native
+part: The fused cascade wave with one status read-back
+why: The first wave does the first calls of four families (74 to 85% of each family's work) with one pass over the rows and one over the columns and one read-back, where four family rounds cost about 0.75 ms fixed.
+
+--- 7
+design: device-native
+part: The hand-back rule: down after two consecutive small steps, one return threshold of 200,000 units for every family
+why: On the recorded steps of the 240 it keeps 98.4% of the rule work on the device between 2e5 and 1e6 nonzeros and leaves at most 10% of any family's seconds on the host; one-algorithm's rule leaves 34 to 84% of the structural work there.
+
+--- 8
+design: device-native
+part: Both candidate forms (column-driven and row-driven) and the alias forest on the host below an edge count with only the edge list moved
+why: These are the two places where a device step is otherwise slower than the host: a narrow step on a large matrix, and a forest of a few hundred edges (37 ns per alias on the host against about a millisecond of launches).
+
+--- 9
+design: device-native
+part: No compaction between rebuilds, records selected once per call, CUDA graph of a wave as a benchmarked variant
+why: Each removes fixed-cost steps from the inner loop; compaction after every cascade pass is a per-pass cost today.
+
+--- 10
+design: bulk-first
+part: Thresholds per family from the measured host cost per work unit
+why: The host cost per unit runs from 1.1 ns (dual fixing) to 9.7 ns (propagation); one threshold for all families is wrong by up to a factor of nine. The other two designs should take this over.
+
+--- 11
+design: bulk-first
+part: Naming host memory as the x86 limit, with huge pages and moved-in arrays
+why: Huge pages take the host constructor from 34 to 24 s with no GPU at all (HISTORY Entry 32). That is a gain for every design's host path below its size threshold, where the state build is 25 to 31% of the time, and no other design uses it.
+
+--- 12
+design: bulk-first
+part: Keys, sort and bucket links of the parallel rows on the device with the host's result
+why: 80% of that family's time (keys 0.576 s and sort 0.161 s of 0.921 s on the Mac) is an integer map and a sort with one defined order; it can be built early in any design and tested by array equality.
+
+--- 13
+design: bulk-first
+part: No slowdown below the size threshold, and an honest projection
+why: It is the only design in which the 143 instances below 2e5 nonzeros keep today's time, and its own projection (about 2.5 on the 240, 2.0 to 2.4 on the nine large) is close to what my model gives (1.9 and 1.7).
+
+
+======== MISSING_IN_ALL ========
+- A measured fixed cost of one real step. Every threshold and every size limit rests on launch counts multiplied by Stage 0 figures. My counts are 1.5 to 2 times the designers' for a cascade round. A mock step with the right number of launches, compactions, sorts and read-backs on recorded frontier sizes can be measured before anything is rewritten.
+- Host timings on the GPU node. The device costs are from an H200 node with a Xeon 6960P; the host seconds are from an EPYC 7413 node and from a Mac, which differ by 2.3 times in the sum. Break-even points move with that ratio.
+- The host-side cost of receiving results: the reduced model, the record stack and the saved-row pool in host memory (first touch 2.7 GB/s, pinning 0.38 s per GB). On the nine large instances the reduced models alone are 2.95 s. Only bulk-first mentions it, for the output.
+- The cost of creating a host mirror or a pinned pool inside a call, and who owns such pools inside cuOpt when one process makes one solve. 'Created outside the timed call' is an accounting choice that the user still pays.
+- An instrumented run of the nine instances above 1e7 nonzeros before the acceptance factors are set. neos-4332810-sesia and dlr2 hold 44% of the nine's time and are dominated by applications (millions of fixings, aliases and saved rows); their later calls hold 46 to 62% of the row-rule and propagation work. Whether those calls are wide or deep is unknown, and the instrumentation patch for it exists.
+- A threshold that sees the matrix size for column-driven steps. The entries of the touched columns reach the size of the matrix from a few thousand frontier entries on, so a threshold in work units of the frontier misjudges the device cost on large matrices.
+- Grace Hopper. No design has a number. The x86 costs that shape every rule (first touch, pageable copies, pinning) do not exist there, and a new one (host loops on managed pages whose preferred location is the device) is unmeasured. Bulk-first's statement that it gains most there is not supported: its host walk and application would run on such pages.
+- What a busy GPU does to the fixed costs. Inside cuOpt other presolves (sub-MIPs) and heuristics can use the device at the same time; all fixed costs were measured on one idle stream.
+- The definition of the timed call for a first call in a fresh process (context creation, first library calls, pools). The device state build lost up to 8.5e5 nonzeros in exactly that form.
+
+======== RANKING ========
+Under the performance lens: 1. device-native, 2. one-algorithm, 3. bulk-first.
+
+Device-native and one-algorithm reach the same end state: the state on the device, batch steps, the same kernels. In my model they are within noise of each other on the 240 benchmark instances (4.1 s and 4.4 s against 19.5 s today; both 6.6 to 6.7 s in the pessimistic setting) and on the nine large instances (6.5 s and 6.1 s against 88.3 s; 15 s pessimistic). Device-native is ahead as written because of its hybrid rule and the fused wave: between 2e5 and 1e6 nonzeros x3.4 against x2.8, between 1e6 and 1e7 x10 against x6.7, and with the mirror's creation counted x2.6 against x2.0 and x9.9 against x4.8. One-algorithm's deficit is the return threshold, the 128 MiB mirror and the output staying on the host; with the first and third fixed it reaches x3.9 and x6.1 in its mirror regime. One-algorithm has the better evidence (the prototype) and the earlier gain (device state build under today's engine); device-native has the more expensive storage rule (a full rebuild after every phase with inserts) and measures its wave cost late.
+
+Bulk-first is far behind: x1.9 on the 240 (x2.1 with huge pages), x1.7 on the nine large, with 85% of its remaining time on the host, and no step inside the design lifts that on x86.
+
+A synthesis under this lens: one-algorithm's canonical state, ordered fold and milestone order (device state build first); device-native's fused wave, hand-back rule, two candidate forms and host forest for small batches; bulk-first's per-family thresholds, huge pages for the host path and the early device keys and sort for the parallel rows; no host mirror from about 2e5 nonzeros unless a measurement with the mirror's creation counted shows a win.
+
+======== UNSURE ========
+- Every time is a model. No device step of any design exists. The device slope (0.25 to 1 ns per work unit for every kind of step) and my fixed costs per step are assumptions built from Stage 0 figures; I varied them by a factor of 3 and 4 and the ranking did not change, but the factors per class moved by up to 2.
+- Host seconds are those of the EPYC 7413 node, device costs those of an H200 node with another CPU, and the step structure comes from a Mac trace scaled per instance and family. On a node with a faster host the factors are lower.
+- The step structure is the host's (lists in host order). Batch rounds differ; I rely on the one-algorithm prototype (two families, 240 dumps) for 'few more rounds' and did not simulate a snapshot order myself.
+- The split into testing and applying is a least-squares fit over calls that explains 66% (dual fixing) to 93% (tightening) of each family's seconds; the application shares I use for bulk-first are of that quality.
+- The nine instances above 1e7 nonzeros have no trace. I assumed 3 device steps per cascade call (10 in the pessimistic run) and every call wide enough for the device. The record counts of the stored summary do not give the size of the record stack, so the host memory for records is not in the figures; only the reduced models are.
+- The mirror cost assumes fresh memory in the call (first touch 2.7 GB/s or pinning 0.38 s per GB). With a warm pool that outlives the call it is zero, and the hand-over rules then look better than I say.
+- The fan-out was computed on the input matrices, not on the frontiers of later rounds; rows listed again may sit in shorter or longer columns than the average entry.
+- The refold estimate uses the row-rule lists after the first one as a proxy for the rows whose activity changed, at an assumed 4 ns per entry and 30 ns per update on the node. Rows that propagation reads again between two row-rule takes are not counted twice.
+- Pageable copy rate: Stage 0 gives about 10 GB/s, HISTORY Entry 32 gives 18 GB/s for the download. I used 10.
+- For bulk-first I took the state-build ratio as 1.0 below 8.5e5 nonzeros, 1.5 up to 8e6 and 2.0 above (3.3 with huge pages), from the 15 measured instances; a warm context may do better at the small end.
+- hawaiiv10-130: the stored run has 145 aliases in 3 doubleton calls; I do not know how many of the three calls had a finding, so 'up to three rebuilds' is an upper bound.
+- I assumed the sum-form hash costs the host 0.4 of today's chain hash; this is why bulk-first shows x1.04 below its threshold. It is not measured.
+- I did not look at the cost of simple probing or of the rules that are designed and not built on the device, and I did not check any statement of the designs about cuOpt's load-balanced kernels or about the papers.
+

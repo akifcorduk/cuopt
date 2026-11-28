@@ -1,0 +1,527 @@
+======== TITLE ========
+Stage 1 on the GPU, device-native: one wave engine whose steps have a plain C++ executor and a CUDA executor with the same bits
+
+======== SUMMARY ========
+This design takes the device-native angle to its end. Stage 1 is redefined as a "wave engine": every family is a loop of waves, a wave evaluates all rows or columns of its work list on the state as it stands, resolves conflicts by integer priorities, exact min/max reductions or sums with one fixed order, and applies everything together. Each step of a wave has two implementations with the same bits: plain sequential C++ (the host-only build and the small work) and CUDA. Because the result does not depend on which executor ran a step, the hybrid rule (model size, short work lists, last waves) can only change time, never a result, and a run with a GPU equals a run without one, on every GPU type, wave by wave.
+
+The price is stated plainly: the result is not today's result. The order of application changes (snapshot instead of row by row), activities are always summed from scratch, rows are kept in column order, and the hash becomes a parallel one. So today's stored hashes, the 99 wrong engines as text patches and the tests of the state operations must be re-based, and the reductions must be shown again against today's engine (gate proposed: geometric mean of remaining nonzeros, rows and columns within 0.1% of today's on the 240 benchmark instances and the testbed, every instance worse by more than 1% explained). What is kept: the oracle, the campaign, the structure and crush checks, the postsolve, and the property the owner's assistant asked for, that the campaign on the host tests the device path.
+
+What goes to the device: state build, start step, activities, all four cascade families as one fused wave, parallel rows, doubleton equations and every alias rule, the singleton-column family, simple probing, all nine unbuilt column rules, storage rebuild, record production, output and hash. What stays on the host, each with a measured reason: the driver, the record stack in order, models below about 200,000 nonzeros, waves below 20,000 work units on models whose state fits a host mirror, and small or deep alias forests.
+
+Read: DESIGN.md lines 27-628, the Stage 1b design in full, the device entries of ASSUMPTIONS.md, HISTORY Entry 32, Stage 0 report section 6, and about 1,500 lines of the engine. Ran: two Python scripts over the stored measurement of step one (a model of the hybrid rule). Nothing was built; no wave, kernel or reduction figure of this design is measured.
+
+======== DESIGN ========
+0. BASIS
+
+Paths: G = /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve, P = /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/design_summaries/gpu_mip_presolve, M = /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure, W = /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/design_device-native.
+
+Read by me: P/DESIGN.md lines 27-628 (amendments A1-A11, sections 0, 2, 3, 4, 5, 6); P/stage1b_design/final_design.txt in full (269 lines); P/ASSUMPTIONS.md lines 3649-3738 (AS-302 to AS-310); P/HISTORY.md Entry 32; G/results/stage0/STAGE0_REPORT.md section 6; in the engine: numerics.hpp in full, state.hpp 50-339, rules.hpp 14-163, presolve.cpp 40-514, hash.cpp 20-249, rules_parallel_rows.cpp 736-890, rules_doubleton.cpp 100-263, alias_forest.cpp 76-215, state_ops.cpp 18-90 and 160-260, rules_tightening.cpp 26-175, G/device/include/gprs/device/state_build.hpp 20-160. Everything else about the code (the singleton-column family, simple probing, the unbuilt rules, state_storage.cpp, postsolve.cpp) I take from the inventory of step one and did not read again.
+Ran: W/hybrid_model.py and one inline variant of it over M/bench240_calls.csv, bench240_generations.csv and bench240_instances.csv (the recorded host steps of the 240 benchmark instances). It is a model of fixed costs, not a device run. No build, no engine run, no git command, no file changed under the project tree.
+Not checked: that nvcc compiles the shared headers with the host's bits; every statement about wave counts (nothing was simulated in snapshot order); the Stage 1c design texts (I use the inventory's summary of their conditions); the nine instances above 1e7 nonzeros.
+Corrections from step one that I use: cuOpt's load-balanced code is under cpp/src/presolve; the first propagation call holds 74.0% of the propagation work on the 240 benchmark instances, not 92.5%; pointer jumping is not in DESIGN.md 4.1.
+
+1. THE DESIGN IN TEN POINTS
+
+1. One engine, defined by its steps. A step is a data-parallel operation with an exactly defined result: a map in which every item writes only its own outputs, a gather, a scatter to unique targets, a stable sort by an integer key, an exclusive scan of integers, an order-preserving compaction, a reduction or reduction by key with an operator whose result does not depend on order (integer sum, min, max, bit-or, the lexicographic minimum of an integer tuple), the row fold (a compensated sum in the lane order of numerics.hpp:145-161), the ordered segment sum (section 3) and pointer jumping on integers.
+2. Two executors per step: seq (plain C++17 in the host library, no CUDA) and cuda (in G/device). They must return the same bits for every input. The host-only build is the engine with the seq executor.
+3. Waves. A family call is a loop of waves: evaluate on the state as it is (read only), select (conflict rule), apply (all together), derive the next work list. Nothing is applied while another item of the same wave is evaluated.
+4. Derived data is a function of the content. Activities are never updated; a row whose entries or column bounds changed is folded again before it is read. Rows are kept in ascending column index, columns in ascending row index, so the lane of an entry is a function of the matrix, not of history.
+5. Work lists are flag arrays; the list a step visits is the flagged indices in ascending order. The order 'first event since the consumer took it' is gone.
+6. No floating-point atomic anywhere. Integer atomics for counters and for minimum-priority claims.
+7. The state lives on the device from the state build to the output when the device is used. The host holds the driver (scalars), the record stack after each flush, and a mirror only where the hybrid rule can hand work back.
+8. The hybrid rule chooses the executor of each step from work counts and the model size. It cannot change a result, only time.
+9. Today's sequential engine stays in the library as engine = sequential until the wave engine has passed the reductions gate; then the owner decides whether it is retired.
+10. The unbuilt column rules are written once, in wave form.
+
+2. ENGINE STRUCTURE
+
+2.1 Logical state (what a hash and an equality test see; the layout is free).
+Matrix: the set of live entries (row, column, value). Rows: lower, upper, alive, version. Columns: lower, upper, cost, type, status (live, fixed, removed), implied-bound records (value, row, row version per side), explicit-step counters, the offset contribution (hi, lo) of the column. Scalars: model offset, counters of changes. Flags: one uint16 mask per row and per column, one bit per consumer (the 11 row lists and 5 column lists of state.hpp:159-187 keep their meaning as bits). Family data: the parallel-row key per row (hash, core length), growth factor per column, saved-entry counter.
+Derived per row (the 'row summary', produced by the fold step, split arrays): min activity hi, lo, max activity hi, lo (double); count of infinite terms per side (two uint16_t arrays, exact, a saturated count marks the side as unusable until the next fold); largest finite term per side; sum of the terms of fixed columns (hi, lo) and of their absolute values; free entries, free continuous entries (int32); smallest, largest and second largest |a| over free entries; position of the single free entry. Derived per column: live entries, down locks, up locks, singleton flag. row_singletons per row. All of these are functions of the content, recomputed by the fold or kept by integer atomics, and checked against a full recomputation in assertion builds.
+Gone from the state: updates and incremental bits of an activity, inf_slot as a slot sum, store capacities and moved columns, list order, the running objective offset.
+
+2.2 Steps and executors.
+The interface is one abstract class executor_t (host header, no CUDA include) with about 70 named steps, each documented with the arrays it reads, the arrays it writes and its result. Examples: fold_rows(flag), row_verdicts, tighten_rows, column_candidates, apply_bounds, apply_row_deletions, dual_fix, mark_frontier, make_explicit, key_rows, bucket_rows, compare_with_leaders, merge_parallel, collect_edges, forest (three steps), expand_aliases, combine_duplicates, rewrite_lines, rebuild, select_records, build_reduced, hash. The arithmetic of every step is in shared headers of value functions (host-and-device inline functions of numbers, no state): numerics.hpp, implied.hpp, integral.hpp, forcing.hpp as they are, plus new headers extracted from today's rule files (row verdict, entry candidates, integer bound decision, tightening of one row, key mix, edge map, singleton tests). A wrong rule is then wrong in both executors and is caught by the oracle and the mutants; a wrong kernel is caught by step equality.
+Step equality is the unit of testing: both executors run the same step on the same state and every output array is compared bit for bit.
+
+2.3 A wave, and the wave status.
+Every wave ends with one read-back of a small struct: next rows, next entries, next columns, findings and work per family, smallest infeasible index, smallest unbounded index, rows deleted, columns fixed, inserts pending. The driver decides from it alone.
+
+2.4 Driver (host, both builds).
+presolve = build; start step; rounds; make_explicit and more rounds; absorb fixed terms and more rounds; output; hash, as in presolve.cpp:409-468. A round = cascade (fused waves until its flags are empty, the budget stops it or max_cascade_passes waves have run), then parallel rows, doubleton, simple probing, singleton columns, dual columns, parallel columns, each followed by end_phase (rebuild or nothing). Budgets stay in work units with the formulas of presolve.hpp:85-99; a wave charges, per family, 8 per line evaluated plus the entries read, counted by integer reductions inside the steps, the same in both executors; stop is tested between waves, so a call can overrun its limit by at most one wave. The time limit is tested between waves and only gives status limit.
+Statistics keep their fields; 'calls' of a cascade family becomes the number of waves in which its flags were not empty, first_work the work of the first cascade. This changes the meaning of two reported numbers.
+
+2.5 Sync layer.
+Every array is a handle from one presolve-owned memory resource with host_access(range, mode) and release, as in the Stage 1b design. A step declares what it reads and writes; before a seq step on a device-resident state the layer brings those arrays current on the host, and the reverse. On Grace Hopper this is a stream synchronisation and nothing else (managed memory, preferred location GPU, accessed-by host). On x86 it is a transfer of dirty records in ascending index through a pinned window, or whole arrays above a share of dirty lines; the matrix is downloaded only when a host step needs it and it changed since the last download.
+
+3. FLOATING-POINT RULES
+
+F1. Row sums (activities, fixed-term sums, any sum over the entries of a line): the lane fold of numerics.hpp over the live entries in storage order, which is ascending column index. Rows up to 64 entries by lane groups in a warp, longer rows by one block with a hand-written tree (kernels 1 and 2 of the Stage 1b design, starting from act_light_kernel and block_fold in G/microbench/sweeps.cu). Infinite terms are counted in the scan with one integer atomic per thread only when its local count is not zero; counts are uint16_t in separate arrays; no second reduction (review of cuOpt PR 2372).
+F2. Ordered segment sum: a sum over a small group of terms that belong to one target (the coefficients that several substituted columns bring into one entry, the side shifts of one row, the cost moved into one column). The terms are sorted by an integer key (origin column or origin row, ascending), added by one thread per group with dd_add_product in that order, rounded once, and tested once for cancellation with tol.cancellation. Both executors do the same.
+F3. Dense sum (the objective offset): each column owns its contribution (written by its own thread when it is fixed or substituted); the offset is formed once, at the output, as a pairwise tree over the columns in index order with dd_add, the tree fixed by the number of columns and a constant leaf size. No running sum exists.
+F4. Everything else that crosses lines is max or min under a total order (value, then index), an integer, or a store of a constant.
+F5. Contraction off in both compilers; the only fused multiply-add is the explicit one in two_prod; sorting never uses a floating-point comparison (a double key is mapped to an ordered 64-bit integer, ties by index).
+Option, for the owner: since every hash changes with this design anyway, the order for rows above 8,192 entries can be changed now to chunks of 8,192 entries, each folded as a row and merged by the lane tree. It removes the latency of one block per very long row (about 2 ms per fold of a row of a million entries, Stage 1b risk list) at no extra re-basing cost. Default in this design: the order of numerics.hpp unchanged.
+
+4. CONFLICT RULES (how simultaneous applications get one result)
+
+K1. Facts. A bound that holds for every feasible point (propagation, singleton row, forcing row, bound transfer of an alias) is combined per column by max of lowers and min of uppers with the tie going to the smaller row index; integer rounding after the reduction (monotone, so equal to rounding each candidate); a crossing beyond the tolerance is infeasible. A fact derived from wider bounds is weaker, not wrong.
+K2. Own line. An edit that reads its own row and column bounds and writes only its own row (redundant row, tightening) or its own column (dual fixing, dual bound strengthening, scaling of a column) has no conflict. Each proof holds for any values of the other variables in the box, and the box only shrinks during the wave.
+K3. Ordered sums. Writes of several units into one cell that add up in exact arithmetic (cost moved into a column by several pivot rows, coefficients merged into one root entry, side shifts of one row) are collected as (target, origin, term), sorted and combined by F2. This replaces 'one after the other in application order' and needs no exclusion. It is why all alias trees of a batch are applied at once: under any one-unit-per-row rule only 32.0% of 280,666 trees fit the first batch and 13.2% of 151 calls need more than 64 batches (240 benchmark instances, measurement of step one), although no tree depends on another.
+K4. Claims. Where a unit's proof reads a cell that another unit of the wave writes (forcing column, dominated column, parallel-column dominance and merge, implied equation, single-equation fixing), units claim cells by an integer atomic minimum of their priority and commit only if they hold every cell they write and no committed unit writes a cell they read. The committed set is then equivalent to applying the units one after another in priority order with the premises true at application, which is the form the Stage 1c designs were reviewed in. Priority is the index where chains are short by construction (one winner per row or per column), and a hash of (wave, index) with the index as tie-break where chains in index order can be long (dominated columns); both executors use the same function. A unit that loses leaves no trace except its flag for the next wave.
+K5. Integer counters (locks, live entries, sizes) change by integer atomics.
+
+5. THE PARTS (the per-part list of this result has the same content with reasons and expected gains)
+
+Build. Upload or take device arrays; column histogram and scan; stable radix sort of entry positions by column (existing G/device/src/state_build.cu, measured bit-equal); locks (existing locks_kernel); start step as two maps with a min-reduction for the first infeasible index and a compaction of the fixed columns into records; fold of every row after the start step; flags by fill; class plans.
+
+Cascade wave (row rules, propagation, tightening, dual fixing fused; a family that is switched off is masked). (1) fold_rows on rows flagged activity-dirty. (2) row_verdicts, one thread per flagged row, O(1) from the summary, in today's order of tests: empty, infeasible, redundant, singleton row, forcing row. (3) column_candidates over the columns of flagged rows: per entry the candidate of implied.hpp on the snapshot activities, or the singleton-row bound, or the fixing value of a forcing row (as a lower and an upper candidate, the smallest forcing row index winning the value); reduced per column by K1 inside the column's thread group; the leader thread decides the integer bounds, writes the bounds or the implied record, marks the column. For small work lists the same result comes from a row-driven form (candidates of the flagged entries, sort by column, reduce by key). (4) tighten_rows on the flagged rows that were not deleted: integral scaling with the gcd, side rounding, coefficient strengthening, evaluated on the snapshot and written to the own row and, through the twin index, to the column copy. The scale search becomes per-entry denominators with their least common multiple as an integer reduction; the checks after it (rounded coefficients, drift, gcd) are today's. (5) apply_row_deletions: alive flag, lock and size decrements by integer atomics over the entries of deleted rows, singleton-column flags. A forcing row is deleted only if it won all its free columns; otherwise it is flagged again and is an empty or constant row in the next wave. (6) dual_fix over flagged columns on the locks after (5) and the bounds after (3). (7) mark_frontier: rows of changed columns, columns of deleted rows. (8) status read-back. Fixed-column records are selected once per call, ordered by (wave, column).
+Chains: one wave per link. Measured on the 240 benchmark instances: 96.1% of the row-rule calls with a finding and 84.2% of the propagation calls have a chain of at most 3, the longest is 834 (neos-1122047); the chain is an upper bound taken in the host's order, the wave count in snapshot order is not measured.
+
+Switch to explicit bounds. A map over columns with a valid record, then mark_frontier. 2,069,123 bound changes on the 240 benchmark instances.
+
+Parallel rows. key_rows: per listed row an integer hash over the core entries (two reductions in one line kernel: the entry of the smallest core column, then the sum of mixes). Sort of (hash, core length, row) by a stable radix sort; bucket bounds by adjacent difference and scan. Up to parallel_bucket_limit leader rounds: the smallest unclassified row of a bucket is the leader, every other unclassified row of the bucket compares itself exactly with it (one thread per pair walking both rows in column order; a rank-parallel form for long rows is a variant). Per class: the kept row is the smallest index, its sides are the max and min of the images of all sides (K1 on rows); removed rows are deleted; records in ascending removed row. Subtraction of an equation: one pivot equation per class (fewest singleton columns, then smallest index, an integer tuple minimum), every admissible target deletes its core entries and gets the equation's singleton-column entries as inserts with the side shift by F2. One wave per call (chain 1 in all 172 calls with a finding).
+
+Alias pipeline (doubleton equations, simple probing, single-lock alias share it). collect_edges: map over listed rows, compaction in ascending row. Forest: the minimum spanning forest with the row index as edge weight, which is unique; seq builds it with union-find over ascending rows, cuda with Boruvka rounds (minimum outgoing edge per component by an integer minimum, hook, pointer jumping). At a first call today's list is ascending, so today's tree edges are the same set (argued from alias_forest.cpp:84-105, not tested). Rooting and maps: breadth-first levels from the smallest column of each tree for the scores, the root by today's key (integer first, score, live entries, smallest index), levels from the root, and the composition scale[v] = map.scale * scale[parent], offset[v] = map.scale * offset[parent] + map.offset level by level, which is today's association order; a vertex whose edge is inadmissible or whose map is unusable becomes a root. Apply: bound transfer to the root by K1; expansion of the entries of all substituted columns into (row, root, origin column, moved value, side product); stable sort by (row, root, origin); coefficients by F2 with the existing root entry first; side shifts per row by F2 and one dd_residual; cost per root by F2; offset contribution per column; substituted columns marked removed (their entries are dead by status, no write); inserts merged by a line rewrite or the rebuild of end_phase. All trees in one batch. Non-tree rows are flagged again.
+
+Singleton-column family. Per flagged row with a singleton column, one line kernel takes the reductions the tests need and chooses one unit per row: the free singleton column with the smallest index that passes (equation or inequality as pivot row), else the zero-cost singleton set. Cost changes of other columns by K3 (sort by (column, pivot row)). A unit that reads a cost which a pivot row of the same wave writes is dropped for this wave (a mark, stores of 1). Saved-row budget: exclusive scan of saved entries over the units in ascending row, units accepted while the running total is within saved_row_factor times the nonzeros, which is the sequential rule in ascending order. Forcing columns in a second half-wave with claims on their rows (K4, priority the column index). Rows are saved into the record pool by a gather with offsets from a scan.
+
+Unbuilt column rules, storage, records, output, hash: see the per-part list and sections 6 and 7.
+
+6. STRUCTURAL EDITS AND STORAGE
+
+Device matrix: CSR (column id int32, value double, twin position) and CSC (row id, value, twin), rows and columns stored binned by length class in ascending index inside a class (stable sort), 64-bit offsets, 32-bit ids, positions 32-bit while the nonzeros fit. A deleted row or removed column kills its entries by status; a single deleted entry gets index -1 in both copies through the twin. Value edits are written in both copies by the row's own thread.
+Inserts never happen in place. A structural phase produces an edit list; version 1 applies it by a rebuild at end_phase: keep flags, scan, gather, concatenation with the inserts, stable sort by (row, column, origin), duplicate combination by F2, absorption of the fixed terms when today's condition fixed_terms_absorbable holds (the fixed-term sum of the row summary and one dd_residual per side), transpose by the stable radix sort (467 microseconds + 0.279 ns per nonzero, Stage 0), twins, class plans, fold of the changed rows. Version 2, only if the measured rebuild time is too large on the instances above 1e7 nonzeros: the affected rows and columns are rewritten into free space at the end of the stores (the batch form of today's move_column_to_end) and the full rebuild follows the dead-share rule. Both versions give the same logical state. A rebuild is also made when the dead share exceeds rebuild_dead_fraction or the fixed share rebuild_fixed_fraction, as today, with the dead share now defined as 1 - live entries / stored entries. compact_sparse_lines has no counterpart.
+
+7. RECORDS, OUTPUT, HASH
+
+Records are produced on the device with the key (phase, wave, kind, index) and exist in one order on both executors: ascending index inside a wave, kinds in a fixed order. Pool offsets are an exclusive scan over the batch plus the pool sizes the host passes in. They are flushed to the host stack at every executor switch, when a device buffer is full, and at the end. Inside one wave the records are independent of each other by the conflict rules (a column removed in a wave is not read by another unit of that wave), so the contract of postsolve.hpp:182-183 holds for the order. postsolve() and crush() are unchanged host code.
+Output: new row and column numbers by scans over the live flags, gather of the live entries with the column map (rows are already in column order and the map is monotone, so no sort), sides less the fixed-term sums, offset by F3. Standalone: download into memory of the resource (a view, so that no vector is zero-filled first; HISTORY Entry 32 measured that sizing vectors was three quarters of the device path). Inside cuOpt the adapter can take the device arrays.
+Hash: a parallel form replaces the chain. Per array, the sum modulo 2^64 of finaliser(position, word) over its elements, then the array sums chained through the finaliser in today's field order. It is an integer reduction, exact on both executors. The chain hash stays available as an option for comparisons with stored results of the sequential engine. The wave hash (tests only) is the same construction over the logical state of 2.1 with entries keyed by (row, column).
+
+8. CODE LAYOUT
+
+Host library (no CUDA): G/include/gprs/wave/ (arrays.hpp, wstate.hpp, steps.hpp, engine.hpp, rules/*.hpp for the value functions), G/src/wave/ (engine.cpp with driver, budgets, hybrid rule and sync calls; seq_*.cpp; records.cpp; hash2.cpp). options_t gets engine {sequential, wave}, executor (pointer, null means seq), hybrid_options_t, hash_kind. Device project G/device: cuda_executor.cu, kernels_*.cuh, memory_resource.cu, sync.cu, tests, bench; CCCL for sorts, scans, selects and integer or min/max reductions; cuSPARSE optional. From cuOpt's load-balanced code (cpp/src/presolve/load_balanced_*): the bin key by length, sub-warp groups, one block per medium line, the split of long columns with a second combining kernel for min/max, the per-row arrays read by the column kernel instead of a candidate array of matrix size, and the CUDA graph of a wave with the read-back as a node. Not taken: its sums, its missing infinite-term counts, the NaN marker, the binning with an atomic cursor.
+
+9. FIXED COSTS AND THE MODEL OF THE HYBRID RULE
+
+Stage 0, one H200: launch with synchronisation 9.0 microseconds; kernel with an 8-byte read-back 13.8; reduce, scan, compaction up to 1e5 elements 23 to 46; sort of 1e3 to 1e5 elements 94 to 501; a step of 8 launches, one read-back and one compaction 77 to 93; hand-back with an ordered list at most about 141 with a mirror. A fused cascade wave is about two such steps (my estimate, 150 to 200 microseconds); parallel rows about 1 ms plus the sort; an alias batch 2 to 3 ms; a rebuild 1 ms plus 0.6 to 1 ns per nonzero (transpose measured, the rest estimated).
+Model (W/hybrid_model.py): every recorded host step of the 240 benchmark instances (one take of a list, or one call of a family that takes once) charged 120 microseconds on the device, a switch of sides 170 microseconds, against the host engine seconds of the same run (Mac). Everything on the device: fixed costs are 131.8% of the host engine seconds below 5e4 nonzeros (93 instances), 83.3% from 5e4 to 2e5 (50), 12.5% from 2e5 to 1e6 (67 instances, 31 of them above 10%), 1.9% from 1e6 to 1e7 (28, none above 10%), 0.2% above 1e7 (2). With the hand-back rule of the hybrid section (down below 20,000 work units in 2 consecutive steps, up from 200,000): 21.4%, 6.7% (17 of 67 above 10%), 1.6%, 0.3% for the four classes from 5e4, and the share of the rule work that runs on the device is 95.1%, 98.2%, 99.8%, 100.0%. The model counts host lists, not snapshot waves (more waves), counts each family as its own step (a fused wave is fewer steps), and sets Mac host seconds against H200 costs; it is an order of magnitude.
+Frame for the gain: the whole-matrix parts hold 78.8% of the engine seconds on the 240 benchmark instances and 82.1% on the 30 of at least 1e6 nonzeros (Mac). If those parts ran 10 times faster and the rest stayed at host speed, the engine would be 3.4 and 3.8 times faster. That is arithmetic on measured shares with an assumed factor.
+
+10. WHERE THIS ANGLE BREAKS
+
+1. It replaces a verified engine. State operations, every rule loop, the driver and the hash are new code (roughly 5,000 of the 8,829 lines by my count of the files); numerics, the rule arithmetic, postsolve, io, the oracle and the campaign tool stay. Stored hashes, mutants as patches and tests of state operations are re-based.
+2. Small models gain nothing and may lose: the wave engine on seq buffers results and folds rows again. Its time against today's engine is unknown until milestone 2.
+3. Chains cost one wave per link. Published figures: 4.4 against 3.1 rounds on average and up to 22 times on one instance (Sofranac et al. section 2.2, 893 instances); 23.53 against 14.54 rounds for delayed application in PaPILO (990 instances). With budgets in work units a long chain can stop earlier than today.
+4. In the class from 2e5 to 1e6 nonzeros the fixed costs are of the size of the possible gain on a quarter of the instances (model above).
+5. Steps that are sequential inside a line (comparison of a pair of long rows, the prefix test of column stuffing, a class of parallel columns) run on one thread per line; one GPU thread is about 1,000 times slower than a core (cuPSLP section 2.2). Each such step needs a length cap with a parallel form above it, or it is slow on the few very long lines.
+6. On x86 above the mirror size nothing can go back to the host except small objects (the edge list of a forest), so every remainder there pays device fixed costs.
+7. The whole state must fit the device: about 40 bytes per nonzero plus 28 during a rebuild (from the array list).
+
+11. THE DESIGNED RULES THAT ARE NOT BUILT
+
+They are written directly in wave form, seq first, then cuda, with the conditions of v2_design.txt and lowworth_v2_design.txt as value functions and the conflict rule named per rule in the per-part list. Writing them first in index order would be code that the wave engine replaces. Simple probing (built, in review at edd147a7e) and the singleton-column rules (built) are finished on the sequential engine as they are and serve as the reference for the reductions of their wave forms.
+
+======== PER_PART ========
+--- 1
+part: State build, with the start step and the first activities
+runs_on: Device from device_min_nnz input nonzeros (provisional 200,000); seq executor below. The choice cannot change a result.
+device_algorithm: Upload the CSR and the row and column vectors (or take device arrays from the caller). Column counts by an integer histogram, column starts by an exclusive scan, transpose by a stable radix sort of the entry positions by column (cub::DeviceRadixSort, the existing G/device/src/state_build.cu), which gives CSC rows, values and both twin arrays; locks by integer sums (existing locks_kernel). Start step: one map over rows (sides that cross within the tolerance) and one over columns (integer rounding, crossing, fixing), with an integer minimum for the first infeasible index and a compaction of the fixed columns into records in ascending index. Then the row fold of every row (activities, infinite counts as uint16, largest term, fixed-term sum, counts, extreme coefficients) by the lane-group kernel up to 64 entries and the block kernel above. Flags by fill. Class plans by a stable sort of rows and columns by length class. About 20 launches, 2 radix sorts, 1 read-back. Transfer: 12 bytes per nonzero and the vectors up, nothing down when the presolve stays on the device.
+why_host: Below the threshold only. Measured: the device build as a first call lost up to 8.5e5 nonzeros and won from 1.3e6 (15 instances, one H200), but in that measurement three quarters of the device path was the host sizing result vectors, which this design does not have. The model of this round puts the device fixed costs of a whole presolve at 83.3% of the host engine seconds from 5e4 to 2e5 nonzeros (50 of the 240 benchmark instances, Mac seconds) and 12.5% from 2e5 to 1e6. The threshold is fixed by measurement in milestone 9.
+same_result_as_today: Transpose, twins and locks: the same arrays as today (bit-equal in 3,734 compared builds, HISTORY Entry 32). Activities: the same bits as today's fold when the start step changes no bound; where it does, today's sums carry two-term updates with a larger update count and the new sums are folds after the start step. Work lists: every row and column in ascending order, as today.
+conflict_rule: None between rows or columns. Infeasibility is reported for the smallest index.
+expected_gain: The state build is 31.4% of the engine seconds on the 240 benchmark instances (node, 40.4 ns per nonzero) and 34.2% on the 9 testbed instances above 1e7 nonzeros. Device work measured at 0.13 to 0.27 ns per nonzero from 5e6 nonzeros (40 to 48 ms for 2.57e8). With no host arrays to size the part should fall to the upload plus about 1 ms; no integrated run exists.
+
+--- 2
+part: Row rules: empty row, infeasible row, redundant row, singleton row, forcing row
+runs_on: Device, inside the fused cascade wave; seq for waves below the hand-back threshold on models with a host mirror.
+device_algorithm: The fold step gives every flagged row its summary. row_verdicts is a map with one thread per flagged row and O(1) work: the tests of rules_rows.cpp in today's order on the summary (free count, activities with counts and error bound, fixed-term sum, extreme coefficients). A singleton row stores its two bound candidates per row; a forcing row stores the side it meets. The column step of the wave (see bound propagation) reads the verdict of each row of a column: singleton-row candidates and forcing-row fixings enter the same max/min reduction as propagation candidates. apply_row_deletions sets alive to 0 and walks the entries of the deleted rows once to decrement locks and column sizes with integer atomics and to flag new singleton columns. Cost: 2 to 3 launches of the wave.
+why_host: Only the tail. Calls below 20,000 work units are 64.9% of all family calls and 0.6% of the engine seconds on the 240 benchmark instances (Mac); 72.8% of the calls take the host less than one fixed device step of 85 microseconds.
+same_result_as_today: Not bit for bit. The tests are today's functions, but they read activities folded from scratch (smallest update count, so the error bound is smaller and a test can pass that today waits for a fresh summation) and the state at wave start instead of the state after the previous row. A row that today is deleted as redundant after another row's bound in the same list is deleted one wave later. With exact data the end state of a cascade is expected to be the same; within tolerances it can differ. Records of fixed columns come in ascending column per wave instead of visit order.
+conflict_rule: Bounds by max and min per column with the tie to the smaller row index (facts). A column in several forcing rows takes the value of the smallest forcing row index; a forcing row is deleted in the wave only if it set all its free columns, otherwise it is flagged again and is tested in the next wave as a row of constants, with today's tolerance. Lock and size changes are integer atomics.
+expected_gain: 5.1% of the engine seconds on the 240 benchmark instances (node); the first call holds 79.8% of its work; lists of at least 10,000 rows hold 92.8% of its work. 62.7% of its units need nothing of the same call and 90.8% are within three levels.
+
+--- 3
+part: Bound propagation and the switch to explicit bounds
+runs_on: Device, inside the fused cascade wave; seq for the tail as above.
+device_algorithm: column_candidates over the binned CSC (lane groups up to 64 entries, one block above, chunks with a second kernel for very long columns, since max and min do not depend on order): per entry in a flagged live row the candidate of implied.hpp on the snapshot activities, residual first, with the guard and the single-infinite-term rule (the entry tests whether its own term is the infinite one); integer candidates moved outward by 4 rounding units. Per column the largest lower and smallest upper candidate with its row. The leader thread of the column applies: integer column by round and compare, fixing when the bounds meet, infeasible index by an integer minimum; continuous column before the switch: the best candidate of the wave becomes the implied record if it beats the valid record by the step; after the switch: the explicit bound, at most 16 waves per bound. For a work list that is small against the columns it touches, the row-driven form gives the same result: candidates of the flagged entries, stable sort by column, reduction by key. mark_frontier flags the rows of changed columns. make_explicit is a map over the columns with a valid record plus mark_frontier. Cost: 3 to 5 launches of the wave; the row-driven form adds a sort (94 to 501 microseconds for 1e3 to 1e5 elements).
+why_host: Only the tail. Later lists of a propagation call hold 7.7% of its work and 33.4% of its findings (240 benchmark instances); lists below 100 rows are 1,131 of 2,122 lists with 1.8% of the work. Sofranac et al. section 5 report that a marked sequential code is often faster after single bound changes.
+same_result_as_today: Not bit for bit. A wave reads the bounds of its start; today each bound is applied before the next candidate. The bounds reached at an empty work list are the same for exact data; with the guard, the step rule of implied records and the 16 steps they can differ. Which candidate becomes a record is now defined (best of the wave, tie to the smaller row) instead of visit order.
+conflict_rule: Max and min per column under a total order, computed inside the column's own thread group; no atomic on a floating-point value. Marks are stores of the constant 1.
+expected_gain: 16.4% of the engine seconds on the 240 benchmark instances (node), 23.1% on the testbed below 1e7, 10.1% on the 9 above. The first list of the first call holds 71.0% of its work. Published: 7.4 times over a sequential code on a V100 without transfers (Sofranac et al., 786 instances), with 1.4 times the rounds.
+
+--- 4
+part: Row tightening: integral scaling with the gcd, side rounding, coefficient strengthening
+runs_on: Device, inside the fused cascade wave; seq for the tail.
+device_algorithm: tighten_rows on flagged rows that the wave did not delete, lane groups up to 64 entries and one block above. Integer rows (free continuous count 0 in the summary): per entry the denominator of the continued fraction of |a| (today's integral_denominator), the least common multiple as an integer reduction with the limit 1000, then today's second pass as reductions (rounded coefficient, drift as a lane sum, gcd). Sides by round_side with the fixed-term sum of the summary. Coefficient strengthening per entry from the snapshot activity. The row's thread group writes values to the CSR and, through the twin, to the CSC, and the sides. Launched after the column step has read the matrix. 2 to 3 launches.
+why_host: Only the tail. 85.9% of the tightening calls have no finding and hold 62.5% of its seconds (240 benchmark instances), but those calls are whole-list scans and stay on the device when the list is large.
+same_result_as_today: Nearly. A row reads only itself and column bounds, so the order of rows never mattered (97.3% of its units at level 1, the rest is the same row again). Differences: the scale is the least common multiple of per-entry denominators instead of a walk that multiplies as it goes; in exact arithmetic with the limit 1000 both give the same scale (argued, not tested), within the tolerance tol.zero they can differ on single rows; the checks after it are unchanged. Strengthening reads the snapshot activity, which is valid and can be weaker by one wave.
+conflict_rule: None: one writer per row. The entries of a column are written by different rows at different positions.
+expected_gain: 15.1% of the engine seconds on the 240 benchmark instances (node; 7.7% on the Mac for the same work), 28.5% of the rule work; lists of at least 10,000 rows hold 73.3% of its work.
+
+--- 5
+part: Dual fixing by locks
+runs_on: Device, last step of the fused cascade wave; seq for the tail.
+device_algorithm: A map over the flagged columns after the row deletions of the wave: cost, the two lock counts, the bounds after the bound step; fix at the bound, record by compaction in ascending column, offset contribution written by the column; unbounded index by an integer minimum. 1 launch.
+why_host: Only the tail.
+same_result_as_today: The same fixings for the same state; every finding of a call is independent of every other under every rule (457 calls, 240 benchmark instances). The order of records and the way the offset is summed change.
+conflict_rule: None. Each fixing is a move of one column that keeps every feasible point feasible and does not raise the objective, for any values of the other columns.
+expected_gain: 0.6% of the engine seconds on the 240 benchmark instances; 2.7% on the 9 instances above 1e7 nonzeros with 39,899,589 fixings.
+
+--- 6
+part: Parallel rows: merge of two parallel rows; subtraction of an equation from a row parallel to it up to singleton columns
+runs_on: Device when the listed work (entries plus 8 per row) is at least the hand-over threshold or no mirror exists; seq otherwise.
+device_algorithm: key_rows: per listed row a line kernel with two reductions, the entry of the smallest core column (min) and the integer sum of the mixes of (column, coefficient scaled by that entry, 20 mantissa bits). Stable radix sort of (hash, core length, row); bucket bounds by adjacent difference, scan and compaction. Leader rounds, at most parallel_bucket_limit: the smallest unclassified row of each bucket (reduction by key) is the leader; each other unclassified row compares itself exactly with it, one thread per pair on the two rows in column order. Merge per class: kept row is the smallest index; its sides are the max of the lower images and the min of the upper images of all rows of the class, each image computed as today; crossing beyond the tolerance is infeasible; removed rows are deleted with integer lock and size updates. Subtraction: per class one pivot equation (fewest singleton columns, then smallest index); each admissible target, after today's size and growth tests as a map, kills its core entries and gets the equation's singleton-column entries as inserts, side shift by the ordered sum. About 25 to 35 launches and library calls plus the sort.
+why_host: Small later calls. 63.5% of its calls have no finding; the first call holds 91.5% of its work on the 240 benchmark instances and 95.6% on the 9 above 1e7.
+same_result_as_today: Not bit for bit. Today a row is compared with up to 4 unlike neighbours above and below while rows of the bucket are deleted; here with up to 4 leaders. In a bucket with at most 4 classes of mutually parallel rows the same rows are merged; with more classes or with rows that are parallel only within the tolerance the pairs can differ. Sides of a kept row come from one max/min over the class instead of pairwise merges.
+conflict_rule: A row belongs to one class; the kept row is written by a reduction over its class; targets write only themselves; the pivot equation is read only. Lock and size decrements are integer atomics (the only conflicts measured under the reservation rule were of this kind). Inserts go to the edit list.
+expected_gain: 10.2% of the engine seconds on the 240 benchmark instances, 13.9% on the 9 above 1e7 (12.254 s). On the Mac the keys are 0.576 s of its 0.921 s, the sort and links 0.161 s, comparisons and reductions 0.148 s.
+
+--- 7
+part: Doubleton equations and the alias forest (the alias pipeline that simple probing and the single-lock alias share)
+runs_on: Device for collection and application. Forest: device from forest_device_min_edges edges (provisional 100,000), seq below, with only the edge list transferred; levels beyond forest_level_cap (64) are finished by seq.
+device_algorithm: collect_edges: map over listed rows, compaction in ascending row. Forest: minimum spanning forest with the row index as weight by Boruvka rounds (integer minimum of the outgoing edge per component, hook, pointer jumping on component ids). Rooting: adjacency by a sort, breadth-first levels from the smallest column of each tree, score along tree edges, root by an integer tuple (type, score, live entries, smallest index) as a reduction per tree, levels from the root, composition of the maps level by level from the parent, cut at an inadmissible edge. Apply: bound transfer by max/min per root; fixing of the columns of a root that is fixed; expansion of the entries of all substituted columns by scan and gather into (row, root, origin column, moved value, side product); stable sort; coefficients, side shifts and costs by ordered segment sums with one cancellation test; removed status for substituted columns; alias records in ascending column; inserts to the edit list; cycle rows and cut edges flagged again. About 100 to 150 launches and 5 sorts for a batch with findings (estimate 2 to 3 ms fixed); a call without an edge is one map and one read-back.
+why_host: The forest of a small batch: the tree walk and composition are 0.018 s of the 0.317 s of this family on the 240 benchmark instances (Mac), about 37 ns per alias, against at least about 1 ms of launches for a device forest. Deep trees: 72.1% of 485,837 substituted columns are at depth 1, 0.3% beyond 64, the deepest tree has depth 741 on CMS750_4, a model below 5e4 nonzeros.
+same_result_as_today: Not bit for bit. Tree edges are the same set as today when the list is ascending, which holds at the first call (94.0% of the work). The root rule and the composition order are today's. Different: all trees are applied in one batch; a root coefficient that several substituted columns feed is one compensated sum in ascending origin column with one cancellation test, where today it is a chain of plain sums with a test after each; sides are shifted once per row instead of once per entry; rows end in column order instead of with the root in the slot of the first substituted entry.
+conflict_rule: Roots are not substituted in their batch, so all maps apply together. Writes of several maps into one entry, one side or one cost are ordered segment sums. No row is reserved.
+expected_gain: 4.0% of the engine seconds on the 240 benchmark instances, 5.9% on the 9 above 1e7 (neos-4332810-sesia alone 4.346 s for 7,077,830 aliases). On the Mac, row deletion and substitution are 0.250 s of 0.317 s.
+
+--- 8
+part: Singleton-column family: free singleton column on an equation and on an inequality, zero-cost singleton columns, forcing column
+runs_on: Device for waves above the hand-back threshold; seq for the rest.
+device_algorithm: Per flagged row with a singleton column, a line kernel takes the reductions of the tests (the two largest coefficients, integrality of the other coefficients in units of the candidate, fixed-term sum from the summary) and tests each singleton entry: implied-free test from the snapshot activity less the own term, growth, integer conditions. Unit of the row: the passing free singleton column with the smallest index, else the zero-cost set with its two sums as lane folds over the taken entries. Saved-row budget by an exclusive scan over units in ascending row. Apply: rows saved to the record pool by scan and gather, rows deleted or entries killed, cost changes of the other columns as (column, pivot row, moved) sorted and combined by the ordered sum with one cancellation test, columns removed, records in ascending row. Second half-wave: forcing columns claim their rows by an integer minimum of the column index and commit when they hold all of them. New singleton columns are flagged by the size decrements. About 30 launches and 2 sorts per wave with findings.
+why_host: Later passes are narrow: the first pass of the first call has 80.3% of the work and 97.5% of the findings (240 benchmark instances); 81.8% of its calls find nothing.
+same_result_as_today: Not bit for bit. The unit of a row is chosen as today. Different: a column that becomes a singleton column through a deletion of the same call is served one wave later (chain at most 30 measured, 92.8% of the calls with a finding at most 3); the cost of a column fed by several pivot rows is one sum in ascending pivot row; the two history rules (growth factor, saved-entry budget) are applied in ascending row order of a wave instead of list order.
+conflict_rule: One unit per row by construction. Costs by ordered segment sums. A zero-cost or forcing unit whose column gets a cost written by a pivot row of the same wave is dropped for the wave (it read a cell that a committed unit writes). Forcing columns by claims on rows with the column index as priority.
+expected_gain: 1.3% of the engine seconds on the 240 benchmark instances; 6.0% on the 9 above 1e7 (dlr2 4.223 s, 6,809,097 zero-cost singleton columns, 71,027,977 saved entries).
+
+--- 9
+part: Simple probing on equations (built at commit edd147a7e, in review)
+runs_on: Device for the collection and through the alias pipeline; seq for small lists and small forests.
+device_algorithm: Collection is a map over listed equations: balance test in O(1) from the summary, one scan for the binaries, then the binaries are tried in ascending column, each trial a reduction over the row inside the row's thread group, the first that passes taken. The offset size test needs a maximum per column, a reduction over the columns of the listed rows once per call. All edges of all rows go to the alias pipeline with the weight (row, rank in the row); a row is deleted when every edge of it became a map.
+why_host: Only small lists. PaPILO does not run simple probing in parallel over all rows because its checks are very fast (paper section 2.5); here the collection is one launch over a list that is on the device anyway.
+same_result_as_today: Not bit for bit. Today a row is refused when edges already in the batch connect two of its columns, in list order; here the spanning forest keeps the edge with the smaller (row, rank) and the row of a non-tree edge stays and is flagged again. Application as for doubleton equations.
+conflict_rule: The forest: of the edges that would close a cycle, the largest weight stays a row.
+expected_gain: 1.8% of the engine seconds, 277,320 aliases on 8 of the 240 benchmark instances (Mac run of the built engine, one repetition); no node figure.
+
+--- 10
+part: Parallel columns: fixing by dominance (R6) and merge (R9); designed, not built
+runs_on: Device, with the key, sort and leader steps of the parallel rows applied to the columns; seq for small lists.
+device_algorithm: Key per column (live entries, integer hash over row and scaled coefficient), stable sort, buckets, leader rounds with exact comparison of two columns in row order. The singleton columns of one row form a group sorted by cost over coefficient (a mapped integer key). Dominance: per pair with its leader the tests of the design as a map, with the implied-bound test of the absorbing column from the snapshot activities. Merge: one thread per class walks its members in ascending index and merges those that pass into the kept column (type first, then smaller index), bounds by min and max of the scaled bounds; entries of removed columns die by status; cost, records.
+why_host: Only small lists; the rule has no measurement yet. The class walk is sequential inside a class by design.
+same_result_as_today: Nothing to compare with: the rule is not built. Against the design in index order: the same conditions; pairs are formed with leaders instead of bucket neighbours.
+conflict_rule: A column is in one class and one class is one unit. A dominance fixing reads the bounds and rows of the absorbing column, so the absorbing column must not be fixed or merged in the same wave: claims with the class leader's index as priority.
+expected_gain: Worth in HiGHS, 237 of the 240 benchmark instances: the ladder moves from 0.9826 to 0.9932 in remaining nonzeros with parallel columns. Time not known.
+
+--- 11
+part: Dual bound strengthening (R7); designed, not built
+runs_on: Device as one more column step; seq for small lists.
+device_algorithm: A map over candidate columns (cost sign and lock counts) with a max or min reduction over the rows of each column of (side - rest) / a from the snapshot activities, moved by candidate_slack; the column's leader thread fixes it or tightens an integer column and writes the record.
+why_host: Only small lists.
+same_result_as_today: Not built. Against the design: the design lets a later column read the activities a former one changed; here all read the snapshot, so a bound can come one wave later.
+conflict_rule: None: each reduction moves one column to a value that keeps every feasible point feasible without raising the objective, for any values of the other columns in the snapshot box; such moves compose. This is my argument and must pass the design review.
+expected_gain: With the single-lock alias: the HiGHS ladder moves from 0.9932 to 0.9994 (237 of the 240 benchmark instances).
+
+--- 12
+part: Alias of single-lock columns to a binary of their lock row (R8); designed, not built
+runs_on: Device through the alias pipeline; seq for small lists.
+device_algorithm: Map over flagged rows: the two largest binaries and the release and force tests from the summary; per column of the row an O(1) test on locks and cost; edges of origin lock with weight (row, column) into the alias pipeline; the row stays.
+why_host: Only small lists and small forests.
+same_result_as_today: Not built. Against the design (one transaction per binary, a column aliased once per call, rows in index order): a column gets at most one tree edge by the forest, the smaller row winning.
+conflict_rule: The forest, as for doubleton equations. A column whose lock count changes in the same wave is dropped by a mark.
+expected_gain: See dual bound strengthening.
+
+--- 13
+part: Implied equation (A); designed, not built
+runs_on: Device; seq for small lists.
+device_algorithm: Map over columns of the dual list: cost against tol.dual, one lock in the cost direction, the lock row found by a walk of the column, the implied test on the snapshot. Per row the smallest column index that points at it wins (integer atomic minimum); the row's thread sets its other side and writes the tight_row record.
+why_host: Only small lists.
+same_result_as_today: Not built. Same winner as the design in index order: the first column that points at a row.
+conflict_rule: Claim on the row with the column index as priority.
+expected_gain: The five low-worth rules together are 1.0006 in nonzeros on the 240 benchmark instances with HiGHS, 19 instances change.
+
+--- 14
+part: Implied integer with scaling (B, C); designed, not built
+runs_on: Device; seq for the later passes.
+device_algorithm: Rows with exactly one live continuous column (the free continuous count of the summary) give candidates by a map; per candidate column a walk of its entries with integral_for and the denominators as reductions; conversion writes the type, rounded bounds and, for scaling, the column's own entries, with records. Waves until no row has one continuous column left.
+why_host: Later waves are a chain by design (a conversion leaves other rows with one continuous column).
+same_result_as_today: Not built. Proofs read the types of the snapshot; a conversion only adds integrality, so a candidate can be found one wave later than in index order, never wrongly.
+conflict_rule: None: a column writes only itself, and the premises (other columns integer) cannot be undone by another conversion.
+expected_gain: Part of the five low-worth rules.
+
+--- 15
+part: Column stuffing (S); designed, not built
+runs_on: Device inside the row visit of the singleton-column family; seq for small lists.
+device_algorithm: Per row with singleton columns: its candidates sorted by cost over coefficient (mapped integer key, index last) by a segmented sort, then one thread per row runs the prefix test with two compensated sums and fixes the candidates the test gives; row_exchange record.
+why_host: The prefix test is sequential inside a row; rows with very many singleton columns need a length cap above which the row waits for a seq step. How long such groups get is not measured.
+same_result_as_today: Not built. Inside one row the design's order is kept.
+conflict_rule: One unit per row, shared with the singleton-column family, so the two cannot take the same column.
+expected_gain: Part of the five low-worth rules.
+
+--- 16
+part: Single-equation extension of dual fixing (E); designed, not built
+runs_on: Device; seq for small lists.
+device_algorithm: Map over marked equations: per entry a mark from lock counts and cost, two lane sums, the allowance of the forcing row; fixings per column with the smallest row index winning; records.
+why_host: Only small lists.
+same_result_as_today: Not built. The design asserts that no lock changes during a pass, so a pass is a map already.
+conflict_rule: Claim on the column with the row index as priority.
+expected_gain: Part of the five low-worth rules.
+
+--- 17
+part: Dominated and weakly dominated column by a bound on the reduced cost (D); designed, not built
+runs_on: Device; seq for small lists.
+device_algorithm: Row scan as a line kernel: the two cheapest compensators per direction as a reduction on (price, column) pairs. Map over candidate columns with a column fold (lane order over the column's entries in row order) of the rate; a candidate claims itself for writing and its compensators for reading; selection by rounds of integer minima with the priority hash(wave, column), then column; committed units fix their column with a comp_fix record.
+why_host: Only small lists.
+same_result_as_today: Not built. Against the design in index order: the committed set is one a sequential application in priority order would also produce, but the priority is a hash, so which of two mutually dependent columns is fixed can differ from index order.
+conflict_rule: Claims: a column that is a compensator of a committed unit is not fixed in the wave, and a unit whose compensator is fixed by a committed unit loses. PaPILO loses 36.5% of its dominated-column transactions to conflicts (240 benchmark instances), so narrow batches are expected.
+expected_gain: Part of the five low-worth rules.
+
+--- 18
+part: Driver: rounds, cascade, budgets, engine choice
+runs_on: Host, in both builds.
+device_algorithm: None. The driver reads one status struct per wave and decides the next step, the budget, the rebuild and the executor.
+why_host: It is a few hundred scalar decisions per presolve (707 rounds on the 240 benchmark instances in all). A host loop that reads one flag per round was the fastest loop in Sofranac et al. section 3.7; a read-back costs 13.8 microseconds here.
+same_result_as_today: The sequence of phases is today's. Different: the four cascade families run as one fused wave instead of four calls per pass; budgets are tested between waves; the meaning of calls and first_work changes.
+conflict_rule: Not applicable.
+expected_gain: None.
+
+--- 19
+part: Storage: compaction, rebuild, absorption of fixed terms
+runs_on: Device when the state is on the device; seq otherwise.
+device_algorithm: Rebuild: keep flags by a map, scan, gather in order, concatenation with pending inserts, stable sort by (row, column, origin), duplicate combination by the ordered sum, fixed terms into the sides from the summary when absorbable (and-reduction of today's test), transpose by the stable radix sort, twins, class plans, fold of the changed rows. About 20 launches and 2 to 3 sorts. Triggered by pending inserts, the dead share or the fixed share. A variant that rewrites only the affected lines into free space is built only if the rebuild is too slow above 1e7 nonzeros.
+why_host: Nothing by design.
+same_result_as_today: The logical state after a rebuild is today's except that rows are in column order. When a rebuild happens differs: the dead share no longer counts the slots a moved column left behind, and inserts force a rebuild.
+conflict_rule: Not applicable.
+expected_gain: Storage is 5.1% of the engine seconds on the 240 benchmark instances (16.3% on the two above 1e7), 4.2% on the 9 testbed instances above 1e7. Measured transpose: 467 microseconds + 0.279 ns per nonzero.
+
+--- 20
+part: Record stack and postsolve
+runs_on: Records are produced on the device and held on the host; postsolve and crush stay on the host.
+device_algorithm: Each wave stamps its findings; per call an ordered select by (wave, index) per kind, pool offsets by an exclusive scan plus the pool sizes passed in by the host, saved rows gathered into a device pool. Flush to the host stack at every executor switch, at a full buffer and at the end, at 18 GB/s pageable (measured for the state build).
+why_host: The stack is an append in one order and the undo walks it backwards, each record reading values restored before it: a chain, and it runs outside the presolve call.
+same_result_as_today: The same record kinds and fields. The order inside a wave is ascending index instead of visit order, so the stack and its hash differ from today's; the contract that a removed column appears in no later record holds by the conflict rules.
+conflict_rule: Not applicable.
+expected_gain: None of its own; it removes the host from the inner loop.
+
+--- 21
+part: Output of the reduced model
+runs_on: Device when the state is on the device; seq otherwise.
+device_algorithm: New numbers by scans over the live flags, gather of the live entries with the column map (no sort: rows are in column order and the map is monotone), sides less the fixed-term sums, offset as a fixed tree over the per-column contributions. Download as a view on resource memory, or device arrays handed to the cuOpt adapter.
+why_host: Nothing by design.
+same_result_as_today: The same model for the same state. The offset can differ in the last bits (a tree over columns instead of a running sum in application order).
+conflict_rule: Not applicable.
+expected_gain: 4.6% of the engine seconds on the 240 benchmark instances, 4.0% on the 9 above 1e7 (3.555 s).
+
+--- 22
+part: Hash of the reduced model and of the state
+runs_on: Device when the arrays are on the device; seq otherwise.
+device_algorithm: Per array the sum modulo 2^64 of the splitmix64 finaliser of (position, word), an integer reduction; the array sums chained through the finaliser in today's field order.
+why_host: The chain hash of today is serial by definition and stays only as an option for comparisons with stored results.
+same_result_as_today: Another function: every stored hash is replaced once.
+conflict_rule: Not applicable.
+expected_gain: 5.5% of the engine seconds on the 240 benchmark instances (12.5% on the Mac), 5.0% on the 9 above 1e7 (4.388 s).
+
+
+======== HYBRID_RULE ========
+The rule chooses the executor of each step. It uses only the input size and work counts that the engine has anyway, so it is the same on every machine, and because both executors give the same bits it changes time only.
+
+H0. No device in the build, or executor = seq: everything on seq.
+H1. Model size. Input nonzeros below device_min_nnz (provisional 200,000): the whole presolve on seq, nothing is uploaded. Reason: the median host time of a whole presolve is 1.7 ms below 5e4 nonzeros (93 of the 240 benchmark instances) and 15.3 ms from 5e4 to 2e5 (50 instances); in the model of this round the device fixed costs are 131.8% and 83.3% of the host engine seconds in these two classes with everything on the device and still 21.4% from 5e4 to 2e5 with the hand-back rule (Mac seconds, 120 microseconds per recorded step).
+H2. Hand-back and hand-over, where a host copy of the state can exist: always on Grace Hopper; on x86 when the state fits mirror_max_bytes (provisional 64 MiB, the placeholder of DESIGN.md 2.1). Work w of the next step = entries of its flagged lines + 8 per line, known from the last read-back. On the device: when w is below handback_work (20,000) in handback_waves (2) consecutive steps, the next steps run on seq. On the host: when w reaches handover_work (200,000), back to the device. The gap between the two values is there so that the engine does not switch back and forth; a switch costs an ordered dirty list each way (at most about 141 microseconds measured with a mirror, about 200 with a gather).
+H3. Above the mirror size on x86 there is no hand-back: every step runs on the device. Reason: on the 30 benchmark instances of at least 1e6 nonzeros the calls below one fixed step cost 0.3% of the engine seconds at one step each, and in the model the fixed costs are 1.9% from 1e6 to 1e7 nonzeros without hand-back against 1.6% with it.
+H4. Alias forest: seq below forest_device_min_edges (100,000) with only the edge list downloaded and the maps uploaded; levels beyond forest_level_cap (64) are finished on seq.
+H5. Memory: when plan_memory(rows, columns, nonzeros) exceeds byte_budget the whole call runs on seq. Falling back to seq after a failed device allocation would read the machine but cannot change a result; whether that is allowed is a question for the owner.
+H6. During the build-up, a step without a cuda implementation runs on seq through the sync layer.
+
+Fixed costs against the rule (Stage 0, one H200): launch with synchronisation 9.0 microseconds; kernel with read-back 13.8; reduce, scan, compaction 23 to 46; sort 94 to 501 for 1e3 to 1e5 elements; a step of 8 launches, read-back and compaction 77 to 93; pinned mirror refresh 31 to 184 microseconds below 5e5 nonzeros and 0.86 to 1.84 ms from 3e6 to 1e7; pinned allocation 0.38 s per GB (so the context and its buffers are created by the caller before the timed call). A fused cascade wave is estimated at 150 to 200 microseconds, which is the host time of 15,000 to 20,000 work units at 10 ns; that is where handback_work comes from.
+
+Model of the rule on the recorded host steps of the 240 benchmark instances (W/hybrid_model.py; down 20,000 twice, up 200,000): share of the rule work on the device 95.1% (5e4 to 2e5), 98.2% (2e5 to 1e6), 99.8% (1e6 to 1e7), 100% (above 1e7); fixed costs 6.7% of the host engine seconds from 2e5 to 1e6 (17 of 67 instances above 10%, the worst 24%) and 1.6% from 1e6 to 1e7 (none above 10%).
+
+All five thresholds are fixed once in milestone 9 by the rule of AS-307, applied to the hybrid run against the seq-only run of the same engine: the smallest summed time, ties to the host, and no instance slower than seq only by more than the larger of 5% and 2 ms. They are options, so two runs can differ in them; a run with any other values must give the same hashes, which is itself a test.
+
+======== IDENTITY_RULE ========
+Equal, bit for bit, by construction and by test:
+1. A run with a GPU and a run without one, for the same settings: the logical state after every wave (bounds, sides, live entries with their values, statuses, records, flags, summaries), the record stack, the reduced model, the statuses, and every statistic that counts work or findings. Seconds are not compared.
+2. Runs on different GPU types, on both memory paths (pinned mirror on x86, managed memory on Grace Hopper), with any values of the hybrid thresholds, any sweep form (flags or lists, column-driven or row-driven candidates), any bin boundaries, and any mix of executors (also a mix drawn at random per step in tests).
+3. Repeated runs.
+The reason is one definition per step whose result does not depend on order (section 1 of the design), and two executors that must agree on every step. So I agree with the preference for the same bits with and without a GPU, and this design gives more than that: the device path equals the host path step by step, so the oracle, the campaign and the wrong engines on the host test the rules of the device path, and a difference between the two is localised to one step of one wave.
+
+Not equal: today's engine and the new one. The reduced model, the record stack and all hashes can differ, because (a) a wave reads the state at its start, (b) activities are always summed from scratch, (c) rows are kept in column order, (d) sums that today run in application order have a fixed order, (e) parallel rows are grouped with leaders, (f) the hash function changes. I disagree with keeping today's bits: reproducing an order of application that was chosen for a sequential loop means index-priority claims, which commit one unit per round on a chain (Blelloch et al. section 5), and incremental activity bits that are history; both work against a device engine and against the rule of one summation order.
+
+What replaces 'equals today': (1) the reductions gate against today's engine, run on the seq executor on the 240 benchmark instances and the 40 testbed instances: geometric mean of today's remaining nonzeros, rows and columns over the new ones at least 0.999 each, every instance below 0.99 in any measure explained, and the gate against the HiGHS reference not below today's values (1.002 on the 240 local dumps, 1.003 on the testbed) by more than 0.001; (2) the oracle, the campaign, the structure and crush checks, the second-presolve test; (3) the wrong engines made again for the wave rules. Today's engine stays selectable (engine = sequential) so that the two can be compared at any time, also at the end over solution quality.
+
+======== DATA_LAYOUT ========
+Matrix on the device. CSR: row_start (int64 per row position), row_id and row_pos (int32, position to row and back), col (int32, -1 for a deleted entry), value (double), twin (position of the entry in the CSC; 32-bit while the nonzeros fit 2^31, else 64-bit). CSC: col_start, col_id, col_pos, row (int32), value (double), twin. Rows and columns are stored in class order of their length (six classes up to 64 entries, one class up to 8,192, one above), ascending index inside a class, by a stable sort at every rebuild; entries of a row in ascending column, of a column in ascending row. Values in both copies, as DESIGN.md 2.3 asks. Liveness of an entry = row alive and column not removed and index not -1; a deleted row or removed column writes no entry.
+
+Bytes (from the array list, not measured): 32 per nonzero with 32-bit positions, 40 with 64-bit; rebuild scratch about 28 per nonzero (keys and positions with a second buffer); peak about 60 to 68 per nonzero. Per row about 110 bytes: sides 16, alive 1, version 4, flags 2, summary (activities 2 x (hi 8, lo 8, largest term 8, infinite count 2), fixed-term sum 24, counts 8, three extreme coefficients 24, single free position 4), verdict and candidate scratch about 24, singleton count 4, key 12. Per column about 120 bytes: bounds 16, cost 8, type and status 2, locks 8, size 4, implied records 32, step counters 2, offset contribution 16, candidate scratch 24, flags 2, growth factor 8. For 2.57e8 nonzeros (the largest testbed instance) that is about 10 GB resident and 17 GB at the peak of a rebuild.
+
+Activities. Never updated. A row is flagged activity-dirty when an entry of it or a bound of one of its columns changes; the fold step recomputes its summary before any step reads it. Order of the sum: the live entries of the row in storage order (ascending column), entry k to lane k mod activity_lanes(n), dd_add_product inside a lane, lanes merged by the tree of numerics.hpp:145-161; an infinite term enters as a * 0 and is counted. Infinite counts are two uint16_t arrays; a count that saturates marks the side unusable until the next fold. The position of a single infinite entry is not stored: the candidate step tests whether its own term is the infinite one.
+
+Deletions. Rows by the alive flag, columns by status, entries by index -1 through the twin. No compaction between rebuilds. Rebuild when inserts are pending at the end of a phase, when 1 - live entries / stored entries exceeds rebuild_dead_fraction, or when the fixed share exceeds rebuild_fixed_fraction and the fixed terms are absorbable.
+
+Work lists. One uint16 mask per row and per column (the 11 row consumers and 5 column consumers of today). A step visits the flagged indices in ascending order, either by testing the flag in a kernel over all lines (wide lists) or over a list made by an order-preserving select (narrow lists); the two forms give the same result. Marks are stores of a constant.
+
+Records. Device buffers per record kind plus the pool of saved entries; each finding stamped with (wave, index); ordered select per call; flushed to the host stack at every executor switch, when a buffer is full and at the end.
+
+On the host. Always: options, budgets, statistics, the wave statuses, the record stack after each flush. x86 with a discrete GPU, state up to mirror_max_bytes: a pageable or pinned mirror of the row and column arrays, brought current by dirty records in ascending index (column record: index, bounds, cost, status, type; row record: index, sides, alive, version) or by whole arrays above a share of dirty lines; the matrix is downloaded when a seq step needs it and it changed since the last download (after a rebuild the whole matrix, after value edits the values of the dirty rows). The same lists go back before the next device step. One side owns the state at a time. x86 above mirror_max_bytes: no mirror; only small objects cross (wave status, forest edges and maps, records, the reduced model). Grace Hopper: all arrays in one managed slab, 2 MiB aligned, preferred location device, accessed-by host; cudaMalloc memory is not used for anything the host must read; host_access waits for the stream and returns the array itself, release prefetches the range; no mirror, no copy, one copy of the matrix for both executors. That path is functional only until a GH200 node is measured, and is tested on x86 by forcing managed memory on small models. Host-only build: the same handles on host memory, rows in index order; the layout is not part of the logical state.
+
+Slab sizes come from plan_memory(rows, columns, nonzeros, options), a function of the input sizes; nothing is allocated during a presolve; the temporary storage of CCCL calls is passed in from a scratch slab.
+
+======== VERIFICATION ========
+1. Value functions (the arithmetic of every rule, shared by both executors). Host: today's rule tests are kept on them, and the extraction is neutral, shown by unchanged hashes of the sequential engine on the 240 benchmark instances, the 40 testbed instances and a fixed list of campaign seeds. Device: every function gives the host's bits on random and special inputs (both zeros, subnormals, the 1e20 boundary, 2^54, cancellation); this also settles whether nvcc compiles the shared headers.
+
+2. Step equality. For every step, the cuda executor and the seq executor run on the same input state and every output array is compared bit for bit: on states recorded from campaign models, from generated models that cover every length class (0 to 70, 255 to 258, 513, 8,191 to 8,193, 20,000 entries) and from the benchmark instances. Models carry integer column types wherever a step rounds. This is the test 'the device equals the host', taken step by step.
+
+3. Wave-hash sequences. With phase hashes on, the hash of the logical state and of the record stack after every wave is equal for: all seq, all cuda, the default hybrid, a mix of executors drawn from the seed, both sweep forms, both candidate forms, forced bin boundaries (0, 2, 64), both rebuild versions, both memory paths. Run on campaign models and on the 240 and the 40 with the structure check and the crush check through the MIPLIB solution files.
+
+4. Semantics of the wave engine, on the seq executor, on the Mac and the node: the oracle (optimum of random small MIPs by enumeration), the structure check, the crush check of the records, the second-presolve test, in the release and the assertion build; a campaign of the same size as for the sequential engine before the wave engine becomes the default, and a billion models before acceptance. Assertion builds recompute every derived array (summaries, locks, sizes, singleton counts) from scratch after every wave and compare.
+
+5. Wrong engines. The 99 mutants are made again for the wave engine in three groups: wrong rule (in the value-function headers, one mutant covers both executors and must be caught by a named oracle or check test); wrong seq step (conflict rule dropped, tie rule reversed, a flag not set, a record out of order); wrong kernel, built only on the node (lane dealing, merge offsets, a library reduction for a sum, count capped at 1, lo not loaded, a frontier test dropped), each of which must fail step equality. A check counts only after it failed on its wrong engine.
+
+6. Against today's engine: remaining rows, columns and nonzeros per instance on the 240 and the 40, statuses, the number of calls that stop on a budget or report limited, and the list of instances that differ with the cause.
+
+7. Determinism: three repeated runs with equal wave-hash sequences on the 240 and the 40; a second GPU type as a cluster job; Grace Hopper when a node is used; managed memory forced on x86 for models up to 1e6 nonzeros.
+
+8. New in the campaign tool (G/tools/gprs_fuzz.cpp): --engine sequential|wave; --executor seq|cuda|mixed with the mix drawn from a draw of its own so that existing cases keep their seeds; the hybrid thresholds, sweep forms and bin boundaries as drawn settings; the wave-hash sequence as an output that two runs can be compared on; a device campaign target (gprs_fuzz_device) that compares every wave with seq in the assertion build. A device campaign is expected to cost about a millisecond per model (estimate of the Stage 1b design), so it runs millions, not billions; the volume is on seq, which has the same bits.
+
+9. Kernel variants are benchmarked against the current kernel before they replace it (gprs_device_bench on recorded states), as the review of cuOpt PR 2372 asks.
+
+10. Overheads in every run: upload, download, each sync, rebuilds, record flushes, output, hash, context creation (cold start apart), next to the per-family figures; overheads.csv gets these columns.
+
+======== MILESTONES ========
+--- 1
+name: 0. Groundwork without a change of results
+content: The host-and-device macro on numerics.hpp, implied.hpp, integral.hpp, forcing.hpp; value-function headers extracted from today's rule files and called by them; the array handles and the memory resource interface with a host backend; the step interface; the parallel hash next to the chain hash; the trace of step one (M/instrumentation.patch) as an option that also counts waves. On the node: a check that nvcc compiles the shared headers and returns the host's bits.
+gate: All 473 tests pass in both builds; every stored hash of the sequential engine is unchanged on the 240 benchmark instances, the 40 testbed instances and the fixed seed list; the device arithmetic test passes or the fallback (a device copy tied by the bit test) is taken.
+
+--- 2
+name: 1. Wave engine on seq: build, start step, cascade, storage, output, hash
+content: The logical state, the fold with the row summary, the fused cascade wave (row rules, propagation, tightening, dual fixing), the rebuild, the output and the parallel hash, all on the seq executor. While families are missing, engine = wave runs its phases to their fixed point and hands the reduced model to the sequential engine, with the two record stacks composed, so that a complete presolve exists from this milestone on. Wrong engines for the cascade rules.
+gate: Oracle and campaign clean in both builds; mutants caught; on the 240 and the 40: no wrong status, structure and crush checks pass, reductions of wave-then-sequential against today's engine reported per instance; measured for the first time: waves per cascade against the host's lists, calls stopped by a budget, and the time of the wave cascade on seq against today's cascade per size class. The default stays engine = sequential.
+
+--- 3
+name: 2. Wave engine complete for the built rules, on seq
+content: Parallel rows with leaders, the alias pipeline with doubleton equations and simple probing, the singleton-column family with claims for the forcing column, the switch to explicit bounds, absorption of fixed terms; the sequential finish switched off. All wrong engines made again.
+gate: The reductions gate of the identity rule against today's engine on the 240 and the 40, and the HiGHS gate not below today's by more than 0.001; campaign of the usual size clean; time of the wave engine on seq against today's engine per size class, with the HiGHS time rule (t at most 1.2 t(HiGHS) + 0.02 s) still met from 50,000 nonzeros. Decision of the owner on the result: the wave engine becomes the default, or the sequential engine stays below a size.
+
+--- 4
+name: 3. Device foundation: memory, sync, build, fold, output, hash on cuda
+content: The device context and memory resource (pinned path and managed path), the sync layer with ordered dirty lists, and the cuda steps for upload, transpose, locks, start step, the fold kernels with the row summary, flags, output and hash. Every other step runs on seq through the sync layer.
+gate: Step equality for every ported step on all length classes; wave-hash sequences equal between all seq and the hybrid on campaign models and on the 240 and the 40; two million device campaign models per build; first timings of build, fold, output and hash against the host figures; with the device taken only where it wins, no instance slower than seq only by more than the larger of 5% and 2 ms.
+
+--- 5
+name: 4. Cascade on cuda
+content: Row verdicts, tightening, candidates in the column-driven and the row-driven form, apply, row deletions, dual fixing, frontier marks, record select, the switch to explicit bounds; flag and list forms; the CUDA graph of a wave as a benchmarked variant.
+gate: Step equality and equal hash sequences for every form; the fixed cost of a wave measured (microseconds per wave by size class) and the time of the cascade against seq per size class on the 240 and the 40; wrong kernels fail.
+
+--- 6
+name: 5. Storage on cuda
+content: Rebuild with insert merge, duplicate combination and absorption; the rebuild triggers. From here a presolve whose structural phases find nothing needs no host copy.
+gate: Equality after random edit lists; rebuild time against 467 microseconds + 0.279 ns per nonzero and against the host; decision by the numbers whether the rewrite of affected lines is needed above 1e7 nonzeros.
+
+--- 7
+name: 6. Parallel rows on cuda
+content: Keys, sort, buckets, leader rounds, merge, subtraction with inserts.
+gate: Step equality; equal hash sequences; time of the family against seq per size class, on rd-rplusc-21, hawaiiv10-130 and usafa in particular.
+
+--- 8
+name: 7. Alias pipeline on cuda
+content: Edge collection, the device forest (Boruvka, levels, composition by level) with the seq forest below the edge threshold, expansion, sort, ordered sums, records; doubleton equations and simple probing run through it.
+gate: Step equality including forests forced to the device on small models and deep trees forced across the level cap; equal hash sequences; time against seq on CMS750_4, neos-5093327-huahum, uccase12 and, on the node, neos-4332810-sesia.
+
+--- 9
+name: 8. Singleton-column family on cuda
+content: Row units, cost sums, saved rows into the device pool, forcing columns with claims. After this every built part has its cuda steps and models above the mirror size run on the device from build to output.
+gate: Step equality; equal hash sequences; time on dlr2 on the node; the share of work units on the device per size class reported for the first time for a whole presolve.
+
+--- 10
+name: 9. Hybrid rule, memory paths, machines
+content: The five thresholds fixed by measurement; the managed path on Grace Hopper as far as the owner wants it now; a second GPU type; cold-start figures; the cuOpt adapter with device arrays in and out; the instrumented run on the nine instances above 1e7 nonzeros that step one could not make.
+gate: Acceptance criteria 2 to 5 and 7 for the built rule set; one shipped set of defaults, each with the measurement behind it.
+
+--- 11
+name: 10. The designed column rules in wave form
+content: Per rule: a short design note with its cells and its conflict rule, reviewed; seq form with oracle, campaign and wrong engines; cuda form with step equality. Order by worth as in A8: parallel-column dominance and merge (on the steps of milestone 6), dual bound strengthening (on the column step of milestone 4), single-lock alias (on milestone 7), then implied equation, implied integer with scaling, column stuffing, single-equation fixing, dominated column.
+gate: Per rule the worth against the HiGHS ladder as in Stage 1c; at the end the Stage 1c gate (0.99 of the reference with all cheap rules in nonzeros, rows and columns, nothing below 0.95 unexplained) and all acceptance criteria for the whole of Stage 1.
+
+
+======== ACCEPTANCE ========
+The GPU acceleration of Stage 1 is complete when all of the following hold. Figures marked 'proposed' are targets for the owner to set; they come from the measured shares, not from a device run.
+
+1. Classification. Every step of every part is listed with its executor. A step that runs on seq when the device is used has a measured reason from one of these classes: model below device_min_nnz, work below the hand-back threshold with a host copy available, forest below the edge threshold or beyond the level cap, driver, record stack. No step is on seq because its cuda form is missing.
+2. Identity. Wave-hash sequences are equal between all seq, all cuda, the default hybrid and a random mix, across three repeated runs, on a second GPU type and on both memory paths, on the 240 benchmark instances, the 40 testbed instances, a billion campaign models on seq and at least ten million through the device.
+3. Share of work on the device, in the engine's own work units, reported per size class of the 240 and the testbed. Proposed: at least 95% from 1e6 nonzeros and at least 80% from device_min_nnz to 1e6 (the model of this round gives 99.8% and 98.2% for the rule work).
+4. Time of the hybrid against the seq-only run of the same engine, minimum of three alternating runs: no instance slower by more than the larger of 5% and 2 ms.
+5. Time against today's engine (commit 04692babd, node ipp2-0043). Proposed: the 9 testbed instances above 1e7 nonzeros in at most a quarter of today's 87.8 s; the benchmark instances from 1e6 to 1e7 nonzeros in at most a third of today's time; from device_min_nnz to 1e6 not slower in the sum; below device_min_nnz the wave engine on seq at most 1.1 times today's sum, and the HiGHS time rule met on every instance from 50,000 nonzeros.
+6. Reductions. The gate of the identity rule against today's engine, and the Stage 1c gate against HiGHS for the full rule set.
+7. Checks. Oracle, structure and crush checks clean; every wrong engine and every wrong kernel caught by a named check; no wrong status on the 240 and the 40.
+8. Overheads (upload, download, syncs, rebuilds, record flushes, output, hash, context) are in every stored run.
+9. Every new assumption of this plan has an entry in ASSUMPTIONS.md with its switch: engine (sequential or wave), executor, the five hybrid thresholds, fused cascade, the leader limit of parallel rows, the scale search by least common multiple, the forest rule, the claim priority of each rule that uses claims, the order of long-row sums, hash kind, rebuild version, memory path.
+Under the narrow reading of 'stage 1' (the built rule set), criteria 1 to 9 at the end of milestone 9 are the acceptance; under the wide reading, the same criteria at the end of milestone 10.
+
+======== REDUCTIONS_LOST ========
+Nothing of this design is built, so no loss or gain is measured. The design does not reproduce today's reduced model. Where it can differ, the direction I expect, and how it is measured (all on the seq executor at milestones 1 and 2, per instance on the 240 benchmark instances and the 40 testbed instances, in rows, columns and nonzeros):
+
+1. Budgets on chains (possible loss). A wave reads the state of its start, so a chain costs one wave per link and each wave charges its work. A call can then stop on its budget where today it finishes. Today 20 calls stop on a budget on the 240 (tightening 16, propagation 2, doubleton 2) and 6 instances end without a fixed point; the longest chains are 834 (neos-1122047), 197 (lotsize), 183 (irish-electricity), 141 (unitcal_7). Measured by the count of stopped and limited calls and of fixed points next to today's, and by the reductions of those instances. Remedy without a rule change: the passes of the budget, which are options.
+2. The only outside figure for snapshot against immediate application: PaPILO on one thread leaves 56,803 against 56,258 nonzeros (1.0% more) with delayed application, at 23.53 against 14.54 rounds (990 instances, read through the fetch tool by the research step). PaPILO limits its rounds; this engine runs to an empty work list on 234 of 240 instances, so I expect less than that, without proof.
+3. Parallel rows (loss or gain on single instances). Up to 4 leaders per bucket instead of 4 unlike neighbours on each side. Differs only in buckets with more than 4 classes or with rows parallel within the tolerance only. Measured by merges and subtractions per instance against today's 351,049 and 8,916 on the 240.
+4. Implied-bound records (either way). The record of a continuous column is the best candidate of a wave instead of the first in visit order; the free singleton test reads these. Measured by the count of free singleton columns against today's 13,217 and 2,685.
+5. Activities from scratch (possible gain). The guard reads the smallest update count a row can have, so fewer candidates and tests are dropped than with updated sums. Size unknown.
+6. Sums with a fixed order and one cancellation test (either way, single entries). A root coefficient that cancels in a partial sum today but not in the full sum, or the reverse.
+7. Scale search by least common multiple (either way, single rows within tol.zero).
+8. All alias trees in one batch and simple probing without the refusal of rows in list order (possible gain in rounds, same end state expected).
+9. The singleton-column history rules in ascending row order of a wave instead of list order (either way where saved_row_factor or the growth limit binds; today growth_refused and saved_row_refused count these).
+
+If the gate fails on a part, that part has a switch back to a form closer to today's (for example leaders against neighbours for the parallel rows), and engine = sequential stays available. If the owner requires that nothing may differ from today's reduced model, this design is the wrong one and a design that reproduces the host order is needed.
+
+======== RISKS ========
+- The reductions gate against today's engine fails or needs many explanations: the wave order, the leaders and the budgets all move single instances. The gate comes early (milestones 1 and 2, on the host) so that this is known before any kernel is written.
+- The wave engine on seq is slower than today's engine on small and mid-size models (buffered results, a second fold per row and wave, more waves). Then either two engines are kept, split by model size, which doubles the rule code, or small models get slower. Unknown until milestone 2.
+- Chains: one wave per link. Published increases are 1.4 times on average and 22 times at worst; the fixed cost of a wave (estimated 150 to 200 microseconds) makes a chain of narrow waves expensive on the device, and the hand-back that avoids it exists only where a host copy exists.
+- From 2e5 to 1e6 nonzeros the modelled fixed costs are 6.7% of the host engine seconds in the sum and above 10% on 17 of 67 benchmark instances; the device may not pay there, and device_min_nnz may end near 1e6.
+- The size of the rewrite: state operations, rule loops, driver and hash are new; the 99 wrong engines and part of the 473 tests are made again; the engine at 1.002 of the HiGHS reference has to be reached again.
+- The validity of simultaneous application for the dual rules (dual bound strengthening, dominated column, parallel-column dominance, implied equation) rests on arguments of this text. The Stage 1c reviews broke several sequential guards by counterexample; the wave forms need the same review before they are built.
+- Step equality rests on IEEE behaviour of + - * / fma ceil floor with contraction off, on nvcc accepting the shared headers, and on stable radix sort and order-preserving select in CCCL. A compiler or CCCL upgrade needs the equality tests rerun; a second GPU type has never been measured.
+- Steps that are sequential inside a line (pair comparison of long rows, the prefix test of stuffing, a class of parallel columns, an ordered sum with very many terms) run on one GPU thread, about 1,000 times slower than a core; each needs a cap and a parallel form above it.
+- A rebuild after every structural phase with inserts costs a pass over the matrix (about 0.1 s at 2.57e8 nonzeros by the measured transpose alone); with several such phases per round the instances above 1e7 nonzeros may need the rewrite of affected lines, which is the most intricate storage code of the design.
+- Device memory: about 40 bytes per nonzero resident and up to 68 at the peak of a rebuild; the largest instances need about 17 GB and do not fit next to other users of a small GPU.
+- The sync layer is the place where a missed dirty record gives a wrong result, not a slow one. Guards: assertion builds compare the two copies after every sync; the campaign runs with executors mixed at random.
+- Shared value functions mean a wrong rule is wrong in both executors and equality does not show it; the independent checks are the oracle, the campaign, the mutants and the comparison with today's engine.
+- The campaign speed of 760,000 models per second is of today's engine; the wave engine on seq may be slower per tiny model, which makes a billion models cost more node time.
+- Grace Hopper is functional only until it is measured; the thresholds tuned on x86 may be wrong there, although they cannot change a result.
+- Pausing the remaining Stage 1c rules delays the gate against HiGHS with all cheap rules until milestone 10.
+
+======== OPEN_FOR_OWNER ========
+- The central decision: may the engine's order of application change, so that the reduced model and all hashes differ from today's engine, with the reductions gate (0.999 in the geometric mean of nonzeros, rows and columns against today's, every instance below 0.99 explained) in place of bit equality with today? If not, this design is not the one to take.
+- The remaining Stage 1c rules (parallel-column dominance and merge, dual bound strengthening, single-lock alias and the five further rules): write them once in wave form after the wave engine exists (my proposal), or finish them on the sequential engine first and write them a second time.
+- Simple probing (built, in review at edd147a7e): finish its review on the sequential engine so that it is a reference for its wave form (my proposal), or leave it.
+- After the gate of milestone 2: is today's sequential engine retired, kept only as a switch for comparisons, or kept as the engine for models below a size if the wave engine on seq turns out slower there?
+- The hash: the parallel form replaces the chain hash and with it every stored hash. Agreed?
+- Rows above 8,192 entries: keep the summation order of numerics.hpp (one block per row, slow on very long rows), or change it now to chunks of 8,192 entries, since all hashes change anyway? The Stage 1b design put the same question with a higher price.
+- The time targets of acceptance criterion 5 (a quarter of today's time above 1e7 nonzeros, a third from 1e6 to 1e7) and the share targets of criterion 3 are my proposals; please set them.
+- Which reading of 'stage 1' closes the stage: the built rule set (milestone 9) or all designed rules (milestone 10)?
+- Fused cascade: the four cascade families as one wave, which changes the meaning of calls and first_work in the statistics, or four calls per pass as today with more launches?
+- May the engine fall back to the seq executor when a device allocation fails? It reads the machine but cannot change a result; the alternative is a byte budget as a setting and a hard error.
+- Inside cuOpt: may the adapter pass the model in and take the reduced model out as device arrays, so that no host copy is made?
+- Which GPU type on the cluster is the second type for the determinism test, and when is the Grace Hopper path measured (A10 says at the end)?
+- An integer atomic minimum or maximum on an order-preserving 64-bit image of a double would let candidates be reduced per column from a row-driven kernel without a sort. Its result does not depend on order. Is it inside 'no floating-point atomics'? This design does not use it; it could be a benchmarked variant.
+
+======== UNSURE ========
+- The number of waves in snapshot order on the project's instances. Step one measured chains in the host's order (an upper bound of the enabling depth) and lists per call; nothing was simulated from the state at wave start. The trace of milestone 0 gives it.
+- The fixed cost of a wave (150 to 200 microseconds), of a parallel-rows call (about 1 ms plus the sort), of an alias batch (2 to 3 ms) and of a rebuild beyond the transpose: estimates from the Stage 0 figures and my count of launches, not measured.
+- The hybrid model: 120 microseconds per recorded host step and 170 per switch are assumed; it sets Mac host seconds against H200 costs, counts host lists instead of waves and each family as its own step.
+- That the minimum spanning forest by row index equals today's forest at a first call: argued from alias_forest.cpp:84-105 (union-find over the list, which is ascending at construction), not tested.
+- That the scale search by least common multiple gives today's scale outside tolerance cases: argued for exact rationals with the limit 1000, not tested.
+- That a forcing row which loses a column to a smaller forcing row is handled as today in the next wave: reasoned from the rule text, not from a run.
+- That inside a cascade no entry is added, deleted or moved: taken from the code check of the Stage 1b synthesis, which I did not repeat.
+- The simultaneous-validity arguments for dual bound strengthening and the other dual rules are mine and unreviewed.
+- Whether the wave engine on seq is faster or slower than today's engine; PaPILO's figure (0.73 s delayed against 0.78 s immediate on 990 instances) is the only evidence and is about another code.
+- Whether folding rows from scratch costs the seq executor more than today's updates on instances with long rows and many narrow waves; the stored traces could bound it (entries of the lists of the cascade families) but I did not compute it.
+- Bytes per nonzero, row and column are from my array list.
+- Whether nvcc accepts std::fma, std::round, std::floor and std::ceil in host-and-device functions with the host's bits; the Stage 1b design marks it as inferred and I did not check it.
+- Stability of cub::DeviceRadixSort and order preservation of the CCCL select are from the library documentation as the earlier rounds quote it; I did not read the CCCL source.
+- The Stage 1c design texts were not read by me; what the unbuilt rules read, write and test is taken from the inventory of step one, so the per-rule conflict rules for them are a first proposal.
+- I did not read the singleton-column family, simple probing, state_storage.cpp or postsolve.cpp myself; their wave forms rest on the inventory.
+- The share of the nine instances above 1e7 nonzeros that is deep or narrow after the first calls (neos-4332810-sesia, dlr2) is not measured; step one names the instrumented run that would give it.
+

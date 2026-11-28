@@ -3078,3 +3078,86 @@ None. This entry follows the end of the campaign watcher (13:35 CET).
 - The profiles with huge values give two different things: failures at huge points, which a
   solver would not visit, and a wrong answer at an ordinary point caused by a huge bound.
   They must be counted apart; I had put all of them into one "extreme values" class.
+
+## Entry 53 — 2026-11-28 — The design round for the GPU acceleration of Stage 1 returned a plan; an independent check of it is running
+
+### The owner's messages (verbatim)
+
+None since Entry 51. The directive of Entry 51 stands: "I want the whole presolve suite to
+be built on GPU. It can be hybrid CPU/GPU presolve where smaller and non-parallel work to
+CPU. Otherwise, all methods that can be parallelized should be on GPU. Do not switch to
+state 2 without implementing a complete GPU acceleration for stage 1."
+
+### What ran
+
+- Workflow `wf_9f20c328-c17` (10 agents, 2.5 hours, read-only on the project tree):
+  inventory of every part of Stage 1 from the code; a measurement on the 240 benchmark
+  dumps of how many findings need nothing of the same call; research; three designs ("one
+  algorithm, two executors", "bulk on the device, host applies", "device-native"); three
+  critiques (validity and determinism, performance, completeness and the way there); one
+  synthesis.
+- All ten outputs are in `stage1_gpu_design/` as JSON and text; the plan text is
+  `stage1_gpu_design/PLAN.md`.
+
+### The plan in short (the synthesis agent's, not yet checked by a second round)
+
+- One engine and one state type. Every rule family becomes a loop of batch steps (find on the
+  state as the step found it, select, apply, update), computed by a host executor and a
+  device executor that give the same bits. The driver stays host code.
+- Three select rules: combine (bounds, by a total order on value and source index), ordered
+  fold (terms added into one cell in ascending source index, compensated), reservation
+  (integer atomic minimum on unique keys, one pass). No floating-point atomic.
+- The state holds no history: activities are folds over the bounds of the moment, work lists
+  are sets in ascending index, a live row has no dead entry.
+- Hybrid rule: the host does whole models below a size threshold (provisional 100,000
+  nonzeros); above it the device owns the state from build to output; a hand-back to the
+  host only for small states (provisional 16 MiB) in long tails of small steps.
+- Thirteen milestones: M0 measurements, M1 evaluation split from application, M2 device
+  state build under today's engine, M3 to M5 the batch engine on the host one switch at a
+  time, M6 to M10 the device executor family by family, M11 the nine unbuilt rules written
+  once, M12 thresholds, machines, adapter, acceptance.
+- Twelve acceptance criteria define "complete".
+
+### Findings of the round that matter for the decision
+
+- Batch application changes the reduced model on some instances. Prototype for row rules and
+  propagation, 240 benchmark dumps, host: 234 of 240 hashes equal, no instance larger, two
+  smaller (momentum1 by 65 rows, neos-1122047 by 2 rows). This reverses the belief AS-254.
+- 68.8% of 7.2 million findings on the 240 need nothing of the same call; dual fixing,
+  parallel rows and the doubleton rule have chain length 1 in every call.
+- The first propagation call holds 74.0% of the propagation work on the 240, not the 92.5%
+  of the earlier measurement on the testbed.
+- Today's time shares on the 240 (19.47 s on the node): state build 31.4%, propagation
+  16.4%, tightening 15.1%, parallel rows 10.2%, hash 5.5%, row rules 5.1%, storage 5.1%,
+  output 4.6%, doubleton 4.0%, singleton columns 1.3%, dual fixing 0.6%.
+- No device step of the plan has run. The performance critic's model gives 19.5 s to about
+  4.1 to 4.4 s on the 240 (6.6 to 6.7 s pessimistic) and 88.3 s to 6.1 to 6.5 s on the nine
+  large instances (15 s pessimistic).
+- "Bulk on the device, host applies" keeps today's bits and reaches about 1.9 times on the
+  240 and 1.7 times on the nine in the same model; two critiques call it fatal against the
+  directive.
+- The validity critic broke the first design's batch rule with four small models (a row
+  deleted after a bound crossing within the tolerance; postsolved point violates the row by
+  5e-3) and repaired it; the repaired prototype equals the unrepaired one on 240 of 240.
+- Four repairs were designed in the synthesis and are not prototyped (rows rewritten in
+  place, column merge at the end of a step, the singleton-column family in two steps,
+  merges before subtraction pivots).
+
+### What I did
+
+- Saved the round, wrote `PLAN.md` from the synthesis, unchanged.
+- Started a second round, read-only (workflow `wf_4cdf1efd-6b2`, task `w49yfvvp5`): six
+  verifiers (claims about the code, the figures, validity of the batch steps, identity and
+  determinism, the hybrid rule with cuOpt's load-balanced kernels read line by line, the
+  owner's constraints and completeness), then one agent that tries to refute each finding
+  and writes the amendments.
+- Nothing is implemented. The plan's assumptions (25, each with a switch) enter the register
+  when the owner approves the plan.
+
+### Lessons
+
+- The first reading question decides the frame: whether "methods that can be parallelized"
+  means the rule or today's order of application. I put it to the owner first.
+- A design with a prototype beats a design with better rules on paper: the only measured
+  reductions of the round came from 700 patch lines, and the validity critic could break
+  and repair it because it ran.

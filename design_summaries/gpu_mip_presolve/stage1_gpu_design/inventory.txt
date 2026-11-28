@@ -1,0 +1,475 @@
+======== SUMMARY ========
+Inventory of Stage 1 of the gprs host engine for a device design, made from the code (8,829 lines read in full, plus simple probing at commit edd147a7e), the stored runs (240 benchmark instances, testbed 31 and 9) and the existing device code and designs. Read-only; nothing was built or run except two aggregation scripts over stored JSON. Main findings: (1) every state change goes through 16 state operations that keep stores, twins, sizes, activities, locks, versions and 16 work lists consistent; all derived arrays are recomputable by maps, sorts and reductions, but the host's incrementally updated activities (bits, update counts, largest term) and its list orders are history and are hashed. (2) By shape: row tightening, dual fixing, the start step, the tests of the row rules, the key step of parallel rows and the collection step of doubleton/simple probing are independent maps; parallel rows are a sort plus short chains inside buckets; propagation, row rules and the singleton-column family are cascades bounded only by budgets; alias application conflicts on rows shared by several substituted columns. (3) Today's shares (240 instances, 19.47 s): state build 31.4%, propagation 16.4%, tightening 15.1%, parallel rows 10.2%, hash 5.5%, row rules 5.1%, storage 5.1%, output 4.6%, doubleton 4.0%, singleton columns 1.3%, dual fixing 0.6%. The first propagation call holds 74% of propagation work on the 240 (65% on both testbed sets), not the 92.5% of the earlier measurement. (4) Order-dependent floating-point results beyond activities exist: the objective offset, cost sums and root coefficients in substitutions, repeated side shifts, and the row storage order after move_entry. (5) model_hash is a serial chain by definition; state_hash covers layout, list order and activity counters. (6) Device code that exists: the bit-equal state build (CSC, twins, locks; not integrated, no activity fold); Stage 0 sweep kernels; the Stage 1b propagation design (nothing built); no device form exists for any other rule.
+
+======== REPORT ========
+INVENTORY OF STAGE 1 FOR A DEVICE DESIGN
+
+Path prefixes. G = /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve. P = /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/design_summaries/gpu_mip_presolve. W = /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/inventory. SP = W/sp (the files of commit edd147a7e, written there with git show). Line numbers are those of the checked-out tree (HEAD 04692babd) unless the path starts with SP.
+
+0. WHAT I READ AND RAN, AND WHAT I DID NOT
+
+Read in full: G/include/gprs/state.hpp, presolve.hpp, rules.hpp, postsolve.hpp, numerics.hpp; G/src/presolve.cpp, state_build.cpp, state_ops.cpp, state_storage.cpp, rules_bounds.cpp, rules_rows.cpp, rules_propagation.cpp, rules_tightening.cpp, rules_doubleton.cpp, alias_forest.cpp, rules_parallel_rows.cpp, rules_dual_fixing.cpp, rules_singleton_cols.cpp, rules_dual_cols.cpp, rules_parallel_cols.cpp, rules_simple_probing.cpp (a stub in the tree), implied.hpp, integral.hpp, saved_row.hpp, postsolve.cpp (lines 14 to 512), hash.cpp. Simple probing as built: SP/rules_simple_probing.cpp (378 lines), SP/alias_apply.hpp (236), SP/forcing.hpp (75), and the diff of the headers and of presolve.cpp between 04692babd and edd147a7e. Device: G/device/include/gprs/device/state_build.hpp in full, an outline of G/device/src/state_build.cu (kernel and function list by grep), G/microbench/README_fixed_costs.md in full, the header list of README_sweeps.md and the kernel list of sweeps.cu. Design: P/DESIGN.md lines 1 to 260, 324 to 628, 769 to 885; P/stage1b_design/final_design.txt in full; the condition and cost paragraphs of rules R6 to R9 in P/stage1c_design/v2_design.txt (lines 62, 65, 69, 72, 76, 79, 83, 86, 120, 121, 129) and of rules A, B, C, S, E, D in lowworth_v2_design.txt (lines 24, 31, 38, 45, 52, 59, 88, 89, 101, 103); the first 75 lines of v2_amendments.txt and the first 43 of lowworth_v2_amendments.txt; ASSUMPTIONS.md entries AS-244, AS-302, AS-305, AS-307, AS-309 and the overview rows of AS-304, AS-306, AS-310; HISTORY.md Entry 32; G/results/stage0/STAGE0_REPORT.md section 6; G/results/stage1c/timing/s1c_m1/report.txt.
+
+Ran: two Python scripts over stored JSON (W/agg.py with output W/agg.out, and inline scripts). No build, no engine run, no git command that changes anything. The stored runs carry source commit daa4f5d68; git diff --stat daa4f5d68 04692babd over src, include, device and microbench is empty, so they are runs of the checked-out engine.
+
+Not read or not checked: sweeps.cu and fixed_costs.cu line by line, the cuOpt load-balanced kernels line by line, G/device/test and bench, G/tools/gprs_fuzz.cpp, G/check, the HiGHS source, stage1b critiques.txt, the answers and reviews files of Stage 1c, HISTORY Entry 24 (its numbers were given in the task), most of ASSUMPTIONS.md. Claims about HiGHS below are quoted from the design files and are unchecked by me. The stored statistics have no count of the waves inside one call of a family, so the depth of a cascade inside a call is not measured here.
+
+Two corrections to the task text. (a) The cuOpt load-balanced propagation is in this worktree under /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/cpp/src/presolve (load_balanced_bounds_presolve.cu 700 lines, _kernels.cuh 639, _helpers.cuh 1161, load_balanced_partition_helpers.cuh 279, lb_probing_cache.cu 418) and cpp/src/mip_heuristics/problem/load_balanced_problem.cu; cpp/src/mip_heuristics/presolve does not exist here. A grep finds no user of load_balanced_bounds_presolve_t outside those files, which agrees with "dead code". (b) "Pointer jumping over the alias forest" is not in DESIGN.md 4.1; it is in DESIGN_v1.md:140 and DESIGN_v2.md:166. Version 4.1 says only "maps are composed on the frozen tree" (DESIGN.md:556-558).
+
+1. THE STATE AND ITS OPERATIONS (shared by every part)
+
+Table 1.1. Arrays of state_t (G/include/gprs/state.hpp).
+| Group | Arrays | Lines |
+| Two stores, csr and csc | per line: start (int64), used, capacity, size (int32); per slot: index (int32, -1 is a tombstone), value (double), twin (int64, the slot of the same entry in the other store) | 62-75, 263-264 |
+| Order inside a line | At construction a row is in increasing column order and a column in increasing row order. move_entry breaks both and nothing restores them. | 58-61 |
+| Rows | row_lower, row_upper (double), row_alive (uint8), row_free_size (int32, live entries in live columns), row_version (uint32), row_singletons (int32) | 266-279 |
+| Activities, min_act and max_act | hi, lo (double), inf_count (int32), inf_slot (int64, sum of the CSR slots of the infinite terms), max_term (double), updates (uint32) | 86-95, 280-281 |
+| Columns | col_lower, col_upper, cost (double), col_type, col_status (uint8: live, fixed, removed), down_locks, up_locks (int32) | 283-291 |
+| Implied-bound records | implied_lower, implied_upper (double), implied_lower_row, implied_upper_row (int32), implied_lower_version, implied_upper_version (uint32) | 295-300 |
+| Scalars | objective_offset (hi, lo), live_rows, live_cols, live_nnz, fixed_nnz, bound_changes, side_changes, coefficient_changes, slot_visits | 303-318 |
+| Work lists | row_frontier with 11 lists (row_rules, propagation, tightening, doubleton, parallel_rows, compaction, singletons, simple_probing, singleton_cols, dual_cols, parallel_cols), col_frontier with 5 (dual_fixing, compaction, singleton_cols, dual_cols, parallel_cols). One uint16 mask per index; a list holds an index once, in the order of the first event since its consumer last took it. | 107-187, 320-321 |
+
+Table 1.2. The operations through which every rule changes the state (G/src/state_ops.cpp unless said).
+| Operation | Lines | What it writes besides its own value |
+| set_col_lower / set_col_upper | 264-280, 199-219 | For each live entry of the column: the one activity that holds this bound loses the old term and gains the new one (two terms, never a * (new - old)), or inf_count and inf_slot change; the row goes on the lists of row_event::activity or activity_unread; a stale row is summed again; bound_changes. |
+| fix_col | 282-319 | Both bounds, status fixed; per live entry both activities where the bound differs, row_free_size, row_singletons, row lists of row_event::entries; live_cols, fixed_nnz, bound_changes; objective_offset += cost * value as a compensated add. The entries stay. |
+| remove_col, set_cost, add_objective_offset, record_implied_lower / upper | 321-356 | Status; cost and the column lists of col_event::locks; the offset; a record with row and row_version. |
+| delete_row | 358-391 | Per live entry: locks released, tombstone in both stores, csc.size, the column on its lists, compaction list, and row_singletons plus the list event of the row in which a column is left as a singleton column (note_singleton, 118-132, which walks the column to its one live entry). Row arrays and both activities are zeroed. |
+| set_row_lower / set_row_upper | 393-417, 222-236 | The side; when it changes between finite and infinite, a lock of every column of the row and their column lists; row_version, side_changes, row lists of row_event::side. |
+| shift_row_sides | 419-437, 160-165 | Each finite side becomes dd_residual(side, the product with its error) as one double; row_version; lists. |
+| scale_row | 439-468 | Every live value times the factor (rounded to an integer for live columns when asked), the twin values, the finite sides times the factor, the activities summed again, column lists of col_event::entries, row_version. |
+| set_coefficient, delete_entry | 470-520 | Terms out of and into both activities, locks, both stores, sizes, row_free_size, row_singletons, live_nnz, row_version, row and column lists, compaction lists, note_singleton. |
+| move_entry | 522-565, 171-197 | The CSR slot keeps its place and gets the new column and value; the CSC entry of the old column becomes a tombstone and one is appended to the new column, which is moved to the end of the store with twice its capacity (at least 4) when it is full. Terms, locks, lists. |
+| compact_sparse_lines, absorb_fixed_terms, fixed_terms_absorbable, rebuild | G/src/state_storage.cpp:64-78, 200-217, 150-198, 255-351 | Slots of compacted lines; the terms of fixed columns leave the sides as one compensated sum per row in storage order (move_fixed_terms, 100-119); activities of touched rows summed again; lists. |
+
+Finding 1. Sizes, row_free_size, row_singletons, locks, the counters and the activities are all functions of the stores, the sides, the bounds and the status flags, so a device engine can recompute them by maps and reductions in place of the host's incremental updates. Three things are not such functions: the bits of an incrementally updated activity with its updates and max_term (they depend on every term the sum ever held), row_version (a count of edits) and the order of the lists.
+
+2. ONE TABLE PER PART
+
+2.A State build
+| Item | Content |
+| Reads | The model (CSR with strictly increasing columns per row, sides, bounds, cost, types), the tolerances. |
+| Writes | Every array of table 1.1. Order of the constructor (G/src/state_build.cpp:246-341): copies of the row and column arrays and of the CSR (250-273); column counts and column starts (275-289); one loop over the rows that fills csc.index, csc.value, both twins and the locks (291-310); row_singletons (315-318); column flags and the empty records (320-330); both activities of every row (332-337); every row on the lists row_rules, propagation, tightening, doubleton, parallel_rows, simple_probing and every column on dual_fixing, singleton_cols, dual_cols, parallel_cols, ascending (339-340, state.hpp:117-128, 225-227, 236). Before it, postsolve_t::init copies the column types (G/src/presolve.cpp:503). |
+| Shape | Column counts: a histogram. Column starts: a prefix sum. Transpose with twins: a stable sort of the entry positions by column. Locks: an integer sum per column. row_singletons: a map over columns with a scatter. Activities: a map over rows, each row a fixed tree. Lists: an iota. No chain. |
+| Conflicts and host order | None between rows or columns. The order inside a column must be increasing CSR position (the host fills in row order, 294-304). |
+| Bits that must agree | The fold of both activities: entry k of the row, in storage order, goes to lane k mod lanes, lanes = activity_lanes(n) (1 to 32 up to 64 entries, 256 above; G/include/gprs/numerics.hpp:145-161); each lane adds with dd_add_product; lanes merge by the tree of merge_lanes (state_build.cpp:115-125). An infinite term (|a * bound| > tol.infinite_term, numerics.hpp:111-114) enters the lane as a * 0 and is counted; the first term of a lane is 0 + product and 0 + error (state_build.cpp:75-97). Stored: hi, lo, inf_count, inf_slot, max_term, updates = number of finite terms (216-224). The pair is not normalised (state.hpp:84-85). |
+| Share today | 240 benchmark instances: 6.114 s of 19.467 s, 31.4%, 40.4 ns per input nonzero. Testbed 31: 1.559 of 5.000 s, 31.2%. Testbed 9 above 1e7: 30.210 of 88.267 s, 34.2%, 43.0 ns per nonzero. It is the largest single part on 99 of the 139 benchmark instances of at least 10 ms. Largest shares: neos-4535459-waipa 63% (9.827 s), a2864-99blp 53%, supportcase7 51%, supportcase42 49%. |
+| Device code or design | G/device/src/state_build.cu (961 lines) with state_builder_t::build (G/device/include/gprs/device/state_build.hpp:151-154): csc_start, csc_size, csc_index, csc_value, csc_twin, csr_twin, down_locks, up_locks, by cuSPARSE csr2csc, by cub::DeviceRadixSort (the default) or by a scatter with a segmented sort; locks by locks_kernel (line 323) with integer sums. Measured bit-equal to the host; not integrated. The activity fold exists only as Stage 0 kernels (act_light_kernel at G/microbench/sweeps.cu:347, act_block_kernel at 418) and as the designed fold_light_kernel and fold_block_kernel of P/stage1b_design/final_design.txt (KERNELS 1 and 2). |
+| Still usable | The radix-sort transpose and the locks kernel as they are. Missing for a whole state on the device: the activity fold in the host's lane order, row_singletons, the lists, and a way to construct state_t from arrays that are moved in (HISTORY Entry 32: three quarters of the device path was the host sizing the result vectors). The Stage 0 block kernel uses a library block reduction and one summation order of its own; the Stage 1b design replaces it by a hand-written tree with the host's lanes. |
+
+2.B Start step
+| Item | Content |
+| Reads and writes | Reads sides, bounds, types (G/src/presolve.cpp:84-117). Writes: a lower side set to the upper one where they cross by at most the tolerance (set_row_lower, 92); integer bounds rounded (round_lower_integer, round_upper_integer, numerics.hpp:135-143); up to three bound calls per column (110-113); fix_column where lower == upper (114), with a fixed_col record. |
+| Shape | A map over rows, then a map over columns. |
+| Conflicts and host order | Index order. Two columns touch the same row only through its activities (two-term updates in column order) and through the offset. Infeasible ends the presolve at the first crossing. |
+| Bits | ceil(lower - feasibility), floor(upper + feasibility); the activity updates of set_col_bound and fix_col; the offset. |
+| Share | 240: 0.048 s, 0.2%; 64,520 columns fixed. Testbed 9: 0.191 s. |
+| Device | Nothing written. On a device that folds the activities after the start step the updates are not needed. |
+
+2.C Row rules (empty row, infeasible row, redundant row, singleton row, forcing row)
+| Item | Content |
+| Reads | row_free_size, both activities with inf_count, updates, max_term, the sides; for a singleton or forcing row the entries of the row with the bounds and types of its columns (G/src/rules_rows.cpp:192-233). |
+| Writes | delete_row (redundant 221, empty 70, singleton 122, forcing 181); tighten_lower and tighten_upper for the column of a singleton row (124-136); fix_column for every free column of a forcing row (183-188). The fixings leave fixed_col records; the deleted rows leave none. |
+| Shape | The tests are a map over rows on the stored activities: empty (O(row)), infeasible and redundant (O(1)), forcing (O(1) to reject, one scan to accept). The effects make a cascade: a new bound changes the activities of the rows of its column and lists them again (state_ops.cpp:214), a fixed column lowers row_free_size and makes singleton and empty rows. The call runs until its list stays empty (rules_rows.cpp:247-263). The length of the cascade is bounded only by the budget (16 passes, 2 passes without a finding) and by the number of rows. |
+| Conflicts and host order | Rows are visited in list order. Two rows conflict when they share a column that one of them tightens or fixes: the other row's activities, its row_free_size and its tests change. Two forcing rows can fix a shared column at different bounds; the host fixes it in the first row and the second row is then visited with a constant term. The order decides the order of the fixed_col records and of the offset sums, and which test fires first on a row (a row that is redundant after another row's bound is deleted as redundant, before it as a singleton row). I did not prove that the end state is the same in every order; the tests within a tolerance are the places where it can differ. |
+| Bits | refresh_activity before the tests (rules_bounds.cpp:66-74: summed again when the error bound is above tol.zero * tol.feasibility and the activity is not fresh). Gaps as dd_residual(side, activity) (209-210). Infeasible: gap beyond feasibility plus the error bound (212). Redundant: 216-219. Singleton row: dd_residual(side, fixed terms) / a, the fixed terms summed in storage order (78-99), an integer bound moved outward by 4 rounding units (103-106). Forcing: |gap| + error <= feasibility * min|a| / max(1, max|a|), and with a continuous column slack <= error + 8 rounding units of the sum of |a * bound| (152-179). |
+| Share | 240: 0.997 s, 5.1% of the seconds, 9.6% of the rule work; 1,252 calls; the first call holds 79.8% of the work; 3,748,242 findings; 2,321,794 rows and 1,379,992 columns removed. Testbed 31: 0.218 s, 4.4%. Testbed 9: 3.124 s, 3.5%, first call 54.5%. Largest shares: physiciansched6-2 31%, supportcase12 28%, map16715-04 27%, a2864-99blp 23%. |
+| Device | Nothing written. DESIGN.md section 4 puts these in classes B and R ("applied together by min/max", "one composed edit per row per round") and section 3 item 1 leaves the cascade on the host. The forcing test exists as a shared header at edd147a7e (SP/forcing.hpp). |
+
+2.D Bound propagation, and the switch to explicit bounds
+| Item | Content |
+| Reads | Per listed row and side: the side, the activity that side reads (min for the upper side, max for the lower), inf_count, inf_slot, updates, max_term; per entry the coefficient, the bounds and the type of its column, the implied record of the column with its row version (G/src/rules_propagation.cpp:84-187, G/src/implied.hpp:82-114). |
+| Writes | Integer column: tighten_lower / tighten_upper at once (144-151). Continuous column: record_implied_lower / upper when the candidate improves the valid record by more than the step (106-117); a mark per column (pending, stale; 121-128); after make_explicit also the explicit bound, at most 16 times per bound (max_explicit_steps, line 48, 130-139). make_explicit (225-278): per marked column in index order the valid record becomes the bound, and the rows of the column go on the propagation list unless the record covered it. |
+| Shape | Per row and side a map over its entries with O(1) per entry from the stored activity; no infinite term: every free column gets a candidate; exactly one: only the column at inf_slot; more: none. Across rows a cascade: each tightened bound lists the rows of its column again (the call runs until the list stays empty, 201-221). The host comment at 44-47 says chains through coefficients below 1 improve "in ever smaller steps, thousands of them"; the bound of 16 steps and the budget (16 passes, 2 without a finding) end them. Before make_explicit only integer columns change bounds, so the cascade runs through integer columns only. |
+| Conflicts and host order | Rows in list order, the upper side before the lower (216), entries in storage order (176-180). Each candidate is applied before the next is computed, so a later entry of the same row, and every later row, sees the new bound. Two rows conflict on a shared column (both give a candidate; the tighter wins in any order) and on a shared activity (a row reads an activity that another row's bound has just changed). Order-dependent: which candidates become records (a record is written only when it beats the valid record by the step, rules.hpp:393 says "records depend on the order of the visits"), the stale and pending marks, the 16 steps, the limited flag, the guard (it reads updates), and where the budget stops. |
+| Bits | candidate_of_finite_rest (implied.hpp:82-114): rest = activity less the own term by dd_sub_product, updates + 1; no candidate when activity_error(updates, max_term) > activity_error_share * feasibility * |a|; bound = dd_residual(side, rest) / a. Side guard |side| * side_error <= feasibility (rules_propagation.cpp:158). candidate_slack (implied.hpp:169-181) with an explicit fma. improvement_step (53-58) and implied_tolerance (implied.hpp:37-40). Integer: the bound moved by 4 rounding units, then ceil / floor with the feasibility tolerance (rules_bounds.cpp:15-49). A second attempt after one fresh summation when the guard dropped a candidate (164-185). |
+| Share | 240: 3.201 s, 16.4% of the seconds, 16.2% of the rule work; 1,205 calls; first call 74.0% of the work; 2,734,526 findings; 8,829,728 records. Testbed 31: 1.155 s, 23.1%, first call 64.5%. Testbed 9: 8.907 s, 10.1%, first call 65.0%. About 9.7 ns per work unit on the 240, the highest of all families. Largest shares: neos-1122047 75%, neos-4647030-tutaki 53%, ns1952667 48%, dano3_3 and dano3_5 45 to 46%, neos-848589 41%. The task's figure "the first call holds 92.5%" (17 local instances, an earlier engine) does not hold for these runs. |
+| Device | cuOpt's load-balanced kernels (activity and bound sweeps in sub-warp, block and heavy forms; not read line by line). G/microbench/sweeps.cu: activity kernels with compensated sums and candidate kernels (act_light 347, act_block 418, act_chunk 436, cand_light 569, cand_block 613, cand_chunk 625). P/stage1b_design/final_design.txt: a full design (binned image, fold and candidate kernels, rounds from one snapshot, results applied by the host in ascending column index through tighten_lower / tighten_upper, a reference backend in plain C++, memory resource for x86 and Grace Hopper, seven milestones); nothing of it is built. |
+| Still usable | The kernel arithmetic and the review rules of PR 2372 (DESIGN.md:459-479). Four premises of the Stage 1b design no longer fit the directive: the device is not selected in the first cascade (ROUND_PROTOCOL step 0), the host stays the only authority and replays every change, the device never keeps an activity, and device and host need not agree (AS-305). The host keeps inf_count as int32 and inf_slot as a sum of slots; the review asks for uint16 counts in separate arrays. |
+
+2.E Row tightening (integral scaling with gcd, side rounding, coefficient strengthening)
+| Item | Content |
+| Reads | The entries of the listed row, bounds and types of its columns, its sides, and for the strengthening one activity with its error bound (G/src/rules_tightening.cpp:90-106, 111-146, 260-275). |
+| Writes | scale_row with integral rounding (204); set_row_upper / set_row_lower (234-249, 306-310); set_coefficient for each strengthened entry (300-303). No record. |
+| Shape | A map over rows: every test and edit reads and writes its own row only, and reads column bounds that this family never writes. An edited row is listed again and visited again in the same call (326-349) until it has no edit. Inside a row the scale is found by a sequential walk: the denominator of entry e is searched for |a_e| times the product of the denominators before it (116-122), with a continued fraction per entry (55-72) and a gcd over the scaled coefficients (141). |
+| Conflicts and host order | None between rows. The order of the rows decides only the order of the list pushes (rows and columns) and where the budget stops. The order inside a row is the storage order. |
+| Bits | integral_denominator with eps = tol.zero and limit 1000; scaled = a * scale, round, drift = sum of delta * max(|lower|, |upper|) at most 0.1 * feasibility (124-145); round_side: dd_residual(side, fixed terms) * scale, ceil / floor with the tolerance, division by the gcd, exact only up to 2^52 (156-166); with fixed terms the new side is integer + dd_value(fixed terms) (223-226). Strengthening: d = dd_residual(side, activity), needs d - error > feasibility, magnitude = d + error, the new side as a compensated sum of the changed terms (268-297), refused when |value| * side_error > feasibility. |
+| Share | 240: 2.944 s, 15.1% of the seconds, 28.5% of the rule work; 1,103 calls; first call 78.4%; 1,469,986 findings; no row or column removed by itself. Testbed 31: 0.613 s, 12.3%. Testbed 9: 8.818 s, 10.0%. Largest shares: neos-860300 44%, hypothyroid-k1 40%, splice1k1 39%, supportcase22 35%, usafa 26%. On the Mac run of the later engine (240, one rep) it is 7.7% of the seconds for the same work share, so its cost per unit depends on the machine. |
+| Device | Nothing written or designed beyond the class rule "one composed edit per row per round" (DESIGN.md:526). |
+
+2.F Dual fixing by locks
+| Item | Content |
+| Reads and writes | Reads cost, down_locks, up_locks, both bounds of each listed column (G/src/rules_dual_fixing.cpp:32-56). Writes fix_column (58) with a fixed_col record; returns unbounded_or_infeasible for a column with a cost and an infinite target bound (49-53). |
+| Shape | A map over columns, O(1) per column to decide. |
+| Conflicts and host order | List order. A fixing changes no lock and no cost (fix_col does not touch locks), so no decision depends on another column of the same call. The order decides the order of the records, of the offset sums and of the activity updates of shared rows. The stop on the budget is tested between two columns. |
+| Bits | Comparisons of the cost with zero; the value is a bound or 0. The offset add. |
+| Share | 240: 0.113 s, 0.6% of the seconds, 5.0% of the rule work; 1,100 calls; 433,143 fixings. Testbed 9: 2.359 s, 2.7%, with 39,899,589 fixings; its later calls hold 46.1% of its work. |
+| Device | The locks kernel of the device state build recomputes what this rule reads. DESIGN.md class L: "evaluated on locks recomputed after B and R". Nothing else written. |
+
+2.G Parallel rows (merge of two parallel rows; subtraction of an equation from a row that is parallel to it up to singleton columns)
+| Item | Content |
+| Reads | Per row its free entries, csc.size of their columns (a column with one live entry is outside the core, G/src/rules_parallel_rows.cpp:75-78), the terms of fixed columns, sides, row_version, row_free_size; the list row_list::singletons. |
+| Writes | Family data that outlives a call: a record per row (hash, core length, free size and version at the reading, 499-511), bucket links above and below, the sorted key array base, an ordered set recent, two skip arrays (515-541). Merge: set_row_lower / set_row_upper of the kept row, delete_row of the other, a parallel_row record (324-357). Subtraction: move_entry of the first core slot of the target, delete_entry of its other core slots, shift_row_sides, a row_addition record (481-493). |
+| Shape | Three steps. (1) Key per listed row: a map; the hash is an integer sum over the core entries of a mix of column and of the coefficient divided by the coefficient of the smallest core column, with the mantissa rounded to 20 bits (42-71, 87-110), so it does not depend on the storage order. (2) Buckets: a sort of (hash, core length, row) (145-193, 601-625); for few new keys an insertion by binary search instead (669-702, chosen at 762-768; both give the same links). (3) Pair scan: each listed row, in ascending index (751), is compared exactly with up to parallel_bucket_limit = 4 unlike neighbours above it and then below it in its bucket (831-883); the exact test scatters the row's core over the columns and walks the other row (235-305). Inside a bucket the scan is a chain: a merge deletes a row and changes the sides of the kept row, which the next comparison reads. |
+| Conflicts and host order | The smaller index is kept (796). Of two equations the one with fewer singleton columns is subtracted, then the smaller index (813-814). Rows above are merged first (830). Two pairs conflict when they share a row. By my reading two buckets are independent of each other inside one call: a deleted row or core entry changes csc.size only for columns of the pair, and a column whose count falls to one was held by the two rows of the pair only (comments at 803, 823-825); this is a reading, not a tested fact. Order-dependent: the count of unlike neighbours up to the limit while rows of the bucket are deleted (834, 868), the limited flag, the test row_version != 0 (452-455), which reads what the presolve has done, and the stop on the budget between two rows. |
+| Bits | Hash: a / first value, the 20-bit grid, three mixes. Exact test: |b - ratio * a| <= tol.zero * |b| (301). Merge: image of a side = dd_residual(side, fixed terms of the removed row) / ratio + dd_value(fixed terms of the kept row); crossing by more than the feasibility tolerance is infeasible (334-353). Subtraction: factor = target first / equation first; |factor| <= 1, = 1 with a singleton column in the equation; growth limits 1e3; size tests with side_error; max |a| / min |a| at most max(old, 1e6) (413-479); shift by factor * dd_residual(rhs, fixed terms). |
+| Share | 240: 1.992 s, 10.2% of the seconds, 29.0% of the rule work (the largest work share); 471 calls; first call 91.5%; 351,049 merges and 8,916 subtractions. Testbed 31: 0.567 s, 11.3%. Testbed 9: 12.254 s, 13.9%, first call 95.6%, 1,201,146 merges and 203,411 subtractions. Largest shares: rd-rplusc-21 29%, usafa 22%, hawaiiv10-130 20% (3.543 s). The comment at 496-498 says a quarter of a first call was cache misses on per-row arrays before they were put in one record. |
+| Device | Nothing written. DESIGN.md section 3 item 2 names pairwise scans as device phases when wide and sends device batches through a reservation table (532-536, AS-310: planned, no switch). The Stage 0 costs of a device sort are measured (94 to 501 microseconds for 1e3 to 1e5 elements; G/results/stage0/STAGE0_REPORT.md section 6). |
+
+2.H Doubleton equations and the alias forest
+| Item | Content |
+| Reads | Listed rows that are equations with two free entries (G/src/rules_doubleton.cpp:199); their two entries and the right-hand side less the fixed terms (read_edge, 44-64); types, bounds and csc.size of the columns (G/src/alias_forest.cpp:41-70, 166-178); for the substitution the whole column of each substituted column and of its root. |
+| Writes | The forest of the batch (link, touched, edges, position, set_size; postsolve.hpp:272-277). delete_row of every map row (210-212). Per map: tighten_lower / tighten_upper of the root (68-102); then either fix_column of the column at its image (229-233) or, per live entry of the column, shift_row_sides, and move_entry (the root takes the slot) or set_coefficient / delete_entry of the root's entry plus delete_entry of the column's (113-143); set_cost of root and column, the offset, remove_col, an alias record (144-155). A mark per row holds the slot of the root's entry (root_slot, 104-110). Cycle rows and cut edges of trees with a map go back on the list (241-259). |
+| Shape | Collection: a map over the listed rows. Forest: connected components with a spanning forest (union-find, alias_forest.cpp:84-105); the root of a tree by a score that needs a walk of the tree (145-178); maps composed from the root down, breadth first (180-206). The depth of a tree is not bounded. Substitution: per substituted column a walk of its entries; several columns of one tree can have entries in the same row, and those are merged into one root entry one after the other. A batch is applied in full. Rows that closed a cycle wait for the next round; the driver starts another round for them (G/src/presolve.cpp:361-364), up to max_rounds = 20. |
+| Conflicts and host order | Rows in list order decide which edges are tree edges (the first that connects two components) and the order of touched. Trees are walked in the order of their first column in touched, neighbours in the order their edges were added. The root: integer before continuous, then the most admissible edges, then the most live entries, then the smallest index. Maps are applied in map order, parents before children. In a row that holds several substituted columns of one root the new coefficient is old + moved as a plain double, map after map, with a cancellation test on each partial sum (134-141); the cost of the root is summed the same way (144-150); the sides are shifted once per substituted entry, each shift rounded to a double (state_ops.cpp:419-437); the root's entry lands in the slot of the first substituted entry met in that row (rules_doubleton.cpp:129-132), which later decides the lane of that entry in the activity fold. All four depend on the host's order. |
+| Bits | Edge: scale = -parent coefficient / child coefficient, offset = rhs / child coefficient; for an integer child both rounded, admissible only with integral_term, integral_side and drift_within in the units of the row (alias_forest.cpp:48-65, G/src/integral.hpp:42-88). Composition: scale[v] = map.scale * scale[u], offset[v] = map.scale * offset[u] + map.offset in plain doubles (196-197). Bound transfer: (bound - offset) / scale, for an integer root ceil / floor with feasibility / max(1, |scale|) and 4 rounding units (rules_doubleton.cpp:75-86). Cancellation: |sum| <= tol.cancellation * (|old| + |moved|). |
+| Share | 240: 0.787 s, 4.0% of the seconds, 5.4% of the rule work; 439 calls; first call 94.0%; 485,837 aliases. Testbed 31: 0.090 s, 1.8%. Testbed 9: 5.197 s, 5.9%, 7,077,830 aliases, 14 ns per work unit (twice the figure on the 240). Largest shares: CMS750_4 67%, neos-5093327-huahum 29%, uccase12 29%, neos-4332810-sesia 20% (4.346 s). |
+| Device | Nothing written. DESIGN.md:556-558 gives the rule (deterministic spanning forest, root at the highest type, inadmissible edge cut, maps composed on the frozen tree). Pointer jumping is named only in versions 1 and 2 of the plan. At edd147a7e the apply code is the shared header SP/alias_apply.hpp, used by simple probing too. |
+
+2.I Singleton-column family (free singleton column on an equation, on an inequality; zero-cost singleton columns; forcing column)
+| Item | Content |
+| Reads | Column list and row list of the family; csc.size, cost, bounds, types, locks; for a visited row one scan (its singleton columns sorted by index, the fixed terms, its two largest coefficients; G/src/rules_singleton_cols.cpp:98-129); both activities for the implied test (141-185). |
+| Writes | Family data: growth factor per column, a stamp per row, an unreadable mark per row, the counter kept_saved, two flag arrays (33-63). Free singleton: the row saved into the pool, delete_row, set_cost of every other column of the row, the offset, remove_col, a col_from_rows record of kind defined (190-247). Zero-cost: the row saved, delete_entry per taken column, new sides or delete_row, remove_col, a record of kind interval (305-396). Forcing column: every row of the column saved and deleted, remove_col, a record of kind forcing (461-518). |
+| Shape | Per listed column an O(1) test for the forcing column; per row with a singleton column one scan and O(1) tests. The effects make a cascade inside the call: a deleted row leaves other columns as singleton columns, which are listed and served in the same call (the loop at 556-589 runs until both lists stay empty). The design names a test of thirty equations that one call finishes (P/stage1c_design/v2_design.txt line 174), so a chain can be as long as the number of rows. A row is visited at most once per pass over the lists (stamp, 403-404). |
+| Conflicts and host order | Columns in list order, then rows in list order (562-577). In a row the singleton column with the smallest index that passes is taken (415-417). Two substitutions conflict on the cost of a column that both pivot rows hold: the new cost is old + moved in the order of the substitutions, set to zero when it cancels within the tolerance (219-229). History that decides: the growth factor (236-241, tested at 292-298), kept_saved against saved_row_factor * nonzeros (356-360), the forcing column that is left when its rows do not fit the rest of the budget unless it is the first reduction of the call (480), the unreadable marks. The pool of saved entries and the record offsets grow in application order. |
+| Bits | Pivot side: free side = dd_residual(side, fixed terms); q = cost / a, refused when q underflows (263-270). Implied test: each end of (side - rest) / a from row_rest (implied.hpp:144-161), moved outward by candidate_slack, within implied_tolerance of the bound, after one fresh summation when the guard fails (141-185). Integer column: integral_for and drift_within in the units of the row (275-282). Growth: largest other coefficient / |a| against pivot_growth_limit (284-298). Zero-cost: two compensated sums of a * bound over the taken columns in index order, new sides dd_residual(side, sum) (326-346). |
+| Share | 240: 0.260 s, 1.3% of the seconds, 6.2% of the rule work; 457 calls; first call 82.4%; 13,217 free singleton columns on equations, 2,685 on inequalities, 36,416 zero-cost singleton columns, 117 forcing columns; 949,957 saved entries; 163,725 costs made nonzero. Testbed 9: 5.261 s, 6.0%, 15.3% of the rule work; 687,074 + 4,183 + 6,809,097 findings; 71,027,977 saved entries. dlr2: 25% of its time (4.223 s). |
+| Device | Nothing written. AS-302 says the column rules were designed as sequential rules in index order with no batch form. DESIGN.md class D: "under reservation". |
+
+2.J Simple probing on equations (built at edd147a7e; in the checked-out tree the family is a stub that takes its list)
+| Item | Content |
+| Reads | Listed rows that are equations with at least three free entries, a readable side and no infinite term in either activity (SP/rules_simple_probing.cpp:246-256); both activities for a balance test in O(1) (259-262); one scan for the binaries (264-281) and one scan per binary tried (140-180); for the size of an offset one scan of every column of the row, once per call (reach, 103-126). |
+| Writes | Edges into the batch (take, 209-242); then apply_aliases (SP/alias_apply.hpp:192-234): the forest, row deletions when every edge of a row became a map, bound transfer, substitution, alias records of origin probing. |
+| Shape | Collection is a map over rows: every test reads the state as the call found it, since the batch is applied after the last visit (the only writes during it are fresh summations of an activity and the reach cache). Application is that of the doubleton equations. |
+| Conflicts and host order | Rows in list order; binaries of a row in increasing column index, the first that passes is taken (282-296). A row is refused and listed again when edges already in the batch connect two of its columns (217-232), so which rows enter a batch depends on the list order. The stop on the budget is tested between two rows. The size test makes the call report limited (309-314). |
+| Bits | gaps: the step enters the compensated sums, gap = dd_residual(side, activity + step), error with updates + 1 (77-91). Balance: dd_add of both activities, dd_residual(2 * side, sum) (259-262). forcing() of SP/forcing.hpp:66-73. Alias: scale = plus or minus (upper - lower), offset = a bound, one subtraction (167-179). Limits: alias_scale_limit, tol.zero on ranges, side_error on offsets. |
+| Share | Not in the node runs. From the Mac run stored at edd147a7e (G/results/bench240/s1c_m2_mac/default/summary.json, source 9d7b5aa0f, one rep, 240 benchmark instances, 11.492 s in all): 0.203 s, 1.8% of the seconds, 5.4% of the rule work, first call 81.1%, 277,320 aliases on 8 instances (highschool1-aigio 247,086, neos-1445765 18,444, brazil3 10,432), 24,819 rows removed, largest alias depth 6. |
+| Device | Nothing. |
+
+2.K Rules that are designed and not built (all designed as host rules in index order; no device form exists; their families take their lists and do no work today)
+| Rule (design code) | Reads and writes | Shape | Conflicts and designed order | Bits | Source |
+| Fixing by dominance between parallel columns (R6) | Per live column a key (number of live entries, hash over row and coefficient divided by the coefficient in the smallest row); cost, bounds, types; the rows of the absorbing column for an implied-bound test. Writes fix_column with a parallel_fix record. | Key: map over columns. Buckets: sort. Then a pair scan with up to parallel_bucket_limit neighbours; all singleton columns of one row form one bucket that is scanned as a group. | One pair at a time, every premise computed at application; ties to the smaller index; a pair left alone marks both columns. | Ratio test with tol.zero and with activity_error_share * feasibility times the largest bound; D = cost_q - s * cost_p as a compensated value; candidate and candidate_slack for "can absorb". | v2_design.txt lines 62, 65 |
+| Dual bound strengthening (R7) | Per candidate column: cost, lock counts, one walk of the column with O(1) per row from the stored activities. Writes fix_column, or tighten of an integer column with a dual_bound record. | Map over columns with a max reduction over the rows of each. | Columns in index order, each once per call; a new bound changes the activities that later columns read. | (side - rest) / a moved by candidate_slack; ceil with feasibility / max(1, |a|). | lines 69, 72 |
+| Alias of single-lock columns to a binary of their lock row (R8) | Per visited row: both activities, its two largest binaries, per column O(1) on locks and cost. Writes aliases of origin lock; the row stays. | Map over rows to find candidates; then a substitution as in 2.H. | One transaction per binary (amendment D.7); a column aliased in a call is not aliased again in it; rows in index order. | Release and force tests on m' and M'; scale = upper - lower. | lines 76, 79; v2_amendments.txt 61-64 |
+| Merge of parallel columns (R9) | Pairs as R6 with equal cost. Writes delete_entry for every entry of the removed column, set_cost, remove_col, new bounds of the kept column, a merge record. | Pair scan in buckets; singleton buckets sorted by cost / coefficient. | Kept column by type, then the smaller index; merge_integers (never, range_kept, always). | sigma = a_removed / a_kept; merged bounds by min and max of sigma * bound. | lines 83, 86 |
+| Implied equation (A) | Columns the dual family visits: cost, one lock in the cost direction, one walk to the lock row, the implied test. Writes the other side of the row (set_row_lower / upper) and a tight_row record. | Map over columns; the effect is on one row. | Index order; a later column of the same call sees an equation and does nothing, so two columns that point at one row conflict and the first wins. | |cost| > tol.dual * |a|; side guard; implied test with candidate_slack; integral_for for an integer source. | lowworth_v2_design.txt line 24 |
+| Implied integer with scaling (B, C) | Rows with exactly one live continuous column (a new count row_cont_size), a cache per row; one walk of the candidate column. Writes the type, rounded bounds, scale_col, records implied_integer and col_scale. | Map over rows to candidates, then per candidate a walk; the family repeats passes, since a conversion leaves other rows with one continuous column: a chain. | Candidates in index order, each once per pass. | integral_for; integral_denominator with limit 1000; sigma in [1/1024, 1024]; rounding of bounds. | lines 31, 38, 88 |
+| Column stuffing (S) | In a row visit of the singleton family: the singleton columns of the row with cost and bounds, two compensated sums. Writes fix_column per fixed candidate and a row_exchange record. | Per row: a sort of the candidates by cost / coefficient, then a sequential prefix test. | Inside one row only; sorted order with the index as the last key. | One division per key; sums by dd_add_product; the allowance of the forcing row. | line 45 |
+| Single-equation extension of dual fixing (E) | Marked equations: per entry a mark from the lock counts and the cost, two compensated sums. Writes fix_column and a row_exchange record. | Map over marked rows; the design asserts that no lock changes during a pass. | Rows in index order, each once per pass. | Sum from scratch with dd_add_product; the allowance of the forcing row. | lines 52, 89 |
+| Dominated and weakly dominated column by a bound on the reduced cost (D) | Per row its two cheapest compensators per direction; per candidate column one walk over its locking rows. Writes a compensated fixing with a comp_fix record. | Row scan (map), then a map over columns with a sum over their rows; cached scans are cleared by a fixing. | Index order; ties to the smaller index; a fixing changes the prices that later columns read. | price = cost / |a| with a limit of 1e7; rate as a compensated sum; tol.cancellation. | lines 59, 89 |
+
+2.L The driver (rounds, cascade, budgets, storage between the phases)
+| Item | Content |
+| Order of a presolve | State; start step; rounds; make_explicit and, when it changed something, more rounds; while a settled presolve still holds terms of fixed columns that matter and can be absorbed, absorb_fixed_terms and more rounds; remove_empty_rows when no fixed point was reached; reduced_model; model_hash (G/src/presolve.cpp:409-468, 499-513). |
+| A round | Cascade (passes of row rules, propagation, tightening, dual fixing, each family called when it is switched on and its list is not empty; compact_sparse_lines after every pass; ends when a call stopped on its budget, no list is left or max_cascade_passes = 100 is reached; 293-307), end_phase, parallel rows, end_phase, doubleton, end_phase, then the four column families each followed by end_phase (338-358). Rounds end when one has no finding (359-365) or at max_rounds = 20. |
+| end_phase | rebuild when the dead share of the slots is above rebuild_dead_fraction or fixed_nnz above rebuild_fixed_fraction * live_nnz, and fixed_terms_absorbable holds; else compact_sparse_lines; then a phase hash when asked (318-333). dead_fraction reads the slot counts of the stores, which include the slots a moved column left behind (state_ops.cpp:240-245). |
+| Budget of a call | limit = floor + passes * pass and stall limit = floor + stall_passes * pass, with pass = free nonzeros + 8 * (live rows + live columns) at the call (presolve.hpp:85-99); a family spends one unit per entry read and 8 per line visited, and stops between two lines when used >= limit or used - used_at_finding >= stall limit (rules.hpp:27-36). |
+| Shape | A fixed sequence of phases; the cascade and the rounds are loops to a fixed point. The storage steps are maps and compactions: compact_line per listed line, absorb per row, rebuild as two stable compactions with twin updates. |
+| Order-dependent | The stall rule (it depends on the sequence of work and findings), the rebuild decision (it depends on the layout), the booking of removed rows, columns and nonzeros per call as differences of the counters (232-234), settled, limited and fixed_point (442-443), and the time limit, which is tested before every call and only gives status limit (243-246). |
+| Measured | 240: 707 rounds, of them 147 after the switch to explicit bounds (1.079 s, 5.5% of the seconds); rounds per instance 1 on 35, 2 on 80, 3 on 56, 4 on 35, 5 on 23, 6 to 8 on 8, and 10, 11, 13 on neos-5104907-jarama, neos-5093327-huahum, neos-3555904-turama; fixed point on 234 of 240; 332 rebuilds. Calls of the row rules per round (the number of cascade passes): 1 on 167 instances, 2 on 65, more on 8; unitcal_7 has 342 calls in 7 rounds, map10 and map16715-04 44 in 2. Storage time: 0.996 s, 5.1% (6.6 ns per input nonzero); square47 and square41 16%. Testbed 9: 3.667 s, 4.2%. |
+| Device | DESIGN.md 2.1 chooses the engine of a phase by a work estimate with a constant per launch and read-back (AS-306, no switch). The fixed costs are measured: 9.0 microseconds per launch with synchronisation, 13.8 with an 8-byte read-back, 77 to 93 for a step of 8 launches, one read-back and one compaction. For scale: the median host time of a whole presolve is 1.7 ms below 5e4 nonzeros (93 instances), 40 ms from 5e4 to 1e6 (117), 283 ms from 1e6 to 1e7 (28). The rebuild on the device is measured as a stable radix sort (467 microseconds + 0.279 ns per nonzero) and designed in Stage 1b milestone 4 for the device's own copy only. |
+
+2.M The record stack and the postsolve
+| Item | Content |
+| What it is | Five record kinds, each with its own array, and one array order that holds the kinds in application order (G/include/gprs/postsolve.hpp:20, 142-166). col_from_rows records point into three shared arrays (record_cols, saved_rows, record_coefficients) and into one pool of saved entries; their parts follow each other in push order (G/src/postsolve.cpp:174-209). A saved row holds the free entries of its row in storage order (G/src/saved_row.hpp:55-70). col_removed marks removed columns. |
+| Writers | fix_column (rules_bounds.cpp:51-58), the doubleton and probing substitution, the parallel rows (two kinds), the three singleton-column reductions. Deleted rows that are empty, redundant, singleton or forcing leave no record. |
+| Shape | Appends. A batch that produces many records needs their order and their offsets, which is a prefix sum over the batch in a fixed order. The undo (postsolve, 443-467) walks the stack backwards and each record reads values restored before it: a chain, outside the presolve call. crush is a gather (469-477). |
+| Order | The order of the stack is the application order and is hashed (postsolve_hash, G/src/hash.cpp:182-247). The contract "a removed column must not appear in a later record" (postsolve.hpp:182-183) is checked on that order. |
+| Bits | The records store the values the rules computed. The undo uses compensated sums of the saved entries in pool order (rest_of, 213-226). |
+| Share | Inside the families; not timed apart. |
+| Device | Nothing. Fixed-cost figures for ordered result lists exist (hand-back with an ordered list at most about 141 microseconds, STAGE0_REPORT section 6). |
+
+2.N Output of the reduced model and its hash
+| Item | Content |
+| reduced_model | G/src/state_storage.cpp:403-515. A pass over the columns (new index, bounds, cost, type) and a pass over the live rows: entries of live columns copied in storage order with the new column index, the terms of fixed columns summed in storage order as one compensated sum and taken from the finite sides by dd_residual (462-482), and a row that is not in increasing column order sorted (489-503). Offset = hi + lo of the state's offset (513). Then same_model against the input and the status (G/src/presolve.cpp:486-494). |
+| Shape | Two stream compactions (rows, columns), a gather of the entries with an index map, a segmented sort of the rows that move_entry left out of order, a map for the sides. |
+| Bits | The sum of the fixed terms per row in storage order; the offset. |
+| model_hash | G/src/hash.cpp:37-56, 119-135. One chain: every 64-bit word (sizes, then each array as its length and its elements, a double as its bit pattern) goes through h = finaliser((h + constant) xor word). Each step needs the result of the one before, so as defined it is serial. state_hash (140-180) covers the layout of both stores (start, used, capacity, size, tombstones by position, twins), versions, records, both activities with inf_slot, max_term and updates, the counters and every list in its order. postsolve_hash covers the stack. Phase hashes are taken only with options_t::phase_hashes. |
+| Share | Output ("finish"): 240: 0.898 s, 4.6%, 5.9 ns per input nonzero; testbed 9: 3.555 s, 4.0%. Hash: 240: 1.073 s, 5.5%, 7.1 ns per input nonzero; testbed 9: 4.388 s, 5.0%; neos-4535459-waipa 13% (2.038 s). |
+| Device | Nothing for the output. Nothing for the hash; a parallel hash is another function and replaces every stored hash. |
+
+3. MEASURED SHARES IN ONE PLACE
+
+Source files: G/results/bench240/s1c_m1/release_all/summary.json (240 benchmark instances, 3 reps, node host 6632e8628d95), G/results/stage1/host/s1c_m1/release_dev/summary.json (testbed, 31 instances below 1e7 nonzeros, 3 reps), release_large/summary.json (testbed, 9 instances above 1e7, 1 rep). The sums of the per-instance "seconds" are 19.467 s, 5.000 s and 88.267 s; the timing report gives 19.498, 4.996 and 87.769 s from other passes.
+
+Table 3.1. Share of the seconds (percent of the set's total).
+| Part | 240, all | 240, below 5e4 (93 inst., 0.282 s) | 240, 5e4 to 1e6 (117, 5.912 s) | 240, 1e6 to 1e7 (28, 10.210 s) | 240, above 1e7 (2, 3.064 s) | Testbed 31 | Testbed 9 |
+| State build | 31.4 | 25.4 | 27.2 | 30.3 | 43.6 | 31.2 | 34.2 |
+| Propagation | 16.4 | 17.0 | 16.9 | 17.9 | 10.6 | 23.1 | 10.1 |
+| Tightening | 15.1 | 11.1 | 15.1 | 16.3 | 11.8 | 12.3 | 10.0 |
+| Parallel rows | 10.2 | 10.3 | 11.3 | 11.8 | 3.0 | 11.3 | 13.9 |
+| Hash | 5.5 | 5.9 | 5.6 | 6.1 | 3.3 | 5.9 | 5.0 |
+| Row rules | 5.1 | 3.2 | 4.3 | 4.6 | 8.7 | 4.4 | 3.5 |
+| Storage | 5.1 | 2.5 | 3.8 | 2.6 | 16.3 | 2.3 | 4.2 |
+| Output | 4.6 | 5.3 | 4.9 | 5.0 | 2.5 | 5.0 | 4.0 |
+| Doubleton | 4.0 | 14.7 | 7.3 | 3.1 | 0.0 | 1.8 | 5.9 |
+| Singleton columns | 1.3 | 2.9 | 2.1 | 1.2 | 0.0 | 1.9 | 6.0 |
+| Dual fixing | 0.6 | 0.6 | 0.9 | 0.6 | 0.0 | 0.4 | 2.7 |
+| Start step | 0.2 | 0.5 | 0.3 | 0.3 | 0.0 | 0.3 | 0.2 |
+The three stub families take 0.007 to 0.008 s each on the 240. Rules together: 53.0% (240), 55.3% (testbed 31), 52.2% (testbed 9).
+
+Table 3.2. Work of the families (work units; share of the summed rule work; share of the family's work in its first call).
+| Family | 240: share, first call | Testbed 31: share, first call | Testbed 9: share, first call |
+| Parallel rows | 29.0%, 91.5% | 29.6%, 89.1% | 28.7%, 95.6% |
+| Tightening | 28.5%, 78.4% | 27.7%, 68.0% | 22.8%, 77.9% |
+| Propagation | 16.2%, 74.0% | 15.1%, 64.5% | 11.3%, 65.0% |
+| Row rules | 9.6%, 79.8% | 8.8%, 65.8% | 7.3%, 54.5% |
+| Singleton columns | 6.2%, 82.4% | 8.7%, 71.1% | 15.3%, 97.1% |
+| Doubleton | 5.4%, 94.0% | 4.2%, 96.8% | 4.1%, 98.9% |
+| Dual fixing | 5.0%, 84.8% | 6.0%, 93.2% | 10.6%, 53.9% |
+A "first call" of a cascade family is its whole first call, with every wave until its list is empty, not one sweep over the rows.
+
+Table 3.3. Instances where one part dominates (at least 10 ms; share of that instance's seconds). Propagation: neos-1122047 75%, neos-4647030-tutaki 53%, ns1952667 48%, dano3_5 46%, dano3_3 45%, neos-848589 41%. Tightening: neos-860300 44%, hypothyroid-k1 40%, splice1k1 39%, supportcase22 35%. Doubleton: CMS750_4 67%; neos-4332810-sesia 20% of 21.8 s. Parallel rows: rd-rplusc-21 29%; hawaiiv10-130 20% of 17.5 s; usafa 22%. Singleton columns: dlr2 25% of 16.9 s. Row rules: physiciansched6-2 31%, supportcase12 28%, a2864-99blp 23%. State build: waipa 63%, a2864-99blp 53%, supportcase7 51%. Storage: square47, square41, a2864-99blp 16%. Largest single part among the 139 benchmark instances of at least 10 ms: state build on 99, tightening on 16, propagation on 15, doubleton on 8, row rules on 1.
+
+4. WHERE THE HOST RESULT DEPENDS ON SOMETHING A DEVICE ENGINE CANNOT REPRODUCE CHEAPLY
+
+| # | What | Where | Why it matters |
+| 1 | Order of every work list: first event since the consumer last took it | state.hpp:109-154; hashed at hash.cpp:94-100, 177-178 | It is the visit order of row rules, propagation, tightening, dual fixing, doubleton, simple probing and the singleton-column family, and it is part of the state hash. Only the parallel rows sort their list (rules_parallel_rows.cpp:751). |
+| 2 | Each change is applied before the next test | rules_propagation.cpp:144-151, rules_rows.cpp:122-136, 181-188 | A batch from one snapshot sees wider bounds than the host's later rows did. |
+| 3 | Incremental activities: bits of hi and lo, updates, max_term | state_ops.cpp:18-55, 72-85 | The guard and every error bound read updates and max_term; a sum from scratch has other bits and a smaller count. The host already separates the two cases with activity_fresh and refresh_activity (rules_bounds.cpp:60-74). The standing constraint asks for one summation order; an incremental sum has an order given by history. |
+| 4 | Automatic re-summation of a stale row | state_ops.cpp:79-85 | It fires on updates >= 2 * size and the error bound, both history. |
+| 5 | Implied-bound records, pending and stale marks, 16 steps per bound | rules_propagation.cpp:48, 100-139, 225-278 | Which candidate becomes a record depends on the visit order; make_explicit reads the marks. |
+| 6 | Budget: stop between two lines on the limit or on work without a finding | rules.hpp:27-36; every run() | The stopping point is a function of the visit sequence; work and first_work are reported statistics. |
+| 7 | Objective offset as a running compensated sum in the order of the fixings and substitutions | state_ops.cpp:318, 336-340; read at state_storage.cpp:513 | The reduced model's offset, and so model_hash, can differ in the last bits with another order. |
+| 8 | Cost of a root or of a pivot row's columns as old + moved, one after the other, with a cancellation test on each partial sum | rules_doubleton.cpp:144-150; rules_singleton_cols.cpp:219-229 | Plain double sums in application order. |
+| 9 | Coefficient of a root in a row that holds several substituted columns | rules_doubleton.cpp:134-141 | The same, per entry of the reduced model. |
+| 10 | Sides shifted once per substituted entry, each shift rounded | state_ops.cpp:419-437 | A row with several shifts ends with sides that depend on their order. |
+| 11 | Storage order of a row after move_entry | state_ops.cpp:522-565; rules_doubleton.cpp:129-132 | It fixes the lane of every entry in the activity fold and the order of the fixed-term sum (state_storage.cpp:462-470), and so later bits. |
+| 12 | Layout: tombstones, a column moved to the end with doubled capacity, compaction lists | state_ops.cpp:171-197, 101-113; presolve.cpp:323-330 | dead_fraction decides a rebuild, and a rebuild moves the fixed terms into the sides before the next phase reads them. The layout is hashed. |
+| 13 | inf_slot as a sum of CSR slots | state.hpp:79-80; shifted at state_storage.cpp:274-276 | It is a slot of the host's layout. |
+| 14 | Tree edges, touched order and walk order of the alias forest | alias_forest.cpp:84-105, 145-206 | List order decides which equation of a cycle stays a row and the order of the maps. |
+| 15 | Simple probing: a row is refused when the batch already connects two of its columns | SP/rules_simple_probing.cpp:217-232 | Greedy in list order. |
+| 16 | Parallel rows: unlike count up to the bucket limit while rows are deleted; row_version != 0 | rules_parallel_rows.cpp:831-883, 452-455 | Chain inside a bucket; a test on history. The ordered set recent and the choice between sort and insertion change no result. |
+| 17 | Singleton columns: growth factors, kept_saved, stamps, the forcing column left for the budget | rules_singleton_cols.cpp:236-241, 292-298, 356-360, 403-404, 480 | History of the call and of the presolve. |
+| 18 | Outcome kinds and early exits | every run(); presolve.cpp:228-231 | The first family that sees an end reports it; infeasible or unbounded_or_infeasible can depend on which comes first. The state is not used again. |
+| 19 | The time limit | presolve.cpp:243-246 | A clock; allowed only as an abort with status limit. |
+| 20 | model_hash and state_hash as chains | hash.cpp:37-56 | Serial by definition (5.0 to 5.5% of the time). |
+| 21 | Record stack in application order with running pool offsets | postsolve.cpp:174-209 | Hashed; a batch needs a fixed order. |
+| 22 | Sequential search of the scale inside a row | rules_tightening.cpp:116-122 | The denominator of an entry depends on the product before it, in storage order. |
+
+5. OPTIONS AND STATISTICS A DEVICE PATH MUST HONOUR
+
+Options (presolve.hpp:103-168): the ten tolerances of tolerances_t (numerics.hpp:22-45), copied into the state as st.tol; primal_only; enabled[10]; budget[10] (passes, stall passes, floor); sub_enabled[8] through sub_rule_active (175-179); merge_integers; saved_row_factor = 4; pivot_growth_limit = 1000; lock_alias_row_limit = 0; max_rounds = 20; max_cascade_passes = 100; time_limit; rebuild_dead_fraction = 0.25; rebuild_fixed_fraction = 0.25; parallel_bucket_limit = 4; near_parallel_rows; phase_hashes. Added at edd147a7e: alias_scale_limit = 1e6 and probing_balance = 1.
+Constants in source files that are not options today: line_visit_work = 8 (rules.hpp:23); max_light_row = 64 and max_activity_lanes = 256 (numerics.hpp:150-151); max_explicit_steps = 16 (rules_propagation.cpp:48); bound_rounding_units = 4 and forcing_rounding_units = 8 (rules_rows.cpp:33, 38); candidate_rounding_units = 4 (implied.hpp:25); max_integral_scale = 1000, max_integral_coefficient = 1e12, coefficient_rounding_share = 0.1, max_exact_side = 2^52 (rules_tightening.cpp:29-38); transfer_error_units = 4 (rules_doubleton.cpp:40); hash_mantissa_bits = 20, sort_share = 32, comparison_sort_size = 64, max_dynamism = 1e6, max_growth = 1e3 (rules_parallel_rows.cpp:32, 135, 138, 375, 381); plain_size = 1e5 (state_storage.cpp:86); min_moved_capacity = 4 (state_ops.cpp:167).
+Statistics (presolve.hpp:195-261, rules.hpp:67-121): per family and for the start step calls, work, first_work, findings, records, seconds, rows_removed, cols_removed, nnz_removed; dual_findings; sub_findings[8]; column_stats_t (cost_fill, saved_entries, max_growth, growth_refused, growth_refused_row, saved_row_refused, alias_depth, free_singleton_rejected_explicit, and eleven probing counters at edd147a7e); rounds, explicit_rounds, rebuilds, fixed_point; seconds with seconds_state, seconds_start, seconds_storage, seconds_finish, seconds_hash, seconds_explicit; hash; phase_hash. State counters that are hashed: bound_changes, side_changes, coefficient_changes. The per-call flags stopped and limited feed fixed_point. The tool also prints merges and subtractions of the parallel rows and the counts of the col_from_rows kinds. No statistic exists for transfers or device work; the owner asks for the overheads in every run (G/results/stage1/overheads.csv has state, start, storage, finish and hash only).
+Contract of every family that a device path inherits (rules.hpp:123-149): the result depends on the state, the options and the budget only; work is counted in units, never in time; with an outcome other than ok the state is not used again; family data holds rows and columns by index and no slot.
+
+6. WHAT EXISTS FOR THE DEVICE, IN ONE TABLE
+
+| Piece | Where | State | Usable for the new plan |
+| Device state build: CSC, twins, locks | G/device (state_build.cu 961 lines, tests 508, bench 816) | Built, bit-equal in every compared run, not integrated; device work 40 to 48 ms for 2.57e8 nonzeros; end to end 2.0 to 2.1 times the host loop; wins from 1.3e6 nonzeros, loses below 8.5e5 | Yes for the transpose and the locks. The host-side sizing of the result vectors is the limit, so the gain depends on where the state lives. |
+| Sweep kernels with compensated sums, split count arrays, lane groups; candidate kernels; walk, histogram, compaction and gather kernels | G/microbench/sweeps.cu (2680 lines), README_sweeps.md | Benchmarks, checked against a CPU reference | As starting points. Their block fold does not have the host's lane order. |
+| Fixed costs of launches, read-backs, library calls, copies, dirty lists, gathers, managed memory | G/microbench/fixed_costs.cu, results in G/results/stage0 | Measured on one H200 | Yes, as the cost model. Nothing measured on Grace Hopper. |
+| cuOpt load-balanced propagation | cpp/src/presolve/load_balanced_* in this worktree | Not referenced by other code | The structure (bins by length, sub-warp groups, a two-level scheme for long lines). The Stage 1b synthesis says its arithmetic is not liftable as it is (plain sums, no counters, side minus activity first); I did not check that. |
+| Stage 1b design of device propagation | P/stage1b_design/final_design.txt | Designed, nothing built | The fold and candidate kernels, the reference backend idea, the memory resource with host_access and release, the tests. Its scope (propagation only, after the first cascade, host replay, no agreement with the host) is narrower than the directive. |
+| DESIGN.md 2.1 to 2.5, 3, 4 | P/DESIGN.md | Plan | One summation order, split arrays, no floating-point atomics, thresholds as constants, reservation table (planned, AS-310). Sections 2.1 and 3 are overruled by amendment A11 where they leave parallel work on the host. |
+| Device forms of the row rules, tightening, dual fixing, parallel rows, doubleton, column rules, driver, records, output, hash | none | Do not exist | — |
+
+7. WHAT I AM UNSURE OF
+
+- That the row rules reach the same end state in every visit order: not proven.
+- That two buckets of the parallel rows never interact inside one call: my reading of the code and its comments, not tested.
+- The cost per work unit differs between the node and the Mac (tightening 15.1% of the seconds on the node, 7.7% on the Mac for almost the same work), so shares in seconds are those of the EPYC 7413 node.
+- The depth of the cascades inside one call is not in the stored statistics; only calls per round and rounds are.
+- Whether nvcc accepts the std:: math calls of numerics.hpp in device functions is still unchecked (it is marked as inferred in the Stage 1b design).
+
+======== KEY_NUMBERS ========
+--- 1
+what: Total host seconds, rules, outside the rules
+value: 19.467 s; 10.319 s; 9.129 s
+instance_set: 240 benchmark instances, node run release_all, source daa4f5d68 (same engine source as HEAD)
+how: sum of the per-instance seconds in summary.json (W/agg.py)
+
+--- 2
+what: State build share of the seconds
+value: 31.4% (6.114 s, 40.4 ns per input nonzero)
+instance_set: 240 benchmark instances
+how: seconds_outside_rules.state summed
+
+--- 3
+what: State build share of the seconds
+value: 31.2% (1.559 of 5.000 s)
+instance_set: testbed, 31 instances below 1e7 nonzeros
+how: release_dev/summary.json
+
+--- 4
+what: State build share of the seconds
+value: 34.2% (30.210 of 88.267 s, 43.0 ns per nonzero)
+instance_set: testbed, 9 instances above 1e7 nonzeros, one rep
+how: release_large/summary.json
+
+--- 5
+what: Propagation: seconds share, work share, first-call share of its work
+value: 16.4%, 16.2%, 74.0%
+instance_set: 240 benchmark instances
+how: rules.propagation seconds, work, first_work summed
+
+--- 6
+what: Propagation first-call share of its work
+value: 64.5% and 65.0%
+instance_set: testbed 31 below 1e7; testbed 9 above 1e7
+how: first_work / work; contrasts with the 92.5% of the earlier 17-instance measurement
+
+--- 7
+what: Tightening: seconds share, work share, first-call share
+value: 15.1%, 28.5%, 78.4%
+instance_set: 240 benchmark instances
+how: summary.json
+
+--- 8
+what: Parallel rows: seconds share, work share, first-call share
+value: 10.2%, 29.0%, 91.5%; 351,049 merges, 8,916 subtractions
+instance_set: 240 benchmark instances
+how: summary.json
+
+--- 9
+what: Parallel rows seconds
+value: 12.254 s, 13.9%; 1,201,146 merges, 203,411 subtractions
+instance_set: testbed 9 above 1e7 nonzeros
+how: release_large/summary.json
+
+--- 10
+what: Row rules: seconds share, work share, first-call share
+value: 5.1%, 9.6%, 79.8%; 2,321,794 rows and 1,379,992 columns removed
+instance_set: 240 benchmark instances
+how: summary.json
+
+--- 11
+what: Doubleton: seconds share, work share, first-call share
+value: 4.0%, 5.4%, 94.0%; 485,837 aliases
+instance_set: 240 benchmark instances
+how: summary.json
+
+--- 12
+what: Doubleton seconds
+value: 5.197 s, 5.9%; 7,077,830 aliases; sesia alone 4.346 s
+instance_set: testbed 9 above 1e7 nonzeros
+how: release_large/summary.json
+
+--- 13
+what: Singleton columns: seconds share, work share
+value: 1.3%, 6.2% (240); 6.0%, 15.3% (testbed 9; dlr2 4.223 s)
+instance_set: 240 benchmark instances; testbed 9 above 1e7
+how: summary.json of both sets
+
+--- 14
+what: Dual fixing: seconds share, fixings
+value: 0.6%, 433,143 (240); 2.7%, 39,899,589 (testbed 9)
+instance_set: 240 benchmark instances; testbed 9 above 1e7
+how: summary.json
+
+--- 15
+what: Hash, output, storage shares of the seconds
+value: 5.5%, 4.6%, 5.1% (7.1, 5.9, 6.6 ns per input nonzero)
+instance_set: 240 benchmark instances
+how: seconds_outside_rules hash, finish, storage
+
+--- 16
+what: Hash, output, storage seconds
+value: 4.388 s, 3.555 s, 3.667 s
+instance_set: testbed 9 above 1e7 nonzeros
+how: release_large/summary.json
+
+--- 17
+what: Largest single part per instance
+value: state build on 99, tightening on 16, propagation on 15, doubleton on 8, row rules on 1
+instance_set: the 139 of the 240 benchmark instances that take at least 10 ms
+how: largest of 15 parts per instance (W/agg.py)
+
+--- 18
+what: Rounds per presolve
+value: 707 in all; 1:35, 2:80, 3:56, 4:35, 5:23, 6-8:8, 10/11/13: one each; 147 rounds after the switch to explicit bounds (1.079 s)
+instance_set: 240 benchmark instances
+how: rounds and explicit fields
+
+--- 19
+what: Cascade passes per round (calls of the row rules / rounds)
+value: 1 on 167 instances, 2 on 65, more on 8; unitcal_7 342 calls in 7 rounds
+instance_set: 240 benchmark instances
+how: rules.row_rules.calls / rounds, rounded up
+
+--- 20
+what: Fixed point reached
+value: 234 of 240; 30 of 31; 7 of 9
+instance_set: 240 benchmark; testbed 31; testbed 9
+how: fixed_point field
+
+--- 21
+what: Median host seconds of a whole presolve by size
+value: 1.7 ms below 5e4 (93); 40 ms from 5e4 to 1e6 (117); 283 ms from 1e6 to 1e7 (28)
+instance_set: 240 benchmark instances by input nonzeros
+how: median of per-instance seconds
+
+--- 22
+what: Simple probing: seconds share, work share, aliases
+value: 1.8% (0.203 of 11.492 s), 5.4%, 277,320 aliases on 8 instances, largest alias depth 6
+instance_set: 240 benchmark instances, Mac run of source 9d7b5aa0f, one rep (not the node)
+how: git show edd147a7e:gpu_presolve/results/bench240/s1c_m2_mac/default/summary.json
+
+--- 23
+what: Cost per work unit by family
+value: propagation 9.7 ns, doubleton 7.2, row rules 5.1, tightening 5.1, parallel rows 3.4, singleton columns 2.1, dual fixing 1.1
+instance_set: 240 benchmark instances, node
+how: summed seconds / summed work
+
+--- 24
+what: Size of the host engine
+value: 8,829 lines in include/gprs and src; device state build 961 lines; sweeps.cu 2,680 lines
+instance_set: not an instance figure
+how: wc -l
+
+--- 25
+what: Work lists and state operations
+value: 11 row lists, 5 column lists; 16 mutating state operations plus 4 storage operations
+instance_set: not an instance figure
+how: state.hpp:159-187 and the member functions of state_t
+
+
+======== NOT_DONE ========
+- No build and no engine run: the depth of the cascades inside one call of a family (waves of row rules, propagation, singleton columns) is not measured; the stored statistics hold only calls, rounds and first-call work.
+- G/microbench/sweeps.cu, fixed_costs.cu and the cuOpt load-balanced kernels were not read line by line; what they contain is taken from the READMEs, a grep of their kernels and the Stage 1b synthesis.
+- G/device/test, G/device/bench, G/tools/gprs_fuzz.cpp and G/check were not read; the campaign and the wrong engines are not inventoried.
+- The HiGHS source was not read; statements about HiGHS are quotations from the design files.
+- Of the Stage 1c design files only the condition and cost paragraphs of the unbuilt rules and the first part of both amendment files were read; the answers, reviews and the check sections were not.
+- stage1b_design/critiques.txt, HISTORY Entry 24 and most of ASSUMPTIONS.md were not read (AS-244, AS-302, AS-305, AS-307, AS-309 were; AS-304, AS-306, AS-310 only as overview rows).
+- No share in seconds exists for simple probing on the node; the only stored run of that engine is a one-rep Mac run.
+- Storage time is not split into compaction, rebuild, absorption, the absorbable test and phase hashes; the stored runs have one figure.
+
+======== UNSURE ========
+- Whether the row rules reach the same end state in every visit order: I argued it for exact arithmetic on examples and did not prove it; tests within a tolerance can differ.
+- Whether two buckets of the parallel rows are independent inside one call: a reading of rules_parallel_rows.cpp (comments at 803 and 823-825), not tested.
+- Whether the order-dependent plain-double sums (root coefficient, costs, repeated side shifts, objective offset) change bits on real instances or only in principle: I found the code paths, not a case.
+- Shares in seconds are those of the EPYC 7413 node; the Mac run shows a different split for the same work (tightening 7.7% against 15.1%).
+- The task names cpp/src/mip_heuristics/presolve for the load-balanced code; in this worktree it is cpp/src/presolve. That it is unused rests on one grep.
+- The task says DESIGN.md describes pointer jumping over the alias forest; version 4.1 does not (only versions 1 and 2 do).
+- The stored runs name source commit daa4f5d68, not 04692babd; the diff over src, include, device and microbench between the two is empty, so I treat them as the same engine.
+- Which reading of 'first call' the earlier 92.5% figure used; today's first_work is the whole first call of the family with all its waves.
+
+======== FILES ========
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/inventory/agg.py
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/inventory/agg.out
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/inventory/m2_mac_default.json
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/inventory/sp/rules_simple_probing.cpp
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/inventory/sp/alias_apply.hpp
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/inventory/sp/forcing.hpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/include/gprs/state.hpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/include/gprs/presolve.hpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/include/gprs/rules.hpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/include/gprs/numerics.hpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/src/state_ops.cpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/src/state_build.cpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/src/state_storage.cpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/src/presolve.cpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/src/rules_parallel_rows.cpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/src/rules_doubleton.cpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/src/hash.cpp
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/device/src/state_build.cu
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/microbench/sweeps.cu
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/results/bench240/s1c_m1/release_all/summary.json
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/results/stage1/host/s1c_m1/release_dev/summary.json
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/gpu_presolve/results/stage1/host/s1c_m1/release_large/summary.json
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/design_summaries/gpu_mip_presolve/stage1b_design/final_design.txt
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/design_summaries/gpu_mip_presolve/stage1c_design/v2_design.txt
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/design_summaries/gpu_mip_presolve/stage1c_design/lowworth_v2_design.txt
+- /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/cpp/src/presolve/load_balanced_bounds_presolve_kernels.cuh
+

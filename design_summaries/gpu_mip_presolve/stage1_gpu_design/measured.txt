@@ -1,0 +1,472 @@
+======== SUMMARY ========
+I instrumented a scratch copy of the host engine (commit 04692babd) and measured width, depth, tail and whole-matrix shares on the 240 benchmark dumps and the 17 small dumps. The instrumented build gives the stored hash and every stored per-family count on all 240. Nothing was changed in the project tree. Seconds are from this Mac under load, not from the node.
+
+Main results on the 240:
+- **Whole-matrix parts:** state build, first propagation sweep, parallel-row keys, output and hash hold 57.2% of the engine seconds (60.3% on the 30 instances of at least 1e6 nonzeros). With the further whole-matrix scans it is 78.8% (82.1%).
+- **Testing against applying:** calls without any finding hold 26.7% of the engine seconds. In the six families other than the doubleton rule, 91.8% of the work units lie outside the visits that change the model.
+- **Depth:** dual fixing, parallel rows and the doubleton rule have chain length 1 in every call; row tightening at most 2, and that is the same row visited again. Row rules: 96.1% of the calls with a finding have a chain of at most 3 (longest 183). Propagation: 84.2% (longest 834, on neos-1122047). Calls with a chain above 3 hold 5.3% of the engine seconds. Driver rounds: median 2, largest 12.
+- **Width:** 68.8% of the 7.2 million findings are at chain level 1. Under the reservation table as DESIGN.md section 4 writes it, only 34.2% fit the first batch; under the literal "shares no row and no column" rule, 29.7%. The doubleton rule fits only 32% of its trees into a first batch under any per-row rule, although no tree depends on another.
+- **Tail:** calls below 20,000 work units are 64.9% of the calls but 0.6% of the engine seconds (5.6% below 5e4 nonzeros, 0.4% from 1e6). 72.8% of the calls take the host less than 85 microseconds; at one fixed device step each they would cost 4.4% of the engine seconds (63.7% below 5e4 nonzeros; 6.9 times the whole engine time on unitcal_7).
+
+Not measured: the nine instances above 1e7 nonzeros, simple probing (commit edd147a7e), the column rules that are not built, and any device or Jacobi order.
+
+======== REPORT ========
+MEASUREMENT OF WIDTH AND DEPTH OF STAGE 1 (host engine, commit 04692babd)
+
+Directory of this work (M): /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure
+Project tree (P): /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve (read only; nothing changed, no git command that changes anything; `git status` shows the same four modified files as at the start).
+
+=====================================================================
+1. WHAT I DID
+=====================================================================
+- Scratch copy: `git archive 04692babd... gpu_presolve` into M/gpu_presolve. The instrumentation is M/instrumentation.patch (1,572 lines, 13 files: new include/gprs/trace.hpp and src/trace.cpp; hooks in src/state_ops.cpp, presolve.cpp, the seven rule files, alias_forest.cpp, tools/gprs_presolve.cpp). Applied to a fresh archive it reproduces the instrumented tree exactly (checked with diff -r).
+- Build: gpu_presolve/build_host_local.sh with GPRS_BUILD_DIR=M/build, JOBS=3. Both builds (assertions, release) pass all 473 tests.
+- The trace is off unless GPRS_TRACE is set. Level 1 writes one line per call, per take of a list and per part outside the rules, with seconds. Level 2 adds the footprints of the findings. No rule, budget or driver decision reads it.
+- Runs (run_engine.py, 3 jobs; the last timing run 2 jobs): the 240 dumps without trace, with level 1 (5 repetitions, the smallest seconds per record are used) and with level 2 (1 run); the same for the 17 small dumps.
+- Hash check: M/compare_hash.py against P/gpu_presolve/results/bench240/s1c_m1/release_all/summary.json. In each of the three runs (trace off, level 1, level 2) all 240 instances are equal in hash, status, reduced sizes, rounds, rebuilds, fixed_point and in calls, work, first_work, findings, records and removals of every family. The 17 small dumps equal the stored testbed runs (release_dev, assert_status) in hash and per-family counts.
+- Seconds: Apple M3 Pro (arm64), release build, load average about 8 of 11 cores from other work. Summed engine seconds of the 240: 8.46 s (sum of all calls and parts; the tool's own total 8.62 s). The stored node run (EPYC 7413) has 19.47 s. Between my own runs the summed total moved between 8.6 and 15 s with the machine load, so only shares should be read from the seconds.
+- The 240 by nonzeros: 93 below 5e4, 93 from 5e4 to 5e5, 24 from 5e5 to 1e6, 30 of at least 1e6. "The 30" below always means the 30 instances of at least 1e6 nonzeros.
+
+=====================================================================
+2. DEFINITIONS (what is counted)
+=====================================================================
+Call: one family.run() from the driver (P/gpu_presolve/src/presolve.cpp:240-260). List (generation): one take of the family's list inside a call (rules_rows.cpp:247-263, rules_propagation.cpp:201-221, rules_tightening.cpp:326-349; for the singleton-column rules one pass over both lists, rules_singleton_cols.cpp:556-589). Items: rows or columns examined that were alive at their turn.
+
+Unit: one visit that changed the model. A unit can hold several findings as the engine counts them.
+- Row rules (row_rules): one row visit (the row deleted, plus the bound changes of a singleton row or the fixings of a forcing row).
+- Bound propagation (propagation): one row visit with at least one bound change.
+- Row tightening (tightening): one row visit with at least one edit.
+- Dual fixing by locks (dual_fixing): one fixed column.
+- Doubleton equations (doubleton): one root with all the columns substituted into it (the engine applies them root by root, rules_doubleton.cpp:213-239).
+- Parallel rows (parallel_rows): one listed row with every row it was merged with or subtracted from (rules_parallel_rows.cpp:774-887).
+- Singleton-column rules (singleton_cols): one reduction (a free singleton column with its row; the zero-cost singleton columns of one row; a forcing column with its rows).
+
+Cells that a unit reads or writes: a row (sides, entries, liveness); the entries of a column (entries, lock counts, length); the bounds and status of a column; the cost of a column; whether a column is a singleton column. Writes are registered by hooks in every mutating operation of state_ops.cpp (set_col_bound 199-219, fix_col 282-319, delete_row 358-391, set_row_lower/upper 393-417, shift_row_sides 419-437, scale_row 439-468, set_coefficient 470-490, delete_entry 492-520, move_entry 522-565, note_singleton 118-132). Reads are registered per family: a row visit of the row rules, propagation, tightening and the free singleton column reads its row and the bounds of all columns of the row (that is the activity); a visit that tightens exactly one column from a row does not count as reading that column's own bound; dual fixing reads entries, cost and bounds of its column; parallel rows read both rows and whether their columns are singleton columns; the doubleton unit reads entries, bounds and cost of the root and of each substituted column. Lists, events and recorded implied bounds are not cells.
+
+Chain (depth): level of a unit = 1 + the largest level of an earlier unit of the same call that wrote a cell this unit read. This is read-after-write. It is an upper bound of "only possible because of an earlier finding" (I did not test the counterfactual), and the share at level 1 is a lower bound of what one sweep over the state at call entry would find.
+
+"Shares" for the greedy batches, three rules, all computed:
+- strict (the literal reading): two units share when both read or write anything of the same row or of the same column.
+- reservation (the table of P/design_summaries/gpu_mip_presolve/DESIGN.md lines 532-536): a write of a cell conflicts with every read and write of that cell by another unit; reads do not conflict.
+- merge: as reservation, but two writes of one cell conflict only when one is exclusive. Exclusive: every change of a row, a cost, the removal of a column, an entry appended to a column. Not exclusive: lock counts and lengths (integer counters), tombstones and values of single entries, bounds that tighten (a minimum or maximum). This classification is mine.
+Greedy pass in host order: a unit takes the first batch that holds no unit it shares with. "Order kept": it also comes after the batch of every earlier unit that wrote a cell it read (so it is never placed before the change it was found on). "Order not kept" is the plain greedy pass of the task text. Batches are counted up to 64; beyond that the count is reported as "more than 64".
+
+=====================================================================
+3. WHERE THE SECONDS ARE (240, this Mac; share of the engine seconds)
+=====================================================================
+                         below 5e4   5e4-5e5   5e5-1e6   the 30 (>=1e6)   all 240
+engine seconds             0.160      1.599     1.095       5.611          8.464
+row rules                   4.8%      7.3%      9.0%        9.3%           8.8%
+bound propagation          17.4%     27.3%     18.8%       20.8%          21.7%
+row tightening              6.8%      9.3%      9.0%        8.0%           8.4%
+doubleton equations        28.5%      6.8%      7.0%        1.6%           3.7%
+parallel rows               8.7%     10.6%     12.7%       10.7%          10.9%
+dual fixing                 0.9%      0.9%      1.8%        0.6%           0.8%
+singleton-column rules      3.0%      2.8%      2.0%        1.1%           1.6%
+state build                12.5%     15.4%     18.2%       25.0%          22.1%
+rebuilds                    1.6%      2.9%      4.3%        5.1%           4.5%
+make_explicit               1.4%      1.1%      0.6%        1.6%           1.4%
+output (reduced model)      2.6%      2.6%      3.0%        2.7%           2.7%
+hash                       10.3%     11.9%     12.5%       12.8%          12.5%
+all rule calls             70.3%     65.3%     60.6%       52.2%          56.1%
+outside the rule calls     29.7%     34.7%     39.4%       47.8%          43.9%
+(start step, compaction, absorbing fixed terms and the three families without rules are 0.1 to 0.6% each.) The doubleton share below 5e4 is one instance: CMS750_4, whose one doubleton call takes 0.038 s of the class's 0.160 s (1,498 substitutions in 2 trees, depth 741).
+Cross-check with the stored node run of the same 240 (M/stored_runs_tables.txt): state 31.4%, storage 5.1%, output 4.6%, hash 5.5%, rules 53.0% (for the 30: 33.4%, 5.8%, 4.4%, 5.5%, 50.6%). The split rules / outside agrees; on the node the state build weighs more and the hash less than on the Mac.
+
+=====================================================================
+4. MEASURE 1: CALLS (Table 1)
+=====================================================================
+All 240 (calls; median and largest per instance; items examined; findings; work units; seconds; share of the FIRST call in items / findings / work / seconds; share of the FIRST THREE calls in work / seconds; median over instances of the first-call work share):
+row rules        1,252; 3/342; 19,343,168; 3,748,242; 196,858,371; 0.742 s; 74.9/73.0/79.8/76.6%; 92.3/86.8%; 82.4%
+propagation      1,205; 2/342; 15,616,135;   665,403; 330,819,511; 1.835 s; 79.9/52.3/74.0/63.9%; 93.4/89.8%; 85.1%
+tightening       1,103; 2/341; 15,643,869; 1,469,986; 581,960,422; 0.710 s; 78.9/65.4/78.4/78.4%; 95.7/95.2%; 92.0%
+doubleton          439; 1/12;  12,440,058;   485,837; 110,210,196; 0.317 s; 94.4/93.4/94.0/94.5%; 99.7/99.3%; 100.0%
+parallel rows      471; 2/12;  12,868,972;   359,965; 592,354,408; 0.921 s; 93.7/90.4/91.5/84.8%; 99.3/98.4%; 99.7%
+dual fixing      1,100; 2/343; 12,555,561;   433,143; 102,157,469; 0.067 s; 85.3/84.0/84.8/53.3%; 97.9/71.6%; 97.1%
+singleton cols     457; 2/12;  14,109,196;    52,435; 126,751,280; 0.136 s; 80.9/99.8/82.4/84.4%; 96.6/97.2%; 99.8%
+The 30:
+row rules          112; 3/16; 11,376,349; 2,238,570; 130,391,554; 0.519 s; 74.8/66.8/81.8/78.5%; 93.4/85.9%; 88.1%
+propagation        106; 2/16;  8,601,641;   112,260; 211,120,791; 1.164 s; 88.6/52.9/75.4/64.7%; 98.0/97.0%; 76.9%
+tightening          94; 2/16;  9,303,620;   549,019; 386,957,402; 0.451 s; 80.1/96.1/79.8/81.7%; 98.1/98.2%; 85.7%
+doubleton           54; 2/8;   7,590,864;   104,534;  63,171,256; 0.087 s; 98.4/74.2/97.8/85.0%; 99.6/97.4%; 100.0%
+parallel rows       57; 2/8;   7,716,804;   102,935; 391,373,494; 0.599 s; 97.9/96.6/94.3/88.3%; 99.7/98.4%; 99.9%
+dual fixing         93; 2/16;  6,594,084;   111,319;  53,516,357; 0.033 s; 85.5/86.8/84.6/42.2%; 97.5/54.3%; 87.7%
+singleton cols      60; 2/8;   7,880,301;    42,600;  69,185,966; 0.063 s; 76.2/100.0/77.9/83.1%; 95.3/96.7%; 99.7%
+Every call with all its counts is in M/bench240_calls.csv (7,385 lines, the three families without rules included).
+
+Testing against applying (Table 1b; 240 / the 30):
+- Calls without a finding, and their share of the family's seconds: row rules 39.2% of the calls, 19.3% of the seconds (the 30: 48.2%, 20.3%); propagation 75.8%, 65.0% (83.0%, 71.3%); tightening 85.9%, 62.5% (81.9%, 67.8%); doubleton 65.6%, 6.8% (64.8%, 15.9%); parallel rows 63.5%, 39.3% (50.9%, 38.6%); dual fixing 58.5%, 24.8% (62.4%, 26.5%); singleton columns 81.8%, 57.5% (75.0%, 50.4%). For propagation "no finding" means no explicit bound changed; 8,829,728 implied bounds were recorded against 665,403 findings.
+- Visits that changed the model among the items examined: row rules 12.0%, propagation 1.9%, tightening 4.4%, parallel rows 2.5%, dual fixing 3.4%, singleton columns 0.2%.
+- Work units spent in those visits, of the family's work: row rules 30.8% (the 30: 37.9%), propagation 3.4% (1.1%), tightening 8.6% (8.2%), parallel rows 4.7% (4.5%), dual fixing 5.1% (3.1%), singleton columns 2.1% (1.1%). The doubleton rule spends its budget while collecting, so it has no such figure.
+- Over the six families without the doubleton rule, 91.8% of the work units lie outside the visits that make a finding (the 30: 91.7%). Calls without a finding are 26.7% of the engine seconds of the 240 (the 30: 27.2%).
+- make_explicit (rules_propagation.cpp:225-278, one loop over the columns, booked outside the calls): 2,069,123 bound changes on the 240, more than three times the findings of all propagation calls, and it lists 816,991 rows. By reading the code each column is handled on its own; I did not analyse it as units.
+- Parallel rows, 0.921 s on the 240: keys 0.576 s, key sort and bucket links 0.161 s, comparisons and reductions 0.148 s. 12,695,736 keys, 331 full sorts, 395,950 rows with a row in their bucket, 433,141 exact comparisons.
+- Doubleton, 0.317 s: collecting 0.035 s, tree walk and composition 0.018 s, row deletion and substitution 0.250 s. 486,302 equations collected, 429 of them closed a cycle and stayed.
+- 20 calls stopped on their budget (tightening 16 on 15 instances; propagation 2: square41, square47; doubleton 2: traininstance2, traininstance6). 6 of the 240 do not end at a fixed point.
+
+=====================================================================
+5. MEASURE 2: WIDTH
+=====================================================================
+5.1 Units at chain level 1 and in the first batches (Table 2a), summed over the calls with a finding. Columns: calls; units; findings; share of units / findings at chain level 1; then share of the units in batch 1 / first 3 / first 10 batches under merge, reservation, strict (order kept); last: batch 1 with the order not kept (merge / reservation / strict).
+All 240:
+row rules        761; 2,321,794; 3,748,242; 62.7/53.5%; merge 62.5/88.4/96.7%; reservation 30.5/44.4/55.6%; strict 27.5/32.4/39.5%; not kept 71.2/36.7/31.8%
+propagation      292;   290,120;   665,403; 37.9/26.5%; merge 37.8/49.7/54.0%; reservation 34.5/49.4/53.8%; strict 16.3/28.3/33.0%; not kept 62.8/46.8/27.6%
+tightening       156;   680,714; 1,469,986; 97.3/98.7%; merge 97.3/100/100%;   reservation 23.2/32.7/35.8%; strict 8.5/14.7/19.4%;  not kept 97.3/23.2/8.5%
+doubleton        151;   280,666;   485,837; 100/100%;   all three rules 32.0/56.0/62.5%; not kept 32.0%
+parallel rows    172;   324,037;   359,965; 100/100%;   merge 100/100/100%;    reservation and strict 43.5/54.2/66.3%; not kept 100/43.5/43.5%
+dual fixing      457;   433,143;   433,143; 100% under every rule
+singleton cols    83;    33,920;    52,435; 94.2/96.3%; merge 94.2/97.4/99.3%; reservation 92.3/96.6/99.0%; strict 92.3/96.5/99.0%; not kept 96.9/95.1/95.0%
+The 30:
+row rules         58; 1,255,082; 2,238,570; 65.3/44.4%; merge 65.1/84.4/94.2%; reservation 18.9/33.3/45.5%; strict 16.7/19.6/26.9%; not kept 77.4/27.8/22.8%
+propagation       18;    62,356;   112,260; 97.2/72.7%; merge 97.1/99.6/99.9%; reservation 84.3/99.6/99.9%; strict 60.3/75.9/78.3%; not kept 97.4/84.6/60.4%
+tightening        17;   274,296;   549,019; 100/100%;   merge 100%; reservation 9.4/11.2/12.5%; strict 2.8/4.4/7.0%
+doubleton         19;    91,215;   104,534; 100/100%;   all three rules 28.8/35.2/41.2%
+parallel rows     28;    99,632;   102,935; 100/100%;   merge 100%; reservation and strict 45.3/56.3/71.3%
+dual fixing       35;   111,319;   111,319; 100%
+singleton cols    15;    24,254;    42,600; 98.3/99.0%; every rule 98.3/99.8/100%
+By findings, all seven families together: 240: 7,215,011 findings, 68.8% at chain level 1; in the first batch 64.0% (merge), 34.2% (reservation), 29.7% (strict), 35.2% (strict, order not kept, the literal definition). The 30: 3,261,237 findings; 60.9%; 58.4%; 22.9%; 20.7%; 29.7%.
+
+5.2 Batches a call needs (Table 2b, calls with a finding): share of calls needing 1 / at most 3 / at most 10 / more than 64; median, 90th percentile, largest.
+All 240:
+row rules:     chain 64.7/96.1/99.6/0.1%, 1/3/183; merge 64.3/95.5/99.5/0.1%; reservation 45.9/78.1/85.9/6.7%, median 2, p90 30; strict 33.4/47.8/82.1/8.7%, median 4, p90 51; strict order not kept 33.4/48.2/82.3/8.7%, median 4, p90 48
+propagation:   chain 73.6/84.2/94.5/2.1%, 1/6/834; merge 73.6/82.9/94.2/2.1%; reservation 71.9/81.5/94.2/2.1%; strict 66.8/74.7/85.3/6.5%, p90 30; strict order not kept 66.8/78.4/88.4/4.8%, p90 19
+tightening:    chain 87.8/100/100/0%, largest 2; merge the same; reservation 39.1/64.7/76.3/11.5%; strict 21.2/34.0/53.2/23.7%, median 10
+doubleton:     chain 1 in all 151 calls; every sharing rule 44.4/60.3/73.5/13.2%, median 2, p90 more than 64
+parallel rows: chain 1 and one batch under merge in all 172 calls; reservation and strict 52.9/66.9/82.6/4.1%, median 1, p90 21
+dual fixing:   one batch in all 457 calls under every rule
+singleton cols: chain 73.5/92.8/98.8/0%, largest 30; reservation and strict (order kept) 63.9/85.5/94.0/0%, largest 62; strict order not kept 63.9/90.4/95.2/0%
+The 30: row rules chain 69.0/89.7/96.6/0%, largest 32; reservation 34.5/53.4/56.9/27.6%; strict 24.1/36.2/39.7/41.4% (median 40). Propagation chain 50.0/77.8/94.4/5.6%, largest 100. Doubleton 21.1/26.3/42.1/47.4% (median 16). Parallel rows under reservation 64.3/71.4/82.1/7.1%. Tightening under reservation 35.3/52.9/70.6/17.6%, strict 23.5/41.2/52.9/29.4%.
+
+5.3 What these numbers mean, family by family.
+- Dual fixing: every finding of a call is independent of every other under every rule.
+- Parallel rows: no listed row's reduction reads anything another one wrote, in any of the 172 calls. The engine itself takes the key away from a row whose core changed in the call (rules_parallel_rows.cpp:802-826), so a call already works on the state at its entry. The conflicts under the reservation and the strict rule are deletions of rows that share a column, that is, two decrements of the same lock count and column length.
+- Row tightening: a unit reads only its own row and the bounds of its columns, and no tightening unit writes a bound. So the level-2 units (2.7%) are the same row visited again after its own edit, by construction. Under the reservation rule only 23.2% of the units fit the first batch, because every edit write-claims the entries of its columns.
+- Doubleton: no tree depends on another (chain 1), but two trees that substitute columns in the same row both rewrite that row. Under any rule that gives a row to one unit per batch, 32.0% of the trees fit the first batch and 13.2% of the calls need more than 64 batches (the 30: 28.8%, 47.4% of the calls). Per instance the first-batch share has quartiles 30.4%, 81.2%, 100%.
+- Row rules: 62.7% of the units need nothing of the same call, 90.8% are within three levels. The reservation and strict rules put far fewer into a batch (30.5%, 27.5%) because deleted rows share columns. The largest number of units of one call on one column is 8,454 on map10 (row rules), 83,218 on neos-4532248-waihi (tightening), 47,521 on rd-rplusc-21 (parallel rows).
+- Propagation: summed over the 240 only 37.9% of the units are at level 1 and 47.1% at level 8 or deeper, but three instances hold half of the units (neos-1122047 67,220; snp-02-004-104 63,656; neos-5114902-kasavu 22,568). Per instance (91 with a finding) the level-1 share has quartiles 21.3%, 69.5%, 100%. On the 30 it is 97.2%.
+- Singleton columns: 94.2% at level 1; per instance the median is 100%.
+- Per instance for the row rules (127 instances): quartiles of the level-1 share 69.0%, 100%, 100%; half of the units are on four instances (neos-3402294-bobin 544,236; map10 and map16715-04 278,698 each; physiciansched3-3 166,973).
+
+5.4 Frontiers of propagation and tightening (Table 2c; every list with live rows and their live entries, in order, is in M/bench240_generations.csv, 6,247 lines).
+Lists by the number of rows listed (240): lists; share of visited rows / work / seconds / findings.
+propagation, 2,122 lists (1,205 first lists of a call, 917 later ones):
+  first list of the first call (240 lists)   78.5% / 71.0% / 60.8% / 48.7%
+  first list of any call                     92.7% / 92.3% / 88.4% / 66.6%
+  later lists                                 7.3% /  7.7% / 11.6% / 33.4%
+  below 100 rows (1,131 lists)                0.1% /  1.8% /  2.2% /  5.2%
+  100 to 999 (314)                            0.7% /  6.9% /  9.4% / 30.3%
+  1,000 to 9,999 (498)                        9.0% / 18.5% / 26.8% / 30.8%
+  10,000 and above (179)                     90.2% / 72.7% / 61.5% / 33.8%
+tightening, 1,278 lists (1,103 first, 175 later):
+  first list of the first call               76.1% / 73.0% / 73.3% / 64.2%
+  first list of any call                     95.9% / 93.4% / 93.6% / 98.7%
+  below 100 (688)                             0.1% /  1.4% /  1.4% /  1.9%
+  100 to 999 (190)                            0.4% /  6.4% /  5.9% /  2.3%
+  1,000 to 9,999 (225)                        4.3% / 18.9% / 16.3% / 10.3%
+  10,000 and above (175)                     95.3% / 73.3% / 76.4% / 85.6%
+row rules, 2,263 lists: first list of the first call 70.6% / 72.7% / 58.2% / 36.8%; later lists 4.8% of the visits and 38.0% of the findings; below 100 rows 1,458 lists with 0.1% of the work; 10,000 and above 207 lists with 92.8% of the work, 87.0% of the seconds.
+singleton columns, 584 passes: the first pass of the first call has 80.3% of the work and 97.5% of the findings.
+The 30: propagation 130 lists; first list of the first call 88.1% of the visits, 73.8% of the work, 62.6% of the seconds; later lists 3.2% of the work; the 28 lists of 1,000 to 9,999 rows hold 16.0% of the work (few very long rows). Tightening 113 lists; first list of the first call 74.0% of the work, 96.1% of the findings. Row rules 183 lists; later lists 3.7% of the visits, 20.0% of the seconds, 46.3% of the findings.
+Examples (live rows / live entries per list; "|" is a new call):
+  square47 (61,591 rows, 27.3e6 nonzeros), propagation: 2,294/27,270,559 | round 2: 1,150/4,044,954, 85/37,412. The first call stops on its stall budget after 1,144 of the 2,294 rows.
+  neos-957323 (499,656 nonzeros), propagation: 3,757/499,656 | 1,172/30,313; tightening: 3,757/499,656, 990/1,980, 853/1,706 | 182/28,333.
+  piperout-08 (44,959 nonzeros), propagation: 11,943/38,502, 1,716/5,804, 203/643, 542/1,978, 626/2,037, 366/907, 529/1,585, 468/2,198, 558/2,902, 492/1,558, 11/23 | 481/1,034 | 84/242 | 6/12 | 20/49.
+  neos-1122047, propagation call 49 (round 3): 209 lists; rows 57,674, 57,642, 3,164, 4,250, 5,060, 5,426, ... (median 2,608) ..., 107, 82, 71, 47, 24, 12, 11; 649,191 row visits and 67,333 bound changes in about 0.1 s.
+  lotsize, propagation in round 2: 600/2,980, 600/2,980, then 78 lists of 10/50.
+
+=====================================================================
+6. MEASURE 3: DEPTH
+=====================================================================
+Chain length per call with a finding (240): median / 90th / 99th percentile / largest; share of calls above 3 and above 10; instances with a call above 10:
+row rules      1 / 3 / 9 / 183;   3.9%; 0.4%; 3 instances
+propagation    1 / 6 / 141 / 834; 15.8%; 5.5%; 16 instances
+tightening     1 / 2 / 2 / 2
+doubleton, parallel rows, dual fixing: 1 in every call
+singleton cols 1 / 3 / 30 / 30;   7.2%; 1.2%; 1 instance
+Lists per call (all calls; the cascade length in the engine's own terms): row rules median 1, 90th 4, 99th 5, largest 86; propagation 1 / 2 / 8 / 209; tightening 1 / 2 / 3 / 3; singleton columns 1 / 2 / 4 / 30.
+Units by chain level (240): row rules 62.7 / 22.5 / 5.5 / 2.0 / 1.0 / 0.9 / 0.8% at levels 1 to 7 and 4.5% at 8 or more; propagation 37.9 / 11.0 / 1.1 / 0.8 / 0.8 / 0.7 / 0.6% and 47.1% at 8 or more; tightening 97.3 / 2.7%; singleton columns 94.2 / 1.5 / 1.6 / 0.6 / 0.4 / 0.3 / 0.2% and 1.1% at 8 or more.
+Alias forest (alias_forest.cpp:180-206): 151 calls with a substitution on 95 instances; 485,837 substituted columns in 280,666 trees. Tree edges between a column and its root: 1 for 350,436 columns (72.1%), 2 for 70,268 (14.5%), 3-4 for 46,337 (9.5%), 5-8 for 16,823 (3.5%), 9-16 for 352, 17-64 for 318, 65-1024 for 1,303 (0.3%). Largest depth per instance: median 1, 90th percentile 6, largest 741; depth 1 on 61 instances, 2 on 11, 3 to 8 on 14, 9 to 64 on 7, above 64 on 2. Largest tree 999 columns. Calls with a substitution per instance: median 1, largest 11.
+Driver rounds (240): median 2, 90th percentile 4, largest 12. Histogram: 1 round 60 instances, 2: 79, 3: 54, 4: 27, 5: 10, 6: 2, 7: 4, 8: 1, 9: 1, 10: 1, 12: 1. The 30: median 2, largest 9. Cascade passes (row rules, propagation, tightening, dual fixing) in one round, largest per instance: median 2, 90th percentile 3; 1 pass on 89 instances, 2 on 120, 3 on 21, 4 on 3, then 9, 11, 15, 27 once each, 43 twice, 100 once (unitcal_7, which is the limit max_cascade_passes). The 30: largest 15.
+
+The ten instances with the longest chain in one call (240): instance (nonzeros), family, round: chain; units; findings; lists in the call:
+ 1 neos-1122047 (163,640), propagation, round 3: 834; 67,220; 67,333; 209
+ 2 lotsize (6,565), propagation, round 2: 197; 990; 990; 80
+ 3 irish-electricity (523,257), row rules, round 1: 183; 21,185; 39,936; 86
+ 4 unitcal_7 (127,595), propagation, round 6: 141; 4,014; 4,021; 46
+ 5 snp-02-004-104 (463,941), propagation, round 5: 104; 63,639; 125,305; 105
+ 6 ns1644855 (2,110,696), propagation, round 3: 100; 100; 10,099; 2
+ 7 milo-v12-6-r2-40-1 (14,604), propagation, round 4: 80; 408; 815; 42
+ 8 ns1952667 (335,643), propagation, round 1: 38; 38; 30,056; 2
+ 9 supportcase12 (2,334,437), row rules, round 1: 32; 136,987; 751,522; 24
+10 tr12-30 (2,508), propagation, round 4: 29; 348; 348; 2
+Deepest alias forests: CMS750_4 741; sing326 69; sing44 46; rd-rplusc-21 19; rail01 12; csched008 10; rail02 10; cryptanalysiskb128n5obj14 9; cryptanalysiskb128n5obj16 9; piperout-08 6.
+Most lists in one call: neos-1122047 209 (propagation); snp-02-004-104 105 (propagation); irish-electricity 86 (row rules); lotsize 80 (propagation); unitcal_7 46; milo-v12-6-r2-40-1 42; supportcase12 24 (row rules); physiciansched3-3 19 (row rules); traininstance2 14; neos-3656078-kumeu 13.
+Most rounds: neos-3555904-turama 12; neos-5093327-huahum 10; neos-5104907-jarama 9; neos-3656078-kumeu 8; unitcal_7, rocII-5-11, snp-02-004-104, beasleyC3 7; satellites2-40, satellites2-60-fs 6.
+Most cascade passes in a round: unitcal_7 100; map10 and map16715-04 43; neos-2987310-joes 27; neos-3402294-bobin 15; neos-1122047 11; var-smallemery-m6j6 9.
+
+Engine seconds by the chain length of the call (Table 8 in M/bench240_extra_tables.txt; share of the engine seconds, 240 / the 30): calls without a finding 26.7% / 27.2%; chain 1: 20.3% / 19.2%; chain 2-3: 3.6% / 2.1%; chain 4-10: 2.1% / 1.4%; chain 11-64: 1.5% / 1.7%; chain above 64: 1.7% / 0.3% (7 calls on 7 instances / 1 call). Calls with a chain above 3 are 5.3% of the engine seconds of the 240 (the 30: 3.4%): row rules 30 calls on 27 instances (2.29%), propagation 46 calls on 39 instances (2.96%), singleton columns 6 calls (0.10%), the other four families none. In the class 5e4 to 5e5, chains above 64 are 7.6% of the engine seconds (3 calls, among them neos-1122047 and snp-02-004-104).
+
+=====================================================================
+7. MEASURE 4: THE TAIL
+=====================================================================
+7.1 By items of a call (as asked; Table 4a). Share of the work / of the seconds of the seven families in calls with fewer than 100, 1,000, 10,000 items, and the share of the calls:
+below 5e4 (1,426 calls):      work 2.1 / 12.1 / 72.3%; seconds 2.3 / 10.8 / 50.7%; calls 35.2 / 63.5 / 96.1%; of the engine seconds 7.6% (<1,000) and 35.5% (<10,000)
+5e4 to 5e5 (3,066):           work 2.7 / 7.7 / 24.0%;  seconds 3.4 / 8.3 / 23.9%;  calls 58.9 / 67.3 / 82.5%; 5.4% and 15.6%
+5e5 to 1e6 (959):             work 2.5 / 14.2 / 20.0%; seconds 2.8 / 17.0 / 24.4%; calls 57.0 / 74.9 / 81.6%; 10.2% and 14.7%
+the 30 (576):                 work 0.1 / 4.1 / 19.3%;  seconds 0.2 / 5.7 / 24.8%;  calls 17.7 / 30.0 / 55.9%; 3.0% and 12.9%
+all 240 (6,027):              work 1.0 / 6.3 / 21.4%;  seconds 1.3 / 8.0 / 25.2%;  calls 49.1 / 64.0 / 83.0%; 4.5% and 14.1%
+Per family, all 240 (work <100 / <1,000 / <10,000; seconds the same): row rules 0.1/0.4/3.8%; 0.2/1.1/5.0%. Propagation 1.7/10.8/30.9%; 2.2/12.7/36.7%. Tightening 1.4/11.7/28.7%; 1.4/10.8/25.1%. Doubleton 0.0/0.3/4.5%; 0.3/0.6/3.5%. Parallel rows 1.0/4.0/23.8%; 1.1/5.8/27.3%. Dual fixing 0.1/0.6/7.4%; 0.5/5.5/43.8%. Singleton columns 0.0/0.3/4.5%; 0.1/1.1/6.7%.
+Per family, the 30: row rules 0.0/0.1/0.7%; 0.0/0.6/1.9%. Propagation 0.2/8.2/31.5%; 0.3/9.0/37.6%. Tightening 0.1/8.6/24.8%; 0.2/8.2/20.8%. Doubleton 0.0/0.0/1.0%; 0.8/0.8/4.3%. Parallel rows 0.1/0.6/22.0%; 0.1/3.2/26.5%. Dual fixing 0.0/0.1/3.1%; 0.1/6.0/48.7%. Singleton columns 0.0/0.0/0.6%; 0.0/1.1/3.4%.
+Caution: an item is a row or a column. An instance with fewer than 1,000 rows has only "small" calls by this count although each row can hold thousands of entries; this is why the tail by items is large for propagation, tightening and parallel rows even on the 30. The other three classes are per-class rows in M/bench240_tables.txt (Tables 4a, 4b, 4d).
+
+7.2 By the work of a call (Table 4d): fewer than 1,000 / 20,000 / 100,000 work units (20,000 is the provisional threshold of DESIGN.md lines 346-355 for a frontier sweep on the GPU). Share of work; of seconds; of calls; and of the engine seconds for <20,000 and <100,000:
+below 5e4:   0.3 / 10.9 / 49.4%; 0.4 / 8.0 / 35.7%; 30.5 / 69.8 / 92.5%; 5.6% and 25.0%
+5e4 to 5e5:  0.1 / 0.7 / 4.5%;   0.2 / 0.9 / 4.9%;  55.4 / 67.4 / 77.6%; 0.6% and 3.2%
+5e5 to 1e6:  0.0 / 0.4 / 1.5%;   0.2 / 1.5 / 4.1%;  52.8 / 70.5 / 77.1%; 0.9% and 2.5%
+the 30:      0.0 / 0.1 / 0.4%;   0.1 / 0.8 / 2.0%;  16.3 / 30.0 / 44.8%; 0.4% and 1.0%
+all 240:     0.0 / 0.4 / 2.3%;   0.1 / 1.1 / 3.7%;  45.4 / 64.9 / 77.9%; 0.6% and 2.1%
+
+7.3 By lists, for the four families that serve their list until it stays empty (Table 4b; lists of fewer than 100 / 1,000 / 10,000 rows; work, then seconds). All 240: row rules 0.1/1.8/7.2%; 0.3/3.7/13.0%. Propagation 1.8/8.7/27.3%; 2.2/11.7/38.5%. Tightening 1.4/7.8/26.7%; 1.4/7.3/23.6%. Singleton columns 0.0/0.4/4.7%; 0.2/1.0/6.7%. The 30: row rules 0.0/2.0/4.9%; 0.1/4.0/11.5%. Propagation 0.3/4.5/20.4%; 0.4/6.4/30.2%. Tightening 0.3/2.6/20.5%; 0.3/2.2/16.7%. Singleton columns 0.0/0.0/0.9%; 0.0/0.1/1.2%.
+
+7.4 Against a fixed device cost (Table 6, M/bench240_extra_tables.txt). P/gpu_presolve/results/stage0/STAGE0_REPORT.md lines 269-296 gives 77 to 93 microseconds for one fixed-cost step on an H200 (8 empty launches, a synchronisation, a read-back, a compaction); I use 85. The host seconds are of the Mac, so this is an order of magnitude, not a prediction. Calls that take the host less than one step; their host seconds; what they would cost at one step each; that cost as a share of the engine seconds:
+below 5e4:   1,201 calls (84.2%); 0.0156 s; 0.102 s; 63.7%
+5e4 to 5e5:  2,299 (75.0%); 0.0162 s; 0.195 s; 12.2%
+5e5 to 1e6:    685 (71.4%); 0.0055 s; 0.058 s; 5.3%
+the 30:        204 (35.4%); 0.0040 s; 0.017 s; 0.3%
+all 240:     4,389 (72.8%); 0.0413 s; 0.373 s; 4.4%
+Lists below one step, all 240: 4,692 of 6,247 (75.1%), 0.038 s of host time, 0.399 s at one step each.
+
+7.5 The ten instances with the largest tail.
+(a) Share of the seconds of the seven families in calls with fewer than 1,000 items, instances of at least 5e4 nonzeros (147): ns1952667 99.5% (41 rows, 335,643 nonzeros); air05 96.6% (426 rows); 30n20b8 95.5% (576); rail507 95.4% (509); fast0507 94.8% (507); proteindesign121hz512p9 94.1% (301); proteindesign122trx11p8 94.0% (254); leo1 92.0% (593); nw04 91.9% (36); supportcase6 91.8% (771). All ten have fewer than 1,000 rows, so this list shows the weakness of counting items, not small work.
+(b) Share of those seconds in calls below 20,000 work units, at least 5e4 nonzeros: wachplan 20.4% (6 of 13 calls); unitcal_7 14.5% (1,363 of 1,383 calls; 7 rounds, 343 cascade passes); neos-3402294-bobin 10.3% (37 of 70 calls, 0.2% of the work); dws008-01 10.2%; istanbul-no-cutoff 9.7%; co-100 7.4%; neos-3216931-puriri 6.5%; map10 6.3% (166 of 180 calls); var-smallemery-m6j6 6.1%; map16715-04 5.9%.
+(c) Over all 240 the ten largest are instances below 4,000 nonzeros at 100% (assign1-5-8, enlight_hard, exp-1-500-5-5, fhnw-binpack4-4, gen-ip002, gen-ip054, glass4, mad, markshare2, markshare_4_0).
+(d) Calls below one fixed step (85 microseconds), cost at one step each over the engine seconds of the instance (Table 7), at least 5e4 nonzeros: unitcal_7 6.87 (1,368 calls with 0.0019 s of host time would cost 0.116 s; the whole instance takes 0.0169 s); neos-3656078-kumeu 0.81; dws008-01 0.56; neos-3216931-puriri 0.42; neos-2987310-joes 0.41; trento1 0.37; istanbul-no-cutoff 0.36; piperout-27 0.31; ns1830653 0.25; neos-1171737 0.23. Over all 240 the largest are tiny instances (markshare_4_0 42.5, gen-ip054 21.9, markshare2 19.9).
+
+=====================================================================
+8. MEASURE 5: PARTS THAT ARE ONE MAP, SORT OR SCAN OVER THE WHOLE MATRIX (Table 5)
+=====================================================================
+Share of the engine seconds, sum over the class (in brackets the median of the instances' shares):
+                                         below 5e4      5e4-5e5        5e5-1e6        the 30         all 240
+state build (with postsolve init)        12.5% (19.2)   15.4% (19.5)   18.2% (21.0)   25.0% (22.0)   22.1% (20.1)
+first propagation sweep                  11.2% (13.4)   13.1% (15.8)   14.1% (15.3)   12.9% (15.0)   13.1% (15.0)
+parallel-row keys, all calls              5.0% (6.8)     6.4% (7.5)     7.3% (8.0)     6.9% (7.5)     6.8% (7.3)
+output (reduced model)                    2.6% (4.2)     2.6% (3.1)     3.0% (2.6)     2.7% (2.4)     2.7% (3.5)
+hash of the reduced model                10.3% (15.9)   11.9% (15.6)   12.5% (15.4)   12.8% (15.3)   12.5% (15.6)
+THE FIVE NAMED PARTS                     41.6% (60.2)   49.5% (60.5)   55.0% (57.6)   60.3% (62.0)   57.2% (60.3)
+further whole-matrix parts:
+  key sort and bucket links, all calls    1.8%           2.3%           2.1%           1.8%           1.9%
+  start step                              0.6%           0.5%           0.4%           0.3%           0.4%
+  first sweep of the row rules            2.8%           4.0%           5.1%           5.4%           5.0%
+  first sweep of row tightening           4.8%           6.1%           6.4%           6.0%           6.1%
+  first call of dual fixing               0.7%           0.7%           0.9%           0.2%           0.4%
+  first pass of the singleton columns     2.3%           2.0%           1.6%           0.8%           1.1%
+  first collection of doubleton rows      0.7%           0.7%           0.5%           0.3%           0.4%
+  rebuilds, compaction, absorbing         2.3%           3.1%           4.7%           5.5%           4.9%
+  make_explicit                           1.4%           1.1%           0.6%           1.6%           1.4%
+THE FIVE AND THE FURTHER PARTS           58.8% (82.0)   69.9% (80.9)   77.4% (86.2)   82.1% (81.6)   78.8% (82.5)
+Of the parallel-row keys the first call alone is 5.8% of the engine seconds (240); the bucket comparisons of the first call are 1.6%. The sum for the class below 5e4 is pulled down by CMS750_4's doubleton call; the median is not. "First propagation sweep" is the first list of the first propagation call. These are Mac seconds; on the node the state build weighs more and the hash less (section 3), and three of the five parts (state, output, hash) sum to 41.5% there against 37.3% here.
+
+=====================================================================
+9. THE 17 SMALL LOCAL DUMPS (M/small17_tables.txt, M/small17_extra_tables.txt)
+=====================================================================
+17 instances (2 below 5e4 nonzeros, 10 from 5e4 to 5e5, 4 from 5e5 to 1e6, 1 above 1e6), 0.561 s of engine seconds, 1,825 calls. Rounds: median 3, largest 7. Chain: propagation largest 141 (unitcal_7), then 13 (triptim1); row rules largest 8; tightening 2; doubleton, parallel rows, dual fixing 1. Alias forest: 46,350 substituted columns, largest depth 19 (rd-rplusc-21). Units at chain level 1: row rules 32.3%, propagation 66.9%, tightening 97.2%, singleton columns 72.6%. The five named parts: 50.8% of the engine seconds (median 53.0%); with the further whole-matrix parts 74.4%. Calls without a finding: 23.5% of the engine seconds. Calls below 85 microseconds: 1,561 of 1,721 (90.7%), 0.005 s of host time, 0.133 s at one step each = 23.7% of the engine seconds, nearly all of it unitcal_7.
+First-call share of the propagation work on these 17: 69.6% (first three calls 91.1%). The brief quotes 92.5% for 17 local instances of an earlier engine; I did not look for the reason of the difference.
+
+=====================================================================
+10. THE NINE INSTANCES ABOVE 1e7 NONZEROS (not on this machine, not measured)
+=====================================================================
+What the stored node run already says (P/gpu_presolve/results/stage1/host/s1c_m1/release_large/summary.json; M/stored_runs_tables.txt): 88.3 s in all; state 34.2%, storage 4.2%, output 4.0%, hash 5.0%, rules 52.2%. Rounds 2 to 6; at most 10 calls of a family on one instance. First-call share of the work, summed (median over the nine): row rules 54.5% (98.0%), propagation 65.0% (72.3%), tightening 77.9% (80.8%), doubleton 98.9% (99.7%), parallel rows 95.6% (99.2%), dual fixing 53.9% (75.1%), singleton columns 97.1% (99.9%). The low sums come from two instances: neos-4332810-sesia (row rules 37.9%, propagation 52.0%, 4 rounds) and dlr2 (67.1%, 52.7%, 5 rounds, not at a fixed point).
+What only an instrumented run can say, and what it is needed for:
+1. Whether the second and later calls of the row rules and of propagation on neos-4332810-sesia and dlr2 are wide second waves or deep chains: chain length, lists per call and list sizes. This decides whether the work after the first sweep can go to the device there.
+2. Width of the doubleton rule at 7 million substitutions (the stored run has 7,077,830 findings): number of trees, depth of the forest, and how many trees share a row.
+3. The tail: calls and lists below a device step, expected to be negligible but not shown.
+4. The share of the whole-matrix parts with the first sweeps and keys split out; the stored run has only state, storage, output and hash.
+5. Whether the engine's budgets stop calls there (16 tightening calls stop on the 240) and how many sweeps that cuts.
+How: apply M/instrumentation.patch to commit 04692babd on the node, build release, run with GPRS_TRACE=1 three times and with GPRS_TRACE=2 once, compare the hashes with the stored summary. Level 2 needs about 372 bytes per column and 111 bytes per row on top of the engine (six batch schemes with 64-bit masks), that is about 15.3 GB for dlr2 (38.9 million columns, 7.1 million rows) and 9.9 GB for neos-4332810-sesia; dropping schemes cuts it. I did not run this.
+
+=====================================================================
+11. WHAT I DID NOT CHECK, AND LIMITS
+=====================================================================
+- The chain is read-after-write, not a counterfactual: a unit that read a changed bound may have been possible without the change. The level-1 share is therefore a lower bound of what a sweep over the entry state finds, and the chain an upper bound of the true depth.
+- No device order was simulated. The host applies changes at once inside a list; a sweep that reads only the entry state can need more or fewer sweeps than the chain says.
+- A row's activity is modelled as a read of the bounds of all its columns. The bit pattern of an activity after several updates in another order is not modelled.
+- The batch counts stop at 64.
+- Seconds are from a loaded Mac, the smallest of 5 repetitions per record; sums of such minima are slightly below a real run (8.46 against 8.62 s).
+- Simple probing on equations (commit edd147a7e) was not measured: the engine at 04692babd has no rule there, the family only takes its lists. The column rules that are designed and not built were not measured.
+- Of the testbed below 1e7 nonzeros only the 17 local dumps were run.
+- Why CMS750_4's doubleton call takes 0.038 s for 1,498 substitutions (274 ns per work unit) was not investigated.
+
+=====================================================================
+12. FILES (all under M)
+=====================================================================
+instrumentation.patch; gpu_presolve/ (the instrumented copy); build/release/gprs_presolve (sha256 16789f94d92e5ee67f1cd83c7dbebbe4783fa2aa2d92def5aebc6b0e38974b7f); run_all.sh, run_timing.sh, compare_hash.py, parse_traces.py, analyse.py, extra_tables.py, stored_runs.py; runs/ (l0, l1, l2, small_l1, small_l2: reports, traces, summaries); csv_columns.txt (meaning of every column); bench240_calls.csv, bench240_generations.csv, bench240_parts.csv, bench240_instances.csv, bench240_tables.txt (Tables 0 to 5), bench240_extra_tables.txt (Tables 6 to 8); the same six with prefix small17_; stored_runs_tables.txt.
+
+======== KEY_NUMBERS ========
+--- 1
+what: Instances on which the instrumented build equals the stored run in hash, status, sizes, rounds and every per-family count
+value: 240 of 240 (trace off, level 1 and level 2); 17 of 17 small dumps
+instance_set: 240 MIPLIB benchmark dumps; 17 small local dumps
+how: compare_hash.py against results/bench240/s1c_m1/release_all/summary.json and the stored testbed summaries
+
+--- 2
+what: Share of engine seconds in the five named whole-matrix parts (state build, first propagation sweep, parallel-row keys, output, hash)
+value: 57.2% (median over instances 60.3%); 60.3% on the 30 of at least 1e6 nonzeros; 41.6% below 5e4; 49.5% from 5e4 to 5e5; 55.0% from 5e5 to 1e6
+instance_set: 240 benchmark instances, Mac seconds
+how: Table 5, sum over the class over the sum of engine seconds
+
+--- 3
+what: Share of engine seconds in the five parts plus the further whole-matrix scans (first sweeps of the other families, key sort, rebuilds, start step, make_explicit)
+value: 78.8% (median 82.5%); 82.1% on the 30 of at least 1e6 nonzeros
+instance_set: 240 benchmark instances, Mac seconds
+how: Table 5
+
+--- 4
+what: Share of engine seconds outside the rule calls
+value: 43.9% on the Mac (47.8% on the 30); 47.0% in the stored node run
+instance_set: 240 benchmark instances
+how: Table 0; stored summary
+
+--- 5
+what: Calls of the seven families without a finding, as share of engine seconds
+value: 26.7% (27.2% on the 30)
+instance_set: 240 benchmark instances, Mac seconds
+how: Table 6
+
+--- 6
+what: Work units outside the visits that make a finding, six families without the doubleton rule
+value: 91.8% (91.7% on the 30)
+instance_set: 240 benchmark instances
+how: work of each finding visit recorded at level 2; Table 6
+
+--- 7
+what: First-call share of the family's work units
+value: row rules 79.8%, propagation 74.0%, tightening 78.4%, doubleton 94.0%, parallel rows 91.5%, dual fixing 84.8%, singleton columns 82.4%; first three calls 92.3% to 99.7%
+instance_set: 240 benchmark instances
+how: Table 1
+
+--- 8
+what: Findings at chain level 1 (need nothing of the same call), all seven families
+value: 68.8% of 7,215,011 findings (60.9% of 3,261,237 on the 30)
+instance_set: 240 benchmark instances
+how: read-after-write levels per call
+
+--- 9
+what: Findings that fit the first greedy batch
+value: merge rule 64.0%, reservation rule of DESIGN.md section 4 34.2%, strict rule 29.7% (order kept); strict with order not kept 35.2%
+instance_set: 240 benchmark instances
+how: greedy pass in host order per call
+
+--- 10
+what: Doubleton trees that fit the first batch, and calls needing more than 64 batches
+value: 32.0% of 280,666 trees; 13.2% of 151 calls (the 30: 28.8%; 47.4% of 19 calls); chain length 1 in every call
+instance_set: 240 benchmark instances
+how: Tables 2a, 2b; same under all three sharing rules
+
+--- 11
+what: Longest chain in one call
+value: propagation 834 (neos-1122047, 209 lists), row rules 183 (irish-electricity), singleton columns 30, tightening 2, doubleton, parallel rows and dual fixing 1
+instance_set: 240 benchmark instances
+how: Table 3a, 3e
+
+--- 12
+what: Calls with a finding whose chain is at most 3
+value: row rules 96.1%, propagation 84.2%, singleton columns 92.8%, the other four 100%
+instance_set: 240 benchmark instances
+how: Table 2b
+
+--- 13
+what: Engine seconds in calls with a chain above 3
+value: 5.3% (3.4% on the 30); 7.6% of the class 5e4 to 5e5 is in chains above 64
+instance_set: 240 benchmark instances, Mac seconds
+how: Table 8
+
+--- 14
+what: Alias forest depth
+value: 72.1% of 485,837 substituted columns at depth 1; per instance median 1, 90th percentile 6, largest 741 (CMS750_4)
+instance_set: 240 benchmark instances (95 with a substitution)
+how: depth recorded in alias_forest freeze
+
+--- 15
+what: Driver rounds per instance
+value: median 2, 90th percentile 4, largest 12; cascade passes in one round median 2, largest 100 (unitcal_7, the limit)
+instance_set: 240 benchmark instances
+how: Table 3d
+
+--- 16
+what: Tail: calls below 20,000 work units
+value: 64.9% of the calls, 0.4% of the rule work, 0.6% of engine seconds (below 5e4 nonzeros 5.6%; 5e4 to 5e5 0.6%; 5e5 to 1e6 0.9%; the 30 0.4%)
+instance_set: 240 benchmark instances, Mac seconds
+how: Table 4d
+
+--- 17
+what: Tail: calls with fewer than 1,000 items
+value: 64.0% of the calls, 6.3% of the rule work, 8.0% of the rule seconds, 4.5% of engine seconds (the 30: 4.1% of work, 5.7% of rule seconds)
+instance_set: 240 benchmark instances, Mac seconds
+how: Table 4a; an item is a row or column, so instances with few long rows count as small
+
+--- 18
+what: Calls that take the host less than one fixed device step of 85 microseconds, and their cost at one step each
+value: 4,389 of 6,027 calls (72.8%) with 0.041 s of host time; 0.373 s at one step each = 4.4% of engine seconds (63.7% below 5e4 nonzeros, 12.2% from 5e4 to 5e5, 0.3% on the 30); unitcal_7 alone 6.9 times its engine time
+instance_set: 240 benchmark instances; host seconds from the Mac, step cost from the H200 figure in STAGE0_REPORT.md
+how: Tables 6, 7
+
+--- 19
+what: First list of the first propagation call
+value: 78.5% of the row visits, 71.0% of the propagation work, 60.8% of its seconds, 48.7% of its findings; lists of at least 10,000 rows hold 72.7% of the work
+instance_set: 240 benchmark instances
+how: Table 2c
+
+--- 20
+what: Nine instances above 1e7 nonzeros, first-call work share from the stored node run
+value: row rules 54.5%, propagation 65.0%, tightening 77.9%, doubleton 98.9%, parallel rows 95.6%, dual fixing 53.9%, singleton columns 97.1%; rounds 2 to 6
+instance_set: 9 testbed instances above 1e7 nonzeros, node run, not instrumented
+how: stored release_large summary
+
+
+======== NOT_DONE ========
+- The nine testbed instances above 1e7 nonzeros were not measured (not on this machine); only the stored node totals are reported for them.
+- Simple probing on equations (commit edd147a7e) was not built or measured; at 04692babd the family only takes its lists.
+- The column rules that are designed and not built (parallel-column dominance, dual bound strengthening, single-lock alias, parallel-column merge and the five further rules) were not measured.
+- No device run and no simulation of a sweep that reads only the state at call entry; width and depth are those of the host order.
+- No timing on the node: all seconds are from a loaded Apple M3 Pro, smallest of 5 repetitions.
+- Of the testbed below 1e7 nonzeros only the 17 local dumps were run, not all 31.
+- make_explicit, the start step and remove_empty_rows were timed and counted but not analysed as units.
+- Batch counts are capped at 64; calls beyond that are reported only as 'more than 64'.
+
+======== UNSURE ========
+- The chain length is read-after-write, an upper bound of true enabling depth; the level-1 share is a lower bound of what one sweep on the entry state finds. I did not test whether a finding was possible without the earlier change.
+- The 'merge' sharing rule rests on my own classification of which writes are exclusive (row changes, costs, column removal, appended entries) and which merge (lock counts, lengths, tombstones, tightened bounds).
+- The 85 microsecond device step is an H200 figure from the Stage 0 report set against host seconds from a Mac; the comparison is an order of magnitude only.
+- The plain-part shares depend on the machine: on the node the state build weighs more (31.4% against 22.1%) and the hash less (5.5% against 12.5%); the first-sweep and key shares exist only for the Mac.
+- The first-call share of propagation work on the 17 local dumps is 69.6% today against the 92.5% quoted for an earlier engine; I did not find out why.
+- Why CMS750_4's doubleton call takes 0.038 s for 1,498 substitutions is not investigated; it distorts the summed shares of the class below 5e4 nonzeros.
+- The memory estimate for a level 2 run on the nine large instances (about 15 GB for dlr2) is computed from the array sizes, not measured.
+
+======== FILES ========
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/instrumentation.patch
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/bench240_tables.txt
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/bench240_extra_tables.txt
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/bench240_calls.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/bench240_generations.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/bench240_parts.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/bench240_instances.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/small17_tables.txt
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/small17_extra_tables.txt
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/small17_calls.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/small17_generations.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/small17_parts.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/small17_instances.csv
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/stored_runs_tables.txt
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/csv_columns.txt
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/gpu_presolve/include/gprs/trace.hpp
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/gpu_presolve/src/trace.cpp
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/run_all.sh
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/run_timing.sh
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/compare_hash.py
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/parse_traces.py
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/analyse.py
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/extra_tables.py
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/stored_runs.py
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/build/release/gprs_presolve
+- /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/measure/runs
+

@@ -1,0 +1,296 @@
+======== SUMMARY ========
+Lens: completeness against the owner's directive, and the way there. Work directory: /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/critique_completeness-migration (called C below).
+
+What I read: DESIGN.md amendments A1 to A11 and sections 9 to 11; ASSUMPTIONS.md overview rows and entries AS-254 and AS-310; presolve.hpp (options), state.hpp (work lists), presolve.cpp 395-515, state_ops.cpp 14-135, 196-320, 470-567, rules_tightening.cpp 26-260, rules_bounds.cpp 55-76, check/make_mutants.py (head, and the 99 entries counted by file), the cuOpt adapter cpp/src/presolve/gprs_presolve.cpp (grep), lowworth_v2_design.txt lines 31 and 38, the stored node summaries (240 and the nine large), the prototype files of design one-algorithm (analysis, five run pairs, campaign logs) and the probe files of bulk-first (existence only).
+
+What I ran (scratch copy of commit 04692babd in C, patch C/critique_probe.patch, 130 lines, release build with 3 jobs; no test suite run; nothing changed in the project tree):
+1. Base run: 240 of 240 hashes equal the stored node run.
+2. Activities re-summed from scratch after every update (the "activities are values" rule of one-algorithm and device-native, in today's storage order and today's sequential order): 238 of the 240 benchmark instances finished (I stopped square41 and square47 after about 150 s, the probe re-sums eagerly); on all 238 the reduced-model hash, every per-family finding count, rounds and fixed points are equal to today's. Seconds of this probe mean nothing.
+3. Scale of row tightening as least common multiple of per-entry denominators against today's search: 8,842,639 integer-row searches on the 240, 8,831,906 succeed with the same scale, divisor and rounding flag in both forms, 10,733 fail in both, 0 differ; with the new form switched on all 240 hashes are equal.
+4. Hybrid rule of one-algorithm simulated on the recorded host steps (C/hybrid_sim.py): with its return threshold of 16 times the hand-over threshold, 84.4% of the rule work of the 114 instances with a mirror runs on the device (66.4% from 1e5 to 2e5 nonzeros, 21 instances below 50%); with a return threshold of 200,000 units it is 98.7%.
+5. Recomputed from the one-algorithm prototype's own runs (smallest of 5): engine time 1.12 times today's, 1.11 to 1.14 in every size class; dual fixing 1.81 times and singleton columns 1.87 times although neither was changed except for sorted lists.
+
+Result. bulk-first does not meet the directive: it leaves every application and the host-owned state on the CPU, and its own projection for the nine large instances is 2.0 to 2.4 times; it is the safest first stage, not the plan. one-algorithm is the only design with measured reductions and classifies every part; its defects are in the way there (a non-switchable rewrite in two large steps, a host time gate its own prototype misses, a hybrid constant, a campaign mode that cannot work unscreened). device-native has the best test structure and mergeable device milestones but nothing measured, a second engine with a new state type, throwaway scaffolding and the remaining cheap rules at the very end. My two probes show that two of the bundled changes of the rewrite are hash-neutral alone, so the rewrite can be staged inside today's engine behind switches, each stage gated by hash equality with a short list of named exceptions.
+
+Not checked: validity of the conflict rules, any device code, the cuOpt kernels, the nine instances above 1e7 nonzeros (stored totals only), the Stage 1c texts beyond two paragraphs.
+
+======== DEFECTS ========
+--- 1
+design: bulk-first
+severity: fatal
+where: Section 1 (principle: the device never decides the order of anything), per-part list (start step, make_explicit, dual fixing, parallel-row pair scan, doubleton forest and substitution, storage, record stack all 'Host'), section 6 and milestone M5 (script application only above 2% of hybrid time), section 7
+defect: As a plan for 'a complete GPU acceleration' it cannot stand: it moves the tests to the device and leaves on the host every application, the host-owned state (so the state build stays limited by host memory), storage and records. Much of that work is parallel by the design's own description (section 6: for dual fixing, make_explicit, tightening edits, parallel-row merges, alias substitution and zero-cost singleton columns 'the script is known before anything is applied'). The reason given for leaving it is 'the host copy must follow', which is a consequence of this design's choice that the host owns the state, not a measured property of the method. The directive allows the host for small and non-parallel work only.
+evidence: Stored node run of the nine instances above 1e7 nonzeros (release_large, 88.3 s): state build 30.21 s, which the design improves by its measured 2.0 to 2.1 times only (at least 14.4 s stay); storage 3.67 s ('None on x86'); doubleton 5.20 s of which only the 11% collection leaves the host; dual fixing 2.36 s with 39,899,589 fixings applied by the host (the test is O(1)); start step 0.19 s. That is at least 25 s of 88.3 s on the host before row rules, singleton columns (dlr2 4.22 s), pair scans, records and any kernel or sync time: a ceiling of 3.5 times, and the design's own projection is 2.0 to 2.4 times. Measurement step, 240 instances: chain length 1 in every call of dual fixing, parallel rows and the doubleton rule; make_explicit makes 2,069,123 bound changes as one loop over columns. For the cascades the prototype of one-algorithm shows that row rules and propagation run as rounds from one state with no instance larger and 234 of 240 hashes equal, so their application 'can be parallelized' in the owner's sense.
+fix: None inside the design, because every fix gives up its principle. Keep two pieces as the first stage of another plan: M0 (each visit split into a pure evaluation and an application, the audit, hashes equal to today's) and M1 (device state build with fold kernels). Do not build the mirror of the host's incremental state (M2 journal and slot-identical image) or the replay library (M5): neither is reusable by an engine that applies on the device.
+
+--- 2
+design: bulk-first
+severity: serious
+where: Acceptance criteria 2 and 3
+defect: 'Complete' is measured by numbers that do not measure what the owner asked. Criterion 2 counts certified work units as device share, but the host walk still loops over every listed item, tests the certificate and charges the work, and where the host visit is O(1) the certificate removes almost no host time (the design says so itself). Criterion 3 (host application of each family at most 2% of the hybrid time of each size class, or script application built) cannot be met for the row rules by the design's own numbers, and script application is excluded for cascades in section 7. With 7 built and 9 designed families at up to 2% each, plus state build, storage, start step and records which criterion 3 does not count, a third of the hybrid time can be host work in a plan that passes.
+evidence: Design text: rows with an effect or listed again hold 31.5% of the row-rule work, 'at most 0.31 s or 1.6% of today's seconds' (240); acceptance 4 asks for a hybrid time of at most 0.5 times today's from 1e6 nonzeros, so that share is 3.2% of the hybrid time, above the 2% of criterion 3. Row rules: 40 ns per visit, 'at most 68.6% of 5.1%' saved; dual fixing 9 ns per column.
+fix: Measure completeness in host seconds: the profile of a hybrid run by part (state arrays, storage, start step, each family's walk and application, records), with one bound on the sum of host seconds outside the driver per size class, next to the work-unit shares.
+
+--- 3
+design: bulk-first
+severity: serious
+where: Per-part entries for the singleton-column family and the nine designed rules; risk 2; milestone M6
+defect: For the singleton-column family and for all nine unbuilt column rules the plan cannot say what share reaches the device. Rows with a history term (growth factor, saved-entry limit, unreadable mark) go to the host, the certifiable share 'is smaller and not measured', and 'a family whose certificate cannot be made sound stays on the host'. So even the test side of these parts is not guaranteed to be on the device, and their application is on the host by design.
+evidence: Nine large instances, stored node run: singleton columns 5.26 s (6.0%), dlr2 alone 4.22 s with 6,809,097 zero-cost findings and 71,027,977 saved entries, all applied in host order. The design's probe covers only the row rules and propagation.
+fix: If any part of this design is kept: measure the certified share of every family with the plain C++ reference on the 240 and the 40 in M0 and make it a gate before any kernel is written.
+
+--- 4
+design: bulk-first
+severity: serious
+where: Section 3 (device image with the same slots, journal, sync), milestone M2, M5, risk 3 and risk 6
+defect: Cost in code without a figure, and a dead end. Every one of the 16 state operations and 4 storage operations gets a journal mark, and the device must mirror the host layout history (tombstones, a column moved to the end with doubled capacity, inf_slot as a slot sum, incrementally updated activities as data). This is needed on x86 only, has no rule in it, and a missed mark gives a wrong certificate. If the owner later asks for applications on the device, section 7 says that is 'another design' with a new reference engine, so the mirror, the ordered walk with its work charges and the replay library are thrown away.
+evidence: state_ops.cpp 171-197 and 522-565 (move_column_to_end, move_entry) are the layout the image must reproduce; the design calls the alias replay 'the hardest piece' and the mirror 'the largest piece of new code without a rule in it'. No count of lines or files is given anywhere in the design.
+fix: State the size (files, lines, tests) of mirror, journal, sync, mirrored compaction and rebuild, and replay; build none of it before the owner has answered the design's first open question.
+
+--- 5
+design: one-algorithm
+severity: serious
+where: Milestone G2 ('batch or sequential order is not switchable after this point; the switch is the engine version'), section 11
+defect: Breaks the standing constraint that every assumption gets an engine option so that two runs can differ in it and the owner can test it at the end over solution quality. The central assumption of the design (batch application in place of sequential application, the reverse of AS-254) and the canonical state are made non-switchable, and the nine unbuilt rules are written in batch form only. At the end no build exists that runs the same rule set in both orders, so the test cannot be made; an 'engine version' is another commit with fewer rules.
+evidence: DESIGN.md A10: 'A choice that cannot be switched is built with a switch from now on, so that it can be tested.' ASSUMPTIONS.md AS-254, 'Test at the end: It would need a batch engine to compare with'; AS-310, 'batches through the reservation table against sequential host application of the same candidates'. The design's own prototype is such a switch (GPRS_BATCH bits, 473 tests pass with it off).
+fix: Keep the order as an option of the host executor: 'apply each candidate at once in ascending index' next to 'apply the round together', on the same canonical state. My probe shows the canonical activities do not change a model under today's order (238 of 238 finished instances of the 240 with equal hashes), so the option costs the loops of the cascade families, not a second state. The device supports the batch order only, and identity of host and device is claimed for that order.
+
+--- 6
+design: one-algorithm
+severity: serious
+where: Milestones G2 and G3
+defect: G2 is not a milestone that can be merged and tested on its own. It bundles eight changes of meaning (sorted lines, activities as values, lists as sets, rebuild by counters, budgets between steps, four families as steps, the order-free scale, the new hash) into one step whose only gate against today is a reductions gate, so a difference cannot be traced to one change. It is also inconsistent: the structural families 'still run as today' on the new state, but today's substitution uses move_entry, which breaks the sorted order that G2 introduces. Then G3 changes every hash again, so the campaign of 1e8 models, the re-made wrong engines and the replaced stored results are paid twice.
+evidence: Measured alone, the bundled changes are nearly or fully hash-neutral: activities re-summed after every update: 238 of 238 finished instances equal (my probe; square41 and square47 not finished); least-common-multiple scale: 240 of 240 equal and 0 of 8,842,639 row searches differ (my probe); ascending lists: 238 of 240 equal (the design's run); batch rounds of row rules and propagation: 234 of 240 (the design's run). state_ops.cpp 522-565 for move_entry.
+fix: Split G2 and G3 into steps inside today's engine, each behind an option and each with the gate 'reduced-model hash equal on the 240 and the 40 except a named list': (a) activities as values, folded lazily, with the order-free scale and the parallel hash next to the chain; (b) ascending lists; (c) rounds for row rules and propagation; (d) budgets between rounds; then parallel rows by leaders, the alias substitution by ordered sums, the singleton columns under reservation, one at a time, each with its own reductions delta.
+
+--- 7
+design: one-algorithm
+severity: serious
+where: Gate of G2 (host path at most 1.10 times today's per size class), acceptance criterion 5, risk 1
+defect: The host time gate is already missed by the design's own prototype, with only two of seven families in batch form and without sorted rows, folds from scratch or the sort of the substitution. The host path is the product below N0, in every build without CUDA, in the tail of every mirror-regime run and in the campaign (760,000 models per second today). Criterion 5 also contradicts itself below N0: there the hybrid is the host executor, which cannot be both 'not slower than today's engine in the sum of any size class' and 'within 1.10 times today's'.
+evidence: Recomputed from the prototype's five run pairs (240 dumps, smallest of 5 per instance, loaded Mac): engine 11.86 s to 13.25 s, 1.12 times; by size class 1.14 (below 5e4), 1.14 (5e4 to 5e5), 1.12 (5e5 to 1e6), 1.11 (from 1e6). Dual fixing 0.068 s to 0.124 s (1.81 times) and singleton columns 0.118 s to 0.221 s (1.87 times) with unchanged work: these two families were not converted, so the cost is the sorted take of their lists.
+fix: Make host cost a result of G0, per family: lists taken by a scan of the mask instead of a sort, lazy folds, the cost of sorted rows. Fix the gate per size class in one sentence (parity, or 1.10 with the owner's consent below N0), and keep the HiGHS time rule as a gate for every instance from 50,000 nonzeros, as device-native does.
+
+--- 8
+design: one-algorithm
+severity: serious
+where: Hybrid rule, regime 2 (T_up = 16 T_down); acceptance criterion 3
+defect: After the first hand-over to the host the state returns to the device only for a step of 320,000 units (cascade) or 3,200,000 units (structural). In the mirror regime (state up to 128 MiB, about 3e6 nonzeros) almost no parallel-row, alias or singleton-column call reaches 3.2 million units, so once a short cascade round has handed over, the first calls of the structural families, which hold 91 to 94% of their work, run on the host. Parallel work is left on the host by a constant, without a measured reason, and the design's own target of 85% is missed.
+evidence: C/hybrid_sim.py on the recorded host steps of the 240 (measurement step's tables), 114 instances from 1e5 nonzeros with a state up to 128 MiB: rule work on the device 84.4% (66.4% from 1e5 to 2e5 nonzeros, 80.3% from 2e5 to 1e6, 94.2% above; 21 instances below 50%, lowest ns1830653 15.1%). With a return threshold equal to the hand-over threshold: 98.2%, 6.9 switches per instance. With hand-over after two low steps and return at 200,000 units (the rule of device-native): 98.7%, 2.2 switches per instance. The simulation counts host lists, not batch rounds.
+fix: Return threshold of 200,000 units for every family and hand-over only after two consecutive low steps; confirm with step-level counts in G0.
+
+--- 9
+design: one-algorithm
+severity: serious
+where: Milestone G4 and its gate; regime 3 of the hybrid rule
+defect: G4 cannot be tested on the instances it names. Its gate asks for equal step hashes of device-forced and hybrid runs on the nine instances above 1e7 nonzeros, but at G4 parallel rows, aliases and singleton columns have no device executor, and regime 3 has no host mirror and no described way to bring the state down. For large models G4 and G5 (which holds the largest single piece, the alias machinery) are one milestone.
+evidence: Design text: regime 3 'no host mirror; the host holds the input model, the records and, at the end, the reduced model'; G5 'After this every built family has a device executor'. 12 of the 240 instances (46.9% of today's summed seconds) and all nine large ones have a state above 128 MiB.
+fix: A stated transitional rule as in device-native (H6): a step without a device form runs on the host through a whole-state download and upload at any size, with its seconds reported, until its device form exists.
+
+--- 10
+design: one-algorithm
+severity: serious
+where: Verification 3 (union mode of the campaign), acceptance criterion 7
+defect: The union of K random models presolved once cannot work on unscreened models: any block that is infeasible or unbounded ends the presolve of the whole union with a status and no reduced model. The union also changes what a small model experiences (one budget, one count of rounds, one saved-entry limit and one rebuild decision for all blocks). So the 1e9 models 'through both executors' never exercise the device's infeasible and unbounded paths, budget stops or limited flags at rate.
+evidence: The design's own campaign log (campaign_rel_final.log): 7,200,000 models, 3,484,741 results with a reduced model, so 52% end without one. A union of 20 unscreened models carries a model with probability below 1e-6.
+fix: Build unions from blocks screened by the host status; add unions with one planted infeasible or unbounded block and compare status and smallest reported index between executors; give the single-model device mode a stated volume (for example 1e7) for statuses, budget stops and limited calls.
+
+--- 11
+design: one-algorithm
+severity: serious
+where: Whole design; sections 9, 12; verification 1
+defect: The cost in code is not stated: no count of files rewritten, tests re-based or wrong engines re-made, although the design replaces the state operations, every rule loop, the storage, the driver's budget logic and the hash, and adds a second implementation of every step.
+evidence: My count from the tree: the files the design rewrites or changes in meaning hold about 6,200 of the 8,829 engine lines (state.hpp 534, state_build 354, state_ops 567, state_storage 968, nine rule files 3,028, presolve.cpp 515, hash.cpp 249). 90 of the 99 wrong engines of check/make_mutants.py are exact text replacements in those files (singleton columns 34, parallel rows 16, doubleton 9, row rules 7, dual fixing 6, propagation 6, state_ops 4, tightening 4, alias forest 2, state_storage 2, presolve 1) and the script stops when a text is not found exactly once. About 14,000 lines of tests are on state operations and single rules (test_state_* 4,036, rule tests about 9,900), and test_hash_values.cpp (454 lines) holds stored hashes. The existing device state build, one part of about twenty, is 961 lines plus 508 of tests and 816 of bench.
+fix: Add an inventory per milestone: files and lines changed, tests rewritten, wrong engines re-anchored or replaced, new device lines. The staging proposed above keeps most wrong engines valid at each step.
+
+--- 12
+design: one-algorithm
+severity: minor
+where: Milestone G1 (content against gate); per-part entry 'State build'
+defect: G1 moves the start step before the first activity fold on the device and claims 'same result as today: yes for every array', with a gate of equal stored hashes under today's engine. Today the constructor folds first and the start step then changes activities by two-term updates, so update counts, largest terms and possibly low bits of the activities of rows touched by the start step differ, and with them the state and phase hashes.
+evidence: presolve.cpp 395-410 and 499-506 (state built, then start_step); 64,520 columns are fixed by the start step on the 240. The reduced-model hash is likely unaffected (my re-summing probe changed no model hash on 238 instances), the state hash is not.
+fix: In G1 keep the start step on the host after the device fold, as bulk-first does, or name the model hash as the only gate of G1.
+
+--- 13
+design: one-algorithm
+severity: minor
+where: C4, C7, parallel rows by leaders; identity rule
+defect: Options and statistics keep their names and change their meaning without a list: budgets tested between steps (work, first_work, stopped), parallel_bucket_limit (leaders instead of neighbours), rebuild_dead_fraction (counters instead of slots), calls of a cascade family. Stored per-family statistics and the timing reports stop being comparable, and each such change is an assumption that needs an entry.
+evidence: presolve.hpp 103-168 (options), 195-261 (statistics). device-native lists its two changed statistics; this design lists none.
+fix: A table of every option and statistic with its old and new meaning, and an ASSUMPTIONS entry for each change.
+
+--- 14
+design: device-native
+severity: serious
+where: 'REDUCTIONS LOST' ('Nothing of this design is built, so no loss or gain is measured'), basis section
+defect: Nothing is measured. The standing constraint asks that a design says where and how much it loses against today's engine; this one names nine places and no amount, and its only model is of fixed costs. The owner would give the go for the largest rewrite of the three on expectations.
+evidence: Design text. The measurements that exist are from other work of this round: the batch prototype of one-algorithm (rounds for two families: 234 of 240 hashes equal, no instance larger) and my two probes (activities from scratch: 238 of 238 equal; least-common-multiple scale: 240 of 240 equal, 0 of 8,842,639 searches differ), which cover items 5 and 7 of its list.
+fix: Take those three results into the plan and make the remaining ones (leaders for parallel rows, all alias trees at once, the singleton columns per wave, sorted rows) switchable probes in today's engine, measured on the 240 and the 40 before the go, not at milestones 1 and 2.
+
+--- 15
+design: device-native
+severity: serious
+where: Sections 2.2 and 8 (new directories include/gprs/wave and src/wave with wstate.hpp, about 70 steps, two executors), point 9 (sequential engine stays), section 11, open question 4
+defect: A second engine with its own state type next to today's. During the project every rule has three control flows (today's loop, the seq step, the cuda step), and if the wave engine on seq is slower on small models the design's own fallback keeps two engines for good. The nine unbuilt rules exist in wave form only, so the switch engine = sequential | wave, which the design lists as the switch for its central assumption, compares different rule sets at the end and cannot serve the owner's test over solution quality.
+evidence: Design text: 'roughly 5,000 of the 8,829 lines' new by its count (mine for the same files: about 6,200); risk 2: 'two engines are kept, split by model size, which doubles the rule code'; milestone 10 writes the nine rules 'in wave form'. AS-254 and AS-310 ask for a comparison of batch against sequential application of the same candidates.
+fix: Build the wave steps on today's state_t as options of one engine (the batch prototype of one-algorithm does this for two families in 700 patch lines), so that a rule written as a step runs under both orders, and drop the separate state type.
+
+--- 16
+design: device-native
+severity: serious
+where: Milestone 1 ('hands the reduced model to the sequential engine, with the two record stacks composed')
+defect: Throwaway scaffolding with its own semantics. A presolve of the wave engine followed by a presolve of the sequential engine on the reduced model needs two state builds, re-indexing and a composed postsolve and crush, and its reductions are those of neither engine, so the gate of milestone 1 ('reductions of wave-then-sequential against today's engine') tests something that never ships. The campaign then tests the composition, not the engine.
+evidence: Design text of milestone 1. With one state the cascade families can be switched while the others run as today, which is what the prototype of one-algorithm measures (240 dumps, status equal on 240).
+fix: Same as above: one engine, families switched one at a time on the same state; no composition.
+
+--- 17
+design: device-native
+severity: serious
+where: Section 2.4 (cascade ends when 'max_cascade_passes waves have run'; budgets tested between waves); 'REDUCTIONS LOST'
+defect: An option is redefined in a way that can lose reductions and is not in the list of nine. Today one cascade pass is four family calls, each served until its list is empty; the limit of 100 passes is reached by one instance of the 240. Counted in fused waves, 100 is of the size of single calls, and a cascade that ends on the limit is not taken up again by the driver.
+evidence: Batch prototype of one-algorithm, 240 dumps: 172 rounds in one row-rule call (irish-electricity), 105 in one propagation call (snp-02-004-104 and unitcal_7), 80 (lotsize). presolve.cpp, comment in run(): 'Rounds that ended on a budget or on max_cascade_passes are not taken up again'. Today only unitcal_7 reaches 100 passes (measurement step).
+fix: Keep the limit in passes with their old meaning (a pass is waves until the flags are empty) or add a separate wave limit set from measured wave counts; list it among the places where reductions can differ and count limited cascades at milestone 1.
+
+--- 18
+design: device-native
+severity: serious
+where: Milestones 9 and 10; section 11; risk 15
+defect: The order of work puts reduction power last and the missing measurement on the largest instances near the end. The remaining cheap column rules come at milestone 10, after the whole rewrite and all device ports, although the owner's standing order is 'cheap rules first' and the gate against HiGHS with all cheap rules is the measure of the first goal. The instrumented run on the nine instances above 1e7 nonzeros, which decides whether 'no hand-back above the mirror size' is right, is in milestone 9.
+evidence: DESIGN.md A8 ('Yes, cheap rules first'; 'Build them too'), A9 ('The GPU state build is integrated after the cheap column rules'), A10 ('first goal is the nnz reduction'); the ladder in A8: with the rules built or in review the reference stands at 0.9826 of all cheap rules in nonzeros, the rest comes from the rules this design defers. Stored node run: later calls hold 62% of the row-rule work on neos-4332810-sesia and 47% of the propagation work on dlr2, and their width is unknown.
+fix: Move the instrumented run on the nine to milestone 0. Put the order of the cheap rules to the owner as a decision with the delay named, and make it possible to write a rule once as a step that today's engine can run (previous fix), so that the rules do not wait for the device.
+
+--- 19
+design: device-native
+severity: minor
+where: Section 6 and data layout (device matrix stored binned by length class; host in index order; 'the layout is not part of the logical state')
+defect: With different layouts on the two executors a hand-over is a transformation, not a copy, and a difference between host and device can be shown only through the hash of the logical state, not array by array. The binned layout is itself unmeasured in place (AS-309).
+evidence: one-algorithm and bulk-first keep index order with scheduling lists by length class for exactly this reason; AS-309 in ASSUMPTIONS.md.
+fix: Index-order storage with class lists as the default, binned storage as a benchmarked variant that cannot change a result.
+
+--- 20
+design: device-native
+severity: minor
+where: Acceptance criterion 9 (switches: fused cascade, forest rule, claim priority, order of long-row sums, rebuild version)
+defect: Several listed switches mean two forms of a step in both executors (fused and unfused cascade, two rebuild versions, two long-row orders), which multiplies the 70 steps and the step-equality tests; the design does not count them.
+evidence: Design text of criterion 9 and of verification 3 ('both sweep forms, both candidate forms, forced bin boundaries, both rebuild versions').
+fix: Mark which switches change a result (they need both forms on both executors) and which change time only (one executor is enough), and count the forms in the code estimate.
+
+
+======== BEST_PARTS ========
+--- 1
+design: one-algorithm
+part: The batch prototype inside today's engine (700 patch lines, switch by bits, 473 tests pass with it off) and its measurement on the 240
+why: It is the only measured evidence of this round on reductions under batch application: status equal on 240, hash equal on 234, no instance larger, 45 million campaign models clean. It also shows the way there: a batch step is a legal family of today's engine, so the change can be made behind a switch on the existing state.
+
+--- 2
+design: one-algorithm
+part: The canonical state (activities as values, lists as sets, layout not part of the state) and one fixed order for sums into one cell
+why: It removes the history from the state, which is what makes host and device equal in bits and satisfies 'one summation order'. My probe shows the first item changes no reduced model on 238 finished instances of the 240, so it can be merged alone with a hash gate.
+
+--- 3
+design: one-algorithm
+part: The three conflict rules by kind of write (combine by maximum, minimum or integer sum; ordered fold; reservation by smallest index)
+why: Every part of the scope gets a classified rule, and the ordered fold lets all alias trees be applied at once where any one-unit-per-row rule fits only 32% of 280,666 trees into a first batch (240 instances, measurement step).
+
+--- 4
+design: one-algorithm
+part: Same line stores and slots on both executors, with length classes as scheduling lists
+why: A hand-over is a copy and 'device equals host' can be tested array by array, which localises a wrong kernel.
+
+--- 5
+design: one-algorithm
+part: Milestone G0 (measure before the decision) and G1 (device state build under today's engine with today's hashes)
+why: G1 is an early, separately mergeable gain on the part that is 31 to 34% of the time, and G0 puts the missing numbers (nine large instances, host cost of the canonical state) before the owner's decision on the rewrite.
+
+--- 6
+design: one-algorithm
+part: Acceptance criteria 2, 8, 9 and 10 (hash sequences equal for the build without CUDA, host forced, device forced and hybrid; overheads as columns; thresholds proven to change time only by forcing them low and high)
+why: They are measurable and cover the standing constraints on determinism, overheads and the build without CUDA.
+
+--- 7
+design: bulk-first
+part: M0: every visit split into a pure evaluation and an application, in plain C++, with all hashes and counts equal to today's and an audit that executes every certified skip
+why: It is a refactor that all three designs need (the evaluation is the FIND step of the others), it keeps every existing check, the 99 wrong engines, the campaign and the stored results valid, and it can be merged before any decision on the order of application.
+
+--- 8
+design: bulk-first
+part: The probe of clean visits (240 instances: 87.2% of row-rule visits and 77.7% of propagation visits are clean and without effect) and the thresholds per family from the cost per work unit
+why: It measures how much of a list is pure testing in today's order, and the per-family thresholds (100,000 units for propagation up to 900,000 for dual fixing) are better founded than one constant for all cascade families.
+
+--- 9
+design: bulk-first
+part: Host memory as a first-class item: state arrays from a presolve-owned resource, moved-in arrays, huge pages, taking the model's CSR instead of copying it
+why: HISTORY Entry 32 measured that three quarters of the device state build was the host sizing vectors; every design that hands state to the host pays this, and only this design plans for it.
+
+--- 10
+design: bulk-first
+part: Acceptance criterion 3 as an idea: a bound in seconds on what each family leaves on the host
+why: It is the only criterion of the three designs that measures remaining host time and not work units; it needs to cover all host parts, not only applications.
+
+--- 11
+design: device-native
+part: Step interface with step equality: both executors run the same step on the same state and every output array is compared bit for bit
+why: It makes 'the device equals the host' a unit test per step, so a wrong kernel is found at one step of one wave and the oracle and campaign on the host test the rules of both.
+
+--- 12
+design: device-native
+part: Milestone 0: value-function headers extracted from today's rule files and called by them, with every stored hash unchanged; wrong engines in three groups (wrong rule in the shared headers, wrong seq step, wrong kernel)
+why: A wrong engine in a shared header covers both executors with one patch, which reduces the cost of re-making the 99, and the extraction is gated by today's hashes.
+
+--- 13
+design: device-native
+part: Rule H6 (a step without a cuda form runs on seq through the sync layer) and one family per device milestone with named instances
+why: Every device milestone gives a complete presolve that can be merged and tested alone, which the other rewrite design lacks for large models.
+
+--- 14
+design: device-native
+part: Acceptance criterion 1 ('no step is on seq because its cuda form is missing', host reasons from a closed list) and criterion 5 (time targets against today's engine, HiGHS time rule from 50,000 nonzeros)
+why: The first is the sharpest statement of 'complete' in the three designs; the second keeps the 50,000-nonzero requirement as a gate after the host engine changes.
+
+--- 15
+design: device-native
+part: Hand-back after two consecutive low steps with return at 200,000 units, and the fixed-cost model on recorded steps
+why: In my simulation this rule keeps 98.7% of the rule work of the mid-size instances on the device with 2.2 switches per instance, against 84.4% for the rule of one-algorithm as written.
+
+--- 16
+design: device-native
+part: Objective offset as per-column contributions summed once at the output by a fixed tree; records keyed by (phase, wave, kind, index)
+why: Both remove a running order-dependent quantity (inventory items 7 and 21) without a sort in the inner loop.
+
+
+======== MISSING_IN_ALL ========
+- A bound on the model-size threshold, so that 'complete' cannot be reached by raising it. All three leave everything below a provisional threshold on the host (1e5 nonzeros in one-algorithm, 2e5 in the other two) and fix it at the last milestone by smallest summed time; device-native says it 'may end near 1e6'. On the 240 benchmark instances 21 lie from 5e4 to 1e5 nonzeros, 29 from 1e5 to 2e5 and 67 from 2e5 to 1e6 (25.2% of today's summed seconds); with a threshold of 1e6, 117 of the 147 instances from 5e4 nonzeros never use the GPU and every acceptance list still passes. Needed: per part a measured crossover (device forced against host, by size class, stored), the threshold derived from it, and the owner's consent to the number.
+- A completeness measure in host seconds. Shares in work units say where the work is counted, not where the time goes (certified skips, O(1) visits, host tails). Needed: the profile of a hybrid run by part, with the host seconds outside the driver bounded per size class.
+- The strength of the reduced model in the gate against today's engine. All gates compare rows, columns and nonzeros. The batch prototype's own runs show a change those numbers do not see: on neos-1122047 the tightening findings fall from 71,994 to 7,238 and the propagation findings rise from 72,403 to 156,923 with 2 fewer rows; 31 further instances have other propagation finding counts with equal hashes of the reduced model or equal sizes. The owner's main goal is a stronger formulation (A10). Needed: a comparison of bounds and coefficients of the two reduced models on instances whose hash differs, or the root bound in cuOpt for them.
+- The cuOpt adapter as it exists (cpp/src/presolve/gprs_presolve.cpp, 398 lines). It takes a host model, copies it into gprs::model_t, and converts the result on the host; adapter mode 3 (A6) then runs four cuOpt reductions through the PaPILO framework on the host model. 'Device arrays in and out' is an open question in all three and planned in none. Also missing: who creates the CUDA context and the memory pool, how the byte budget is set next to cuOpt's early GPU heuristics, which hold about 120 bytes per nonzero during presolve (DESIGN.md section 10) against 40 to 68 for the device state, and how the engine and executor options reach cuOpt's settings for a cluster comparison.
+- The hash is computed without condition in presolve() (presolve.cpp, last lines) and so in the adapter too. An option to skip it removes its 5.5% in production with no new function and no replaced stored hash; all three replace the function instead.
+- Scope at the edges. Not classified in any design: remove_empty_rows, the comparison of the reduced model with the input for the status 'unchanged' (an O(nonzeros) host loop), the BHW coefficient reduction that A6 calls 'a candidate for the end of Stage 1' and A8 places after the Stage 1c gate, and sparsify with the aggregator (A8 item 2), which come before the wide phases. The plan should say whether these wait for the acceptance and in which form a rule added later must be written.
+- The work in review. All three designs and all measurements stand on commit 04692babd; simple probing (edd147a7e) and the parallel-row repair are in review and not accepted (HISTORY). None says in which order the review, the remaining cheap rules and the rewrite are merged, and no node figure exists for simple probing.
+- Width and depth on the nine instances above 1e7 nonzeros. No design has it, two put the run late, and the rules for large models (no hand-back, every step on the device) rest on the 30 benchmark instances from 1e6 nonzeros.
+- A count of the code. None of the three gives lines per milestone for the host changes, the device code, the tests re-based and the wrong engines re-made (device-native gives one figure for the host).
+- None of the three designers read the cuOpt load-balanced kernels they plan to lift; what is liftable rests on the research step's reading.
+- GPU time for verification: the device campaign, the second GPU type and Grace Hopper have no estimate of node hours, and a second GPU type has never been run in this project.
+
+======== RANKING ========
+Under this lens: 1. one-algorithm, 2. device-native, 3. bulk-first.
+
+one-algorithm first: every part of the scope is classified with an executor, a conflict rule and a statement on today's result; host-only parts are few and named; it has the only measured reductions (two families, 240 instances, nothing lost); one algorithm means one set of rules and checks for both executors; the build without CUDA is the reference. Its defects are all in the way there and have small fixes: keep the order switchable, split G2 and G3 into hash-gated steps (my probes show two of the bundled changes are hash-neutral alone), correct the return threshold, state the host time gate honestly, screen the campaign unions, count the code.
+
+device-native second: equally complete in classification and better in test structure (step equality, a complete presolve at every device milestone, 'no step on seq because its cuda form is missing'), and it keeps an engine switch. It loses on the way there: nothing measured, a second engine with a new state type and about 70 steps in two executors, a composed two-engine presolve as scaffolding, an option redefined in a way that can lose reductions, and the remaining cheap rules and the measurement on the largest instances at the end.
+
+bulk-first third: the safest migration (bit-equal with today at every milestone, all checks and stored results kept) and the cheapest in risk, but it does not meet the directive. Applications, the host-owned state, storage and records stay on the CPU; on the nine large instances at least 25 s of 88.3 s remain host work by construction and its own projection is 2.0 to 2.4 times. Its M0 and M1 belong at the start of the synthesis.
+
+For the synthesis: the algorithm and the acceptance list of one-algorithm; the first two milestones from bulk-first M0 and device-native milestone 0 (evaluation and application split, value-function headers, hashes unchanged); then the canonical state in hash-gated, switchable steps inside today's engine; the device executor with step equality, rule H6 and the hand-back rule of device-native; the remaining cheap rules written once as steps that both orders can run, in the order the owner decides.
+
+======== UNSURE ========
+- Whether the owner reads 'methods that can be parallelized' as I do (the method, not today's order of application). If the owner accepts 'the device tests, the host applies in today's order' as complete, the fatal mark on bulk-first becomes a serious one about its ceiling of 2.0 to 2.4 times on the nine large instances.
+- My re-summing probe is not the canonical state of the designs: it re-sums eagerly, in today's storage order (rows are not kept sorted) and under today's sequential order. It shows that activity values in place of accumulated ones change no reduced model on 238 of the 240 benchmark instances; square41 and square47 were stopped by me, and the testbed and the nine large instances were not run. Its seconds are meaningless.
+- The least-common-multiple probe covers the rows today's engine visits on the 240 benchmark instances only; no testbed instance, no random campaign.
+- The hybrid simulation uses recorded host lists and their recorded work as the step size; batch rounds are more and smaller, and a fused wave is fewer steps. The 84.4% is an estimate of the effect of the constant, not a prediction.
+- The ceiling for bulk-first on the nine large instances is arithmetic on the stored node run with the design's own factors; no device step was run.
+- How many of the 99 wrong engines survive a rewrite depends on exact texts; I counted them by the file they patch, not by whether the patched line would remain.
+- Whether a cap of 100 fused waves loses reductions in device-native: the 172 and 105 rounds are per family call in the prototype of one-algorithm; fused waves may need fewer, and I did not simulate it.
+- The time ratios I recomputed from the prototype (1.12 overall, 1.81 and 1.87 for the two cheap families) are from a loaded Mac; I attribute the two family ratios to the sorted takes by exclusion, not by a profile.
+- I did not check the validity of any conflict rule beyond the implied-integer paragraph of the low-worth design (where the claim of both rewrite designs that two candidates do not share a row holds by my reading), and I did not read device code, the cuOpt kernels or the papers.
+- My estimate of the device code size (the state build's 961 lines scaled to about twenty parts) is a guess of order, not a count.
+

@@ -1,0 +1,297 @@
+======== SUMMARY ========
+Lens: validity and determinism. No design is fatal under this lens, but the two wave designs ("one-algorithm", "device-native") each have rules that give a wrong or an undefined result as written. "bulk-first" avoids the question by leaving every application on the host.
+
+What I ran (all in /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/critique_validity-determinism, nothing changed in the project tree):
+- t_cross.cpp, four models of 1 to 3 columns, linked against the one-algorithm designer's prototype library. With batch rounds on (GPRS_BATCH=7) all four return a reduced model whose postsolved point violates a deleted row by 5e-3 or 3.9e-3 (tolerance 1e-6). Today's order gives infeasible, or a violation of 5e-7, depending on the row order.
+- A patched copy of the prototype (fix/): a row that gives a bound is deleted only when the bounds written to its columns are at least as tight as it asked for. The four models then give infeasible. On the 240 benchmark dumps (3 jobs) hash and status equal the designer's stored batch run on 240 of 240, and no row was held back.
+- t_zero.cpp: rows -x <= 0 and x >= 0 in two orders give lower-bound bits 8000000000000000 and 0000000000000000 and two model hashes. So "maximum of doubles" is not one result in bits.
+- A grep of the engine's math calls: only fabs, fmin, fmax, round, floor, ceil, fma, frexp, ldexp, llround and the classification functions, with no pow, exp, log or sqrt. The nvcc risk is therefore contraction and signed zero, not library rounding.
+
+What I read: rules_rows.cpp, rules_bounds.cpp, rules_propagation.cpp, rules_singleton_cols.cpp, rules_doubleton.cpp, alias_forest.cpp, implied.hpp, numerics.hpp in full; state.hpp 50-339; state_ops.cpp 14-323; state_build.cpp 60-240; rules_parallel_rows.cpp 196-500 and 728-891; rules_tightening.cpp 26-150; the postsolve undo loop; DESIGN.md 420-573; the prototype patch lines 1-630; line 69 of stage1c_design/v2_design.txt.
+
+Main findings:
+1. Row deletion at a crossing (one-algorithm; device-native for singleton rows). Combining bounds per column by max and min and deleting every classified singleton or forcing row is invalid when two candidates cross within the tolerance. DESIGN.md section 4 already asks that redundancy be re-tested last.
+2. Signed zero (one-algorithm). The max/min rule needs a tie rule on (value, source), or host and device can store different zeros.
+3. Lane order (both wave designs). The fold deals lanes by rank among live entries (state_build.cpp:186-199). Both designs keep dead entries between rebuilds and neither says how a kernel gets the rank.
+4. Smaller holes in one-algorithm: reservation keys are not unique across row units and column units; inserts wait for a rebuild that its own rule may not trigger; the union campaign would almost always stop at an infeasible block (48.4% of 7.2 million campaign models end with a reduced model).
+5. device-native: the second half-wave for forcing columns is invalid if it is evaluated on the state before the first half.
+6. bulk-first: its base plan is sound by my reading, but the stated reason is not. A propagation row is not listed again when a bound changes on the side it does not read (state.hpp:204-208); the certificates hold by monotonicity instead. A skipped singleton-column visit can drop a statistic and the limited flag.
+
+One claim I checked and found to hold: dual bound strengthening applied to all columns of a step together is valid for the rule as written in the Stage 1c text.
+
+Not done: no device run, nothing on the nine instances above 1e7 nonzeros, and I did not read the Stage 1b texts, ASSUMPTIONS.md, HISTORY.md, the device code, the cuOpt kernels or the other Stage 1c rule texts.
+
+======== DEFECTS ========
+--- 1
+design: one-algorithm
+severity: serious
+where: Section 3 rule K1 and section 4 'Row rules' (all classified rows are deleted; bounds combined per column by maximum and minimum; 'a smaller crossing fixes the column'); the prototype's run_batch in batch_prototype.patch lines 533-586
+defect: A singleton or forcing row is deleted in the step even when the bound it gave was cut by another row's bound that crosses it within the feasibility tolerance. The column is fixed at one of the two values, and the deleted row is then violated by |a| times the crossing, which has no limit in |a|. Today's order never does this: the second row is tested on the new bound in its own units and is either clamped or reported infeasible.
+evidence: t_cross.cpp against the designer's prototype library, GPRS_BATCH=7. Model 1: x in [-1,1], rows 1e4 x >= 5e-3 and x <= 0. Result: reduced_to_empty with x = 0, row 1 violated by 5e-3 (tolerance 1e-6). Today's order: x = 5e-7 with a violation of 5e-7, or infeasible with the rows swapped. Model 2: x in [0, 2^-21], y and z in [0,1], rows x + y <= 0 and 8192 x + z >= 1 + 2^-8, both forcing. Result: x = 0, second row violated by 3.9e-3. Today: infeasible, or 4.8e-7 with the rows swapped. Code: the prototype does 'if (lo > up) { lo = up; }' and deletes every row of w.deleted. Today's guards are rules_rows.cpp:107-115 (clamp in the units of the row) and :212 (infeasible test on the current activity). DESIGN.md section 4 class R says 'redundancy re-tested last'. The designer's 45 million random models did not show it.
+fix: Delete a row that gives a bound only when the bounds written to its columns are at least as tight as its own candidates (after integer rounding). Otherwise the row stays, is listed again, and the next step tests it in its own units. I built this in a copy of the prototype: the four models give infeasible, and on the 240 benchmark dumps hash and status equal the stored batch run on 240 of 240 with no row held back.
+
+--- 2
+design: one-algorithm
+severity: serious
+where: Section 3 rule K1 ('maximum or minimum of doubles ... exact in any order'), used for row rules, bound transfer to a root, sides of merged parallel rows, merged parallel columns; identity rule ('conflicts are resolved by index and value')
+defect: Maximum and minimum of doubles are not one result in bits: +0 and -0 compare equal. The host loop keeps the first of two equal candidates; a device tree keeps whichever its association gives. Only propagation has a tie rule (smallest source row); the other K1 uses have none.
+evidence: t_zero.cpp: rows -x <= 0 (candidate 0 / -1 = -0) and x >= 0 on one column. With the rows in the two orders the reduced lower bound has bits 8000000000000000 and 0000000000000000, and the model hashes are cedcd4f07a6a00b8 and 112bd1a4a0717d7f, in today's engine and in the batch prototype alike. Code: tighten_lower takes a bound only when 'lower > st.col_lower' (rules_bounds.cpp:20), so the first zero stays. Side images in the parallel-row merge are side / ratio (rules_parallel_rows.cpp:334-337), which gives -0 for a negative ratio. I did not run a device tree.
+fix: Define every K1 reduction on the pair (value, source index) under one stated total order, and write the value of the winner, in both executors. The alternative, adding +0.0 to every candidate, also works but changes today's -0 results; say which.
+
+--- 3
+design: one-algorithm
+severity: serious
+where: Section 3 rule K3 and section 4 'Singleton-column family' ('each unit writes its index with an integer minimum into the slot of every row it deletes or rewrites')
+defect: The step has units of two kinds: one per row (free singleton column, zero-cost singleton columns) and one per column (forcing column). A row unit with index 5 and a forcing column with index 5 write the same number into the slot of a shared row; both read back their own index and both are applied.
+evidence: Design text. If both are applied, the row is saved by both records: the saved row of the first names the forcing column and the saved rows of the forcing column name the singleton column. That breaks the contract of postsolve.hpp:182-183 (a removed column must not appear in a later record), and the undo loop of postsolve.cpp:456-466 then reads a value that is not restored yet. DESIGN.md section 4 asks for unique keys ('Keys are (hash, candidate id), unique').
+fix: Make the reservation key unique over all units of a step, for example 2 * index + kind, the same in both executors, and say which kind wins a tie on purpose.
+
+--- 4
+design: one-algorithm
+severity: serious
+where: Rule C4 (rebuild only on counters and only when fixed_terms_absorbable holds) against per-part 'Parallel rows' ('the new entries go through the insert path of the next rebuild') and 'Storage' ('Entries added by a step are merged here')
+defect: After a subtraction the entry of the equation's singleton column in the target row exists in the row store only. It reaches the column store at 'the next rebuild', and C4 does not make pending inserts a reason for a rebuild; a rebuild also waits for fixed_terms_absorbable. Until then every column-driven step (the propagation column kernel, the recount of sizes and locks, the walk of a substituted column) reads a column that lacks an entry.
+evidence: Design text; the doubleton family runs right after the parallel rows (presolve.cpp order of a round). Today the entry is placed at once by move_entry (rules_parallel_rows.cpp:482-484).
+fix: Pending inserts force the merge (a rewrite of the touched lines, or a rebuild without absorption) at the end of the step that made them. device-native already states 'Rebuild when inserts are pending at the end of a phase'.
+
+--- 5
+design: one-algorithm
+severity: serious
+where: Rule C2 and data layout: 'Deletions' (tombstones, entries dead without a write) together with 'entry k in storage order to lane k mod activity_lanes(n)'
+defect: The lane of an entry is its rank among the live entries of the row, and n is the live count. The design keeps tombstones and entries that are dead by status between rebuilds and folds every touched row after every step, but does not say how a lane group or a block gets the rank of each live entry. A kernel that deals lanes by slot position gives other bits on every row with a dead entry.
+evidence: state_build.cpp:186-199 (the counter k advances only on live entries) and :211-214 (the fast path is only for a row 'without a tombstone'); numerics.hpp:145-149. Rows with dead entries arise from subtraction targets (delete_entry), zero-cost singleton columns (rules_singleton_cols.cpp:376-378) and merged columns. I did not read the Stage 0 or Stage 1b kernels; that they deal by position is taken from the host fast path and the inventory.
+fix: Either compact a row in the same step that kills one of its entries, so a folded row never has a dead entry, or add a rank pass (count per thread, prefix) to both fold kernels and benchmark it. State the choice and test rows with a dead entry at every position in the kernel tests.
+
+--- 6
+design: one-algorithm
+severity: serious
+where: Verification item 3 (union mode) and acceptance criterion 7 ('at least 1e9 random models through both executors (union mode)')
+defect: A union of K random models presolved once ends at the first block that is infeasible or unbounded, and the state is not used after that. With unions of 1e5 models nearly every union ends there, so the reductions of the other blocks are not tested. Budgets, stall limits, round limits and the switch to explicit bounds are also those of the union, so a block does not get its standalone result.
+evidence: The designer's own log /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_design/design_one-algorithm/campaign_rel_final.log: 7,200,000 models, 3,484,741 results with a reduced model (48.4%). A union of 10 such models has a reduced model with probability about 0.0007.
+fix: Build unions only from blocks whose standalone host presolve ends with a reduced model (that run exists at host speed). Test the other statuses standalone on the device at the low rate, or in unions of their own compared by step hashes up to the stop. Compare union-on-host with union-on-device; run the oracle per block.
+
+--- 7
+design: one-algorithm
+severity: serious
+where: Section 11 (the unbuilt rules written directly as steps; reason (b) 'their designs already demand what a step demands') and per-part conflict rules for the unbuilt rules
+defect: The Stage 1c designs demand that every premise is computed at application. A step computes premises on the state before the batch, so the reviewed form and the step form differ. The read and write cells per rule are not derived from the rule texts; the designer says he did not read them.
+evidence: The two wave designs give different conflict rules for the same rule: for the single-equation extension of dual fixing (E), one-algorithm says 'inside one row only' and device-native says 'claim on the column with the row index as priority'. DESIGN.md section 4 puts these rules in class D ('under reservation') and notes that each guard 'was broken by a counterexample in review'. One rule I checked by hand against line 69 of stage1c_design/v2_design.txt: dual bound strengthening (R7) applied to all columns together is valid, because each new bound keeps every locking row feasible for all values of the other columns in the old box, the moved point stays in that box, and the rounding tolerances do not add up.
+fix: Before a rule is built as a step: a table of the cells it reads and writes, checked against its Stage 1c text, a validity review of the step form, and a campaign profile for it. Keep K1 only where the review confirms a single-column argument that holds for all values of the other columns.
+
+--- 8
+design: one-algorithm
+severity: minor
+where: Rule C6 (records ordered by step and unit index) and per-part 'Doubleton equations' (bound transfer by maximum and minimum, then substitution)
+defect: The case where the bound transfer fixes a root is not stated. If the children of such a root were substituted, their alias records would name a column that a fixed_col record of the same step removes, and with the order by index alone the alias record can come after it.
+evidence: Today's code fixes the children at their image instead (rules_doubleton.cpp:222-233). The undo loop sets a fixed value only when its record is reached walking backwards (postsolve.cpp:456-466); contract at postsolve.hpp:182-183.
+fix: State that the children of a root fixed by the transfer are fixed at their image with no alias record. Fix an order of record kinds inside a step, as device-native does. Run stack_consistent after every step in the step-hash harness.
+
+--- 9
+design: one-algorithm
+severity: minor
+where: Milestone G1 (device build 'plus the start step and the first activity fold', gate 'every hash ... equals today's stored hash') against per-part 'State build' ('the start step before the activities')
+defect: Today the constructor folds the activities on the input bounds and the start step then changes them by two-term updates. A fold after the start step has other bits and a smaller update count, which the error guard reads. The gate cannot hold on instances where the start step moves a bound.
+evidence: presolve.cpp:499-503 and 84-117; state_ops.cpp:199-219; implied.hpp:107-108 reads updates. The inventory counts 64,520 columns fixed by the start step on the 240 benchmark instances.
+fix: In G1 fold on the input bounds and run today's start step afterwards, or drop bit equality with the stored hashes from the G1 gate.
+
+--- 10
+design: one-algorithm
+severity: minor
+where: Per-part 'Singleton-column family': 'units beyond opt.saved_row_factor are refused in unit order' by a prefix sum
+defect: This is another rule than today's. Today a refused row adds nothing to the count and a later, smaller row can still pass. A cut on a running prefix refuses everything after the first unit that does not fit. It is deterministic, but it changes results where the limit binds, and the scan must count only units that won their reservation and whose row stays.
+evidence: rules_singleton_cols.cpp:356-360 and :388.
+fix: Say that the rule changes, or define the scan over accepted units only. Report saved_row_refused next to today's count at the gate.
+
+--- 11
+design: device-native
+severity: serious
+where: Section 4 rule K1 and section 5 cascade wave steps (2), (3), (5): singleton-row candidates enter the max/min reduction and the row is deleted
+defect: The same defect as in one-algorithm, for singleton rows. The design protects forcing rows (a forcing row is deleted only if it won all its free columns), but a singleton row is deleted even when its bound was cut by a crossing within the tolerance. The value a column gets at such a crossing is not defined, and a forcing value against a propagation or singleton-row candidate is not covered either.
+evidence: The first two models of t_cross.cpp (x in [-1,1], rows 1e4 x >= 5e-3 and x <= 0): a deleted row is violated by 5e-3 when the column is fixed at 0. I showed this on the one-algorithm prototype; device-native has no code, so for this design it follows from its text.
+fix: One rule for every row that gives a bound: it is deleted in the wave only when the bounds written to its columns are at least as tight as its own candidates; otherwise it is flagged again and tested in the next wave in its own units. Define the value at a crossing within the tolerance (for example the upper candidate) in the value-function header.
+
+--- 12
+design: device-native
+severity: serious
+where: Section 2.1 and data layout ('a deleted row or removed column kills its entries by status; a single deleted entry gets index -1'; 'No compaction between rebuilds') with rule F1
+defect: As in one-algorithm: the lane of an entry is its rank among the live entries, and rows carry dead entries until the next rebuild. Here it is worse because a removed column writes nothing, so a row cannot see from its own slots which entries are dead. The fold kernels 'starting from act_light_kernel and block_fold' are not described with a rank pass.
+evidence: state_build.cpp:186-199 and :211-214; numerics.hpp:145-149.
+fix: Add the rank pass to both fold kernels with a status lookup per entry, or rewrite the touched rows at the end of the step that kills entries. Add step-equality cases with a dead entry at every position and with rows that cross the 64-entry boundary through deletions.
+
+--- 13
+design: device-native
+severity: serious
+where: Section 5 'Singleton-column family': 'Forcing columns in a second half-wave with claims on their rows (K4, priority the column index)'
+defect: It is not said on which state the second half-wave is evaluated. On the state before the first half, a forcing column can take a row that a first-half unit deleted or rewrote. Its saved row then names a column that an earlier record removed, or its lock premise was read on sides that the zero-cost rule changed.
+evidence: Zero-cost singleton columns change the sides of their row and can make one infinite (rules_singleton_cols.cpp:343-344, 384-387), which changes the lock counts the forcing test reads (:466-467). Contract at postsolve.hpp:182-183. The design only drops a forcing unit whose cost was written.
+fix: Evaluate forcing columns on the state after the first half is applied and its rows are refolded (then it is simply another wave), or let first-half units claim their rows first and drop every forcing column that touches a claimed row.
+
+--- 14
+design: device-native
+severity: serious
+where: Section 11 and the per-part conflict rules of the nine unbuilt rules; risk list item on the dual rules
+defect: The same as in one-algorithm: the step forms of the unbuilt dual rules rest on arguments of the design text. The designer did not read the Stage 1c texts, and a hashed priority gives another winner than the reviewed index order.
+evidence: See the one-algorithm entry. The design itself says 'The Stage 1c reviews broke several sequential guards by counterexample; the wave forms need the same review'. Milestone 10 has a 'short design note ... reviewed' per rule, which is the right place for it.
+fix: Make the cell table and the validity review a gate of milestone 10 per rule, before the seq form is written. Keep the index as priority wherever the Stage 1c tie rule is part of the proof.
+
+--- 15
+design: device-native
+severity: minor
+where: Section 4 rule K4: 'commit only if they hold every cell they write and no committed unit writes a cell they read'
+defect: As a definition this is circular: for two units that each read what the other writes, both 'only the first commits' and 'only the second commits' satisfy it. The result is unique only with the round structure that the dominated-column rule mentions.
+evidence: Design text. one-algorithm's wording ('no smaller writer holds a cell it reads') is a single pass and has one result.
+fix: Define K4 as the greedy maximal independent set in priority order (rounds of integer minima over read and write cells), or take one-algorithm's single-pass wording.
+
+--- 16
+design: device-native
+severity: minor
+where: Section 5 'Singleton-column family': 'units accepted while the running total is within saved_row_factor times the nonzeros, which is the sequential rule in ascending order'
+defect: The claim is wrong. In the sequential rule a refused row adds nothing and later rows can still pass.
+evidence: rules_singleton_cols.cpp:356-360 and :388.
+fix: As for one-algorithm: state the change or scan accepted units only.
+
+--- 17
+design: device-native
+severity: minor
+where: Section 5 'Parallel rows': 'one pivot equation per class ..., every admissible target ... gets the equation's singleton-column entries as inserts'
+defect: Two unstated differences from today. (1) Today an equation with a singleton column serves one target, because after the first subtraction that column has two entries and the equation's core changes (rules_parallel_rows.cpp:823-825); here it serves all targets at once. As row operations this is valid, but the column gets one entry per target. (2) The pivot is chosen on the state before the wave, so it can be an equation that the same wave merges into a smaller parallel row; the row_addition record then names a deleted row.
+evidence: rules_parallel_rows.cpp:367-371 (may_subtract), 413-422 (the comment on what the pair leaves) and 793-827. Primal postsolve does not read these records, so no wrong value follows today.
+fix: State both. For (2), choose the pivot among the rows that the merge keeps, or apply the merge first.
+
+--- 18
+design: bulk-first
+severity: minor
+where: Section 1: 'For a clean item, S0 is the state today's visit would have seen'; hybrid rule item 3
+defect: This is false for bound propagation. A row is not listed again for propagation when a bound of one of its columns changes on the side the row does not read, yet its visit compares its candidates with that bound. The certificates stay correct for another reason: bounds and records only tighten during the call, so a visit without effect on S0 stays without effect. That argument is not in the design and has to be made per family.
+evidence: state.hpp:204-208 (activity_unread leaves out the propagation list); state_ops.cpp:213-214; rules_propagation.cpp:110 and :119 read the column's current bound. For row rules and tightening both events list the row, so there the claim holds by my reading.
+fix: Replace the claim by a proof obligation per family: a 'no effect' certificate is stable under every change that does not list the item. Make the audit of verification item 1 the gate for it.
+
+--- 19
+design: bulk-first
+severity: minor
+where: Per-part 'Singleton-column family' and verification item 1 (the audit checks 'no counter of the state, no list, no record and no activity')
+defect: A singleton-column visit without a reduction can still book a statistic or set the limited flag, and can sum an activity again. A skipped visit would drop these, against the identity claim 'every statistic except seconds'. The audit as written does not compare result statistics.
+evidence: rules_singleton_cols.cpp:272 (free_singleton_rejected_explicit), :288-296 (growth_refused counts and the refused list), :424-426 (limited), :156-158 (recompute_row_activity inside the implied test).
+fix: The certificate carries what the visit books (statistics and flags), or such rows go to the host. The audit also compares the rule result and the statistics.
+
+--- 20
+design: bulk-first
+severity: minor
+where: Section 6, script application: 'the activity and the sides of a row are replayed by that row in script order'
+defect: A row's activity under a script is not only a chain of its own two-term updates. When the update count passes twice the row size, the host sums the row from scratch at that script position and reads the bounds of all its columns as they are then. The replay needs the script position of every column of the row, or its bits and update counts differ.
+evidence: state_ops.cpp:72-85 and the calls at :215 and :312. The nine instances above 1e7 nonzeros have 39.9 million dual fixings in the stored node run, so long scripts are the normal case there.
+fix: Give the replay the script position per column and reproduce the stale test. The array comparison after every replayed script, which the design already has, is the check.
+
+--- 21
+design: bulk-first
+severity: minor
+where: Verification item 2 and acceptance criterion 8 ('ten million through the device (packed)')
+defect: The same status problem as one-algorithm's union mode for whole presolves on a packed model: the run ends at the first infeasible or unbounded block. The array comparisons of the first bulk steps are not affected.
+evidence: 48.4% of 7.2 million campaign models end with a reduced model (campaign_rel_final.log of the one-algorithm designer).
+fix: Pack only blocks that end with a reduced model standalone; test the other statuses unpacked.
+
+
+======== BEST_PARTS ========
+--- 1
+design: bulk-first
+part: Certificates of visits without effect plus the ordered walk on the host
+why: Every reduction is still found and applied by today's reviewed code in today's order, so the oracle campaign, the 99 wrong engines and all stored hashes keep testing the device path. I found no case where a 'no effect' certificate of the row rules, propagation, tightening or dual fixing can be wrong, given the events of state.hpp:193-228.
+
+--- 2
+design: bulk-first
+part: Certificate audit in assertion builds and in the campaign
+why: Every certified skip is also executed by today's visit code and must change nothing and spend exactly the charged work. That turns each campaign model into a test of every certificate without a GPU. A synthesis should keep it for any step that claims 'this item does nothing', and extend it to result statistics.
+
+--- 3
+design: bulk-first
+part: Milestone M0: each family's visit split into a pure evaluation and an application, on the host, with hashes equal to today's
+why: It is the one migration step that changes no result and that all three designs need. The evaluation functions are the shared value functions of the wave designs.
+
+--- 4
+design: bulk-first
+part: Device image with the host's slots; whole-image comparison after every sync in assertion builds; four modes that must give the same phase hashes
+why: A stale mirror gives a wrong result, not a slow one, and this is the check that finds it.
+
+--- 5
+design: device-native
+part: Forcing-row rule: the smallest forcing row sets the value; a forcing row is deleted only if it set all its free columns, otherwise it is tested again as a row of constants
+why: It is the only rule among the three designs that survives my forcing-row models. Extended to every row that gives a bound, it is the fix for the defect I showed on the prototype.
+
+--- 6
+design: device-native
+part: Floating-point rules F1 to F5: max and min under a total order (value, then index), sorts on an ordered integer image of the double, ordered segment sums with one cancellation test, the objective offset as per-column contributions summed once by a fixed tree
+why: They close the signed-zero hole and remove the running sums in application order (inventory section 4, items 7 to 10) with one definition per sum.
+
+--- 7
+design: device-native
+part: Today's engine stays selectable (engine = sequential) until the wave engine has passed the reductions gate; step equality as the unit of testing
+why: A reviewed reference stays available for comparison at any time, and a difference between executors is located to one step of one wave.
+
+--- 8
+design: device-native
+part: Dual fixing evaluated after the deletions and bounds of the wave; records keyed (phase, wave, kind, index) with a fixed kind order; pending inserts force a rebuild
+why: These match class L of DESIGN.md section 4 and the postsolve contract, and they avoid the stale column store that one-algorithm's rebuild rule allows.
+
+--- 9
+design: device-native
+part: Wrong engines in three groups (rule, seq step, kernel), a check counts only after it failed on its wrong engine; assertion builds recompute every derived array after every wave
+why: Shared value functions make a wrong rule wrong in both executors; these are the independent checks for that.
+
+--- 10
+design: one-algorithm
+part: The prototype method: a batch form of a family behind a switch inside today's engine, measured on the 240 dumps for hashes, sizes, rounds and work
+why: It gave the only measured evidence of this round on what a snapshot order costs. It also made my counterexample runnable in minutes, and the fix measurable (240 of 240 hashes unchanged). Every family should pass this stage before a kernel is written.
+
+--- 11
+design: one-algorithm
+part: Activities as values (C2), lists as sets served in ascending index (C3), rebuild decisions on counters (C4), budgets between steps (C7)
+why: They remove the history from the state (inventory section 4, items 1, 3, 4, 6, 12, 13) and take the owner's rule of one summation order literally. Ascending lists alone change 2 of 240 hashes on the 240 benchmark dumps (designer's measurement).
+
+--- 12
+design: one-algorithm
+part: Reservation worded as 'holds every cell it claims and no smaller writer holds a cell it reads' (K3)
+why: It is a single pass with one result, and it equals a sequential application in index order when the read and write sets are complete. It needs only a unique key.
+
+--- 13
+design: one-algorithm
+part: Alias forest as the minimum spanning forest under a unique key, maps composed level by level in today's association order, all trees substituted in one step by an ordered fold
+why: The forest is the one Kruskal gives on the ascending list (alias_forest.cpp:84-105). The composition has one order on both executors, and no tree waits for another (32% of 280,666 trees fit a first batch otherwise, on the 240 benchmark instances).
+
+--- 14
+design: one-algorithm
+part: Step-hash harness with thresholds drawn at random per call, including 0, infinity and a coin per step
+why: It tests the claim that thresholds change time only, and the hand-overs in both directions.
+
+
+======== MISSING_IN_ALL ========
+- A rule for bounds of one column that cross within the tolerance when several rows give them in one batch, stated in the units of each source row. DESIGN.md section 4 has it in words ('redundancy re-tested last'); only device-native has it, and only for forcing rows.
+- A campaign profile for tolerance edges: two rows that bound one column within 1e-6 of each other with a coefficient ratio above 1e3, signed zeros, bounds one step apart. The default profiles ran 45 million models through the one-algorithm prototype without showing a defect that a two-row model shows.
+- How a fold kernel deals lanes on a row with dead entries. The summation order is defined on the rank among live entries (state_build.cpp:186-199). bulk-first needs it only for script replay; the two wave designs need it after every step.
+- Which status wins when one batch finds both an infeasible row and an unbounded column. Today it is the first in visit order; the designs carry a smallest index of each kind but no precedence.
+- A validity review of the batch forms of the nine unbuilt column rules against their Stage 1c texts. None of the three designers read those texts.
+- The nvcc check. All three leave it open. What I can add from a grep of the engine: the only math calls are fabs, fmin, fmax, round, floor, ceil, fma, frexp, ldexp, llround and the classification functions, with integer casts behind range tests. The open points are contraction off under nvcc, an explicit fma, and signed zero in fmin and fmax.
+- stack_consistent (the postsolve contract check) as a per-step check in the device tests. It exists only as an assertion in postsolve(), and a batch is where the record order is new.
+- A packing rule for device campaigns that keeps infeasible and unbounded blocks apart (48.4% of 7.2 million campaign models end with a reduced model).
+
+======== RANKING ========
+Under validity and determinism alone: 1. bulk-first, 2. device-native, 3. one-algorithm.
+
+bulk-first is first because nothing in its base plan can change a result: the device computes values with one definition and certificates of visits that do nothing, and today's code applies every finding in today's order. I found only gaps in its stated reasons and in what its audit compares. Its limit under this lens is that it answers the batch question by not asking it: for the cascades it has no conflict rule, and its script application (section 6) is the only place where the device writes the state.
+
+device-native is second. Its conflict and floating-point rules are the most complete of the two wave designs: the forcing-row rule, total orders for max and min, ordered sums, record keys with a kind order, the forced rebuild on inserts, and the sequential engine kept as a reference. Its defects are a missing extension (singleton rows at a crossing), an unspecified half-wave, and the lane rank. Nothing of it is built, so none of its rules has met a test.
+
+one-algorithm is third. It is the only design with a running prototype and measured results, which is its main value, but its rules as written give a wrong result at a crossing within the tolerance (shown on its own prototype), leave max and min without a tie rule, allow two units to hold one row, and let inserts wait for a rebuild that may not come. Each has a small fix.
+
+For a synthesis: take device-native's rule set with the fixes above as the definition of a step, one-algorithm's canonical state (C2, C3, C4, C7), its reservation wording and its prototype method as the gate per family, and bulk-first's M0 (evaluation split from application, with the audit) as the first milestone, because it changes no result.
+
+======== UNSURE ========
+- How often the crossing within the tolerance occurs on real models. On the 240 benchmark dumps the fix held back no row and changed no hash; I did not run the testbed or the nine instances above 1e7 nonzeros.
+- Which answer is right for my four models. They are infeasible in exact arithmetic and feasible within 1e-6; today's engine returns either, depending on the row order. What I call a defect is only the third outcome: a reduced model whose postsolved point violates a row by 5e-3.
+- The signed-zero finding is shown on the host only (two row orders, two bit patterns). That a device tree would pick the other zero follows from the comparison semantics; I ran no device code.
+- That the Stage 0 and Stage 1b fold kernels deal lanes by slot position. I did not read sweeps.cu or final_design.txt; I infer it from the host's fast path, which exists only for rows without a tombstone.
+- The composition argument for dual bound strengthening is mine, made by hand against one paragraph of v2_design.txt. I did not read the texts of the other eight unbuilt rules, so I cannot say which of their conflict rules are right.
+- bulk-first's certificates for the singleton-column family: I checked the statistics and flags a visit books, not whether every history term is excluded.
+- That a subtraction with several targets for one equation (device-native) is harmless beyond fill-in: argued from the comments in rules_parallel_rows.cpp:413-432, not tested.
+- The share of campaign models without a reduced model (51.6%) is from one log of the default profiles; I did not split it into infeasible and unbounded, and other profiles may differ.
+- I did not read ASSUMPTIONS.md, HISTORY.md, the Stage 1b design and critiques, the device state build, the cuOpt kernels, HiGHS, simple probing at edd147a7e, state_storage.cpp or hash.cpp. Statements about them in this critique come from the first-step reports.
+
