@@ -39,7 +39,8 @@ struct tolerances_t {
   // Share of the feasibility tolerance by which ratios of coefficients that are taken as
   // integers may move a row over the bounds of its columns, where a column gets an integer
   // value from a row (a free singleton column of integer type, an alias between two integer
-  // columns). Row tightening has the same share for the row it scales.
+  // columns). Row tightening has the same share for the row it scales. The side of such a row
+  // that is taken as an integer uses the same tolerance: the two together stay within it.
   double integral_drift_share = 0.1;
 };
 

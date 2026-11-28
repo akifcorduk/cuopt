@@ -301,6 +301,7 @@ struct alias_forest_t {
   // |rhs - child coefficient * offset| <= tol.feasibility; and what the rounding of the scale
   // moves the row by over the bounds of the parent, |child coefficient| * |scale as read -
   // scale| * max(|lower|, |upper|) of the parent, is at most tol.integral_drift_share *
+  // tol.feasibility, and together with |rhs - child coefficient * offset| at most
   // tol.feasibility (integral_term and drift_within, src/integral.hpp): a scale off by 5e-10
   // next to a parent that reaches 2e6 leaves the row off by 1e-3. An edge is inadmissible as well
   // when its scale, rounded for an integer child, is zero or not finite or its offset is not

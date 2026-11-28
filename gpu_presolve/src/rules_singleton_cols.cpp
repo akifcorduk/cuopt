@@ -39,6 +39,9 @@ struct singleton_cols_t::work_t {
   // By row: the pass over the lists that last visited it.
   std::vector<uint32_t> stamp;
   uint32_t pass = 0;
+  // By row: a forcing column was left because a side of the row is not readable. A side changes
+  // without an event of the columns of its row, so the row lists them when it is listed.
+  std::vector<uint8_t> unreadable;
   // Entries saved of rows that stayed in the model, over the whole presolve.
   int64_t kept_saved = 0;
   // The bounds of continuous columns are explicit (bound_propagation_t::make_explicit).
@@ -261,7 +264,10 @@ bool pivot(context_t& c, int32_t row, const row_scan_t& scanned, const single_t&
   double free_side = dd_residual(side, scanned.fixed_terms);
   if (!free_side_readable(c.tol, free_side)) { return false; }
   double q = cost / s.a;
-  if (!std::isfinite(q) || !std::isfinite(q * free_side)) { return false; }
+  // A quotient that underflows to zero would leave the cost where it is.
+  if (!std::isfinite(q) || (q == 0.) != (cost == 0.) || !std::isfinite(q * free_side)) {
+    return false;
+  }
   if (!implied_free(c, row, s, side)) {
     c.result.columns.free_singleton_rejected_explicit += c.w.explicit_bounds;
     return false;
@@ -433,6 +439,21 @@ int32_t row_of_singleton(context_t& c, int32_t col)
   return csc.index[p];
 }
 
+// The live columns of a row that a forcing column was left for go back on the column list: the
+// row has changed, and the column that was left has had no event of its own.
+void list_columns(context_t& c, int32_t row)
+{
+  state_t& st             = c.st;
+  const line_store_t& csr = st.csr;
+  c.w.unreadable[row]     = 0;
+  c.budget.spend(csr.used[row]);
+  for (int64_t e = csr.begin(row); e < csr.end(row); ++e) {
+    if (csr.live(e) && st.is_live(csr.index[e])) {
+      st.col_frontier.push(list_bit(col_list::singleton_cols), csr.index[e]);
+    }
+  }
+}
+
 // The forcing column: no cost, no bound and no lock in one direction, and locks in the other.
 // Every value of its other columns leaves it a value, so its rows restrict nothing: they are
 // saved without it and deleted. False when the rows do not fit the rest of the budget: the
@@ -475,6 +496,7 @@ bool forcing_column(context_t& c, int32_t col)
     saved_row_t copy = save_row(st, row, pool, [col](int32_t other) { return other != col; });
     usable =
       side_readable(c.tol, side) && free_side_readable(c.tol, upper_side ? copy.upper : copy.lower);
+    if (!usable) { c.w.unreadable[row] = 1; }
     saved.push_back(copy);
     values[kept++] = values[k];
   }
@@ -514,13 +536,21 @@ rule_result_t singleton_cols_t::run(state_t& st,
     w.taken.assign(st.ncols, 0);
     w.counted.assign(st.ncols, 0);
   }
-  if (w.stamp.size() != (size_t)st.nrows) { w.stamp.assign(st.nrows, 0); }
+  if (w.stamp.size() != (size_t)st.nrows) {
+    w.stamp.assign(st.nrows, 0);
+    w.unreadable.assign(st.nrows, 0);
+  }
   rule_result_t result;
   context_t c{st, budget, ps, opt, opt.tol, w, result};
   bool visits = sub_rule_active(opt, sub_rule::free_singleton) ||
                 sub_rule_active(opt, sub_rule::free_singleton_dual) ||
                 sub_rule_active(opt, sub_rule::zero_cost_singleton);
   bool forcing = sub_rule_active(opt, sub_rule::forcing_column);
+  if (!visits && !forcing) {
+    st.col_frontier.take(col_list::singleton_cols, w.cols);
+    st.row_frontier.take(row_list::singleton_cols, w.rows);
+    return result;
+  }
   // A reduction lists the columns and rows it touches: the lists are served until they stay
   // empty, so that a column which a deleted row leaves as a singleton is visited in this call.
   while (!result.stopped) {
@@ -541,6 +571,7 @@ rule_result_t singleton_cols_t::run(state_t& st,
         int32_t row = w.rows[r];
         if (!st.row_alive[row]) { continue; }
         budget.spend(line_visit_work);
+        if (w.unreadable[row]) { list_columns(c, row); }
         if (visits) { visit(c, row); }
       }
     }

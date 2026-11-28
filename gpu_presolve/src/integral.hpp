@@ -31,9 +31,11 @@ namespace gprs {
 // k; infinite when a ratio that is not an integer exactly belongs to a column without a finite
 // bound. It is the drift of row tightening (rules.hpp (c)) measured in the row divided by a,
 // where that rule measures it in the row times its scale.
+// side_error: |a * m - side|, what the rounded side moves the row by, in the units of the row.
 struct integral_form_t {
-  bool integral = true;
-  double drift  = 0.;
+  bool integral     = true;
+  double drift      = 0.;
+  double side_error = 0.;
 };
 
 // One other free column of the row, an integer column with coefficient b and the given bounds.
@@ -55,8 +57,8 @@ inline void integral_side(const tolerances_t& tol, double a, double side, integr
 {
   double ratio   = side / a;
   double nearest = std::round(ratio);
-  if (!(std::fabs(ratio - nearest) <= tol.zero) ||
-      !(std::fabs(a * nearest - side) <= tol.feasibility)) {
+  f.side_error   = std::fabs(a * nearest - side);
+  if (!(std::fabs(ratio - nearest) <= tol.zero) || !(f.side_error <= tol.feasibility)) {
     f.integral = false;
   }
 }
@@ -73,13 +75,16 @@ enum class drift_units_t : uint8_t { row, column };
 // the row, |a| * drift <= share * tol.feasibility, and in those of the column also
 // drift <= share * tol.feasibility, which together are
 // |a| * drift <= share * tol.feasibility * min(1, |a|).
+// The rounded side moves the same row: with the integers that the form stands for the row is
+// off by up to side_error + |a| * drift, which must stay within tol.feasibility as well. Each
+// alone within its limit would let a row be off by 1 + share tolerances.
 inline bool drift_within(
   const tolerances_t& tol, double share, double a, const integral_form_t& f, drift_units_t units)
 {
   double size  = std::fabs(a);
   double limit = share * tol.feasibility;
   if (units == drift_units_t::column && size < 1.) { limit *= size; }
-  return size * f.drift <= limit;
+  return size * f.drift <= limit && f.side_error + size * f.drift <= tol.feasibility;
 }
 
 // The form of the live row for the column of its live entry e, with `side` as the side of the
