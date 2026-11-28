@@ -181,9 +181,10 @@ struct options_t {
   // measurements.
   bool parallel_keep_larger = true;
 
-  // Share of the feasibility tolerance by which a row that is merged into a parallel one may
-  // differ from its multiple of that row over the bounds of their columns, where the two are
-  // parallel within tol.zero and not exactly (rules.hpp (e)). inf for no limit.
+  // Share of the feasibility tolerance by which a row that is merged into a parallel one, or
+  // has an equation with a parallel core subtracted, may differ from its multiple of the other
+  // row over the bounds of their columns, where the two cores are parallel within tol.zero and
+  // not exactly (rules.hpp (e)). inf for no limit.
   double parallel_drift_share = 0.1;
 
   // Record a hash of state and postsolve stack after every phase in result_t::phase_hash.
@@ -256,8 +257,8 @@ struct result_t {
   // of it stopped on its budget, no list of the cascade is left, no family reported limited
   // (rule_result_t::limited: a bound of a continuous column that has had its steps, a
   // subtraction of parallel rows left to a row that the presolve has changed, rows of a bucket
-  // of parallel rows that were not compared, a merge of parallel rows left to the bounds of
-  // their columns or to a fixed term, a free singleton column that only the growth
+  // of parallel rows that were not compared, a merge or a subtraction of parallel rows left to
+  // the bounds of their columns or to a fixed term, a free singleton column that only the growth
   // factor of earlier substitutions kept in the model, zero-cost singleton columns left for
   // saved_row_factor, a probing row left for the size of an offset), no column family is left
   // with a list, no row
@@ -347,9 +348,9 @@ struct result_t {
 // have, and every two rows of a bucket of parallel rows were compared (the parallel rows
 // report limited otherwise: a subtraction left to a row that the presolve has changed,
 // comparisons of a row that ended on opt.parallel_bucket_limit with rows of its bucket left,
-// which a second presolve reaches once the rows between have gone, and a merge left to the
-// bounds of the columns or to a fixed term of the kept row, which change without an event of
-// the pair; rules.hpp, (e)); an
+// which a second presolve reaches once the rows between have gone, and a merge or a
+// subtraction left to the bounds of the columns or to a fixed term of the kept row, which
+// change without an event of the pair; rules.hpp, (e)); an
 // activity whose error bound could decide a test was summed from scratch before the test
 // (refresh_activity). What it does not cover: a stored activity differs from the sum that the
 // second presolve starts with by its rounding, so a test that the last bits of an activity

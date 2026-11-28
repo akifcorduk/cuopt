@@ -1165,6 +1165,15 @@ MUTANTS = {
         "          if (!(drift <= opt.parallel_drift_share * tol.feasibility)) {",
         "          if (false) {",
     ),
+    # ... and an equation is subtracted from such a row whatever the two
+    # cores differ by (near_core_that_is_not_an_exact_multiple). No
+    # campaign check sees it, for the same reason.
+    "pr_sub_no_drift": (
+        "rules_parallel_rows.cpp",
+        "    if (!(drift <= drift_limit)) "
+        "{ return subtraction_t::left_to_the_bounds; }",
+        "    (void)drift;\n    (void)drift_limit;",
+    ),
 }
 
 

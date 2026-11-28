@@ -1281,6 +1281,41 @@ struct reference_t {
     return size * tol.side_error <= tol.feasibility;
   }
 
+  // The two cores are equal entry by entry, or one is the negative of the other.
+  static bool equal_cores(const view_t& kept, const view_t& gone)
+  {
+    double ratio = gone.core.begin()->second / kept.core.begin()->second;
+    bool equal   = std::fabs(ratio) == 1.;
+    for (const auto& entry : gone.core) {
+      equal = equal && entry.second == ratio * kept.core.at(entry.first);
+    }
+    return equal;
+  }
+
+  // What the core of `gone` differs by from its multiple of the core of `kept` over the bounds
+  // of the columns, each difference read from two products without rounding (rules.hpp (e)).
+  static double drift(const state_t& st, const view_t& kept, const view_t& gone)
+  {
+    double kept_first = kept.core.begin()->second, gone_first = gone.core.begin()->second;
+    double sum = 0.;
+    for (const auto& entry : gone.core) {
+      double a = kept.core.at(entry.first), b = entry.second;
+      double b_error, a_error;
+      double of_b       = two_prod(b, kept_first, b_error);
+      double of_a       = two_prod(a, gone_first, a_error);
+      double difference = (of_b - of_a) + (b_error - a_error);
+      if (difference == 0.) { continue; }
+      sum += std::fabs(difference / kept_first) *
+             std::fmax(std::fabs(st.col_lower[entry.first]), std::fabs(st.col_upper[entry.first]));
+    }
+    return sum;
+  }
+
+  static double drift_limit()
+  {
+    return options_t().parallel_drift_share * tolerances_t().feasibility;
+  }
+
   void unkey(int32_t row)
   {
     buckets[rows[row].key].erase(row);
@@ -1371,26 +1406,9 @@ struct reference_t {
           double ratio      = gone_first / kept_first;
           // Two rows that are not equal up to the sign cost one more pass over the other row,
           // for what they differ by over the bounds of their columns.
-          bool equal = my_size == their_size;
-          for (const auto& entry : gone_view.core) {
-            equal = equal && entry.second == ratio * kept_view.core.at(entry.first);
-          }
-          if (!equal) {
+          if (!equal_cores(kept_view, gone_view)) {
             budget.spend(st.csr.used[other]);
-            double drift = 0.;
-            for (const auto& entry : gone_view.core) {
-              double a = kept_view.core.at(entry.first), b = entry.second;
-              double b_error, a_error;
-              double of_b       = two_prod(b, kept_first, b_error);
-              double of_a       = two_prod(a, gone_first, a_error);
-              double difference = (of_b - of_a) + (b_error - a_error);
-              if (difference == 0.) { continue; }
-              drift += std::fabs(difference / kept_first) *
-                       std::fmax(std::fabs(st.col_lower[entry.first]),
-                                 std::fabs(st.col_upper[entry.first]));
-            }
-            tolerances_t tol;
-            if (!(drift <= options_t().parallel_drift_share * tol.feasibility)) {
+            if (!(drift(st, kept_view, gone_view) <= drift_limit())) {
               call.limited = true;
               return false;
             }
@@ -1451,6 +1469,14 @@ struct reference_t {
         }
         double value = -factor * ev.single_value;
         if (ev.singles == 1 && (!std::isfinite(value) || value == 0.)) { return false; }
+        // The same pass and the same limit as for a merge, with the equation as the kept row.
+        if (!equal_cores(ev, tv)) {
+          budget.spend(st.csr.used[other]);
+          if (!(drift(st, ev, tv) <= drift_limit())) {
+            call.limited = true;
+            return false;
+          }
+        }
         if ((grow_equation > 1. && touched[equation]) || (grow_target > 1. && touched[target])) {
           call.limited = true;
           return false;
@@ -3011,6 +3037,41 @@ GPRS_TEST(parallel_rows_that_are_not_exact_multiples)
     rule_result_t result = f.run();
     GPRS_CHECK_EQ(result.findings, second == 6. ? 1 : 0);
     GPRS_CHECK_EQ(result.limited, second != 6.);
+  }
+}
+
+// The same for an equation that is subtracted. Row 0: x0 + (1 + 9e-10) x1 + t <= 5 with the
+// singleton column t; row 1: x0 + x1 = 3; rows 2 and 3 hold x0 and x1. With row 0 left as
+// t <= 2, the row of the model is off by 9e-10 x1 where the reduced model holds: 9e-3 at
+// x1 = 1e7, which leaves the pair alone, and 4.5e-8 at x1 = 50.
+GPRS_TEST(near_core_that_is_not_an_exact_multiple)
+{
+  for (double range : {1e7, 50.}) {
+    bool subtracted = range == 50.;
+    model_t m =
+      continuous(make_model({{1., 1. + 9e-10, 1.}, {1., 1., 0.}, {1., -1., 0.}, {1., 2., 0.}},
+                            {-inf, 3., -3. * range, -3. * range},
+                            {5., 3., 3. * range, 3. * range},
+                            {-range, -range, 0.},
+                            {range, range, 10.}));
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.outcome, ok);
+    GPRS_CHECK_EQ(result.findings, subtracted ? 1 : 0);
+    GPRS_CHECK_EQ(result.limited, !subtracted);
+    GPRS_CHECK_EQ(f.ps.row_additions.size(), subtracted ? 1u : 0u);
+    // Without the limit the equation is subtracted whatever the bounds are.
+    fixture_t loose(m);
+    loose.opt.parallel_drift_share = inf;
+    GPRS_CHECK_EQ(loose.run().findings, 1);
+    if (!subtracted) { continue; }
+    GPRS_CHECK_EQ(f.st.row_upper[0], 2.);
+    model_t reduced = f.reduced();
+    dense_t point   = {3. - range, range, 2.}, back;
+    point_check_t c = check_point(reduced, point);
+    GPRS_CHECK(c.row_violation == 0. && c.bound_violation == 0.);
+    f.ps.postsolve(point, back);
+    GPRS_CHECK(feasible(m, back));
   }
 }
 
