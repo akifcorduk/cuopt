@@ -222,6 +222,7 @@ def summarize(args, summary, entries, out):
                 "dual_findings",
                 "sub_rules",
                 "columns",
+                "probing",
                 "col_from_rows",
                 "objective_nnz",
             ):

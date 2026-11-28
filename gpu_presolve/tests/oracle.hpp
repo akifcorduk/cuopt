@@ -145,6 +145,34 @@ struct generator_options_t {
   // is no such column. With p_forcing_col == 0 nothing is drawn.
   double p_forcing_col     = 0.;
   int32_t max_forcing_cols = 2;
+
+  // Probing rows, behind the rows counted above: up to max_probing_rows times, each with
+  // p_probing_row, the model gets an equation over columns that other rows hold as well, made
+  // for simple probing (rules.hpp (g)). One of its columns is an enumerated column with two
+  // values, the binary, nine times in ten one with the values 0 and 1 where the model has one;
+  // it has two or three other columns, at most one of them a line column and three in four of
+  // the enumerated columns with two values other than 0 and 1 passed over, with coefficients
+  // drawn as elsewhere. The coefficient of the binary is the sum of
+  // |coefficient| * (upper - lower) over the other columns, with a random sign, and the side is
+  // the minimum activity of the row plus that sum: the midpoint of its activity range, of which
+  // the binary carries half. An end that an infinite or huge bound leaves open counts as four
+  // from the other end. The coefficient of the binary and the side are not held to
+  // max_coefficient and max_side.
+  // Of eight rows, four are drawn like that. One has its side moved by one, one the coefficient
+  // of the binary changed by one. One has an enumerated column with three values in the place
+  // of the binary, with half the coefficient (the other coefficients are doubled for that), so
+  // that it carries half of the range as well. And one prefers a line column among its other
+  // columns where the model has one, as the four plain ones do one time in two.
+  // With p_probing_row == 0 nothing is drawn.
+  // probing_wide: the smallest huge bound (1e7) counts as the bound it is, so that a column with
+  // it has a range beyond the limit on the scale of an alias. The binary then has a coefficient
+  // of that size and the row a side of that size, next to the small integers of the other data:
+  // such a case is outside what the other knobs draw, and the cases with it are a set of their
+  // own (the singleton row of an integer column with a coefficient of 1e7 rounds its bound with
+  // the tolerance in the units of the column).
+  double p_probing_row     = 0.;
+  int32_t max_probing_rows = 2;
+  bool probing_wide        = false;
 };
 
 // A model for the presolve and the integer-data model it was scaled from.
@@ -174,7 +202,9 @@ struct case_t {
 // order of their rows; a row that is a multiple of an earlier row copies that row without its
 // singleton column and can get one of its own. The sides of a row are drawn with its singleton
 // columns in the activity range. With p_forcing_col > 0 the forcing columns follow, after the
-// sides are drawn.
+// sides are drawn. With p_probing_row > 0 the probing rows follow the rows counted above, in
+// the order they are drawn, after the forcing columns; a case that is scaled draws a factor for
+// each of them as for any row.
 case_t generate(uint64_t seed, const generator_options_t& options);
 
 // base with row i multiplied by row_scale[i] > 0 and column j divided by col_scale[j] > 0

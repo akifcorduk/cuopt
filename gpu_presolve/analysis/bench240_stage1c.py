@@ -1048,6 +1048,50 @@ def print_column_statistics(rows):
                 sum(o[2] for o in objective),
             )
         )
+    print_probing_statistics(rows)
+
+
+def print_probing_statistics(rows):
+    """Print what simple probing counts besides its findings."""
+    rows = {
+        n: r for n, r in rows.items() if isinstance(r.get("probing"), dict)
+    }
+    if not rows:
+        return
+    print("\nSimple probing, %d instances with the statistics" % len(rows))
+
+    def total(path):
+        values = [(field(r, path) or 0, n) for n, r in rows.items()]
+        hit = [v for v in values if v[0]]
+        most = max(values) if hit else (0, "-")
+        return sum(v for v, _ in values), len(hit), most
+
+    for label, path in (
+        ("aliases of origin probing", "probing.aliases"),
+        ("  of them with their row", "probing.aliases_with_row"),
+        ("rows whose aliases entered a batch", "probing.rows"),
+        ("  deleted by the batch", "probing.rows_deleted"),
+        ("  left with a cut edge", "probing.rows_cut"),
+        ("visits left: two columns connected", "probing.connected"),
+        ("visits left: bounds one apart, not 0 and 1", "probing.unit_refused"),
+        ("visits left: scale limit", "probing.scale_refused"),
+        ("visits left: size of an offset", "probing.size_refused"),
+        ("calls with an alias depth above 1", "probing.deep_batches"),
+        ("changes of entries by the substitutions", "probing.entry_changes"),
+    ):
+        sum_, count, most = total(path)
+        print(
+            "  %-55s %10d on %3d instances, most %d on %s"
+            % (label, sum_, count, most[0], most[1])
+        )
+    depth = max(
+        (field(r, "columns.alias_depth") or 0, n) for n, r in rows.items()
+    )
+    print("  largest alias depth of a call: %d on %s" % depth)
+    scale = max(
+        (field(r, "probing.max_scale") or 0.0, n) for n, r in rows.items()
+    )
+    print("  largest scale of an alias: %g on %s" % scale)
 
 
 def rounds_text(rows):

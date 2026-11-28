@@ -677,3 +677,84 @@ GPRS_TEST(engine_fixed_point_with_a_plain_fixed_term_next_to_a_subtraction)
   GPRS_CHECK_EQ(result.reduced.row_upper[1], 2.);
   check_fixed_point(result, options);
 }
+
+// Simple probing reads explicit bounds. Row 0: 2 p + x + y = 2 with x in [0, 5] is balanced only
+// with the bound x <= 1 that row 1, x + z <= 1, implies: the row is taken in the rounds after
+// the bounds became explicit, and the presolve ends at a fixed point.
+GPRS_TEST(engine_fixed_point_with_a_probing_row_that_needs_an_implied_bound)
+{
+  std::vector<col_t> cols = {{0., 1., true}, {0., 5., false}, {0., 1., false}, {0., 3., false}};
+  std::vector<row_t> rows = {{{{0, 2.}, {1, 1.}, {2, 1.}}, 2., 2.}, {{{1, 1.}, {3, 1.}}, -inf, 1.}};
+  model_t m               = with_cost(make_model(cols, rows), {3., 1., 1., -1.});
+  options_t options       = stage1();
+  result_t result         = presolve(m, options);
+  GPRS_CHECK_EQ(result.status, status_t::reduced);
+  GPRS_CHECK_EQ(result.stats[rule::simple_probing].findings, 2);
+  GPRS_CHECK(result.explicit_rounds >= 1);
+  // z - p <= 0 is left.
+  GPRS_CHECK_EQ(result.reduced.nrows, 1);
+  GPRS_CHECK_EQ(result.reduced.ncols, 2);
+  check_fixed_point(result, options);
+  check_fixed_point(presolve(m, options_t()), options_t());
+
+  // Without propagation no bound becomes explicit, and the row stays.
+  options.enabled[rule::propagation] = false;
+  result                             = presolve(m, options);
+  GPRS_CHECK_EQ(result.stats[rule::simple_probing].findings, 0);
+  GPRS_CHECK_EQ(result.reduced.nrows, 2);
+  check_fixed_point(result, options);
+}
+
+// What simple probing leaves, it leaves for a reason that the reduced model shows as well: a
+// range beyond the limit on the scale of an alias. And a row that waits for the next call,
+// because two of its columns were connected in the batch, is taken in the next round.
+GPRS_TEST(engine_fixed_point_with_probing_rows_that_are_left_or_wait)
+{
+  // 5 p + x + y = 5 with x in [0, 4].
+  {
+    std::vector<col_t> cols   = {{0., 1., true}, {0., 4., false}, {0., 1., false}, {0., 9., false}};
+    std::vector<row_t> rows   = {{{{0, 5.}, {1, 1.}, {2, 1.}}, 5., 5.},
+                                 {{{1, 1.}, {2, 1.}, {3, 1.}}, -inf, 4.5},
+                                 {{{0, 1.}, {2, 1.}, {3, -1.}}, -3.5, inf}};
+    model_t m                 = with_cost(make_model(cols, rows), {1., 1., -1., 1.});
+    options_t options         = stage1();
+    options.alias_scale_limit = 3.;
+    result_t result           = presolve(m, options);
+    GPRS_CHECK_EQ(result.stats[rule::simple_probing].findings, 0);
+    GPRS_CHECK(result.columns.probing_scale_refused >= 1);
+    check_fixed_point(result, options);
+    options.alias_scale_limit = 4.;
+    result                    = presolve(m, options);
+    GPRS_CHECK_EQ(result.stats[rule::simple_probing].findings, 2);
+    GPRS_CHECK_EQ(result.columns.probing_max_scale, 4.);
+    check_fixed_point(result, options);
+  }
+  //   r0:  2 p1 + x + w  = 2
+  //   r1:  2 p2 + x + y  = 2      stays with a cut edge, as p2 - p1 = 0
+  //   r2:  2 p3 + p1 + p2 = 2     waits: p1 and p2 are connected through x
+  // and two rows that keep the columns in the model.
+  {
+    std::vector<col_t> cols = {{0., 1., true},
+                               {0., 1., true},
+                               {0., 1., true},
+                               {0., 1., false},
+                               {0., 1., false},
+                               {0., 1., false},
+                               {0., 9., false}};
+    std::vector<row_t> rows = {{{{0, 2.}, {3, 1.}, {4, 1.}}, 2., 2.},
+                               {{{1, 2.}, {3, 1.}, {5, 1.}}, 2., 2.},
+                               {{{0, 1.}, {1, 1.}, {2, 2.}}, 2., 2.},
+                               {{{2, 1.}, {6, 1.}}, -inf, 4.5},
+                               {{{2, 1.}, {6, -1.}}, -3.5, inf}};
+    model_t m               = with_cost(make_model(cols, rows), {1., 1., 1., 1., -1., 1., -1.});
+    options_t options       = stage1();
+    result_t result         = presolve(m, options);
+    GPRS_CHECK(result.columns.probing_connected >= 1);
+    GPRS_CHECK_EQ(result.columns.probing_rows_cut, 1);
+    // Every column but p3 and the last one is an alias.
+    GPRS_CHECK_EQ(result.reduced.ncols, 2);
+    GPRS_CHECK_EQ(result.reduced.nrows, 2);
+    check_fixed_point(result, options);
+    check_fixed_point(presolve(m, options_t()), options_t());
+  }
+}

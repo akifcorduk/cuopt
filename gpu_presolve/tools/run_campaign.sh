@@ -77,5 +77,13 @@ grep -h "^columns " "$out"/part.*.txt |
             print "results with a record: defined", i, "defined by a dual rule", j,
                   "interval", k, "forcing", l, "| boxes tested", m, "snapshots tested", n,
                   "not tested", o, "results with limited", p}'
+grep -h "^probing " "$out"/part.*.txt |
+  awk '{a += $3; b += $5; c += $7; d += $10; e += $12; f += $14; g += $17; u += $19; h += $21;
+        i += $23; j += $26; if ($28 + 0 > k) k = $28 + 0}
+       END {print "simple probing: results with an alias", a, "aliases", b, "without a row", c,
+                  "| rows in a batch", d, "deleted", e, "left with a cut edge", f;
+            print "rows left: columns connected", g, "bounds one apart, not 0 and 1:", u,
+                  "scale limit", h, "size of an offset", i,
+                  "| calls with an alias depth above 1:", j, "largest depth", k + 0}'
 grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND" "$out"/part.*.txt | cut -c1-200 | head -20
 exit $bad

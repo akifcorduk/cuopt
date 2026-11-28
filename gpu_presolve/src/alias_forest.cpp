@@ -79,6 +79,7 @@ void alias_forest_t::init(int32_t ncols)
   touched.clear();
   edges.clear();
   set_size.clear();
+  depth.clear();
 }
 
 bool alias_forest_t::add_edge(const alias_edge_t& edge)
@@ -142,6 +143,7 @@ void alias_forest_t::freeze(const state_t& st, std::vector<alias_map_t>& maps)
   std::vector<int32_t> score(n);
   std::vector<double> scale(n), offset(n);
   std::vector<int32_t> walk, roots;
+  depth.assign(n, 0);
   for (int32_t start = 0; start < n; ++start) {
     if (seen[start]) { continue; }
 
@@ -200,6 +202,7 @@ void alias_forest_t::freeze(const state_t& st, std::vector<alias_map_t>& maps)
             continue;
           }
           maps.push_back(alias_map_t{touched[v], touched[root], edge.row, scale[v], offset[v]});
+          depth[v] = depth[u] + 1;
           walk.push_back(v);
         }
       }

@@ -31,7 +31,8 @@
 //    test_e2e_*.cpp.
 // G  Column rules (Stage 1c): src/rules_simple_probing.cpp, rules_singleton_cols.cpp,
 //    rules_dual_cols.cpp, rules_parallel_cols.cpp and the internal headers they share with C
-//    and D, src/implied.hpp and saved_row.hpp; tests/test_columns_*.cpp.
+//    and D, src/implied.hpp, saved_row.hpp, forcing.hpp and alias_apply.hpp;
+//    tests/test_columns_*.cpp.
 
 #include <gprs/numerics.hpp>
 #include <gprs/postsolve.hpp>
@@ -140,6 +141,16 @@ struct options_t {
   // Free entries of a lock row above which the lock alias leaves the row; 0 for no limit.
   int32_t lock_alias_row_limit = 0;
 
+  // Largest range upper - lower of a column that simple probing or the lock alias replaces by a
+  // binary: it is the scale of the alias, which multiplies every coefficient of the column into
+  // the rows of the binary.
+  double alias_scale_limit = 1e6;
+
+  // Simple probing visits an equation whose two activities lie equally far from its side within
+  // this many feasibility tolerances (rules.hpp (g)). With 1 the two gaps of a binary together
+  // stay within one tolerance; 2 is what the two forcing tests allow by themselves.
+  double probing_balance = 1.;
+
   // Rounds of cascade, parallel rows, doubleton equations and column rules, counted over the
   // whole presolve.
   int32_t max_rounds = 20;
@@ -235,7 +246,8 @@ struct result_t {
   // subtraction of parallel rows left to a row that the presolve has changed, rows of a bucket
   // of parallel rows that were not compared, a free singleton column that only the growth
   // factor of earlier substitutions kept in the model, zero-cost singleton columns left for
-  // saved_row_factor), no column family is left with a list, no row
+  // saved_row_factor, a probing row left for the size of an offset), no column family is left
+  // with a list, no row
   // holds a term of a fixed column that a family could read, and no limit (max_rounds,
   // max_cascade_passes, time_limit) cut it short.
   // presolve(reduced, options) then returns unchanged; see presolve().

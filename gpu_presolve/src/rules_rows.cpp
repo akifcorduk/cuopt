@@ -5,6 +5,8 @@
  */
 /* clang-format on */
 
+#include "forcing.hpp"
+
 #include <gprs/assert.hpp>
 #include <gprs/presolve.hpp>
 #include <gprs/rules.hpp>
@@ -31,11 +33,6 @@ namespace {
 // division, by up to this many rounding units of its size in all. The integer rounding allows
 // for the feasibility tolerance only, which is less than that from about 1e10 on.
 constexpr double bound_rounding_units = 4.;
-
-// A bound of a continuous column lies up to 4 rounding units of its size outside the value that
-// its row gives (bound propagation), so the activity of a row that is forcing in exact terms
-// misses its side by up to that many units of the sum of its terms; twice that is allowed.
-constexpr double forcing_rounding_units = 8.;
 
 struct context_t {
   state_t& st;
@@ -137,46 +134,30 @@ rule_outcome_t singleton_row(context_t& c, int32_t row)
   return rule_outcome_t::ok;
 }
 
-// gap is side - activity, error the error bound of the activity, and the activity is the minimum
-// (at_minimum) or the maximum one. The row is forcing when the gap is zero within
-// feasibility / dynamism. That alone keeps a feasible point within feasibility / max|a| of the
-// fixed one, which is above the tolerance when every coefficient is below 1, so the tolerance
-// is feasibility * min|a| / max(1, max|a|).
-// An integer column has no point between its bound and that distance. A continuous column has:
-// the points of the row lie up to slack / |a| off the bound, where the slack is what the
-// activity can still move towards the side, and fixing the column moves them all onto the
-// bound. Another row that holds the column with a larger coefficient is then violated by more
-// than the slack; with bounds that propagation left a step short of their limit that makes a
-// feasible model infeasible. So a row with a free continuous column is forcing only when its
-// slack is rounding: the error bound of the activity and forcing_rounding_units of its terms.
+// The forcing row: the free entries of the row are forcing (src/forcing.hpp) at its minimum
+// activity (at_minimum) or at its maximum one, gap being side - activity and error the error
+// bound of the activity. Every free column is fixed at the bound that gives the activity and
+// the row is deleted.
 bool forcing_row(context_t& c, int32_t row, double gap, double error, bool at_minimum)
 {
   state_t& st = c.st;
-  if (!(std::fabs(gap) + error <= c.tol.feasibility)) { return false; }
-  double smallest = inf, largest = 0., size = 0.;
-  bool continuous = false;
+  if (!forcing_possible(c.tol, gap, error)) { return false; }
+  forcing_entries_t entries;
   c.work.cols.clear();
   c.work.values.clear();
   for (int64_t e = st.csr.begin(row); e < st.csr.end(row); ++e) {
     if (!st.csr.live(e)) { continue; }
     int32_t col = st.csr.index[e];
     if (!st.is_live(col)) { continue; }
-    double a         = st.csr.value[e];
-    double magnitude = std::fabs(a);
-    if (magnitude < smallest) { smallest = magnitude; }
-    if (magnitude > largest) { largest = magnitude; }
+    double a = st.csr.value[e];
     c.work.cols.push_back(col);
     c.work.values.push_back(at_minimum
                               ? min_activity_bound(a, st.col_lower[col], st.col_upper[col])
                               : max_activity_bound(a, st.col_lower[col], st.col_upper[col]));
-    size += std::fabs(a * c.work.values.back());
-    continuous = continuous || !st.is_integer(col);
+    entries.add(a, c.work.values.back(), !st.is_integer(col));
   }
   c.budget.spend(st.csr.used[row]);
-  double tolerance = c.tol.feasibility * smallest / (largest > 1. ? largest : 1.);
-  if (!(std::fabs(gap) + error <= tolerance)) { return false; }
-  double slack = at_minimum ? gap : -gap;
-  if (continuous && slack > error + forcing_rounding_units * rounding_unit * size) { return false; }
+  if (!forcing(c.tol, entries, gap, error, at_minimum)) { return false; }
 
   st.delete_row(row);
   c.finding();

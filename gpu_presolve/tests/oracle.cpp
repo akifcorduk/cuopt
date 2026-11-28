@@ -445,6 +445,85 @@ case_t generate(uint64_t seed, const generator_options_t& o)
     }
   }
 
+  for (int32_t n = 0; n < o.max_probing_rows; ++n) {
+    if (!(o.p_probing_row > 0. && rng.chance(o.p_probing_row))) { break; }
+    int32_t kind      = rng.uniform(0, 7);
+    bool wide         = kind == 6;
+    bool prefers_line = kind == 7 || (kind < 4 && rng.chance(0.5));
+    // The integer points of an enumerated column, and for a line column its small bounds or,
+    // where an end is open, a stretch of four from the other end.
+    double largest = o.probing_wide ? huge_bounds[0] : o.max_side + 1;
+    auto ends      = [&](int32_t j, double& first, double& last) {
+      first           = std::ceil(base.col_lower[j]);
+      last            = std::floor(base.col_upper[j]);
+      bool low_small  = std::fabs(first) <= largest;
+      bool high_small = std::fabs(last) <= largest;
+      if (!low_small) { first = high_small ? last - 4. : -2.; }
+      if (!high_small) { last = first + 4.; }
+    };
+    // An enumerated column with two values other than 0 and 1.
+    auto shifted = [&](int32_t j) {
+      double first, last;
+      ends(j, first, last);
+      return !line[j] && last - first == 1. && first != 0.;
+    };
+    std::vector<int32_t> binaries, plain, others;
+    for (int32_t j : usable) {
+      double first, last;
+      ends(j, first, last);
+      if (line[j] || last - first != (wide ? 2. : 1.)) { continue; }
+      binaries.push_back(j);
+      if (first == 0.) { plain.push_back(j); }
+    }
+    if (binaries.empty()) { continue; }
+    // Nine times in ten a column with the values 0 and 1, where the model has one.
+    if (!plain.empty() && rng.chance(0.9)) { binaries = plain; }
+    int32_t binary = binaries[rng.uniform(0, (int32_t)binaries.size() - 1)];
+    for (int32_t j : usable) {
+      if (j == binary) { continue; }
+      if (line[j] && prefers_line) {
+        others.insert(others.begin(), j);
+      } else {
+        others.push_back(j);
+      }
+    }
+    int32_t count = rng.uniform(2, 3);
+    draft_row_t row;
+    row.kind     = row_kind_t::general;
+    double reach = 0., minimum = 0.;
+    bool at_front = prefers_line;
+    while ((int32_t)row.col.size() < count && !others.empty()) {
+      int32_t pick = at_front ? 0 : rng.uniform(0, (int32_t)others.size() - 1);
+      at_front     = false;
+      int32_t j    = others[pick];
+      others.erase(others.begin() + pick);
+      if (line[j] && row.has_line) { continue; }
+      if (shifted(j) && rng.chance(0.75)) { continue; }
+      double a = nonzero(rng, o.max_coefficient);
+      if (wide) { a *= 2.; }
+      double first, last;
+      ends(j, first, last);
+      add_entry(row, j, a);
+      reach += std::fabs(a) * (last - first);
+      minimum += a > 0 ? a * first : a * last;
+    }
+    double first, last;
+    ends(binary, first, last);
+    double step = wide ? reach / 2. : reach;
+    if (kind == 5) { step += rng.chance(0.5) ? 1. : -1.; }
+    if (step <= 0.) { step = 1.; }
+    double a = rng.chance(0.5) ? step : -step;
+    add_entry(row, binary, a);
+    minimum += a > 0 ? a * first : a * last;
+    double side = minimum + step * (last - first);
+    if (kind == 4) { side += rng.chance(0.5) ? 1. : -1.; }
+    sort_entries(row);
+    row.lower = row.upper = side;
+    rows.push_back(row);
+  }
+  nrows      = rows.size();
+  base.nrows = nrows;
+
   base.row_start.push_back(0);
   for (const draft_row_t& row : rows) {
     base.col_index.insert(base.col_index.end(), row.col.begin(), row.col.end());

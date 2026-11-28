@@ -275,6 +275,9 @@ struct alias_forest_t {
   std::vector<alias_edge_t> edges;  // tree edges in the order they were added
   std::vector<int32_t> position;    // index in touched of a column of the batch, -1 otherwise
   std::vector<int32_t> set_size;    // by position: columns of the set of a union-find root
+  // By position, set by freeze(): the tree edges between the column and the root of its map,
+  // which are the maps that its own is composed of; 0 for a root.
+  std::vector<int32_t> depth;
 
   // O(columns), once.
   void init(int32_t ncols);
@@ -293,7 +296,7 @@ struct alias_forest_t {
   // neighbours in the order their edges were added. An inadmissible edge is cut: its row stays
   // in the model and the child becomes the root of its subtree, which is walked after the tree.
   // Returns in maps every column that is not a root with its map composed to its root, the maps
-  // of one root contiguous and parents before children. O(edges of the batch).
+  // of one root contiguous and parents before children, and sets depth. O(edges of the batch).
   // Added with the implementation. The columns of the edges are live. An edge between integers
   // must be integral in the units of its row as well, since a large coefficient turns a
   // deviation below tol.zero into a violated row: with the rounded scale and offset,

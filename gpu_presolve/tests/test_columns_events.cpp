@@ -5,8 +5,9 @@
  */
 /* clang-format on */
 
-// The events of the column rules through the Stage 1 families, the singleton columns and the
-// storage steps between them: whatever a family, a compaction, a rebuild, make_explicit or
+// The events of the column rules through the Stage 1 families, simple probing, the singleton
+// columns and the storage steps between them: whatever a family, a compaction, a rebuild,
+// make_explicit or
 // absorb_fixed_terms changes of what the column rules read must be on their lists afterwards
 // (rules.hpp, before (g)).
 // tests/test_state_ops.cpp and test_state_random.cpp test the same per state operation.
@@ -122,6 +123,7 @@ struct driver_t {
   doubleton_t doubleton;
   parallel_rows_t parallel_rows;
   dual_fixing_t dual_fixing;
+  simple_probing_t simple_probing;
   singleton_cols_t singleton_cols;
   std::string failure;
   bool ended                     = false;
@@ -130,6 +132,8 @@ struct driver_t {
   int64_t rebuilds               = 0;
   int64_t singleton_findings     = 0;
   int64_t singleton_second_calls = 0;
+  int64_t probing_findings       = 0;
+  int64_t probing_last_calls     = 0;
 
   explicit driver_t(const model_t& m) : st(m, opt.tol) { ps.init(m); }
 
@@ -262,8 +266,53 @@ struct driver_t {
     storage(rebuild);
     call("doubleton equations", rule::doubleton, doubleton);
     storage(rebuild);
+    probing();
+    storage(rebuild);
     singleton();
     storage(rebuild);
+  }
+
+  // Simple probing on every live row. A call applies one batch, and the rows that the batch
+  // changes or leaves for the next one are on the list again: the family is called until its
+  // list stays empty. What it changed was on its list and has been served: with every row
+  // listed once more it finds nothing, unless a call stopped.
+  void probing()
+  {
+    step(
+      "simple probing",
+      [&] {
+        const list_mask_t own = list_bit(row_list::simple_probing);
+        auto list_rows        = [&] {
+          for (int32_t i = 0; i < st.nrows; ++i) {
+            if (st.row_alive[i]) { st.row_frontier.push(own, i); }
+          }
+        };
+        list_rows();
+        bool stopped = false;
+        for (int32_t calls = 0; !st.row_frontier.empty(row_list::simple_probing); ++calls) {
+          if (calls == 100) {
+            failure = "simple probing does not serve its list";
+            break;
+          }
+          work_budget_t budget = make_budget(opt.budget[rule::simple_probing], st);
+          rule_result_t result = simple_probing.run(st, budget, ps, opt);
+          probing_findings += result.findings;
+          stopped = stopped || result.stopped;
+          if (result.limited) { failure = "simple probing reported limited"; }
+          if (result.outcome != rule_outcome_t::ok) { return result.outcome; }
+        }
+        if (!stopped && failure.empty()) {
+          list_rows();
+          work_budget_t budget = make_budget(opt.budget[rule::simple_probing], st);
+          rule_result_t again  = simple_probing.run(st, budget, ps, opt);
+          ++probing_last_calls;
+          if (again.findings != 0 && !again.stopped) {
+            failure = "simple probing found a reduction that no list of the calls before held";
+          }
+        }
+        return rule_outcome_t::ok;
+      },
+      list_bit(row_list::simple_probing));
   }
 
   // The singleton-column rules on every live column. Every step starts with the lists of the
@@ -329,7 +378,14 @@ struct driver_t {
 // family or storage step makes it; a column family serves its own lists.
 GPRS_TEST(columns_events_follow_every_family)
 {
-  std::vector<oracle::generator_options_t> shapes(6);
+  std::vector<oracle::generator_options_t> shapes(7);
+  shapes[6].p_probing_row         = 0.8;
+  shapes[6].max_probing_rows      = 3;
+  shapes[6].max_width             = 2;
+  shapes[6].max_enum_cols         = 6;
+  shapes[6].max_line_cols         = 1;
+  shapes[6].p_infinite_bound      = 0.2;
+  shapes[6].p_singleton_col       = 0.3;
   shapes[5].p_singleton_col       = 0.5;
   shapes[5].p_singleton_line      = 0.7;
   shapes[5].p_singleton_zero_cost = 0.5;
@@ -354,6 +410,7 @@ GPRS_TEST(columns_events_follow_every_family)
   shapes[4].p_forcing_side        = 0.25;
   int64_t models = 0, row_changes = 0, col_changes = 0, rebuilds = 0, aliases = 0, fixed = 0;
   int64_t additions = 0, failures = 0, singleton_findings = 0, from_rows = 0, second_calls = 0;
+  int64_t probing_findings = 0, probing_last_calls = 0, probing_aliases = 0;
   for (size_t shape = 0; shape < shapes.size(); ++shape) {
     for (uint64_t seed = 7400000; seed < 7402500 && failures < 3; ++seed) {
       driver_t d(oracle::generate(seed, shapes[shape]).model);
@@ -368,6 +425,11 @@ GPRS_TEST(columns_events_follow_every_family)
       singleton_findings += d.singleton_findings;
       second_calls += d.singleton_second_calls;
       from_rows += d.ps.col_from_rows.size();
+      probing_findings += d.probing_findings;
+      probing_last_calls += d.probing_last_calls;
+      for (const alias_record_t& r : d.ps.aliases) {
+        probing_aliases += r.origin == alias_origin_t::probing;
+      }
       if (d.failure.empty()) { continue; }
       ++failures;
       test::fail(
@@ -377,15 +439,20 @@ GPRS_TEST(columns_events_follow_every_family)
     }
   }
   GPRS_CHECK_EQ(failures, 0);
-  GPRS_CHECK_EQ(models, 6 * 2500);
+  GPRS_CHECK_EQ(models, 7 * 2500);
   GPRS_CHECK(row_changes > 5000 && col_changes > 5000);
   GPRS_CHECK(rebuilds > 5000 && aliases > 300 && fixed > 10000 && additions > 0);
   if (std::getenv("GPRS_ORACLE_CENSUS")) {
     std::printf("    findings of the singleton columns %lld, their records %lld\n",
                 (long long)singleton_findings,
                 (long long)from_rows);
+    std::printf("    findings of simple probing %lld, its aliases %lld, last calls %lld\n",
+                (long long)probing_findings,
+                (long long)probing_aliases,
+                (long long)probing_last_calls);
   }
   GPRS_CHECK(singleton_findings > 400 && from_rows > 400 && second_calls > 50000);
+  GPRS_CHECK(probing_findings > 100 && probing_aliases > 100 && probing_last_calls > 50000);
 }
 
 // A list_mask_t has a bit for sixteen lists, and every one of them works as a list.

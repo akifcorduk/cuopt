@@ -8,6 +8,7 @@
 // gprs_presolve <model.csr> [--json <file>] [--primal-only] [--time-limit <seconds>]
 //               [--off <rule>]... [--exact-parallel-rows] [--pivot-growth-limit <x>]
 //               [--saved-row-factor <x>] [--integral-drift-share <x>]
+//               [--alias-scale-limit <x>] [--probing-balance <x>]
 // Reads a GPRSCSR1 dump, runs the presolve, prints sizes before and after, seconds and the
 // determinism hash of the reduced model, and writes the same as JSON.
 // --off takes the name of a rule family (rule_name) or of a reduction of the column rules
@@ -16,6 +17,7 @@
 // (options_t::near_parallel_rows off).
 // --pivot-growth-limit, --saved-row-factor: the two limits of the singleton-column rules
 // (options_t). --integral-drift-share: tolerances_t::integral_drift_share.
+// --alias-scale-limit, --probing-balance: the two settings of simple probing (options_t).
 // Exit code 0 when the presolve ran, 1 when the dump cannot be read, 2 on a usage error.
 
 #include <gprs/io.hpp>
@@ -111,6 +113,30 @@ void write_report(FILE* out,
                (long long)result.columns.saved_row_refused,
                result.columns.alias_depth,
                (long long)result.columns.free_singleton_rejected_explicit);
+  int64_t probing_aliases = 0, probing_aliases_with_row = 0;
+  for (const gprs::alias_record_t& r : result.postsolve.aliases) {
+    if (r.origin != gprs::alias_origin_t::probing) { continue; }
+    ++probing_aliases;
+    probing_aliases_with_row += r.row >= 0;
+  }
+  std::fprintf(out,
+               "  \"probing\": {\"rows\": %lld, \"rows_deleted\": %lld, \"rows_cut\": %lld, "
+               "\"connected\": %lld, \"unit_refused\": %lld, \"scale_refused\": %lld, "
+               "\"size_refused\": %lld, "
+               "\"deep_batches\": %lld, \"entry_changes\": %lld, \"max_scale\": %.17g, "
+               "\"aliases\": %lld, \"aliases_with_row\": %lld},\n",
+               (long long)result.columns.probing_rows,
+               (long long)result.columns.probing_rows_deleted,
+               (long long)result.columns.probing_rows_cut,
+               (long long)result.columns.probing_connected,
+               (long long)result.columns.probing_unit_refused,
+               (long long)result.columns.probing_scale_refused,
+               (long long)result.columns.probing_size_refused,
+               (long long)result.columns.probing_deep_batches,
+               (long long)result.columns.probing_entry_changes,
+               result.columns.probing_max_scale,
+               (long long)probing_aliases,
+               (long long)probing_aliases_with_row);
   int64_t kinds[4] = {}, interval_columns = 0, forcing_rows = 0;
   for (const gprs::col_from_rows_record_t& r : result.postsolve.col_from_rows) {
     int32_t kind = r.kind == gprs::col_from_rows_kind_t::defined    ? (r.dual ? 1 : 0)
@@ -158,7 +184,8 @@ int usage()
                "usage: gprs_presolve <model.csr> [--json <file>] [--primal-only] "
                "[--time-limit <seconds>] [--off <rule>]... [--exact-parallel-rows] "
                "[--pivot-growth-limit <x>] [--saved-row-factor <x>] "
-               "[--integral-drift-share <x>]\n");
+               "[--integral-drift-share <x>] [--alias-scale-limit <x>] "
+               "[--probing-balance <x>]\n");
   return 2;
 }
 
@@ -184,6 +211,10 @@ int main(int argc, char** argv)
       options.saved_row_factor = std::atof(argv[++i]);
     } else if (arg == "--integral-drift-share" && i + 1 < argc) {
       options.tol.integral_drift_share = std::atof(argv[++i]);
+    } else if (arg == "--alias-scale-limit" && i + 1 < argc) {
+      options.alias_scale_limit = std::atof(argv[++i]);
+    } else if (arg == "--probing-balance" && i + 1 < argc) {
+      options.probing_balance = std::atof(argv[++i]);
     } else if (arg == "--off" && i + 1 < argc) {
       int32_t rule = 0, sub = 0;
       ++i;

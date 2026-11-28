@@ -5,7 +5,8 @@
  */
 /* clang-format on */
 
-// gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] [--profile <name>]
+// gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] [--probing]
+//           [--probing-wide] [--profile <name>]
 // Long random runs of the engine, for every rule change (tools/run_campaign.sh splits one run
 // over processes). For each seed and each generator profile: one generated model, the presolve
 // with options chosen by the seed, and three verdicts.
@@ -28,6 +29,12 @@
 //   record of each kind (defined, defined with the dual flag, interval, forcing), the box ends
 //   and snapshots that the structure check tested, and the results that the family left as
 //   limited.
+//   The line "probing" counts what simple probing reached: the results with an alias of origin
+//   probing, those aliases, and those of them that name no row; the rows that entered a batch,
+//   those that a batch deleted and those that stayed with a cut edge; the visits of a row that
+//   was left because two of its columns were connected, for a column with bounds one apart
+//   that are not 0 and 1, for the limit on the scale, or for the size of an offset; the calls
+//   with an alias depth above 1, and the largest depth.
 // With the engine as it is, all three must be silent. A structure failure that the oracle does
 // not share is a false alarm of the structure check (or a relaxation without effect on the
 // optimum); an oracle failure that the structure check does not share is, on a result with a
@@ -39,7 +46,11 @@
 // --singletons adds columns with one entry to the generated model (rows parallel up to singleton
 // columns). --columns makes the generator draw what the singleton-column rules act on: up to
 // two singleton columns per row, most of them line columns and half of them without a cost,
-// and forcing columns (oracle.hpp). GPRS_FUZZ_SHOW=<n> prints the first n models of each kind
+// and forcing columns (oracle.hpp). --probing makes it draw up to three probing rows per model,
+// equations in which a binary carries half of the activity range, and their near misses.
+// --probing-wide does the same with generator_options_t::probing_wide: coefficients and sides
+// of 1e7 among the small integers, a set of cases that is not part of a campaign (oracle.hpp).
+// GPRS_FUZZ_SHOW=<n> prints the first n models of each kind
 // of disagreement. GPRS_FUZZ_OFF=<rule family> switches that family off for every seed, on top
 // of the options of the seed: with a family off the run can be compared, line by line, with
 // that of an engine that does not have it.
@@ -247,11 +258,24 @@ generator_options_t with_columns(generator_options_t o)
   return o;
 }
 
+// --probing: the knob of the generator that draws probing rows.
+generator_options_t with_probing(generator_options_t o, bool wide)
+{
+  o.p_probing_row    = 0.7;
+  o.max_probing_rows = 3;
+  o.probing_wide     = wide;
+  return o;
+}
+
 // The options of a seed: three seeds in ten keep the defaults; one each has primal-only mode;
 // one family or one reduction of the column rules switched off; a random subset of the families
 // and of those reductions (each on with probability 3/4), a random mode and a random setting of
 // merge_integers; a rebuild after every phase; no rebuild; tiny budgets; few rounds and passes,
 // half of them with the two limits of the singleton-column rules at their tightest.
+// Whatever the variant is, three seeds in eight change a setting of simple probing: the limit
+// on the scale of an alias at 2, so that rows are left for it; the same at 1e8, so that a column
+// with the smallest huge bound passes it and the size of its offset decides; the balance test
+// with two tolerances.
 options_t variant(uint64_t seed)
 {
   options_t o;
@@ -303,6 +327,10 @@ options_t variant(uint64_t seed)
       break;
     default: break;
   }
+  uint64_t probing = (seed * 0xd6e8feb86659fd93ull) >> 61;
+  if (probing == 0) { o.alias_scale_limit = 2.; }
+  if (probing == 1) { o.alias_scale_limit = 1e8; }
+  if (probing == 2) { o.probing_balance = 2.; }
   return o;
 }
 
@@ -339,17 +367,21 @@ int main(int argc, char** argv)
   if (argc < 3) {
     std::fprintf(stderr,
                  "usage: gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] "
-                 "[--profile <name>]\n");
+                 "[--probing] [--probing-wide] [--profile <name>]\n");
     return 2;
   }
   uint64_t first   = std::strtoull(argv[1], nullptr, 10);
   uint64_t count   = std::strtoull(argv[2], nullptr, 10);
   bool singletons  = false;
   bool columns     = false;
+  bool probing     = false;
+  bool wide        = false;
   const char* only = nullptr;
   for (int i = 3; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--singletons")) { singletons = true; }
     if (!std::strcmp(argv[i], "--columns")) { columns = true; }
+    if (!std::strcmp(argv[i], "--probing")) { probing = true; }
+    if (!std::strcmp(argv[i], "--probing-wide")) { probing = wide = true; }
     if (!std::strcmp(argv[i], "--profile") && i + 1 < argc) { only = argv[++i]; }
   }
   std::map<std::string, int64_t> tally;
@@ -372,6 +404,8 @@ int main(int argc, char** argv)
   // Results with a record of the kind: defined, defined with the dual flag, interval, forcing.
   int64_t kind_results[4] = {};
   int64_t box_tested = 0, snapshot_tested = 0, snapshot_untested = 0, limited_results = 0;
+  int64_t probing_results = 0, probing_aliases = 0, probing_no_row = 0, probing_depth = 0;
+  column_stats_t probing_sum;
   std::map<std::string, int64_t> parts;
   int64_t show_missed =
     std::getenv("GPRS_FUZZ_SHOW") ? std::atoll(std::getenv("GPRS_FUZZ_SHOW")) : 0;
@@ -388,6 +422,7 @@ int main(int argc, char** argv)
   for (const profile_t& profile : profiles()) {
     if (only && std::strcmp(only, profile.name)) { continue; }
     generator_options_t generator = columns ? with_columns(profile.options) : profile.options;
+    if (probing) { generator = with_probing(generator, wide); }
     for (uint64_t seed = first; seed < first + count; ++seed) {
       case_t c = oracle::generate(seed, generator);
       if (singletons) {
@@ -415,6 +450,25 @@ int main(int argc, char** argv)
         kind_results[k] += has_kind[k];
       }
       limited_results += result.columns.growth_refused + result.columns.saved_row_refused > 0;
+      int64_t aliases = 0;
+      for (const alias_record_t& r : result.postsolve.aliases) {
+        if (r.origin != alias_origin_t::probing) { continue; }
+        ++aliases;
+        probing_no_row += r.row == -1;
+      }
+      probing_results += aliases > 0;
+      probing_aliases += aliases;
+      probing_sum.probing_rows += result.columns.probing_rows;
+      probing_sum.probing_rows_deleted += result.columns.probing_rows_deleted;
+      probing_sum.probing_rows_cut += result.columns.probing_rows_cut;
+      probing_sum.probing_connected += result.columns.probing_connected;
+      probing_sum.probing_unit_refused += result.columns.probing_unit_refused;
+      probing_sum.probing_scale_refused += result.columns.probing_scale_refused;
+      probing_sum.probing_size_refused += result.columns.probing_size_refused;
+      probing_sum.probing_deep_batches += result.columns.probing_deep_batches;
+      if (result.columns.alias_depth > probing_depth) {
+        probing_depth = result.columns.alias_depth;
+      }
       if (v.ok && v.crushed_points > 0) {
         ++crush_results;
         crush_dual += result.dual_findings > 0;
@@ -630,6 +684,22 @@ int main(int argc, char** argv)
     (long long)snapshot_tested,
     (long long)snapshot_untested,
     (long long)limited_results);
+  std::printf(
+    "probing results %lld aliases %lld without_row %lld | rows %lld deleted %lld cut %lld | "
+    "connected %lld unit_refused %lld scale_refused %lld size_refused %lld | "
+    "deep_batches %lld depth %lld\n",
+    (long long)probing_results,
+    (long long)probing_aliases,
+    (long long)probing_no_row,
+    (long long)probing_sum.probing_rows,
+    (long long)probing_sum.probing_rows_deleted,
+    (long long)probing_sum.probing_rows_cut,
+    (long long)probing_sum.probing_connected,
+    (long long)probing_sum.probing_unit_refused,
+    (long long)probing_sum.probing_scale_refused,
+    (long long)probing_sum.probing_size_refused,
+    (long long)probing_sum.probing_deep_batches,
+    (long long)probing_depth);
   for (const auto& t : parts) {
     std::printf("  part %lld x%s\n", (long long)t.second, t.first.c_str());
   }

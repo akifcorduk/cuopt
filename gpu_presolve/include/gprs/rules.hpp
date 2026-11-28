@@ -85,6 +85,27 @@ struct column_stats_t {
   // Largest depth of a tree in the alias forest of one call of simple probing: the aliases
   // composed between a substituted column and its root.
   int32_t alias_depth = 0;
+  // Simple probing (g). Rows whose aliases entered a batch; of them, those that the batch
+  // deleted, and those that stayed in the model with a cut edge.
+  int64_t probing_rows         = 0;
+  int64_t probing_rows_deleted = 0;
+  int64_t probing_rows_cut     = 0;
+  // Visits of a row that passed every test and was left for the next call, because edges of
+  // the batch connected two of its columns already.
+  int64_t probing_connected = 0;
+  // Visits of a row whose other entries are forcing at both values of a binary and that was
+  // left: for an integer column with bounds one apart that are not 0 and 1; else for
+  // opt.alias_scale_limit; else for the size of an offset (the call then reports limited).
+  int64_t probing_unit_refused  = 0;
+  int64_t probing_scale_refused = 0;
+  int64_t probing_size_refused  = 0;
+  // Calls whose alias depth is above 1.
+  int64_t probing_deep_batches = 0;
+  // Changes of entries (state_t::coefficient_changes) by the substitutions: one for an entry
+  // that moves to the root, two where the root has an entry in the row already.
+  int64_t probing_entry_changes = 0;
+  // Largest |scale| of an alias that was applied.
+  double probing_max_scale = 0.;
   // Refusals of a singleton column by the test "the pivot row implies its bounds" after the
   // switch to explicit bounds (bound_propagation_t::make_explicit), one per visit of its row in
   // which the test fails: what reading explicit bounds only still costs the free singleton
@@ -115,7 +136,7 @@ struct rule_result_t {
   // comparisons of a row on opt.parallel_bucket_limit with rows of its bucket left (see (e));
   // the singleton columns, when only the growth factor of earlier substitutions keeps a free
   // singleton column in the model or opt.saved_row_factor the zero-cost singleton columns of a
-  // row (see (h)).
+  // row (see (h)); simple probing, when only the size of an offset keeps a row (see (g)).
   // The state is then no fixed point of the rules, although every list can be empty.
   bool limited = false;
 };
@@ -249,7 +270,8 @@ struct row_tightening_t {
 };
 
 // (d) Rows of row_list::doubleton that are equations with two free entries. The call collects
-// them as the edges of one batch (alias_forest_t::add_edge) and tests the budget between two
+// them as the edges of one batch (alias_batch_t, src/alias_apply.hpp, the code that simple
+// probing (g) shares) and tests the budget between two
 // edges, spending for an edge the live entries of its two columns; rows it does not collect go
 // back on the list. A collected batch is applied in full, since a deleted edge row without its
 // substitution is a wrong model: freeze() picks the tree edges and returns the maps grouped by
@@ -399,16 +421,76 @@ struct dual_fixing_t {
 // A family takes its lists when it is called and, when it stops on its budget, returns the part
 // it has not served. A reduction that it leaves undone for a reason that is no function of the
 // state reports limited.
-// A family whose reductions are not built takes its lists and reports nothing: (g), (i) and
-// (j). The singleton columns (h) are built, and do the same when none of their reductions is
-// active (sub_rule_active).
+// A family whose reductions are not built takes its lists and reports nothing: (i) and (j).
+// Simple probing (g) and the singleton columns (h) are built; the singleton columns do the same
+// when none of their reductions is active (sub_rule_active).
 
-// Largest range upper - lower of a column that simple probing or the lock alias replaces by a
-// binary: it is the scale of the alias, which multiplies every coefficient of the column into
-// the rows of the binary.
-constexpr double alias_scale_limit = 1e6;
-
-// (g) Rows of row_list::simple_probing, which holds every row at construction.
+// (g) Rows of row_list::simple_probing, which holds every row at construction and gets every
+// event of a row but sparse and singleton. Simple probing on an equation: a binary whose term
+// is half of the range of the row decides every other column of it.
+// The call takes the list and visits its live rows in list order, testing the budget between
+// two of them; rows it does not visit go back on the list. A visit ends at the first of these
+// that fails:
+// - The row is an equation with three or more free entries (two are a doubleton equation, (d))
+//   and a readable right-hand side b (src/implied.hpp), and neither activity has an infinite
+//   term, so that every free column has two finite bounds. The activities are summed from
+//   scratch where their error bound could decide (refresh_activity).
+// - Balance, in O(1): with m and M the minimum and the maximum activity,
+//   |(M - b) - (b - m)| less the two error bounds is at most opt.probing_balance *
+//   tol.feasibility.
+// - One scan of the row lists its binaries: free integer columns with upper - lower == 1 whose
+//   term takes two values, |a| apart, with (b - m) - |a| and (M - b) - |a| within the
+//   feasibility tolerance (forcing_possible, src/forcing.hpp). They are tried in increasing
+//   column index, each with one scan of the row: with the term of the binary at its larger
+//   value the other free entries must be at their minimum activity, and with it at its smaller
+//   value at their maximum activity, each of the two being forcing as a row of (a) is
+//   (forcing(), the function of the forcing row, on the entries other than the binary: the gap
+//   within tol.feasibility * min|a| / max(1, max|a|), and with a continuous column among them
+//   positive only by rounding). The gaps are differences of the compensated sums.
+// - Every other free column j then has one value for each value of the binary p. The first
+//   binary that passes these limits is taken:
+//   The binary, and every other integer column of the row with bounds one apart, has the bounds
+//   0 and 1. Then x[j] = start + scale * x[p], where scale is upper - lower of j and start its
+//   lower bound when the two coefficients have opposite signs, and scale is lower - upper and
+//   start its upper bound when they have the same sign: no arithmetic but one difference of
+//   bounds. Only integer columns with bounds one apart can be the root of a tree of the batch
+//   or lie between a column and its root; with the bounds 0 and 1 for all of them, the alias of
+//   any column to its root has one of the two bounds of the column as its offset, 0 or 1 for
+//   such a column, and the range of the column or 1 as the size of its scale, whichever root
+//   the batch picks. (With bounds 7 and 8 on a root the offsets are multiples of 7, rounded
+//   differences that the scale of a column multiplies.)
+//   upper - lower <= opt.alias_scale_limit for every other column: the scale multiplies every
+//   coefficient of the column into the rows of its root.
+//   The size of the offset fits the rows of the column, for the binary and every other column:
+//   max(|lower|, |upper|) * r * tol.side_error <= tol.feasibility, r being the largest
+//   coefficient of the column, and every finite side of a row of the column is readable. The
+//   offset enters the side of each of those rows, times the coefficient there, and a side
+//   beyond that size loses more than the tolerance of what it held. This test reads rows that
+//   change without an event of the visited row: a row that is left for it makes the call report
+//   limited. A column is scanned for it once per call.
+// The aliases of a row that passes are edges x[j] - scale * x[p] = offset of the batch of the
+// call (alias_batch_t, src/alias_apply.hpp, the code of the doubleton equations), unless edges
+// of the batch connect two of its free columns already: such a row goes back on the list for
+// the next call. Every test of a visit reads the state as the call found it, since the batch is
+// applied after the last visit; an alias holds at every point that satisfies its row and the
+// bounds, so the aliases of a batch hold together, composed and oriented either way.
+// The batch is applied in full (apply_aliases): freeze() picks the roots and cuts an edge that
+// is not admissible with the child it would have (an integer column under a continuous one, or
+// under an integer one with a ratio that is no integer: only the binary as the child of
+// another column of its row); a row is deleted when every one of its edges has become a map;
+// every mapped column is substituted once, into its root, with its bounds transferred there,
+// and recorded as an alias of origin probing that names its row when the batch deleted it and
+// no row otherwise. A row with a cut edge stays, with the columns that were substituted, as an
+// equation in its binary and the column of the cut edge or their roots, and is on the lists
+// again by the change of its entries. Every map is a finding. The deleted equation leaves no
+// record: with its aliases it is 0 = 0 up to the tolerance of the forcing test.
+// Work: line_visit_work per visited row; the used slots of a row per scan (one for its
+// binaries, one per binary tried, one where the activities are summed again); the used slots
+// of a column whose rows are read for the size of an offset, once per call; and, for a row
+// that enters the batch, the live entries of its columns, which is what the substitutions cost.
+// No limit of the family depends on the history of a row. It reports limited for a row that
+// the size of an offset alone keeps (above). On in primal-only mode: every feasible point
+// satisfies the aliases.
 struct simple_probing_t {
   struct work_t;
   simple_probing_t();

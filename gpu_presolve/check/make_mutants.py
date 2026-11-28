@@ -47,6 +47,20 @@ int32_t down_count = 0, up_count = 0;
     bool to_lower = cost >= 0 && down_count == 0;
     bool to_upper = cost <= 0 && up_count == 0;"""
 FORCING_TEST = "  if (!(std::fabs(gap) + error <= %s)) { return false; }"
+# The forcing test with an allowance `wrong` on its tolerance, for a caller
+# that passes one: the forcing row (r_forcing) or simple probing (sp_gap).
+FORCING_WRONG = [
+    (
+        "forcing.hpp",
+        "double error, bool at_minimum)\n{",
+        "double error, bool at_minimum,\n  double wrong = 0.)\n{",
+    ),
+    (
+        "forcing.hpp",
+        FORCING_TEST % "tolerance",
+        FORCING_TEST % "tolerance + wrong",
+    ),
+]
 SUBTRACT_SHIFT = "st.shift_row_sides(target.row, factor, rhs);"
 SUBTRACT_RECORD = "  ps.push_row_addition(target.row, equation.row, factor);\n"
 EXPLICIT_BOUND = "    bound        = is_upper ? bound + slack : bound - slack;"
@@ -152,10 +166,12 @@ MUTANTS = {
     ),
     # The mutants of the review of the check (r_*). Relaxations first.
     # The bounds of a substituted column do not reach its root.
+    # The substitution of a doubleton equation is the code of every alias
+    # batch (alias_apply.hpp): these six act on simple probing as well.
     "r_dbl_bounds": (
-        "rules_doubleton.cpp",
-        "result.outcome = transfer_bounds(st, ps, tol, map);",
-        "result.outcome = ok;",
+        "alias_apply.hpp",
+        "      outcome = transfer_bounds(st, ps, tol, map);",
+        "      outcome = rule_outcome_t::ok;",
     ),
     # An integer column is substituted by a continuous one.
     "r_alias_dir": [
@@ -239,33 +255,33 @@ MUTANTS = {
     # Wrong substitutions. The sides of the rows of a substituted column
     # move the wrong way.
     "r_dbl_side": (
-        "rules_doubleton.cpp",
+        "alias_apply.hpp",
         "st.shift_row_sides(row, a, map.offset);",
         "st.shift_row_sides(row, a, -map.offset);",
     ),
     # The substituted coefficient loses the sign of the scale.
     "r_dbl_scale": (
-        "rules_doubleton.cpp",
+        "alias_apply.hpp",
         "double moved = a * map.scale;",
         "double moved = a * std::fabs(map.scale);",
     ),
     # The substituted cost is not scaled.
     "r_dbl_cost": (
-        "rules_doubleton.cpp",
+        "alias_apply.hpp",
         "double moved = cost * map.scale;",
         "double moved = cost;",
     ),
     # The offset of a substituted column does not reach the objective.
     "r_dbl_objoff": (
-        "rules_doubleton.cpp",
+        "alias_apply.hpp",
         "    st.add_objective_offset(cost, map.offset);\n",
         "",
     ),
     # Wrong postsolve. The alias record holds a wrong offset.
     "r_alias_offset": (
-        "rules_doubleton.cpp",
-        "ps.push_alias(col, root, map.row, map.scale, map.offset);",
-        "ps.push_alias(col, root, map.row, map.scale, map.offset + 1.);",
+        "alias_apply.hpp",
+        "map.scale, map.offset, origin);",
+        "map.scale, map.offset + 1., origin);",
     ),
     # The records are undone in the order they were pushed.
     "r_order": [
@@ -284,16 +300,19 @@ MUTANTS = {
     "r_forcing": [
         (
             "rules_rows.cpp",
-            FORCING_TEST % "c.tol.feasibility",
+            "  if (!forcing_possible(c.tol, gap, error)) { return false; }",
             "  double wrong = row % 7 == 0 ? 1. : 0.;\n"
             + FORCING_TEST % "c.tol.feasibility + wrong",
         ),
         (
             "rules_rows.cpp",
-            FORCING_TEST % "tolerance",
-            FORCING_TEST % "tolerance + wrong",
+            "  if (!forcing(c.tol, entries, gap, error, at_minimum)) "
+            "{ return false; }",
+            "  if (!forcing(c.tol, entries, gap, error, at_minimum, wrong)) "
+            "{ return false; }",
         ),
-    ],
+    ]
+    + FORCING_WRONG,
     # A forcing row fixes its columns at the other bound.
     "r_forcing_end": (
         "rules_rows.cpp",
@@ -498,19 +517,19 @@ MUTANTS = {
     ),
     # A substitution moves the cost with the absolute value of the scale.
     "obj_alias_abs": (
-        "rules_doubleton.cpp",
+        "alias_apply.hpp",
         "    double moved = cost * map.scale;",
         "    double moved = cost * std::fabs(map.scale);",
     ),
     # A moved cost of size up to 1 counts as a cancellation.
     "obj_cancel_wide": (
-        "rules_doubleton.cpp",
+        "alias_apply.hpp",
         COST_CANCEL,
         "if (std::fabs(sum) <= 1.) { sum = 0.; }",
     ),
     # The offset of a substitution is booked with the moved cost.
     "obj_offset_scale": (
-        "rules_doubleton.cpp",
+        "alias_apply.hpp",
         "    st.add_objective_offset(cost, map.offset);",
         "    st.add_objective_offset(moved, map.offset);",
     ),
@@ -963,6 +982,117 @@ MUTANTS = {
     "ev_sides": (
         "rules_singleton_cols.cpp",
         "    if (!usable) { c.w.unreadable[row] = 1; }\n",
+        "",
+    ),
+    # The mutants of simple probing (sp_*), with the check that must catch
+    # each. The alias takes a column to the wrong bound: with the binary at
+    # its lower bound a column sits where it belongs with the binary at its
+    # upper bound. The rows part of the structure check, on the equation
+    # that left the model; the oracle.
+    "sp_dir": (
+        "rules_simple_probing.cpp",
+        "    bool falls   = (p.a > 0) == (a > 0);",
+        "    bool falls   = (p.a > 0) != (a > 0);",
+    ),
+    # A gap of 1e-3 between a side and an activity counts as forcing: the
+    # columns are put on bounds that the row does not ask for. The oracle;
+    # requirement 2 of the crush check.
+    "sp_gap": [
+        (
+            "rules_simple_probing.cpp",
+            "<= c.opt.probing_balance * c.tol.feasibility)) { return; }",
+            "<= 2e-3)) { return; }",
+        ),
+        (
+            "rules_simple_probing.cpp",
+            "    if (forcing_possible(c.tol, g.low, g.low_error) &&\n"
+            "        forcing_possible(c.tol, g.high, g.high_error)) {",
+            "    if (std::fabs(g.low) <= 1e-3 && std::fabs(g.high) <= 1e-3) {",
+        ),
+        (
+            "rules_simple_probing.cpp",
+            "  if (!forcing(c.tol, at_min, g.low, g.low_error, true) ||\n"
+            "      !forcing(c.tol, at_max, -g.high, g.high_error, false)) {",
+            "  if (!forcing(c.tol, at_min, g.low, g.low_error, true, 1e-3) ||\n"
+            "      !forcing(c.tol, at_max, -g.high, g.high_error, false, 1e-3)) {",
+        ),
+    ]
+    + FORCING_WRONG,
+    # An integer column with three values is taken as the binary when its
+    # term carries half of the range of the row: its middle value leaves
+    # the other columns free, and the alias takes them out of their bounds
+    # at its third. The bounds and rows parts of the structure check; the
+    # oracle.
+    "sp_range": [
+        (
+            "rules_simple_probing.cpp",
+            "    if (!st.is_integer(col) || range != 1.) { continue; }\n"
+            "    double step = std::fabs(a);",
+            "    if (!st.is_integer(col) || range > 2.) { continue; }\n"
+            "    double step = std::fabs(a) * range;",
+        ),
+        (
+            "rules_simple_probing.cpp",
+            "  bool units = is_unit(st, p.col), in_range = true;",
+            "  bool units = st.col_lower[p.col] == 0., in_range = true;",
+        ),
+    ],
+    # A continuous column counts as an integer one in the forcing test: a
+    # gap within the tolerance is taken although the column sits off its
+    # bound. The generator has no such data: the fixed model of
+    # tests/test_columns_probing.cpp
+    # (columns_probing_leaves_a_continuous_column_that_is_off_its_bound)
+    # through the oracle.
+    "sp_cont": (
+        "rules_simple_probing.cpp",
+        "    bool continuous = !st.is_integer(col);",
+        "    bool continuous = false;",
+    ),
+    # The last column of a row gets no alias, and the row is deleted: a
+    # relaxation. The rows part of the structure check; the oracle.
+    "sp_row": (
+        "rules_simple_probing.cpp",
+        "  for (size_t k = 0; k < w.edges.size(); ++k) {",
+        "  for (size_t k = 0; k + 1 < w.edges.size(); ++k) {",
+    ),
+    # A row is deleted with its first map, although an edge of it was cut
+    # and its column stays: a relaxation. The rows part of the structure
+    # check; the oracle. (A doubleton equation has one edge: no change.)
+    "sp_cut": (
+        "alias_apply.hpp",
+        "    if (--batch.open_edges[map.row] == 0) { st.delete_row(map.row); }",
+        "    if (st.row_alive[map.row]) { st.delete_row(map.row); }",
+    ),
+    # An alias names its row although the row stays in the model. The stack
+    # part of the structure check, when a later record names that row
+    # (columns_probing_row_with_a_cut_edge_names_no_row).
+    "sp_named": (
+        "alias_apply.hpp",
+        "st.row_alive[map.row] ? -1 : map.row, map.scale",
+        "map.row, map.scale",
+    ),
+    # A column with bounds one apart that are not 0 and 1 is taken as the
+    # binary or next to it, with the alias of a binary. The bounds and rows
+    # parts of the structure check; the oracle.
+    "sp_unit": (
+        "rules_simple_probing.cpp",
+        "  if (!units) { return probe_t::unit_refused; }\n",
+        "",
+    ),
+    # Wrong engines of simple probing that the generator of the campaign
+    # does not reach: each fails the unit test named for it. No test of the
+    # size of an offset: a side takes a term that it cannot hold
+    # (columns_probing_size_of_an_offset).
+    "sp_size": (
+        "rules_simple_probing.cpp",
+        "  return size * reach(c, col) * c.tol.side_error <= c.tol.feasibility;",
+        "  return size * reach(c, col) * c.tol.side_error <= inf;",
+    ),
+    # A row that is left for the size of an offset does not report limited
+    # (columns_probing_size_of_an_offset).
+    "sp_limited": (
+        "rules_simple_probing.cpp",
+        "    c.result.limited = true;\n",
         "",
     ),
 }

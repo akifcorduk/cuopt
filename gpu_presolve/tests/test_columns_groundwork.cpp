@@ -8,7 +8,7 @@
 // The groundwork of the column rules: the four families in the round, their options and
 // statistics, and the dual findings of a result. While a family holds no reduction, a presolve
 // with it is the presolve without it; the singleton columns hold theirs
-// (tests/test_columns_singleton.cpp).
+// (tests/test_columns_singleton.cpp) and simple probing its own (tests/test_columns_probing.cpp).
 
 #include "harness.hpp"
 #include "oracle.hpp"
@@ -33,13 +33,11 @@ options_t without_column_rules(options_t options)
 }
 
 // The families that hold no reduction yet.
-bool is_empty_family(int32_t r)
-{
-  return r == rule::simple_probing || r == rule::dual_cols || r == rule::parallel_cols;
-}
+bool is_empty_family(int32_t r) { return r == rule::dual_cols || r == rule::parallel_cols; }
 
-options_t without_singleton_cols(options_t options)
+options_t without_built_families(options_t options)
 {
+  options.enabled[rule::simple_probing] = false;
   options.enabled[rule::singleton_cols] = false;
   return options;
 }
@@ -95,7 +93,8 @@ GPRS_TEST(columns_options_and_names)
   GPRS_CHECK_EQ(options.saved_row_factor, 4.);
   GPRS_CHECK_EQ(options.pivot_growth_limit, 1000.);
   GPRS_CHECK_EQ(options.lock_alias_row_limit, 0);
-  GPRS_CHECK_EQ(alias_scale_limit, 1e6);
+  GPRS_CHECK_EQ(options.alias_scale_limit, 1e6);
+  GPRS_CHECK_EQ(options.probing_balance, 1.);
 }
 
 // In primal-only mode a reduction of the column rules runs only when it keeps every feasible
@@ -206,8 +205,8 @@ GPRS_TEST(columns_family_sees_a_row_that_lost_a_fixed_term)
 
 // On generated models, in both modes and with a rebuild after every phase or none: the reduced
 // model, the stack, the flag, the rounds and the statistics of the Stage 1 families are the same
-// with the three families that hold no reduction switched on and switched off, the singleton
-// columns being off in both. Seven phase hashes per round.
+// with the two families that hold no reduction switched on and switched off, simple probing and
+// the singleton columns being off in both. Seven phase hashes per round.
 GPRS_TEST(columns_empty_families_change_no_result)
 {
   std::vector<oracle::generator_options_t> shapes(3);
@@ -230,7 +229,7 @@ GPRS_TEST(columns_empty_families_change_no_result)
           options.rebuild_dead_fraction  = 0.;
           options.rebuild_fixed_fraction = 0.;
         }
-        result_t on  = presolve(m, without_singleton_cols(options));
+        result_t on  = presolve(m, without_built_families(options));
         result_t off = presolve(m, without_column_rules(options));
         ++compared;
         reduced += on.status == status_t::reduced;

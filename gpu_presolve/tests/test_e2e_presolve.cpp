@@ -127,6 +127,17 @@ std::vector<profile_t> profiles()
   o.p_forcing_col         = 0.5;
   o.p_equation            = 0.35;
   list.push_back({"columns", o});
+
+  // What simple probing acts on: up to three equations in which a binary carries half of the
+  // activity range, over columns that other rows hold, and their near misses.
+  o                  = generator_options_t();
+  o.p_probing_row    = 0.8;
+  o.max_probing_rows = 3;
+  o.max_width        = 2;
+  o.max_enum_cols    = 6;
+  o.max_line_cols    = 1;
+  o.p_infinite_bound = 0.2;
+  list.push_back({"probing", o});
   return list;
 }
 

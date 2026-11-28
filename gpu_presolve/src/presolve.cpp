@@ -225,6 +225,18 @@ struct engine_t {
     columns.growth_refused += r.columns.growth_refused;
     columns.growth_refused_row += r.columns.growth_refused_row;
     columns.saved_row_refused += r.columns.saved_row_refused;
+    columns.probing_rows += r.columns.probing_rows;
+    columns.probing_rows_deleted += r.columns.probing_rows_deleted;
+    columns.probing_rows_cut += r.columns.probing_rows_cut;
+    columns.probing_connected += r.columns.probing_connected;
+    columns.probing_unit_refused += r.columns.probing_unit_refused;
+    columns.probing_scale_refused += r.columns.probing_scale_refused;
+    columns.probing_size_refused += r.columns.probing_size_refused;
+    columns.probing_deep_batches += r.columns.probing_deep_batches;
+    columns.probing_entry_changes += r.columns.probing_entry_changes;
+    if (r.columns.probing_max_scale > columns.probing_max_scale) {
+      columns.probing_max_scale = r.columns.probing_max_scale;
+    }
     if (r.outcome != rule_outcome_t::ok) {
       outcome = r.outcome;
       return false;
