@@ -1,0 +1,174 @@
+{
+ "verdict": "Yes for the merge itself, with one reservation that the owner has to decide before it goes on the main branch. Commit e3dbc812d on branch stage1c-m2-merged holds milestone M2 (simple probing on equations, R1) and the three commits of the parallel-row repair, both whole: 504 tests pass in both builds, all 115 wrong engines apply and are caught, 168 million release and 84 million assertion campaign models are clean, the check tool has no failed verdict on the 17 and the 240 local dumps, both identity statements hold, and no instance is larger than before in default or primal-only mode. The reservation: the parallel-row repair that the merge brings in has three wrong results that its author's report does not name. Its attacker found them; his report is missing (attack and triage are null in my task) and his repair lies uncommitted in the worktree /Users/acoerduek/Documents/workspace/cuopt/.claude/worktrees/wf_f36af1da-339-3. I reproduced the three on the merged engine and did not repair them, because that is the repair's own review and not this step. Two feasible models of three parallel rows are reported infeasible (the base engine returns points that are off by 1.6e-2 and 1.1e-6 on them), and one infeasible model is reduced to a point that is off by 1.35e-6 (the base engine reports it infeasible). No campaign model, none of the 240 and none of the 17 local dumps shows them, because the generator cannot draw them. If no known new wrong result may enter the branch, merge edd147a7e (M2 alone, unchanged by me) and hold the repair until its attack is finished. The reviews of M2 (validity, worth) are missing as well, so what stands for M2 beyond its author's report is my verification of the merged tree.",
+ "commit": "e3dbc812d2c5dfa0b0c99ab081a28c101e966078",
+ "branch": "stage1c-m2-merged",
+ "changed": true,
+ "wrong_results": [
+  "NEW WITH THE REPAIR, not repaired (found by the repair's attacker, reproduced by me on the merged engine and on the repair commit, release build). Feasible model reported infeasible. Two continuous columns in [-64, 64]; row 0: x0 + (1 + 2^-31) x1 = 1; row 1: 2^20 (x0 + x1) <= 2^21; row 2: 2^20 (x0 + x1) = 2^20 - 2^-6. The point x0 = -31 - 2^-26, x1 = 32 satisfies all rows exactly. Merged engine and repair commit: status infeasible, with the parallel rows alone and with all rules. Base engine and M2 commit: reduced, and the points of the reduced model postsolve to a violation of 1.5625e-2 on row 2. Cause as I read it: row 0 is no exact multiple of row 1 and passes the drift limit in its own units (2^-25), its side becomes a side of the kept row 1, where it is off by 2^-5, and row 2 then crosses it. Model file: /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/s1c_m2_merge/probe/side_no_multiple.txt.",
+  "NEW WITH THE REPAIR, not repaired. Feasible model reported infeasible. Two continuous columns in [0, 20000]; row 0: x0 + x1 = 10000.1; row 1: 1000003 (x0 + x1) <= 3e10; row 2: 1000003 (x0 + x1) = 10000130000.3. A point within the tolerance of 1e-6 on every row exists. Merged engine and repair commit: status infeasible in this row order, with the parallel rows alone and with all rules; with row 0 last they reduce it. Base engine and M2 commit: reduced, row 2 off by 1.127e-6 at the postsolved points. Cause as I read it: the image of the side of row 0 in row 1 is rounded by one unit of 1e10 (1.9e-6), and rows 1 and 2, of one size, then cross by that. Model file: /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/s1c_prow_attack/models/decimal3.txt.",
+  "NEW WITH THE REPAIR, not repaired. Infeasible model reduced. Two continuous columns in [-10, 10]; row 0: 1.75e-6 <= x0 + x1 <= 5; row 1: -5 <= 2 (x0 + x1) <= 1.7e-6; row 2: -5 <= 4 (x0 + x1) <= 1.6e-6. No point is within 1e-6 of all three rows. Merged engine and repair commit: reduced (reduced to empty with all rules), 4 of 4 tested points postsolve to a violation of 1.35e-6 on row 0. Base engine and M2 commit: infeasible, which is right. Cause: a kept row is later removed into a larger row and each merge takes up to one tolerance; the repair's author names the class and left it. Model file: /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/s1c_prow_attack/models/chain3.txt.",
+  "Shared with the base commit, not repaired (reported by the repair's author, confirmed by me on the merged engine): the doubleton substitution shifts the side of a row of 2^18 by 2.36e13; the postsolved point violates that row by 1.563e-3 in the base and in the merged engine, with and without a parallel row (probe /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/s1c_prow/probe/dbl_large.cpp, both variants).",
+  "Shared with the base commit, not repaired: the free singleton column on an inequality (R5) restores its column at 9e7 with the rounding of a double, which a row with coefficients of 2^18 reads as 1.563e-3; base and merged engine, default options (probes single_row.cpp and model1_all.cpp, set 0, in the same directory). The model that the repair closes (zero-cost singleton rule after the merge, set 2 of model1_all.cpp and stage1c_reports/m1/probes/parallel_scale.cpp) fails on the base with 1.563e-3 and passes on the merged engine.",
+  "Shared with the base commit, not repaired: an alias of scale 1000 next to a free singleton column in primal-only mode passes a bound by 1.0e-4 (probe other_places.cpp, model A, same directory); base and merged engine.",
+  "Shared with the base commit, not repaired: the wide probing rows (gprs_fuzz --probing-wide, a set that is not part of a campaign). Merged engine, release build, 559,944 models (14 profiles, 39,996 seeds each, first seed 8100000000): 8 oracle failures with simple probing on and the same 8 with GPRS_FUZZ_OFF=simple_probing. Seven are the seeds that the M2 author reported for the base engine. The eighth is profile parallel_scale, seed 8100010396, variant 6, which only the merged tool can draw; it passes with the row rules off and fails with the parallel rows off and with simple probing off, so it is the row rules' class (singleton row of an integer column with a coefficient near 1e7) and not the repair or the new rule.",
+  "Known seeds, through gprs_fuzz of the base engine, the M2 commit, the repair commit and the merged engine, both builds each. Class (a): profile open_ends seed 5302642968 with --singletons and profile huge_parallel seed 10100538218 fail identically in all four (reduced optimum off by 1.1e-9). Profile huge_parallel seed 32077278 with --singletons is clean in all four engines and both builds; it does not reproduce at the base commit with the base commit's own gprs_fuzz. Class (b): profile open_ends seed 403349198 fails identically in all four (objective -1 against 9). The failure that the repair's author added: --singletons, profiles default and scaled, seed 31150507986, variant 6: the structure check fails alone in its postsolve part, identically in all four. None repaired."
+ ],
+ "other_defects": [
+  "A reduction lost by the repair in an option set that is not the default: rocII-5-11 (240 local dumps) with bound propagation switched off ends at 21,988 rows / 9,452 columns / 245,095 nonzeros with the repair commit and the merged engine, against 21,612 / 9,283 / 243,136 with the base engine and the M2 commit. With the larger row kept, 33 merges and 11 subtractions of an equation no longer happen (102 merges and 0 subtractions against 135 and 11), and the row rules find 490 fewer reductions after them. The result is a true fixed point (its second presolve returns unchanged). I did not trace which test refuses them. In default and primal-only mode no instance of the 240 or the 17 loses anything.",
+  "The two works meet on random models that have probing rows. Of 2.6 million random models per build (13 profiles, 20,000 seeds, 10 option kinds), 17 model and kind pairs have the merged engine differ from the M2 commit although the repair commit equals the base engine there, all in the four kinds with --probing: simple probing makes rows parallel that the repair then merges the other way round. Sixteen differ in the reduced-model hash or the record stack only; one changes the status from reduced to infeasible (profile parallel_equations, seed 61000002215, --probing --columns). The oracle passes the merged engine on all 2.6 million of these models, that one included. On the 240 and the 17 local dumps there is no such case.",
+  "The repair changes the status of a few random models against the base engine (reduced to infeasible on about 15, infeasible to reduced on 3, of 2.6 million); the oracle agrees with the merged engine on all of them.",
+  "git commit -s puts a second Signed-off-by after the Co-Authored-By line even when the message already holds the sign-off, as the repair's author warned. I rewrote the message with git commit --amend -F (no -s) so that it ends on the Co-Authored-By line; the tree is unchanged.",
+  "The end-of-file hook rewrote the three summary.json files on the first commit attempt; I added them again and committed. The sources were not touched: the release gprs_presolve rebuilt from the committed tree is byte-identical (sha256 ce294dc9...) with the one that made the results.",
+  "My first summary of the wrong-engine runs failed on a parse error of my own script (the message field holds the separator it split on). The runs were complete; I repaired the script and built the table from the same run files.",
+  "The attacker's unfinished repair of the parallel rows (two more options, parallel_chain_share = 1 and parallel_side_share = 0.1, six more tests) builds and passes its own 488 tests according to his last build log, and his stored runs give the hash of the repair commit on all 240 local dumps in both modes. It has no wrong engines, no campaign that I can see and no report. I did not bring it in.",
+  "I built no rule code in this step and checked no citation of the design myself. The differences between the design's citations and the code that the M2 author lists stand as he reports them."
+ ],
+ "evidence": "1. Merge. git cherry-pick of f0ba8e0e0, 5d7147611 and 5b87457a5 onto edd147a7e. The first had conflicts in five files (tests/oracle.hpp, tools/gprs_fuzz.cpp, tools/gprs_presolve.cpp, tools/run_campaign.sh, check/make_mutants.py, 11 hunks); each now holds the entries of both works. The other two applied cleanly. tests/test_hash_values.cpp neither conflicted nor failed; no hash value was regenerated. Then one commit of mine with the results.\n2. Tests on the committed tree e3dbc812d: 504 pass in the assertion build and 504 in the release build (473 at the base, 495 at the M2 commit, 482 at the repair commit, all of which I rebuilt and reran).\n3. Wrong engines: check/make_mutants.py on the committed tree applies all 115 (99 of the base, 11 of M2, 5 of the repair). Each was built with -Werror and run on 1.4 million campaign models (no option, --singletons, --columns, --probing, --probing --columns; 14 profiles, 20,000 seeds) and on the 504 unit tests. Caught by a campaign check: 99 (oracle 92, structure check 74, second presolve 17, side points 7). Caught by the unit tests: all 115 (20 of the test runs end in a crash). By the unit tests alone: 16 (ev_scale, ev_sides, ev_unread, fc_guard, fs_drift, fs_guard, fs_limited, fs_shared, r_alias_drift, zs_guard, pr_cross_kept, pr_no_drift, pr_sub_no_drift, sp_cont, sp_narrow, sp_size). By nothing: 0. pr_keep_index is caught by the side points alone among the campaign checks (5,285 results).\n4. Campaign on the merged engine, seeds from 50,000,000,000, 6 processes. Release build: 8 runs of 21,000,000 models (no option, --singletons, --columns, --probing, --probing --singletons, --probing --columns over all 14 profiles; the profiles parallel_scale and scale_pair alone), 168,000,000 models. Assertion build: the same 8 runs of 10,500,000 models, 84,000,000 models. In all 16 runs: 0 oracle failures, 0 structure failures, 0 missed, 0 of 19,948,316 (release) and 9,972,549 (assertion) second presolves changed a fixed point, 0 of 30,000,000 and 15,000,000 side-point results failed, every process ended, exit code 0. None of the known classes fell into these seed ranges.\n5. Check tool without a solver (LP and MIP limits 0). 17 local dumps: 490 verdicts pass, 0 fail, 176 skipped in the default run, and the same in the primal-only run. 240 local dumps: 5,040 pass, 0 fail, 4,320 skipped; the structure check ran on all 240 results in each of the two modes with no failed part.\n6. Identity, with the base engine, the M2 commit and the repair commit rebuilt from git archive, on eight option variants per dump (default and primal-only among them). (i) The merged engine with simple_probing off against the repair commit: 0 of 1,920 lines differ on the 240 local dumps and 0 of 136 on the 17, in the release and in the assertion build, compared as whole lines (reduced-model hash, stack hash field by field, fixed-point flag, rounds, statistics of every other family, phase hashes). On 2.6 million random models per build the two are equal line by line as well. (ii) The merged engine differs from the M2 commit on 12 lines of 2 instances of the 240 (momentum1, rocII-5-11), which are exactly the 12 lines where the repair commit differs from the base; none on the 17. Sizes on each side, rows / columns / nonzeros: momentum1 default 24,254 / 3,597 / 62,041 on both sides, primal-only 24,277 / 3,620 / 62,087 on both; rocII-5-11 default 12,860 / 5,282 / 134,280 on both, primal-only 12,936 / 5,326 / 134,432 on both; they differ in the hash and the record stack only. The one line with other sizes is rocII-5-11 without propagation (see other defects).\n7. Second presolve of every fixed-point result of the merged engine in the eight option variants: 1,529 fixed points of 1,920 results on the 240 local dumps and 108 of 136 on the 17, all returned unchanged.\n8. The stored runs agree: the merged run with simple_probing off equals results/bench240/s1c_prow_mac/default on all 240 instances (hash, rounds, flag, status, calls, work and findings of every other family); the default, primal-only and off runs differ from results/bench240/s1c_m2_mac in the hash of momentum1 and rocII-5-11 and in nothing else.\nScratch with every log: /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/s1c_m2_merge (chain.log, camp_table_c1.txt, mutants_summary.txt, ident/out, second/out, bench, timing, probe).",
+ "reductions": "All figures are on the 240 local dumps, release build, one run, default options unless said. Geometric mean of reference / engine over 237 instances (without ex9, ex10, enlight_hard), nonzeros / rows / columns: against m2_a 1.0021 / 1.0023 / 1.0023 (0.9995 / 0.9993 / 0.9993 with the engine's lead counted as zero; below 0.95: no instance in nonzeros, irish-electricity in rows 0.935 and in columns 0.894); against m2_b 1.0017 / 1.0017 / 1.0017; against d3_cheap 0.9846 / 0.9914 / 0.9794 (below 0.95 on 19 / 8 / 16 instances); against m1_a 1.0124 / 1.0128 / 1.0243. Primal-only mode against m2_a: 0.9540 / 0.9616 / 0.9340. These are the figures of the M2 commit, because the merged engine has its sizes on every instance.\nAgainst the engine before (results/bench240/s1c_m1_mac): no instance larger in any measure in default or primal-only mode; 8 smaller in both modes (rows / columns / nonzeros, default): highschool1-aigio 70,519 / 299,661 / 1,153,577 to 36,715 / 45,231 / 379,495; brazil3 9,237 / 17,532 / 74,644 to 3,197 / 6,812 / 40,080; neos-1445765 2,124 / 20,590 / 40,180 to 999 / 2,144 / 20,583; academictimetablesmall 17,522 / 25,794 / 244,587 to 17,340 / 25,148 / 242,779; cryptanalysiskb128n5obj14 and obj16 64,332 / 30,761 / 215,728 to 63,816 / 30,397 / 214,148; bab2 16,847 / 146,244 / 1,819,630 to 16,803 / 146,156 / 1,819,242; bab6 29,442 / 113,900 / 1,157,469 to 29,402 / 113,820 / 1,157,029. Sums over the 240: nonzeros 101,227,465 to 100,393,426, rows 10,472,693 to 10,430,426, columns 9,674,821 to 9,389,683. The fixed-point flag is set on 234 instances before and now, none lost; most rounds 13.\nThe repair changes no size on the 240 in default or primal-only mode: momentum1 and rocII-5-11 differ in the hash only. Simple probing: 277,320 aliases on 8 instances, 24,819 rows entered a batch and all were deleted, 952 visits were left because two columns were connected already, none for the bounds 0 and 1, the scale limit, the rounding test or the size of an offset.",
+ "timing": "240 local dumps, release build, three alternating passes with the order turned per pass, one process at a time, minimum per instance, summed; the load average from other processes on the machine was 7 to 10, so the sums are good to a few percent. Run of two binaries: base binary (m1_merged_build) 8.190 s, merged 8.347 s, +1.9%. Run of four binaries: base 8.130 s, M2 commit 8.294 s (+2.0%), repair commit 8.104 s (-0.3%), merged 8.311 s (+2.2%). Simple probing takes 0.132 s (0.005 s in the base, where the family is empty). The parallel rows take 0.898 s in the base and 0.918 s merged (+2.3%); that comes with M2 (+1.9% at the M2 commit, +0.1% at the repair commit). Work units of all families: 2,041,111,657 to 2,172,155,947 (+6.4%), of them simple probing 116,758,890. 17 local dumps, same method: 0.552 s to 0.557 s, +1.0%.",
+ "assumptions": [
+  {
+   "title": "Simple probing (R1): limit on the scale of an alias",
+   "statement": "A row is left when the range upper - lower of one of its other columns is above 1e6; the range is the scale of the alias and multiplies the coefficients of the column into the rows of the binary.",
+   "where": "gpu_presolve/include/gprs/presolve.hpp:147; gpu_presolve/src/rules_simple_probing.cpp:171",
+   "switch": "options_t::alias_scale_limit = 1e6 (gprs_presolve --alias-scale-limit <x>)",
+   "alternatives": "Any value from 1 up; inf for no limit.",
+   "measured": "240 local dumps, merged engine: with 1 and with inf every instance has the hash of the default run, and no visit is left for the limit. Campaign, 168 million release models: 84,912 visits left for it."
+  },
+  {
+   "title": "Simple probing (R1): tolerance of the balance test",
+   "statement": "A row is visited only when its two activities lie equally far from its side within one feasibility tolerance, less the two error bounds. That is stricter than the two forcing tests by themselves, which allow two tolerances.",
+   "where": "gpu_presolve/include/gprs/presolve.hpp:152; gpu_presolve/src/rules_simple_probing.cpp:262",
+   "switch": "options_t::probing_balance = 1 (gprs_presolve --probing-balance <x>)",
+   "alternatives": "2 (what the two forcing tests allow); 0.",
+   "measured": "240 local dumps, merged engine: with 2 and with 0 every instance has the hash of the default run."
+  },
+  {
+   "title": "Simple probing (R1): the binary and its neighbours must have the bounds 0 and 1",
+   "statement": "The binary, and every other integer column of the row whose bounds are one apart, must have the bounds 0 and 1 exactly. The design asks for upper - lower == 1 only. The author's reason: only then is the offset of every alias a bound of its own column whichever root the forest picks.",
+   "where": "gpu_presolve/src/rules_simple_probing.cpp:94-97, 147, 172, 185",
+   "switch": "no switch",
+   "alternatives": "Bounds one apart at any place, as the design writes it.",
+   "measured": "240 local dumps, merged engine: no visit is left for it. Campaign, 168 million release models: 531,733 visits left for it."
+  },
+  {
+   "title": "Simple probing (R1): a continuous column whose range is of rounding size is left",
+   "statement": "A row is left when the rounding of the two bounds of a continuous column is above tol.zero times its range, or when the slack of the forcing tests is above tol.zero times the smallest term range of a continuous column. This is the author's repair of the wrong reduction that his campaign found; the two thresholds are chosen by argument.",
+   "where": "gpu_presolve/src/rules_simple_probing.cpp:174, 192-194; bound_rounding in gpu_presolve/src/implied.hpp:25-30",
+   "switch": "no switch of its own; tolerances_t::zero = 1e-9 (gpu_presolve/include/gprs/numerics.hpp:25)",
+   "alternatives": "Another factor than tol.zero; a test on the term range alone.",
+   "measured": "240 local dumps, merged engine: no visit is left for it. Campaign: 28 visits in 168 million release models and 10 in 84 million assertion models, no failure."
+  },
+  {
+   "title": "Simple probing (R1): size of an offset",
+   "statement": "A row is left when max(|lower|, |upper|) of a column times its largest coefficient is above feasibility / side_error (1e8), or when a finite side of a row of the column is not readable. The call then reports limited, because the test reads rows that change without an event of the visited row, so the presolve does not end at a fixed point.",
+   "where": "gpu_presolve/src/rules_simple_probing.cpp:103-134, 198-203, 309-313",
+   "switch": "no switch of its own; tolerances_t::side_error = 1e-14 and feasibility = 1e-6 (gpu_presolve/include/gprs/numerics.hpp:23, 36)",
+   "alternatives": "No test, as the doubleton equations have none; a limit of its own.",
+   "measured": "240 local dumps, merged engine: no visit is left for it and no fixed-point flag is lost. Campaign, 168 million release models: 1,912 visits left for it."
+  },
+  {
+   "title": "Simple probing (R1): which rows are visited",
+   "statement": "Only an equation with three or more free entries, a readable side and two finite activities is visited, and only explicit bounds of the columns are read (no implied bound).",
+   "where": "gpu_presolve/src/rules_simple_probing.cpp:250-255, 159, 273",
+   "switch": "no switch",
+   "alternatives": "Inequalities (not in the design); implied bounds.",
+   "measured": "not measured"
+  },
+  {
+   "title": "Simple probing (R1): the forcing test",
+   "statement": "The other entries must be forcing at both values of the binary's term by the test that the forcing row uses: a gap of zero within feasibility times min|a| / max(1, max|a|), with 8 rounding units allowed for a continuous column.",
+   "where": "gpu_presolve/src/forcing.hpp:25 and the function forcing below it; gpu_presolve/src/rules_simple_probing.cpp:181-184, 277-278",
+   "switch": "no switch (forcing_rounding_units = 8 is a named constant shared with the forcing row)",
+   "alternatives": "A tolerance of its own for the rule.",
+   "measured": "not measured"
+  },
+  {
+   "title": "Simple probing (R1): order of the binaries and one batch per call",
+   "statement": "The columns that can be the binary are tried in increasing index and the first that passes is taken. A call collects one batch from one state; a row whose columns the batch connects already waits for the next call. A row is deleted only when all its edges became maps.",
+   "where": "gpu_presolve/src/rules_simple_probing.cpp:282-296, 207-232, 352-358; gpu_presolve/src/alias_apply.hpp:202-203",
+   "switch": "no switch",
+   "alternatives": "Largest step first; apply after every row.",
+   "measured": "240 local dumps, merged engine: 952 visits on 2 instances were left because two columns were connected, and all 24,819 rows of the batches were deleted, none left with a cut edge."
+  },
+  {
+   "title": "Simple probing (R1): place in the round, family switch and budget",
+   "statement": "The family runs first of the column rules, after the doubleton equations, with the budget of 4 passes, 2 stall passes and a floor of 100,000 work units. The budget is tested between two rows only and never while a batch is applied.",
+   "where": "gpu_presolve/src/presolve.cpp:366; gpu_presolve/include/gprs/presolve.hpp:114-123; gpu_presolve/src/rules_simple_probing.cpp:337-346, 356-358",
+   "switch": "options_t::enabled[rule::simple_probing] = true (gprs_presolve --off simple_probing, GPRS_FUZZ_OFF=simple_probing); options_t::budget[rule::simple_probing] = {4, 2, 100000}",
+   "alternatives": "Another place in the round; another budget.",
+   "measured": "240 local dumps, merged engine: with the family off the run equals that of the repair commit on every instance; with it on 8 instances are smaller and none larger. Other places or budgets not measured."
+  },
+  {
+   "title": "Parallel rows: which row of a pair is kept",
+   "statement": "Of two parallel rows without singleton columns the one with the larger coefficients is kept, the size read from the coefficient of the smallest core column, and the smaller index between rows of one size. The base kept the smaller index whatever the sizes.",
+   "where": "gpu_presolve/include/gprs/presolve.hpp:182; gpu_presolve/src/rules_parallel_rows.cpp:333-338, 1001",
+   "switch": "options_t::parallel_keep_larger = true (gprs_presolve --parallel-keep-smaller-index switches it off)",
+   "alternatives": "Smaller index (the base); the row with the smaller sides.",
+   "measured": "240 local dumps, merged engine: with the option off the sizes are equal on all 240 and the hash differs on momentum1 and rocII-5-11. With propagation off the larger kept row costs rocII-5-11 376 rows, 169 columns and 1,959 nonzeros. The three wrong results named above come with the larger kept row."
+  },
+  {
+   "title": "Parallel rows: limit on rows that are no exact multiples",
+   "statement": "Rows that are parallel within tol.zero and not exactly are merged, and an equation is subtracted from such a row, only when they differ by at most 0.1 of the feasibility tolerance over the explicit bounds of their columns, in the units of the removed row. A pair that fails reports limited.",
+   "where": "gpu_presolve/include/gprs/presolve.hpp:188; gpu_presolve/src/rules_parallel_rows.cpp:1009, 1047",
+   "switch": "options_t::parallel_drift_share = 0.1 (gprs_presolve --parallel-drift-share <x>)",
+   "alternatives": "inf for no limit; 0 for exact multiples only; a limit in the units of the kept row as well, which the attacker's unfinished repair adds.",
+   "measured": "240 local dumps, merged engine: with inf and with 0 every instance has the hash of the default run. The first wrong result above passes this limit and is wrong in the units of the kept row."
+  },
+  {
+   "title": "Parallel rows: unit of the crossing test",
+   "statement": "Sides that cross are measured in the units of the removed row (crossing times |ratio|): infeasible above the feasibility tolerance, a merge with the new side at the opposite side of the kept row within it, and no merge when the rounding of the image and the drift do not place it on one side.",
+   "where": "gpu_presolve/src/rules_parallel_rows.cpp:509-515",
+   "switch": "no switch",
+   "alternatives": "Units of the kept row; exact arithmetic; a sum over the merges of one row, which the attacker's unfinished repair adds.",
+   "measured": "Not measured on instances. The third wrong result above is two such merges in a row."
+  },
+  {
+   "title": "Parallel rows: image of a side and its rounding",
+   "statement": "The image of a side is exact wherever it is a double. A rounded image is allowed 8 rounding units, is used only when the side of the removed row less its fixed terms is at most 1e8 (feasibility / side_error), and a side below 2^-960 leaves the pair alone. A rounded image becomes a side of the kept row as it is.",
+   "where": "gpu_presolve/src/rules_parallel_rows.cpp:409 (image_error_units), 412 (min_scaled_side), 421-467, 316-319",
+   "switch": "no switch (two named constants; the size limit follows tolerances_t::side_error and feasibility)",
+   "alternatives": "Another allowance; refusing a rounded image as a side of the kept row when its rounding is above a share of the tolerance in that row's units, which the attacker's unfinished repair adds.",
+   "measured": "Not measured on instances. The second wrong result above is a rounded image taken as a side."
+  },
+  {
+   "title": "Parallel rows: fixed terms of the kept row and the limited flag",
+   "statement": "A pair is left when the kept (larger) row holds fixed terms above 1e8. Refusals that read column bounds or the fixed terms of the kept row report limited, so the presolve then does not end at a fixed point.",
+   "where": "gpu_presolve/src/rules_parallel_rows.cpp:323-326, 1004, 500-503, 1009-1012, 1019-1021",
+   "switch": "no switch of its own (tolerances_t::side_error, feasibility)",
+   "alternatives": "Asking the smaller row, as the base did.",
+   "measured": "240 and 17 local dumps, merged engine, default and primal-only: no fixed-point flag is lost against the engine before, and the sizes equal those of the M2 commit on every instance."
+  },
+  {
+   "title": "Generator and campaign of the two works (tests only)",
+   "statement": "Probing rows are drawn only with p_probing_row > 0 (--probing: 0.7, up to 3 rows); probing_wide is kept out of campaigns. Parallel rows of very different scale are drawn only with p_parallel_scale > 0 (profile parallel_scale: 0.8, factors up to 2^20). The profile scale_pair ignores every profile option and is judged by the side points alone; the side points run on no other profile.",
+   "where": "gpu_presolve/tests/oracle.hpp:173-175, 186-187; gpu_presolve/tools/gprs_fuzz.cpp:200-213, 414-416",
+   "switch": "generator_options_t::p_probing_row = 0, max_probing_rows = 2, probing_wide = false, p_parallel_scale = 0, max_parallel_scale_exp2 = 20; gprs_fuzz --probing, --probing-wide, --profile <name>",
+   "alternatives": "Side points on every profile; a generator of three parallel rows with sides that cross within the tolerance, of rows that are no exact multiples at a ratio far from 1, and of decimal sides near 1e10.",
+   "measured": "Campaign of this step: 168 million release and 84 million assertion models, clean. The three wrong results of the repair are outside what these knobs draw."
+  },
+  {
+   "title": "The merge itself",
+   "statement": "The merge chooses no default, limit, tolerance or order that decides a reduction. Where both works appended to a list, the entries of M2 stand before those of the repair.",
+   "where": "gpu_presolve/tests/oracle.hpp:149-187; gpu_presolve/include/gprs/presolve.hpp:140-188",
+   "switch": "no switch",
+   "alternatives": "none",
+   "measured": "Identity runs: the merged engine with simple probing off equals the repair commit on the 240 and the 17 local dumps and on 2.6 million random models per build."
+  }
+ ],
+ "open": [
+  "Most serious: the three wrong results of the parallel-row repair (two feasible models reported infeasible, one infeasible model reduced with a point off by 1.35e-6) are in the commit and not repaired. The attack on the repair has to be finished and reported: the attacker's uncommitted changes in /Users/acoerduek/Documents/workspace/cuopt/.claude/worktrees/wf_f36af1da-339-3 address all three and need wrong engines, a campaign and a review before they can be taken. Owner's decision until then: merge e3dbc812d as it is, or merge edd147a7e (M2 alone).",
+  "No review of M2 exists: the validity and worth reports are null. Its author's own open points stand: the rounding test for a continuous column is reached by the generator only when the row rules are switched off (28 visits in 168 million release models here); the claim that only 0/1 columns can be a root or an inner node of a tree of the batch is not asserted in the code.",
+  "Doubleton substitution with an offset of any size (1.563e-3 at a row of 2^18): shared with the base, not repaired. The same hazard is named by the M2 author for the single-lock alias (R8, milestone M4), which needs the three guards of simple probing (0/1 bounds, size of an offset, rounding test) moved to a shared header.",
+  "Free singleton column on an inequality (R5): the restored value is rounded at its own size and a pivot row with large coefficients reads it times the coefficient (1.563e-3): shared with the base, not repaired.",
+  "Alias scale with the implied-bound band of the free singleton column in primal-only mode: a bound passed by 1.0e-4; shared with the base, not repaired.",
+  "The row rules on a singleton row of an integer column with a coefficient near 1e7: 8 oracle failures in 559,944 models of the wide probing set, with and without simple probing; shared with the base, not repaired. The M2 author traced one of them; whether all eight are one class is not known.",
+  "The known seeds of classes (a) and (b) and the structure-check failure at seed 31150507986 fail identically in the base, both parents and the merged engine; none has an owner. The seed 32077278 of class (a) no longer fails at the base commit.",
+  "Blind spots of the checks: the oracle and the campaign generator cannot reach the repair's wrong results, and 16 of the 115 wrong engines are caught by unit tests alone (the three guards of the repair pr_cross_kept, pr_no_drift, pr_sub_no_drift and three of simple probing among them).",
+  "The larger kept row loses reductions on rocII-5-11 when propagation is off (376 rows, 169 columns, 1,959 nonzeros). Which test refuses the 11 subtractions and 33 merges is not traced.",
+  "Nothing ran with a solver (the verdicts that compare optima are skipped: 176 per mode on the 17 local dumps, 4,320 on the 240), nothing on the node, on the 44 testbed instances or in the third check mode of the design. Solution quality is not measured for any assumption.",
+  "Assumptions without a switch remain in both works: the 0/1 bounds, the order of the binaries, one batch per call, explicit bounds only, the rounding test and the size test of simple probing; the unit of the crossing test, the allowance of 8 rounding units for an image and the smallest scaled side of the parallel rows.",
+  "Timing was measured under a load average of 7 to 10 from other processes; +1.9% and +2.2% on the 240 local dumps are good to a few percent.",
+  "Not pushed. No HISTORY.md and no ASSUMPTIONS.md entry (task rules). The two assumptions of the attacker's unfinished repair (parallel_chain_share, parallel_side_share) are not in this commit and not in the list above."
+ ]
+}

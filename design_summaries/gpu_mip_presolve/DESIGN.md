@@ -1,4 +1,4 @@
-# GPU MIP presolve: design plan (version 4.1)
+# GPU MIP presolve: design plan (version 4.1, with amendment A11 of 2026-11-28)
 
 Date: 2026-11-26. Status: Stage 0 is measured on the 31 testbed instances from 5e4 to 1e7
 nonzeros; HiGHS on the nine instances above 1e7 nonzeros and the probing run with HiGHS's limits
@@ -178,6 +178,30 @@ constraints like indicator. but we will test them at the end. first goal is the 
   until then the design keeps the unified-memory path possible and nothing is measured there.
 - cuOpt's sub-MIPs keep PaPILO for now.
 - The design notes (this directory) are pushed to the fork as branch `gpu-presolve-notes`.
+
+**A11. Stage 1 is complete on the GPU before Stage 2 (owner, 2026-11-28).** In the owner's
+words: "I want the whole presolve suite to be built on GPU. It can be hybrid CPU/GPU presolve
+where smaller and non-parallel work to CPU. Otherwise, all methods that can be parallelized
+should be on GPU. Do not switch to state 2 without implementing a complete GPU acceleration for
+stage 1." ("state 2" is Stage 2.)
+
+- Until this amendment the host engine was the whole of Stage 1 and the only device code was
+  the state build, measured and not integrated (A9; the device propagation of section 13 was
+  postponed after the measurement of HISTORY Entry 24). That no longer holds. Sections 2.1 and
+  3, which give the device the wide phases and the dense sweeps only, are overruled where they
+  leave parallel work on the host.
+- "Stage 1" is read as every part of a presolve call before the wide phases: the state build,
+  every rule family that is built, the cheap column rules that are designed (A8), the driver,
+  the record stack, the output and its hash. If the owner means the first rule set only, the
+  plan below covers it as a subset.
+- What stays on the host needs a measured reason (small models, short work lists, chains that
+  are not parallel). The hybrid rule must not depend on the machine (2.5).
+- No Stage 2 work (probing, cliques, implication graph) starts before the acceptance criteria
+  of the GPU plan for Stage 1 are met.
+- The design plan is made by a design round (inventory, measured width and depth of the work,
+  research, three designs, three critiques, one synthesis) and saved under
+  `stage1_gpu_design/`. The owner decides on it before anything is implemented, as with the
+  first plan.
 
 ## 0. Decisions
 

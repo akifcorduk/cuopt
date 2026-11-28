@@ -2909,3 +2909,104 @@ and launched it again. Nothing of the wrong reading reached a commit or the regi
   of the work in progress after each part, so that a cut costs one part and not the run.
 - The random campaign runs at 760,000 models per second on a node with 24 processes. A
   billion models per kind is 20 minutes: every milestone can have it.
+
+## Entry 51 — 2026-11-28 — The owner asks for a complete GPU acceleration of Stage 1 before Stage 2; the singleton-column rules are verified on the node; the merge of simple probing with the parallel-row repair is back and not accepted
+
+### User messages (verbatim)
+
+First, as a question:
+
+> are all presolve routines up to now GPU accelerated?
+
+I answered no: every rule built so far is single-threaded CPU code, and the only device code
+is the state build, measured and not integrated. Then, while I was working:
+
+> I want the whole presolve suite to be built on GPU. It can be hybrid CPU/GPU presolve where smaller and non-parallel work to CPU. Otherwise, all methods that can be parallelized should be on GPU. Do not switch to state 2 without implementing a complete GPU acceleration for stage 1.
+
+("state 2" is Stage 2.)
+
+### What the directive changes
+
+- It overrules my deferral of the device work. After the measurement of Entry 24 I had
+  proposed to give the device the state build only and to postpone device propagation, and
+  the owner had allowed that then ("the GPU part of Stage 1 may go to the state build").
+  From now on everything of Stage 1 that can be parallel runs on the device, the host keeps
+  small and non-parallel work, and no Stage 2 work starts before that is complete.
+- Plan amendment A11 in DESIGN.md holds the directive, my reading of "stage 1" (every part of
+  a presolve call before the wide phases, the cheap column rules included; the narrower
+  reading is a subset) and the rule that what stays on the host needs a measured reason.
+- Register: AS-244, AS-302, AS-304 and AS-305 are marked as overruled in their State lines.
+- Following the owner's rule for redesigns (plan in chat first, then the go), nothing is
+  implemented. A design round is running (workflow `wf_9f20c328-c17`, ten agents, read-only):
+  an inventory of every rule from the code, a measurement of how wide and how deep the work
+  is on the 240 (instrumented scratch build), research (PaPILO's parallel scheme, GPU domain
+  propagation, deterministic reservations, pointer jumping, GPU compaction), three designs
+  from different angles (one algorithm with two executors; bulk on the device and tail on
+  the host; device-native), three critics (validity and determinism; performance;
+  completeness and migration), one synthesis. Output goes to `stage1_gpu_design/`.
+- Open for the owner, asked in the answer: whether the GPU work starts now, before the
+  remaining cheap column rules (parallel-column dominance, dual bound strengthening,
+  single-lock alias, parallel-column merge and the five further rules), or after them. My
+  recommendation: now, and the remaining rules are then written once, in the new form.
+
+### The singleton-column rules [M1] on the node (closes AS-336)
+
+Node chain `s1c_m1` on slot a (ipp2-0043), engine commit `daa4f5d68`, base `s1c_m0`:
+
+- The 240 benchmark instances: 1.0020 / 1.0022 / 1.0022 of the ladder step `m1_a` in
+  nonzeros / rows / columns (237 instances). Hash, sizes and fixed-point flag are equal to
+  the Mac run on 240 of 240, in default mode and with the family off.
+- Testbed, 40 instances: 1.0028 / 1.0009 / 1.0032 of `tb_m1_a`, nothing below 0.95.
+- Family off against M0: sizes, hash and fixed-point flag identical on 240 + 31 + 9. One
+  statistic differs, `singleton_cols.calls`: the groundwork family counted a call that did
+  nothing, the switched-off family is not called (AS-326).
+- Assertion build: no failure on 240, 31 and the 4 status instances. Structure and crush
+  check without a solver: clean on the 240 (184 with a point), the 31 and the 3 status
+  instances, and on 8 of the 9 large ones; hawaiiv10-130 has no usable stored point (known
+  since Stage 1). Check with HiGHS as solver on the 31: no failed check.
+- Time against M0 on this node, three alternating passes: +1.8% on the 240 (19.16 to
+  19.50 s), +2.0% on the testbed below 1e7 nonzeros, +7.3% on the 9 large instances (81.8 to
+  87.8 s; dlr2 +31%, t11nonreg +10%, neos-4332810-sesia +6%). With the family off: within 0.2%.
+- cuOpt adapter rebuilt against this engine: its 27 tests pass; the device state build test
+  passes against the M1 library.
+- Committed and pushed as `04692babd` on `feat/gpu-presolve`, with `tools/node_campaign.sh`.
+
+### The campaign on slot b (still running)
+
+M1 engine, release build, 1.2 billion models per kind: with no profile option 5 oracle
+failures, with `--singletons` 4. The structure check missed all nine. Three are objective
+differences of about 1.1e-9 (the known class at the oracle's tolerance), six are crush
+failures at feasible points with entries of 1e19 to 1e23. The rate is about one in 270
+million models, so no Mac campaign sees the class. The seeds went to the triage.
+Still to run: `--columns` in the release build and the three kinds in the assertion build.
+
+### The M2 workflow returned
+
+- The merge step joined the unreviewed simple probing (`edd147a7e`) and the unreviewed
+  parallel-row repair (`5b87457a5`) into `e3dbc812d` (504 tests, 115 wrong engines caught,
+  168 million release and 84 million assertion models clean, 1.0021 / 1.0023 / 1.0023 of
+  `m2_a` on the 240 local dumps).
+- It is not accepted. The repair has three wrong results that its first attacker had found
+  before the cut and that the merge agent reproduced: two feasible models reported
+  infeasible and one infeasible model reduced (rows parallel only up to rounding, a side
+  image rounded at 1e10, a chain of merges that each take one tolerance). The campaign
+  generator cannot reach them. Simple probing has no review at all.
+- Reports saved: `stage1c_reports/m2/{impl_m2,repair_parallel_rows,merge_unreviewed}.json`.
+  Work branches pushed to the fork: `stage1c-m2`, `stage1-parallel-scale`,
+  `stage1c-m2-merged-unreviewed`.
+- The workflow is resumed (same run, task `w4dp9trat`): the two finished agents come from
+  the cache; the validity and the worth attack on simple probing run on its own commit, the
+  attack on the repair takes over the first attacker's saved state `399fed27b` and the three
+  models, then the triage with the nine new seeds, then the merge. The script now stops when
+  a reviewer returns nothing or says no.
+
+### Lessons
+
+- The owner reads "GPU presolve" literally. A measurement that says the device does not pay
+  for a part is a reason to design that part differently for the device, not to leave it on
+  the host, unless the part is small or cannot be parallel. I should have asked before
+  deferring the device work for a second time.
+- A repair of a numerical defect can be worse than the defect: the first repair of the
+  parallel rows turns a violation of 1.6e-3 on extreme models into wrong "infeasible"
+  answers on other models. A repair is attacked before it is merged, also when the attack
+  was cut once.

@@ -2970,7 +2970,7 @@ An entry whose choice cannot change the reduced model is tested by its own means
 - **Alternatives:** GPU cascades at all sizes; another size boundary.
 - **May change:** The division of work between host and device; measured on one GPU type and one CPU. Nothing in the reduced model if both engines give the same bits.
 - **Test at the end:** Not a quality test: a time measurement with the device forced on and off once a wide phase exists.
-- **State:** measurement only.
+- **State:** measurement only. Overruled by the owner on 2026-11-28 (HISTORY Entry 51, plan amendment A11): Stage 1 gets a complete GPU acceleration, hybrid with the host for small and non-parallel work, before Stage 2 starts; the design round is `stage1_gpu_design`.
 
 ### AS-245 Belief: a surplus over HiGHS comes from where HiGHS limits itself, and from cliques
 - **Assumption:** The plan expects parity through a complete rule set of its own and a surplus from coverage where HiGHS limits itself (its probing contingent starting at 1,000, the aggregator pass that ends after three fill-in failures, stages it runs once) and from clique strengthening. One source was measured: with HiGHS's probing limits off the 31 end with 1.8% fewer nonzeros in the geometric mean, for 15 times the probing time and 31 times the probes; the gain sits on supportcase7, bab6 and brazil3. The other two are not measured.
@@ -3654,7 +3654,7 @@ An entry whose choice cannot change the reduced model is tested by its own means
 - **Alternatives:** Device batches with the plan's reservation table; several host threads; device state build and device phases behind a size threshold.
 - **May change:** Presolve time only, and through it the primal integral, as long as a later device form gives the bits of the host.
 - **Test at the end:** Not a quality pair: a timing test at the end (host against device), with equal hashes.
-- **State:** in the engine and the adapter.
+- **State:** in the engine and the adapter. Overruled by the owner on 2026-11-28 (HISTORY Entry 51, plan amendment A11): Stage 1 gets a complete GPU acceleration, hybrid with the host for small and non-parallel work, before Stage 2 starts; the design round is `stage1_gpu_design`.
 
 ### AS-303 The prices of the dominated-column rule are cached for one pass
 - **Assumption:** The best compensators and their prices of a scanned row are cached for one pass of the family and cleared when a fixing touches a cached compensator; the assertion build compares every used price with a fresh scan.
@@ -3674,7 +3674,7 @@ An entry whose choice cannot change the reduced model is tested by its own means
 - **Alternatives:** Host only; device from another size; huge pages on the host without a GPU; device propagation after the first host cascade, as in plan version 4.
 - **May change:** Nothing in the reduced model while bit equality holds (the device arrays had the host's bits in all 3,734 compared builds); presolve seconds (the state build is 43 to 46% of engine time). If a library version changed the order inside a column, results could differ between host and device. DESIGN.md amendment A4 supersedes the rule that the device copy is created after the first host cascade, which had its own reason (the Stage 1 rules remove at least half of the rows on 9 of the 31).
 - **Test at the end:** Not a quality test: hash identity with the device path forced on the 240 and the 40, the campaign with the device path forced, then three alternating timing runs above the switch size.
-- **State:** designed; built as a bench project, integration planned after the cheap column rules.
+- **State:** designed; built as a bench project, integration planned after the cheap column rules. Overruled by the owner on 2026-11-28 (HISTORY Entry 51, plan amendment A11): Stage 1 gets a complete GPU acceleration, hybrid with the host for small and non-parallel work, before Stage 2 starts; the design round is `stage1_gpu_design`.
 
 ### AS-305 Device bound propagation is postponed, ships off, and need not agree with the host
 - **Assumption:** Of the design of GPU bound propagation only the parts that the later probing stage reuses are built now (memory resource, device image, bit-equal row sums, hand-over); frontier kernels and the threshold measurements wait. The design ships with the device off (`engine = host`) and provisional values for the settings that can change a result: `min_nnz` = 500000, `frontier_work` = 20000, `handback_work` = 20000, `handback_rounds` = 1, `fixed_cost_per_nnz` = 5, `byte_budget` = 0. In the design the device applies a round from one snapshot of the bounds and the host goes row by row, so the two are each checked for validity and are required to reach the same bounds only on integer models with exact data run to an empty frontier.
@@ -3684,7 +3684,7 @@ An entry whose choice cannot change the reduced model is tested by its own means
 - **Alternatives:** Ship device propagation off for good; other thresholds after measurement; a device engine that reproduces the host's order (slower).
 - **May change:** With the device on, bounds are tightened in rounds from one snapshot, which can use the work budget differently and leave other bounds than the host rule, so the reduced model can differ between a run that used the device and one that did not.
 - **Test at the end:** If built: `engine` = `host` against `device` forced, hashes and reductions first, then a standard cluster comparison.
-- **State:** designed (Stage 1b); waits for the probing and clique stage.
+- **State:** designed (Stage 1b); waits for the probing and clique stage. Overruled by the owner on 2026-11-28 (HISTORY Entry 51, plan amendment A11): Stage 1 gets a complete GPU acceleration, hybrid with the host for small and non-parallel work, before Stage 2 starts; the design round is `stage1_gpu_design`.
 
 ### AS-306 The engine of a phase is chosen by a work estimate against provisional thresholds
 - **Assumption:** Each phase is given to the host or the device by a deterministic work estimate against thresholds, which includes a constant per kernel launch and per read-back; each presolve call has a device fixed-cost budget (proposed: 5 work units per nonzero, "a policy choice, not derived"), and a phase whose fixed cost does not fit runs on the host or is skipped. Provisional Stage 0 values (the 31, one H200): work unit 10 ns; full sweep on the GPU from 32,000 nonzeros (nothing below 71,477 nonzeros was measured); GPU sweep of changed rows from 20,000 work units; rebuild on the GPU from 100,000 nonzeros; pinned host mirror below 64 MiB (a placeholder). Not set at all: the hand-back threshold, the byte budget, the probing budget with its caps, the hard cap of pairwise dominated columns, the budgets of every phase not built.
