@@ -2795,3 +2795,117 @@ No new user message. The turn started with the notification that workflow `wf_40
   not in the rules paragraph.
 - A writer that marks a figure "recounted" must be checked on exactly those figures: three
   were not recounted.
+
+## Entry 50 — 2026-11-28 — Two nodes are back; a network drop cut five agents; the M1 node chain and a 100 times larger campaign are running; the switches build restarted from its saved state; the HiGHS claim of AS-339 checked in source
+
+### User message (verbatim)
+
+> both slots are up. you can use both slot a and b for your experiments if you need more compute.
+> is there anything i should decide now ?
+
+It came together with the notification that the switches workflow (`wf_d0fdbed0-0ae`) had
+ended with "the implementer returned no commit".
+
+### What I found
+
+- The Mac lost its network at 08:19 CET (API unreachable, ENOTFOUND). That cut five agents:
+  the switches implementer (after 4.2 h and 451 tool calls, nothing committed), the validity
+  and the worth attack on simple probing [M2] (1.9 h each, 33 and 49 tool calls, nothing in
+  their worktrees), the attack on the parallel-row repair (2.9 h, 155 tool calls, repairs
+  uncommitted), and at 09:33 the triage of the extreme campaign seeds (no tool call at all).
+- The M2 workflow (`wf_f36af1da-339`) went on by its script. The implementation of simple
+  probing (`edd147a7e`, branch `stage1c-m2`) and the parallel-row repair (`5b87457a5`, branch
+  `stage1-parallel-scale`) had returned before the cut. A failed reviewer returns nothing,
+  and the script reads "nothing" as "no objection": it took both unreviewed commits into
+  its merge step, which has been running since 09:33. The merge is useful work, but its
+  result is two unreviewed changes joined.
+- The nodes: slot a is a different node than before, ipp2-0043 (EPYC 7413, 48 CPUs, H200);
+  slot b is viking-cr-194 (28 CPUs). Both containers see the same scratch, so the builds and
+  results of the earlier chains are there. The base binaries are built with -O2 and no
+  machine flags, so they run on the new node; times of the old node do not compare with
+  times of the new one (the chain times base and new on the same node).
+- Agents do not keep their task list current: the last list of each cut agent still shows
+  its first step in progress. What they had done is only in their tool calls.
+
+### What I did
+
+1. Saved what the cut agents left. Uncommitted worktree states are now commits on their own
+   branches: `ec7a30dcf` (switches: 17 changed and 9 new files, and 60 MB of stored runs of
+   42 option values) and `399fed27b` (attack on the parallel-row repair: two new guards,
+   their tests, an option). A digest of every tool call of the four agents, in order, with
+   the end of each output, is in the scratchpad (`handoff/*_digest.txt`). The switches agent
+   was near its end: options, counters, tools, tests, wrong engines, the 42 measurements and
+   the release campaign were done, the assertion-build campaign was running.
+2. Started the node chain of the singleton-column rules [M1] on slot a:
+   `GPRS_OFF="singleton_cols" stage1c_engine_runs.sh s1c_m1 daa4f5d68 s1c_m0` (all steps,
+   with the solver check). It is the run that entry AS-336 says is missing.
+3. Wrote `gpu_presolve/tools/node_campaign.sh`: the random campaign of a tag that the chain
+   has built, the three kinds in both builds, one after the other. Calibration on slot b
+   with 24 processes: 14.4 million models in 19 s in the release build (760,000 models per
+   second), 7.2 million in 12 s in the assertion build. Started campaign `big1` of the M1
+   engine there: 100 million seeds per profile, which is 1.2 billion models per kind in the
+   release build and 0.6 billion in the assertion build, seeds from 1e12 on. The Mac
+   campaigns of the milestone had 10 and 5 million per kind. About 2 hours.
+4. Restarted the switches workflow (run `wf_e509c798-6d7`). The implementer takes over the
+   saved state on a new branch (`stage1c-m1-switches-2`), has the digest, and must show for
+   each measurement and campaign of the first agent that it was made with the source it
+   commits, or run it again. Stored results become reduced summary.json files (below 8 MB
+   together) instead of 60 MB. The attack step is told that two agents built the work and
+   where the seams can be.
+5. Checked the HiGHS claim of AS-339 in the HiGHS source (commit `283bfc8`). The claim
+   holds: in `singletonCol` HiGHS updates the implied bounds of the row dual from the
+   singleton column only when the column is not an integer column, so an integer singleton
+   column never gives its own inequality a dual sign. The substitution itself does accept
+   an integer column when the row is an equation or has its sign from another column and
+   the column is implied integral. The engine has no row-dual state, takes the sign from
+   the pivot column's own cost, and there takes integer columns where HiGHS does not.
+   AS-339 now says so and names the functions.
+6. A first table from the first agent's stored runs (the 240 as local dumps on the Mac, 237
+   instances, geometric mean of the default size over the size with the other value;
+   unverified until the takeover agent has shown the runs belong to its source):
+   integer pivot columns off: 0.9998 / 0.9996 / 0.9994 in nonzeros / rows / columns, 10
+   instances change and all 10 get larger (seymour, seymour1, brazil3 first); growth ratio
+   read over continuous columns only: 1.0003 / 1.0005 / 1.0003, 6 instances;
+   integer pivot exempt from the growth limit: 1.0002 / 1.0004 / 1.0001, 5 instances; the
+   zero-cost singleton rule and the forcing column in primal-only mode: 1.0017 / 1.0005 /
+   1.0073, 22 instances; every other value built (rounding band, start and order of the
+   interval undo, scaled tolerances, visit order) changes at most one instance.
+
+### A mistake of mine in this entry's work
+
+My first reading of the HiGHS source stopped at `isImpliedIntegral` (the substitution does
+accept integer columns) and I concluded that the reviewer's claim was wrong. I wrote that
+into the takeover note and launched the workflow. Reading `singletonCol` to its end showed
+that the dual sign is never taken from an integer singleton column, which is the claim. I
+stopped the workflow after about three minutes, removed its worktree, corrected the note
+and launched it again. Nothing of the wrong reading reached a commit or the register.
+
+### Open
+
+- When the merge step returns: run the four cut reviews again, on the merged commit (the
+  validity attack and the worth attack on simple probing, the attack on the parallel-row
+  repair from its saved state, the triage of the extreme seeds), then one integration.
+  Nothing of M2 or of the repair goes to `feat/gpu-presolve` before that.
+- Read the M1 node chain (sizes against `m1_a` and `tb_m1_a`, identity with the family off
+  against `s1c_m0`, time, the check with a solver), then the adapter build against M1.
+- Read campaign `big1`; failures outside the known classes go to the triage.
+- For the owner: nothing has to be decided now. The open choices are the growth limit
+  (AS-094, AS-318), the two rules in primal-only mode (AS-004), the dense objective (AS-095,
+  AS-324), integer pivot columns (AS-339) and irish-electricity below 0.95 (AS-206). By the
+  first table none of them moves the 240 by more than 0.1%, except the two rules in
+  primal-only mode (0.7% of the columns in that mode). All of them wait for the test over
+  solution quality at the end.
+
+### Lessons
+
+- A workflow script must treat a reviewer that returned nothing as a stop, not as "no
+  objection". The M2 script merged two unreviewed commits after a network drop.
+- A claim about another solver is checked along the whole path (where the dual sign comes
+  from, not only where the substitution is allowed) before it goes into a prompt or the
+  register.
+- A watcher that greps the output of `cuopt exec` for a marker must match the whole line:
+  `cuopt exec` echoes the command, marker included. My first watcher ended at once.
+- Agents leave their work uncommitted for hours. A milestone task should ask for a commit
+  of the work in progress after each part, so that a cut costs one part and not the run.
+- The random campaign runs at 760,000 models per second on a node with 24 processes. A
+  billion models per kind is 20 minutes: every milestone can have it.
