@@ -491,24 +491,26 @@ options_t only_rules(std::initializer_list<int32_t> rules)
 
 }  // namespace
 
-// Row 1 is 1.5 times row 0 and an equation: merged into row 0, it makes row 0 the equation
-// 2 x0 - x1 = 1. Row 2 is parallel to row 0 up to the singleton column y, but the subtraction
-// would multiply the error of row 0 by |f| / |c| = 2, and the presolve has changed row 0: the
-// pair is left alone (rules.hpp, (e)). A presolve of the reduced model finds row 0 as a model
-// gave it and subtracts it, so the first one does not end at a fixed point.
+// Row 0 is an equation and row 1 is 1.5 times row 0: the larger row 1 is kept and takes the
+// sides of row 0, which makes it the equation 3 x0 - 1.5 x1 = 1.5. Row 2 is parallel to row 1
+// up to the singleton column y, but the subtraction would multiply the error of row 1 by
+// |f| / |c| = 4 / 3, and the presolve has changed row 1: the pair is left alone (rules.hpp,
+// (e)). A presolve of the reduced model finds that row as a model gave it and subtracts it, so
+// the first one does not end at a fixed point.
 GPRS_TEST(engine_no_fixed_point_with_a_subtraction_left_to_a_changed_row)
 {
   std::vector<col_t> cols = {{0., 1., true}, {0., 1., true}, {-inf, 11., false}};
-  std::vector<row_t> rows = {{{{0, 2.}, {1, -1.}}, 1., inf},
-                             {{{0, 3.}, {1, -1.5}}, 1.5, 1.5},
+  std::vector<row_t> rows = {{{{0, 2.}, {1, -1.}}, 1., 1.},
+                             {{{0, 3.}, {1, -1.5}}, 1.5, inf},
                              {{{0, -0.5}, {1, 0.25}, {2, -0.125}}, -1.75, inf}};
   model_t m               = make_model(cols, rows);
   options_t options       = only_rules({rule::parallel_rows});
   result_t result         = presolve(m, options);
   GPRS_REQUIRE(result.status == status_t::reduced);
   GPRS_CHECK_EQ(result.reduced.nrows, 2);
-  GPRS_CHECK_EQ(result.reduced.row_lower[0], 1.);
-  GPRS_CHECK_EQ(result.reduced.row_upper[0], 1.);
+  GPRS_CHECK(result.postsolve.row_origin == std::vector<int32_t>({1, 2}));
+  GPRS_CHECK_EQ(result.reduced.row_lower[0], 1.5);
+  GPRS_CHECK_EQ(result.reduced.row_upper[0], 1.5);
   GPRS_CHECK_EQ(result.reduced.nnz(), 5);
   GPRS_CHECK(result.postsolve.row_additions.empty());
   GPRS_CHECK(!result.fixed_point);
@@ -518,8 +520,7 @@ GPRS_TEST(engine_no_fixed_point_with_a_subtraction_left_to_a_changed_row)
   GPRS_CHECK_EQ(again.reduced.nnz(), 3);
   check_fixed_point(again, options);
 
-  // Without the merge row 0 is as the model gave it, and the subtraction is made at once.
-  rows[0].upper = 1.;
+  // Without row 1 the equation is as the model gave it, and the subtraction is made at once.
   rows.erase(rows.begin() + 1);
   result = presolve(make_model(cols, rows), options);
   GPRS_CHECK_EQ(result.postsolve.row_additions.size(), 1u);
@@ -604,11 +605,11 @@ GPRS_TEST(engine_subtraction_after_the_bounds_became_explicit)
 // Six rows over the core x0 - x1 - x2, each a multiple of it, four of them with a singleton
 // column. Row 0 is compared with rows 1 to 4, is left alone with each (a factor above 1, or
 // not 1 next to its own singleton column) and stops there, at opt.parallel_bucket_limit: row 5,
-// from which it could be subtracted, is not reached, nor does row 5 reach row 0. Row 1 holds
-// the term 2.4e8 of the fixed column w, with which it takes no side of another row; when the
-// term has left it, before the last rounds, row 4 is merged into it, and rows 0 and 5 are
-// three rows apart: a presolve of the reduced model compares them. The presolve does not end
-// at a fixed point; with a limit that the bucket does not reach, it does.
+// from which it could be subtracted, is not reached, nor does row 5 reach row 0. Row 1, the
+// largest of the six, holds the term 3.6e8 of the fixed column w, with which it takes no side
+// of another row; when the term has left it, before the last rounds, row 4 is merged into it,
+// and rows 0 and 5 are three rows apart: a presolve of the reduced model compares them. The
+// presolve does not end at a fixed point; with a limit that the bucket does not reach, it does.
 GPRS_TEST(engine_no_fixed_point_with_a_bucket_scan_that_ended_on_the_limit)
 {
   std::vector<col_t> cols = {{-1., 0., true},
@@ -628,17 +629,17 @@ GPRS_TEST(engine_no_fixed_point_with_a_bucket_scan_that_ended_on_the_limit)
     return entries;
   };
   std::vector<row_t> rows = {{with(0.25, 3, -0.25), -0.25, -0.25},
-                             {with(8., 7, -8.), 239999992., inf},
+                             {with(12., 7, -12.), 359999988., inf},
                              {with(1.5, 4, 0.5), -1., 0.5},
                              {with(0.125, 5, 0.125), -0.375, -0.375},
-                             {core(12.), -24., inf},
+                             {core(8.), -16., inf},
                              {with(0.25, 6, -0.25), -0.75, -0.75}};
   model_t m               = with_cost(make_model(cols, rows), {-1., 0., -1., 0., -3., 3., -3., 0.});
   options_t options       = only_rules({rule::doubleton, rule::parallel_rows});
   result_t result         = presolve(m, options);
   GPRS_REQUIRE(result.status == status_t::reduced);
   GPRS_CHECK(result.postsolve.row_origin == std::vector<int32_t>({0, 1, 2, 3, 5}));
-  GPRS_CHECK_EQ(result.reduced.row_lower[1], -8.);
+  GPRS_CHECK_EQ(result.reduced.row_lower[1], -12.);
   GPRS_CHECK(result.postsolve.row_additions.empty());
   GPRS_CHECK(!result.fixed_point);
   result_t again = presolve(result.reduced, options);

@@ -9,6 +9,7 @@
 //               [--off <rule>]... [--exact-parallel-rows] [--pivot-growth-limit <x>]
 //               [--saved-row-factor <x>] [--integral-drift-share <x>]
 //               [--alias-scale-limit <x>] [--probing-balance <x>]
+//               [--parallel-keep-smaller-index] [--parallel-drift-share <x>]
 // Reads a GPRSCSR1 dump, runs the presolve, prints sizes before and after, seconds and the
 // determinism hash of the reduced model, and writes the same as JSON.
 // --off takes the name of a rule family (rule_name) or of a reduction of the column rules
@@ -18,6 +19,8 @@
 // --pivot-growth-limit, --saved-row-factor: the two limits of the singleton-column rules
 // (options_t). --integral-drift-share: tolerances_t::integral_drift_share.
 // --alias-scale-limit, --probing-balance: the two settings of simple probing (options_t).
+// --parallel-keep-smaller-index: options_t::parallel_keep_larger off.
+// --parallel-drift-share: options_t::parallel_drift_share.
 // Exit code 0 when the presolve ran, 1 when the dump cannot be read, 2 on a usage error.
 
 #include <gprs/io.hpp>
@@ -186,7 +189,8 @@ int usage()
                "[--time-limit <seconds>] [--off <rule>]... [--exact-parallel-rows] "
                "[--pivot-growth-limit <x>] [--saved-row-factor <x>] "
                "[--integral-drift-share <x>] [--alias-scale-limit <x>] "
-               "[--probing-balance <x>]\n");
+               "[--probing-balance <x>] [--parallel-keep-smaller-index] "
+               "[--parallel-drift-share <x>]\n");
   return 2;
 }
 
@@ -216,6 +220,10 @@ int main(int argc, char** argv)
       options.alias_scale_limit = std::atof(argv[++i]);
     } else if (arg == "--probing-balance" && i + 1 < argc) {
       options.probing_balance = std::atof(argv[++i]);
+    } else if (arg == "--parallel-keep-smaller-index") {
+      options.parallel_keep_larger = false;
+    } else if (arg == "--parallel-drift-share" && i + 1 < argc) {
+      options.parallel_drift_share = std::atof(argv[++i]);
     } else if (arg == "--off" && i + 1 < argc) {
       int32_t rule = 0, sub = 0;
       ++i;

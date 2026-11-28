@@ -85,5 +85,9 @@ grep -h "^probing " "$out"/part.*.txt |
             print "rows left: columns connected", g, "bounds one apart, not 0 and 1:", u,
                   "scale limit", h, "range of rounding size", n, "size of an offset", i,
                   "| calls with an alias depth above 1:", j, "largest depth", k + 0}'
-grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND" "$out"/part.*.txt | cut -c1-200 | head -20
+grep -h "^sides " "$out"/part.*.txt |
+  awk '{r += $3; p += $5; f += $7; if ($9 + 0 > w) w = $9 + 0}
+       END {print "side points (profile scale_pair): results", r, "points", p,
+                  "results with a point that failed", f, "largest violation", w + 0}'
+grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND\|^SIDES" "$out"/part.*.txt | cut -c1-200 | head -20
 exit $bad

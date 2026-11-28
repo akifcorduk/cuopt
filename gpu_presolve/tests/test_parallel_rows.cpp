@@ -6,6 +6,7 @@
 /* clang-format on */
 
 #include "harness.hpp"
+#include "oracle.hpp"
 
 #include <gprs/postsolve.hpp>
 #include <gprs/presolve.hpp>
@@ -248,8 +249,11 @@ model_t random_model(rng_t& rng, bool odd_first = false)
 
 // The rule recomputed from the model, pair by pair.
 struct naive_t {
-  std::vector<int32_t> kept;  // smallest row of the class of each row; the row itself if alone
-  dense_t lower, upper;       // sides of each class at its smallest row
+  // The row of the class of each row that stays, the row itself if alone: the one with the
+  // largest coefficients, and of those the smallest index.
+  std::vector<int32_t> kept;
+  dense_t lower, upper;  // sides of each class at that row
+  dense_t first;         // coefficient of each row in its smallest free column; 0 without one
   bool infeasible = false;
 };
 
@@ -269,28 +273,42 @@ naive_t naive_parallel(const model_t& m, const tolerances_t& tol)
   }
   naive_t result;
   result.kept.resize(m.nrows);
+  result.first.assign(m.nrows, 0.);
   result.lower = m.row_lower;
   result.upper = m.row_upper;
+  // The first row of the class of each row.
+  std::vector<int32_t> head(m.nrows);
   for (int32_t i = 0; i < m.nrows; ++i) {
+    head[i]        = i;
     result.kept[i] = i;
-    for (int32_t k = 0; k < i && result.kept[i] == i; ++k) {
+    if (!free_entries[i].empty()) { result.first[i] = free_entries[i].begin()->second; }
+    for (int32_t k = 0; k < i && head[i] == i; ++k) {
       const entries_t &a = free_entries[k], &b = free_entries[i];
-      if (result.kept[k] != k || a.size() < 2 || a.size() != b.size()) { continue; }
+      if (head[k] != k || a.size() < 2 || a.size() != b.size()) { continue; }
       double ratio  = b.begin()->second / a.begin()->second;
       bool parallel = true;
       for (auto ia = a.begin(), ib = b.begin(); ia != a.end(); ++ia, ++ib) {
         parallel = parallel && ia->first == ib->first &&
                    std::fabs(ib->second - ratio * ia->second) <= tol.zero * std::fabs(ib->second);
       }
-      if (!parallel) { continue; }
-      result.kept[i] = k;
-      double lower   = (m.row_lower[i] - fixed[i]) / ratio + fixed[k];
-      double upper   = (m.row_upper[i] - fixed[i]) / ratio + fixed[k];
-      if (ratio < 0) { std::swap(lower, upper); }
-      result.lower[k] = std::fmax(result.lower[k], lower);
-      result.upper[k] = std::fmin(result.upper[k], upper);
-      if (result.lower[k] - result.upper[k] > tol.feasibility) { result.infeasible = true; }
+      if (parallel) { head[i] = k; }
     }
+    int32_t& stays = result.kept[head[i]];
+    if (std::fabs(result.first[i]) > std::fabs(result.first[stays])) { stays = i; }
+  }
+  for (int32_t i = 0; i < m.nrows; ++i) {
+    int32_t k      = result.kept[head[i]];
+    result.kept[i] = k;
+    if (k == i) { continue; }
+    double ratio = result.first[i] / result.first[k];
+    double lower = (m.row_lower[i] - fixed[i]) / ratio + fixed[k];
+    double upper = (m.row_upper[i] - fixed[i]) / ratio + fixed[k];
+    if (ratio < 0) { std::swap(lower, upper); }
+    result.lower[k] = std::fmax(result.lower[k], lower);
+    result.upper[k] = std::fmin(result.upper[k], upper);
+  }
+  for (int32_t i = 0; i < m.nrows; ++i) {
+    if (result.lower[i] - result.upper[i] > tol.feasibility) { result.infeasible = true; }
   }
   return result;
 }
@@ -337,7 +355,8 @@ GPRS_TEST(parallel_duplicates)
   GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
 }
 
-// Multiples: the sides are divided by the ratio and change places for a negative one.
+// Multiples: each row goes into the next larger one, its sides times the quotient of the two
+// rows, and they change places for a negative one. The row with the largest coefficients stays.
 GPRS_TEST(parallel_scaled_and_negative)
 {
   model_t m = make_model({{1., 2.}, {-2., -4.}, {3., 6.}, {-0.5, -1.}},
@@ -349,39 +368,86 @@ GPRS_TEST(parallel_scaled_and_negative)
   rule_result_t result = f.run();
   GPRS_CHECK_EQ(result.outcome, ok);
   GPRS_CHECK_EQ(result.findings, 3);
-  GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
-  // Row 1: x0 + 2 x1 >= 2. Row 2: 1 <= x0 + 2 x1 <= 8. Row 3: x0 + 2 x1 <= 12.
-  GPRS_CHECK_EQ(f.st.row_lower[0], 2.);
-  GPRS_CHECK_EQ(f.st.row_upper[0], 8.);
-  check_record(f.ps, 0, 1, 0, -2.);
-  check_record(f.ps, 1, 2, 0, 3.);
-  check_record(f.ps, 2, 3, 0, -0.5);
+  GPRS_CHECK(!result.limited);
+  GPRS_CHECK(alive_rows(f.st) == (list_t{2}));
+  // Row 0: x0 + 2 x1 <= 10. Row 1: x0 + 2 x1 >= 2. Row 2: 1 <= x0 + 2 x1 <= 8.
+  // Row 3: x0 + 2 x1 <= 12. In the units of row 2, three times those.
+  GPRS_CHECK_EQ(f.st.row_lower[2], 6.);
+  GPRS_CHECK_EQ(f.st.row_upper[2], 24.);
+  check_record(f.ps, 0, 0, 1, -0.5);
+  check_record(f.ps, 1, 1, 2, -2. / 3.);
+  check_record(f.ps, 2, 3, 2, -0.5 / 3.);
   model_t reduced = f.reduced();
   GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
 }
 
-// The larger row is the one that goes, also when it is the one that is not scaled.
-GPRS_TEST(parallel_keeps_smaller_index)
+// The row with the larger coefficients stays, whichever of the two comes first, and of two
+// rows with coefficients of one size the one with the smaller index.
+GPRS_TEST(parallel_keeps_larger_row)
 {
-  model_t m = make_model({{-2., 4.}, {1., -2.}}, {-inf, -3.}, {8., inf}, {0., 0.}, {9., 9.});
-  fixture_t f(m);
-  GPRS_CHECK_EQ(f.run().findings, 1);
-  GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
-  // Row 1: x0 - 2 x1 >= -3 is -2 x0 + 4 x1 <= 6.
-  GPRS_CHECK_EQ(f.st.row_lower[0], -inf);
-  GPRS_CHECK_EQ(f.st.row_upper[0], 6.);
-  check_record(f.ps, 0, 1, 0, -0.5);
+  {
+    model_t m = make_model({{-2., 4.}, {1., -2.}}, {-inf, -3.}, {8., inf}, {0., 0.}, {9., 9.});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
+    // Row 1: x0 - 2 x1 >= -3 is -2 x0 + 4 x1 <= 6.
+    GPRS_CHECK_EQ(f.st.row_lower[0], -inf);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 6.);
+    check_record(f.ps, 0, 1, 0, -0.5);
+  }
+  {
+    model_t m = make_model({{1., -2.}, {-2., 4.}}, {-3., -inf}, {inf, 8.}, {0., 0.}, {9., 9.});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1}));
+    GPRS_CHECK_EQ(f.st.row_lower[1], -inf);
+    GPRS_CHECK_EQ(f.st.row_upper[1], 6.);
+    check_record(f.ps, 0, 0, 1, -0.5);
+  }
+  {
+    // Coefficients of one size, the second row the negative of the first.
+    model_t m = make_model({{3., -6.}, {-3., 6.}}, {-inf, -inf}, {9., 12.}, {0., 0.}, {9., 9.});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
+    GPRS_CHECK_EQ(f.st.row_lower[0], -12.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 9.);
+    check_record(f.ps, 0, 1, 0, -1.);
+  }
+  {
+    // With the option off the row with the smaller index stays whatever the sizes.
+    // Row 1: -2 x0 + 4 x1 <= 4 is x0 - 2 x1 >= -2.
+    model_t m = make_model({{1., -2.}, {-2., 4.}}, {-3., -inf}, {inf, 4.}, {0., 0.}, {9., 9.});
+    fixture_t f(m);
+    f.opt.parallel_keep_larger = false;
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
+    GPRS_CHECK_EQ(f.st.row_lower[0], -2.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], inf);
+    check_record(f.ps, 0, 1, 0, -2.);
+  }
 }
 
 GPRS_TEST(parallel_equations)
 {
   {
-    // An inequality and an equation: the kept row becomes the equation.
+    // An inequality and an equation that is twice as large: the equation stays as it is.
     model_t m = make_model({{1., -1.}, {2., -2.}}, {-inf, 6.}, {4., 6.}, {0., 0.}, {9., 9.});
     fixture_t f(m);
+    int64_t side_changes = f.st.side_changes;
     GPRS_CHECK_EQ(f.run().findings, 1);
-    GPRS_CHECK_EQ(f.st.row_lower[0], 3.);
-    GPRS_CHECK_EQ(f.st.row_upper[0], 3.);
+    GPRS_CHECK_EQ(f.st.row_lower[1], 6.);
+    GPRS_CHECK_EQ(f.st.row_upper[1], 6.);
+    GPRS_CHECK_EQ(f.st.side_changes, side_changes);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1}));
+  }
+  {
+    // An inequality and an equation of half its size: the kept row becomes the equation.
+    model_t m = make_model({{2., -2.}, {1., -1.}}, {-inf, 3.}, {8., 3.}, {0., 0.}, {9., 9.});
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK_EQ(f.st.row_lower[0], 6.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 6.);
     GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
   }
   {
@@ -415,10 +481,10 @@ GPRS_TEST(parallel_equations)
     fixture_t f(m);
     int64_t side_changes = f.st.side_changes;
     GPRS_CHECK_EQ(f.run().findings, 1);
-    GPRS_CHECK_EQ(f.st.row_lower[0], 2.);
-    GPRS_CHECK_EQ(f.st.row_upper[0], 2.);
+    GPRS_CHECK_EQ(f.st.row_lower[1], 6.);
+    GPRS_CHECK_EQ(f.st.row_upper[1], 6.);
     GPRS_CHECK_EQ(f.st.side_changes, side_changes);
-    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1}));
   }
   {
     // Two equations that do not.
@@ -482,9 +548,10 @@ GPRS_TEST(parallel_exact_comparison)
   rule_result_t result = f.run();
   GPRS_CHECK_EQ(result.outcome, ok);
   GPRS_CHECK_EQ(result.findings, 1);
-  GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1, 2, 3, 4, 6, 7}));
-  GPRS_CHECK_EQ(f.st.row_upper[0], 7.);
-  check_record(f.ps, 0, 5, 0, 2.);
+  // Row 5 is twice row 0 and stays; x0 + 2 x1 <= 9 is weaker than its own side.
+  GPRS_CHECK(alive_rows(f.st) == (list_t{1, 2, 3, 4, 5, 6, 7}));
+  GPRS_CHECK_EQ(f.st.row_upper[5], 14.);
+  check_record(f.ps, 0, 0, 5, 0.5);
 }
 
 // The terms of fixed columns are constants: rows are compared on their free entries and the
@@ -501,14 +568,14 @@ GPRS_TEST(parallel_fixed_terms)
     fixture_t f(m);
     GPRS_CHECK_EQ(f.st.row_free_size[0], 2);
     GPRS_CHECK_EQ(f.run().findings, 2);
-    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
-    // The kept row still holds the term of x2: its sides are those of x0 + x1 plus 2.
-    GPRS_CHECK(row_entries(f.st, 0) == (entries_t{{0, 1.}, {1, 1.}, {2, 1.}}));
-    GPRS_CHECK_EQ(f.st.row_lower[0], 5.);
-    GPRS_CHECK_EQ(f.st.row_upper[0], 8.);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1}));
+    // The kept row still holds the term of x2: its sides are those of 2 x0 + 2 x1 plus 10.
+    GPRS_CHECK(row_entries(f.st, 1) == (entries_t{{0, 2.}, {1, 2.}, {2, 5.}}));
+    GPRS_CHECK_EQ(f.st.row_lower[1], 16.);
+    GPRS_CHECK_EQ(f.st.row_upper[1], 22.);
     model_t reduced = f.reduced();
-    GPRS_CHECK_EQ(reduced.row_lower[0], 3.);
-    GPRS_CHECK_EQ(reduced.row_upper[0], 6.);
+    GPRS_CHECK_EQ(reduced.row_lower[0], 6.);
+    GPRS_CHECK_EQ(reduced.row_upper[0], 12.);
     GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
   }
   {
@@ -539,16 +606,40 @@ GPRS_TEST(parallel_huge_fixed_terms)
     GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 6);
   }
   {
-    // The same rows in the other order: the kept row has no fixed term and takes the upper side
-    // of the other row, (12 + 4e20) / 3.
+    // The same rows in the other order: the row with the term is still the larger one, which
+    // would be kept, and the pair is left alone as well.
     model_t m = make_model(
       {{1., -1., 0.}, {3., -3., 2.}}, {1., -inf}, {inf, 12.}, {0., 0., -2e20}, {3., 3., -2e20});
     fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK(!result.limited);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
+    GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 6);
+  }
+  {
+    // The row with the term is the smaller one, which goes. Its upper side less the term,
+    // 12 + 4e20, is no double, and at that size a double does not hold the tolerance: left.
+    model_t m = make_model(
+      {{3., -3., 0.}, {1., -1., 2.}}, {3., -inf}, {inf, 12.}, {0., 0., -2e20}, {3., 3., -2e20});
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK(!result.limited);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
+    GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 6);
+  }
+  {
+    // A side that is the term itself leaves 0 exactly: x0 - x1 <= 0 goes into row 0 as
+    // 3 x0 - 3 x1 <= 0.
+    model_t m = make_model(
+      {{3., -3., 0.}, {1., -1., 2.}}, {-9., -inf}, {inf, -4e20}, {0., 0., -2e20}, {3., 3., -2e20});
+    fixture_t f(m);
     GPRS_CHECK_EQ(f.run().findings, 1);
     GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
-    GPRS_CHECK_EQ(f.st.row_lower[0], 1.);
-    GPRS_CHECK_EQ(f.st.row_upper[0], (12. + 4e20) / 3.);
-    GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 6);
+    GPRS_CHECK_EQ(f.st.row_lower[0], -9.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 0.);
+    GPRS_CHECK_EQ(check_same_feasible_set(m, f.reduced(), f.ps), 10);
   }
   {
     // The limit is |fixed terms| * tol.side_error <= tol.feasibility, 1e8 with the default
@@ -601,9 +692,9 @@ GPRS_TEST(parallel_storage_order)
   // Row 2 is listed as well: x3 has its only entry there now.
   GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{2, 1}));
   GPRS_CHECK_EQ(f.run().findings, 1);
-  GPRS_CHECK(alive_rows(f.st) == (list_t{0, 2}));
-  GPRS_CHECK_EQ(f.st.row_upper[0], 4.);
-  check_record(f.ps, 0, 1, 0, 2.);
+  GPRS_CHECK(alive_rows(f.st) == (list_t{1, 2}));
+  GPRS_CHECK_EQ(f.st.row_upper[1], 8.);
+  check_record(f.ps, 0, 0, 1, 0.5);
 }
 
 // A row that changed is found parallel to rows that did not, below it and above it.
@@ -645,13 +736,15 @@ GPRS_TEST(parallel_changed_against_unchanged)
     fix_column(f.st, f.ps, 2, 1.);
     GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{0, 2}));
     GPRS_CHECK_EQ(f.run().findings, 1);
-    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
-    // Row 2: 2 x0 + 4 x1 <= 25, so x0 + 2 x1 <= 12.5: no change of row 0.
-    GPRS_CHECK_EQ(f.st.row_upper[0], 5.);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1, 2}));
+    // Row 0: x0 + 2 x1 <= 4, so 2 x0 + 4 x1 <= 8, and with the term of x2 in the side 13.
+    GPRS_CHECK_EQ(f.st.row_upper[2], 13.);
+    check_record(f.ps, 0, 0, 2, 0.5);
   }
   {
-    // Only row 2 is listed when x2 is fixed at 1, and it goes into row 0 below it, which holds
-    // the term of x3, fixed at 2 from the start. Row 2: 2 x0 + 4 x1 <= 6, so x0 + 2 x1 <= 3.
+    // Only row 2 is listed when x2 is fixed at 1, and row 0 below it, which holds the term of
+    // x3, fixed at 2 from the start, goes into it. Row 0: x0 + 2 x1 <= 5, so 2 x0 + 4 x1 <= 10;
+    // row 2 has 2 x0 + 4 x1 <= 6 already.
     model_t wide = make_model({{1., 2., 0., 1.}, {1., 3., 0., 0.}, {2., 4., 5., 0.}},
                               dense_t(3, -inf),
                               {7., 4., 11.},
@@ -662,9 +755,26 @@ GPRS_TEST(parallel_changed_against_unchanged)
     fix_column(f.st, f.ps, 2, 1.);
     GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{2}));
     GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1, 2}));
+    GPRS_CHECK_EQ(f.st.row_upper[2], 11.);
+    check_record(f.ps, 0, 0, 2, 0.5);
+  }
+  {
+    // The same with row 2 as the smaller one: it goes into row 0 below it.
+    // Row 2: x0 + 2 x1 <= 6, so 2 x0 + 4 x1 <= 12, and with the term of x3 in the side 14.
+    model_t wide = make_model({{2., 4., 0., 1.}, {1., 3., 0., 0.}, {1., 2., 5., 0.}},
+                              dense_t(3, -inf),
+                              {17., 4., 11.},
+                              {0., 0., 0., 2.},
+                              {9., 9., 9., 2.});
+    fixture_t f(wide);
+    GPRS_CHECK_EQ(f.run().findings, 0);
+    fix_column(f.st, f.ps, 2, 1.);
+    GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{2}));
+    GPRS_CHECK_EQ(f.run().findings, 1);
     GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
-    GPRS_CHECK_EQ(f.st.row_upper[0], 5.);
-    check_record(f.ps, 0, 2, 0, 2.);
+    GPRS_CHECK_EQ(f.st.row_upper[0], 14.);
+    check_record(f.ps, 0, 2, 0, 0.5);
   }
 }
 
@@ -714,12 +824,12 @@ GPRS_TEST(parallel_dead_rows_do_not_count)
   }
 }
 
-// The listed rows are taken in index order, whatever the order of their events: the smallest
-// row of three absorbs the other two, each with its ratio to that row.
+// The listed rows are taken in index order, whatever the order of their events: row 0 goes
+// into row 1, the first larger row it meets, and row 1 with the sides of both into row 2.
 GPRS_TEST(parallel_listed_in_index_order)
 {
   model_t m = make_model(
-    {{1., 2.}, {2., 6.}, {4., 16.}}, dense_t(3, -inf), {9., 16., 24.}, {0., 0.}, {9., 9.});
+    {{1., 2.}, {2., 6.}, {4., 16.}}, dense_t(3, -inf), {5., 16., 24.}, {0., 0.}, {9., 9.});
   fixture_t f(m);
   GPRS_CHECK_EQ(f.run().findings, 0);
   f.st.set_coefficient(f.st.find_entry(2, 1), 20.);
@@ -727,10 +837,27 @@ GPRS_TEST(parallel_listed_in_index_order)
   f.st.set_coefficient(f.st.find_entry(0, 1), 5.);
   GPRS_CHECK(f.st.row_frontier.list[row_list::parallel_rows] == (list_t{2, 1, 0}));
   GPRS_CHECK_EQ(f.run().findings, 2);
+  GPRS_CHECK(alive_rows(f.st) == (list_t{2}));
+  GPRS_CHECK_EQ(f.st.row_upper[2], 20.);
+  check_record(f.ps, 0, 0, 1, 0.5);
+  check_record(f.ps, 1, 1, 2, 0.5);
+}
+
+// Three rows, the largest first: both others go into it, each with its ratio to that row.
+GPRS_TEST(parallel_largest_row_takes_the_class)
+{
+  model_t m = make_model(
+    {{4., 20.}, {2., 10.}, {-1., -5.}}, {-inf, -inf, -5.}, {24., 16., inf}, {0., 0.}, {9., 9.});
+  fixture_t f(m);
+  GPRS_CHECK_EQ(f.run().findings, 2);
   GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
-  GPRS_CHECK_EQ(f.st.row_upper[0], 6.);
-  check_record(f.ps, 0, 1, 0, 2.);
-  check_record(f.ps, 1, 2, 0, 4.);
+  // Row 2: x0 + 5 x1 <= 5 is 4 x0 + 20 x1 <= 20.
+  GPRS_CHECK_EQ(f.st.row_lower[0], -inf);
+  GPRS_CHECK_EQ(f.st.row_upper[0], 20.);
+  check_record(f.ps, 0, 1, 0, 0.5);
+  check_record(f.ps, 1, 2, 0, -0.25);
+  model_t reduced = f.reduced();
+  GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
 }
 
 // Ten rows in one bucket: the coefficients of rows 1 to 8 differ from 2 by less than the
@@ -794,22 +921,23 @@ GPRS_TEST(parallel_budget)
   GPRS_CHECK(calls > 6 && calls < 100);
   GPRS_CHECK_EQ(findings, 3);
   GPRS_CHECK(alive_rows(f.st) == alive_rows(whole.st));
-  GPRS_CHECK(alive_rows(f.st) == (list_t{0, 2, 5}));
-  for (int32_t row : {0, 2, 5}) {
+  GPRS_CHECK(alive_rows(f.st) == (list_t{2, 4, 5}));
+  for (int32_t row : {2, 4, 5}) {
     GPRS_CHECK_EQ(f.st.row_lower[row], whole.st.row_lower[row]);
     GPRS_CHECK_EQ(f.st.row_upper[row], whole.st.row_upper[row]);
   }
-  GPRS_CHECK_EQ(f.st.row_lower[0], 1.);
-  GPRS_CHECK_EQ(f.st.row_upper[0], 8.);
+  // Rows 0, 1 and 4 in the units of row 4: 1 <= x0 + 2 x1 <= 8.
+  GPRS_CHECK_EQ(f.st.row_lower[4], 3.);
+  GPRS_CHECK_EQ(f.st.row_upper[4], 24.);
   GPRS_CHECK_EQ(f.st.row_lower[2], -2.);
   GPRS_CHECK_EQ(f.st.row_upper[2], 9.);
 }
 
 // Random models with duplicated and scaled rows, rows that are parallel up to singleton columns
 // left alone (near_parallel_rows off): the rule removes exactly the rows that a pairwise
-// comparison of the model finds, keeps the smallest row of each class with the intersection of
-// the sides, reports infeasible exactly when a class has crossing sides, and leaves the
-// feasible set as it was.
+// comparison of the model finds, keeps the largest row of each class (the smallest index among
+// equals) with the intersection of the sides, reports infeasible exactly when a class has
+// crossing sides, and leaves the feasible set as it was.
 GPRS_TEST(parallel_random_models)
 {
   tolerances_t tol;
@@ -838,8 +966,13 @@ GPRS_TEST(parallel_random_models)
       GPRS_CHECK_EQ(result.findings, classes_removed);
       GPRS_CHECK_EQ((int64_t)f.ps.parallel_rows.size(), classes_removed);
       for (const parallel_row_record_t& record : f.ps.parallel_rows) {
-        GPRS_CHECK_EQ(naive.kept[record.removed_row], record.kept_row);
-        GPRS_CHECK(record.kept_row < record.removed_row);
+        // A row goes into a row of its class that is not smaller, which can go in turn.
+        GPRS_CHECK_EQ(naive.kept[record.removed_row], naive.kept[record.kept_row]);
+        double kept_size    = std::fabs(naive.first[record.kept_row]);
+        double removed_size = std::fabs(naive.first[record.removed_row]);
+        GPRS_CHECK(kept_size > removed_size ||
+                   (kept_size == removed_size && record.kept_row < record.removed_row));
+        GPRS_CHECK_EQ(record.ratio, naive.first[record.removed_row] / naive.first[record.kept_row]);
       }
       removed += classes_removed;
       with_fixed += classes_removed > 0 && f.st.fixed_nnz > 0;
@@ -957,7 +1090,7 @@ GPRS_TEST(parallel_hash_rounding)
                            {9., 9.});
     fixture_t f(m);
     GPRS_CHECK_EQ(f.run().findings, 2);
-    GPRS_CHECK(alive_rows(f.st) == (list_t{0}));
+    GPRS_CHECK(alive_rows(f.st) == (list_t{2}));
   }
   {
     // A normalised coefficient below the normal numbers: 1e-10 / 1e300.
@@ -968,8 +1101,9 @@ GPRS_TEST(parallel_hash_rounding)
                            {1., 1.});
     fixture_t f(m);
     GPRS_CHECK_EQ(f.run().findings, 1);
-    GPRS_CHECK(alive_rows(f.st) == (list_t{0, 1}));
-    check_record(f.ps, 0, 2, 0, 2.);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1, 2}));
+    GPRS_CHECK_EQ(f.st.row_upper[2], 1e300);
+    check_record(f.ps, 0, 0, 2, 0.5);
   }
 }
 
@@ -1009,20 +1143,28 @@ GPRS_TEST(parallel_many_rows)
   GPRS_CHECK_EQ(result.findings, pairs);
   GPRS_CHECK_EQ(f.st.live_rows, pairs);
   GPRS_REQUIRE(f.ps.parallel_rows.size() == (size_t)pairs);
-  list_t removed_of(pairs);
+  list_t partner_of(pairs);
   for (int32_t i = 0; i < pairs; ++i) {
-    removed_of[partner(i)] = pairs + i;
+    partner_of[partner(i)] = pairs + i;
   }
-  int32_t wrong = 0;
+  // A second row with the factor -2 is the larger one and stays; one with 0.5 goes.
+  int32_t wrong = 0, second_kept = 0;
   for (int32_t k = 0; k < pairs; ++k) {
     const parallel_row_record_t& record = f.ps.parallel_rows[k];
-    wrong += record.kept_row != k || record.removed_row != removed_of[k];
+    bool second_stays                   = partner_of[k] % 3 == 0;
+    second_kept += second_stays;
+    wrong += record.kept_row != (second_stays ? partner_of[k] : k) ||
+             record.removed_row != (second_stays ? k : partner_of[k]) ||
+             record.ratio != (second_stays ? -0.5 : 0.5);
   }
   GPRS_CHECK_EQ(wrong, 0);
-  // Hashing of every row; a scatter and one comparison per kept row.
+  GPRS_CHECK(second_kept > 10000 && second_kept < 13000);
+  // Hashing of every row; a scatter and one comparison per first row, with one more pass
+  // over the second row for two rows that are not equal; a visit of every second row that
+  // stayed, which finds its bucket empty.
   GPRS_CHECK_EQ(budget.used,
                 2 * pairs * (line_visit_work + 4) + pairs * (line_visit_work + 2) +
-                  pairs * (line_visit_work + 4));
+                  pairs * (line_visit_work + 4) + pairs * 2 + second_kept * (line_visit_work + 2));
   GPRS_CHECK_EQ(f.st.consistency_error(), std::string());
 }
 
@@ -1216,13 +1358,46 @@ struct reference_t {
       // The reduction of the pair, if it has one.
       auto reduce = [&](int32_t other, const view_t& theirs) {
         if (mine.singles == 0 && theirs.singles == 0) {
-          int32_t kept = std::min(row, other), gone = std::max(row, other);
-          const view_t& kept_view = kept == row ? mine : theirs;
-          const view_t& gone_view = kept == row ? theirs : mine;
+          // The row with the larger coefficients stays, then the one with the smaller index.
+          double my_size    = std::fabs(mine.core.begin()->second);
+          double their_size = std::fabs(theirs.core.begin()->second);
+          bool keep_mine    = my_size != their_size ? my_size > their_size : row < other;
+          int32_t kept = keep_mine ? row : other, gone = keep_mine ? other : row;
+          const view_t& kept_view = keep_mine ? mine : theirs;
+          const view_t& gone_view = keep_mine ? theirs : mine;
           if (!holds(std::fabs(kept_view.fixed))) { return false; }
-          double ratio = gone_view.core.begin()->second / kept_view.core.begin()->second;
-          double low   = (lower[gone] - gone_view.fixed) / ratio + kept_view.fixed;
-          double high  = (upper[gone] - gone_view.fixed) / ratio + kept_view.fixed;
+          double kept_first = kept_view.core.begin()->second;
+          double gone_first = gone_view.core.begin()->second;
+          double ratio      = gone_first / kept_first;
+          // Two rows that are not equal up to the sign cost one more pass over the other row,
+          // for what they differ by over the bounds of their columns.
+          bool equal = my_size == their_size;
+          for (const auto& entry : gone_view.core) {
+            equal = equal && entry.second == ratio * kept_view.core.at(entry.first);
+          }
+          if (!equal) {
+            budget.spend(st.csr.used[other]);
+            double drift = 0.;
+            for (const auto& entry : gone_view.core) {
+              double a = kept_view.core.at(entry.first), b = entry.second;
+              double b_error, a_error;
+              double of_b       = two_prod(b, kept_first, b_error);
+              double of_a       = two_prod(a, gone_first, a_error);
+              double difference = (of_b - of_a) + (b_error - a_error);
+              if (difference == 0.) { continue; }
+              drift += std::fabs(difference / kept_first) *
+                       std::fmax(std::fabs(st.col_lower[entry.first]),
+                                 std::fabs(st.col_upper[entry.first]));
+            }
+            tolerances_t tol;
+            if (!(drift <= options_t().parallel_drift_share * tol.feasibility)) {
+              call.limited = true;
+              return false;
+            }
+          }
+          // The product first: exact on the sides and factors of these models.
+          double low  = (lower[gone] - gone_view.fixed) * kept_first / gone_first + kept_view.fixed;
+          double high = (upper[gone] - gone_view.fixed) * kept_first / gone_first + kept_view.fixed;
           if (ratio < 0) { std::swap(low, high); }
           // A side that changes lists the kept row.
           if (low > lower[kept] || high < upper[kept]) {
@@ -1366,7 +1541,7 @@ struct reference_t {
 
 // Rows that are multiples of a few patterns: exact ones, ones within tol.zero and ones that
 // are off by less than the rounding of the hash. The sides are so wide that no merge makes
-// them cross.
+// them cross, and small enough for a double to hold the tolerance next to them.
 model_t bucket_model(rng_t& rng, int32_t nrows, int32_t ncols)
 {
   static const double factor[] = {1., 1., 1., -1., 2., -2., 0.5, -0.5, 3., 1.5, 4., 0.25};
@@ -1396,7 +1571,7 @@ model_t bucket_model(rng_t& rng, int32_t nrows, int32_t ncols)
     col_lower[j] = rng.in(-2, 1);
     col_upper[j] = col_lower[j] + (rng.chance(0.1) ? 0 : rng.in(1, 3));
   }
-  return make_model(rows, dense_t(nrows, -inf), dense_t(nrows, 1e9), col_lower, col_upper);
+  return make_model(rows, dense_t(nrows, -inf), dense_t(nrows, 1e7), col_lower, col_upper);
 }
 
 // The same patterns over the first `shared` columns, and behind them columns of their own for
@@ -1605,7 +1780,7 @@ GPRS_TEST(near_random_sequences)
   GPRS_CHECK(counts.merges > 10000);
   GPRS_CHECK(counts.additions > 7000);
   GPRS_CHECK(counts.stops > 120);
-  GPRS_CHECK(counts.listed > 800);
+  GPRS_CHECK(counts.listed > 400);
 }
 
 // 2,000 rows x0 + v xj over 8 columns j, each alone in its bucket at first. Then one to three
@@ -2615,4 +2790,341 @@ GPRS_TEST(near_random_models)
   GPRS_CHECK(stops > 2000);
   GPRS_CHECK(two_entries > 200);
   GPRS_CHECK(ranged > 100);
+}
+
+// ---- Which of two parallel rows is kept, and what its sides can take ----
+
+namespace {
+
+model_t continuous(model_t m)
+{
+  m.col_type.assign(m.ncols, 0);
+  return m;
+}
+
+options_t only(std::initializer_list<int32_t> rules)
+{
+  options_t options;
+  options.enabled.fill(false);
+  for (int32_t rule : rules) {
+    options.enabled[rule] = true;
+  }
+  return options;
+}
+
+// The contract of a merge and of what follows it: a point that satisfies the reduced model
+// with violation 0 postsolves to a point that the model accepts within the feasibility
+// tolerance (check_point). Tested at the points with one reduced row at one of its sides: for
+// every row, finite side and continuous column of the row, with the other columns at their
+// lower bounds and then at their upper bounds (0 for an infinite one), the column takes what
+// the side leaves it, moved by single doubles until the reduced point violates nothing.
+// Returns the number of points tested.
+int32_t check_side_points(const model_t& m, const result_t& result)
+{
+  const model_t& q = result.reduced;
+  tolerances_t tol;
+  int32_t points = 0, failures = 0;
+  dense_t x(q.ncols), back;
+  auto clean = [&]() {
+    point_check_t c = check_point(q, x);
+    return c.row_violation == 0. && c.bound_violation == 0. && c.integrality_violation == 0.;
+  };
+  for (bool at_upper : {false, true}) {
+    for (int32_t i = 0; i < q.nrows; ++i) {
+      for (double side : {q.row_lower[i], q.row_upper[i]}) {
+        if (!std::isfinite(side)) { continue; }
+        for (int64_t e = q.row_start[i]; e < q.row_start[i + 1]; ++e) {
+          int32_t col = q.col_index[e];
+          if (q.col_type[col] != 0) { continue; }
+          for (int32_t j = 0; j < q.ncols; ++j) {
+            double bound = at_upper ? q.col_upper[j] : q.col_lower[j];
+            x[j]         = std::isfinite(bound) ? bound : 0.;
+          }
+          dd_t rest;
+          for (int64_t k = q.row_start[i]; k < q.row_start[i + 1]; ++k) {
+            if (k != e) { dd_add_product(rest, q.value[k], x[q.col_index[k]]); }
+          }
+          double value = dd_residual(side, rest) / q.value[e];
+          bool found   = false;
+          for (double towards : {inf, -inf}) {
+            x[col] = value;
+            for (int32_t step = 0; step < 4 && !(found = clean()); ++step) {
+              x[col] = std::nextafter(x[col], towards);
+            }
+            if (found) { break; }
+          }
+          if (!found) { continue; }
+          ++points;
+          result.postsolve.postsolve(x, back);
+          point_check_t c = check_point(m, back);
+          if (!point_feasible(c, tol) && ++failures <= 3) {
+            GPRS_CHECK_EQ(c.row_violation, 0.);
+            GPRS_CHECK_EQ(c.bound_violation, 0.);
+          }
+        }
+      }
+    }
+  }
+  GPRS_CHECK_EQ(failures, 0);
+  return points;
+}
+
+}  // namespace
+
+// A row and the same row times 2^18, in either order, and a continuous column without cost
+// that only the two hold, with a range of 9e7. Once one row has gone into the other the column
+// is a singleton column, and the rule of those columns takes it out of the kept row when its
+// term fits the sides of that row. In the smaller row it fits, and the new side 0.1 - 9e7, one
+// double, is off by 6e-9, which the larger row reads as 1.6e-3. The larger row is kept, where
+// the term does not fit.
+GPRS_TEST(parallel_larger_row_is_kept_before_a_singleton_column_leaves)
+{
+  const double factor = 262144.;
+  dense_t small = {1., 1., 1.}, large = {factor, factor, factor};
+  for (bool larger_first : {false, true}) {
+    double first = larger_first ? factor : 1., second = larger_first ? 1. : factor;
+    model_t m       = continuous(make_model(
+      {larger_first ? large : small, larger_first ? small : large, {0., 1., 1.}, {0., 1., -1.}},
+      {first * 0.1, second * 0.1, -inf, -2e8},
+      {first * 5.3, second * 5.3, 100., inf},
+      {0., -1e8, 0.},
+      {9e7, 10., 1.}));
+    m.cost          = {0., 1., 1.};
+    result_t result = presolve(m, only({rule::parallel_rows, rule::singleton_cols}));
+    GPRS_REQUIRE(result.status == status_t::reduced);
+    int32_t kept = larger_first ? 0 : 1;
+    check_record(result.postsolve, 0, 1 - kept, kept, 1. / factor);
+    GPRS_CHECK_EQ(result.postsolve.parallel_rows.size(), 1u);
+    GPRS_CHECK_EQ(result.sub_findings[sub_rule::zero_cost_singleton], 0);
+    GPRS_CHECK(check_side_points(m, result) >= 4);
+  }
+}
+
+// Sides that cross are measured in the units of the row that goes, which is the one that the
+// new side leaves off: x0 + x1 <= 5 and 2^20 (x0 + x1) >= 2^20 (5 + crossing). Within the
+// tolerance the larger row becomes an equation at its own side; in its own units the two
+// sides are half a unit apart.
+GPRS_TEST(parallel_crossing_in_the_units_of_the_removed_row)
+{
+  const double factor = 1048576.;
+  dense_t small = {1., 1.}, large = {factor, factor};
+  for (bool larger_first : {false, true}) {
+    for (double crossing : {5e-7, 2e-6}) {
+      bool within = crossing < 1e-6;
+      double from = factor * (5. + crossing);
+      model_t m =
+        continuous(make_model({larger_first ? large : small, larger_first ? small : large},
+                              {larger_first ? from : -inf, larger_first ? -inf : from},
+                              {larger_first ? inf : 5., larger_first ? 5. : inf},
+                              {0., 0.},
+                              {9., 9.}));
+      int32_t kept = larger_first ? 0 : 1;
+      fixture_t f(m);
+      rule_result_t result = f.run();
+      GPRS_CHECK_EQ(result.outcome, within ? ok : infeasible);
+      if (!within) { continue; }
+      GPRS_CHECK(!result.limited);
+      GPRS_CHECK(alive_rows(f.st) == (list_t{kept}));
+      GPRS_CHECK_EQ(f.st.row_lower[kept], from);
+      GPRS_CHECK_EQ(f.st.row_upper[kept], from);
+      result_t whole = presolve(m, only({rule::parallel_rows}));
+      GPRS_CHECK(check_side_points(m, whole) >= 2);
+    }
+  }
+}
+
+// A crossing that the rounding of the image does not decide. Row 0: x0 + x1 + x2 <= 5e7 + 2
+// with x2 fixed at 5e7; row 1: x0 + x1 >= 2 + crossing, which as a side of row 0 is rounded at
+// 5e7. Clearly within the tolerance the sides meet, clearly beyond it the rows are infeasible,
+// and between the two the pair is left alone and the call reports limited.
+GPRS_TEST(parallel_crossing_next_to_the_tolerance)
+{
+  for (double crossing : {8e-7, 1e-6, 1.2e-6}) {
+    model_t m = continuous(make_model({{1., 1., 1.}, {1., 1., 0.}},
+                                      {-inf, 2. + crossing},
+                                      {5e7 + 2., inf},
+                                      {0., 0., 5e7},
+                                      {4., 4., 5e7}));
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.outcome, crossing > 1e-6 ? infeasible : ok);
+    if (result.outcome != ok) { continue; }
+    GPRS_CHECK_EQ(result.findings, crossing < 1e-6 ? 1 : 0);
+    GPRS_CHECK_EQ(result.limited, crossing == 1e-6);
+    GPRS_CHECK_EQ(f.st.live_rows, crossing < 1e-6 ? 1 : 2);
+    if (crossing < 1e-6) { GPRS_CHECK_EQ(f.st.row_lower[0], 5e7 + 2.); }
+  }
+}
+
+// A ranged row of half the size and the other sign: its sides change places and double, in
+// either order of the two rows.
+GPRS_TEST(parallel_ranged_row_into_a_larger_one)
+{
+  for (bool larger_first : {false, true}) {
+    dense_t small = {-1., 2.}, large = {2., -4.};
+    model_t m    = make_model({larger_first ? large : small, larger_first ? small : large},
+                              {larger_first ? -inf : -3., larger_first ? -3. : -inf},
+                              {larger_first ? 7. : 4., larger_first ? 4. : 7.},
+                              {0., 0.},
+                              {9., 9.});
+    int32_t kept = larger_first ? 0 : 1;
+    fixture_t f(m);
+    GPRS_CHECK_EQ(f.run().findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{kept}));
+    GPRS_CHECK_EQ(f.st.row_lower[kept], -8.);
+    GPRS_CHECK_EQ(f.st.row_upper[kept], 6.);
+    check_record(f.ps, 0, 1 - kept, kept, -0.5);
+    model_t reduced = f.reduced();
+    GPRS_CHECK(check_same_feasible_set(m, reduced, f.ps) > 0);
+  }
+}
+
+// Rows that are parallel within tol.zero and not exactly: the row that goes differs from its
+// multiple of the kept row by the differences of the coefficients times the values of the
+// columns. Over wide bounds that is more than the tolerance, and the pair is left alone.
+GPRS_TEST(parallel_rows_that_are_not_exact_multiples)
+{
+  for (double range : {1e7, 50.}) {
+    bool merged = range == 50.;
+    model_t m   = continuous(make_model(
+      {{1., 1.}, {1., 1. + 9e-10}}, {-inf, -inf}, {0., 0.}, {-range, -range}, {range, range}));
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.outcome, ok);
+    GPRS_CHECK_EQ(result.findings, merged ? 1 : 0);
+    GPRS_CHECK_EQ(result.limited, !merged);
+    GPRS_CHECK_EQ(f.st.live_rows, merged ? 1 : 2);
+    result_t whole = presolve(m, only({rule::parallel_rows}));
+    GPRS_CHECK_EQ(whole.fixed_point, merged);
+    GPRS_CHECK(check_side_points(m, whole) >= 2);
+    // Without the limit the rows are merged whatever the bounds are.
+    fixture_t loose(m);
+    loose.opt.parallel_drift_share = inf;
+    GPRS_CHECK_EQ(loose.run().findings, 1);
+  }
+  // Exact multiples are merged over any bounds, columns without a bound included; rows that
+  // differ in the last bit of one coefficient are not, there.
+  for (double second : {6., std::nextafter(6., 7.)}) {
+    model_t m = continuous(
+      make_model({{1., 2.}, {3., second}}, {-inf, -inf}, {4., 9.}, {-inf, 0.}, {inf, inf}));
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, second == 6. ? 1 : 0);
+    GPRS_CHECK_EQ(result.limited, second != 6.);
+  }
+}
+
+// The image of a side is exact wherever it is a double, and a rounded one is used only at a
+// size at which a double holds the tolerance of the row that goes.
+GPRS_TEST(parallel_image_of_a_side)
+{
+  {
+    // 3 (x0 + x1) = 3e10 + 3 and 7 (x0 + x1) = 7e10 + 7 say the same: no side moves.
+    model_t m = make_model(
+      {{3., 3.}, {7., 7.}}, {3e10 + 3., 7e10 + 7.}, {3e10 + 3., 7e10 + 7.}, {0., 0.}, {1e11, 1e11});
+    fixture_t f(m);
+    int64_t side_changes = f.st.side_changes;
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.outcome, ok);
+    GPRS_CHECK_EQ(result.findings, 1);
+    GPRS_CHECK(alive_rows(f.st) == (list_t{1}));
+    GPRS_CHECK_EQ(f.st.side_changes, side_changes);
+    check_record(f.ps, 0, 0, 1, 3. / 7.);
+  }
+  {
+    // x0 + x1 <= 3e8 + 2^-24 in units of 3 has no double, and at 3e8 a double does not hold
+    // the tolerance: left alone, for good. With a side that has an image the rows are merged.
+    model_t m =
+      make_model({{1., 1.}, {3., 3.}}, {-inf, -inf}, {3e8 + 0x1p-24, 1e12}, {0., 0.}, {1e11, 1e11});
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK(!result.limited);
+    GPRS_CHECK_EQ(f.st.live_rows, 2);
+    m.row_upper[0] = 3e8 + 0.5;
+    fixture_t exact(m);
+    GPRS_CHECK_EQ(exact.run().findings, 1);
+    GPRS_CHECK(alive_rows(exact.st) == (list_t{1}));
+    GPRS_CHECK_EQ(exact.st.row_upper[1], 9e8 + 1.5);
+  }
+  {
+    // x0 + x1 <= 3e8 is 9e8 in units of 3, but the kept row holds the term 0.1 of a fixed
+    // column, and 9e8 + 0.1 has no double. The term can leave the row without an event of the
+    // two rows: the call reports limited.
+    model_t m = continuous(make_model(
+      {{1., 1., 0.}, {3., 3., 1.}}, {-inf, -inf}, {3e8, 1e12}, {0., 0., 0.1}, {1e11, 1e11, 0.1}));
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK(result.limited);
+    GPRS_CHECK_EQ(f.st.live_rows, 2);
+  }
+  {
+    // An image beyond the doubles: left alone.
+    model_t m =
+      make_model({{1., 1.}, {1e200, 1e200}}, {-inf, -inf}, {1e150, 1e300}, {0., 0.}, {1., 1.});
+    fixture_t f(m);
+    rule_result_t result = f.run();
+    GPRS_CHECK_EQ(result.outcome, ok);
+    GPRS_CHECK_EQ(result.findings, 0);
+    GPRS_CHECK(!result.limited);
+    GPRS_CHECK_EQ(f.st.row_upper[1], 1e300);
+  }
+}
+
+// The generator knob for parallel rows of very different scale (oracle.hpp): the base model is
+// that of the same seed without it, a row factor is an integer from 1 to 2^20, powers of two
+// and others, and the oracle accepts the presolve of every case, with the larger row kept and
+// with the smaller index kept, which is as right while every later step is exact.
+GPRS_TEST(parallel_scale_generated_models)
+{
+  oracle::generator_options_t plain;
+  plain.p_parallel_row               = 0.5;
+  plain.p_scaled                     = 0.;
+  plain.p_equation                   = 0.3;
+  plain.max_rows                     = 7;
+  oracle::generator_options_t scaled = plain;
+  scaled.p_parallel_scale            = 0.8;
+  int64_t powers = 0, others = 0, kept_larger_index = 0, far_ratios = 0;
+  for (uint64_t seed = 1; seed <= 1500; ++seed) {
+    oracle::case_t c    = oracle::generate(seed, scaled);
+    oracle::case_t same = oracle::generate(seed, plain);
+    int32_t failures    = gprs::test::failure_count();
+    GPRS_CHECK(c.base.value == same.base.value && c.base.row_lower == same.base.row_lower &&
+               c.base.row_upper == same.base.row_upper && c.base.col_index == same.base.col_index);
+    for (double factor : c.row_scale) {
+      int exponent  = 0;
+      bool power    = std::frexp(factor, &exponent) == 0.5;
+      bool in_range = factor >= 1. && factor <= 1048576. && factor == std::floor(factor);
+      powers += power && factor > 1.;
+      others += !power;
+      GPRS_CHECK(in_range);
+    }
+    // All rules with the larger row kept, all rules with the smaller index kept, and the
+    // parallel rows alone, which then meet the rows that the other rules would take first.
+    for (int32_t set = 0; set < 3; ++set) {
+      options_t options            = set == 2 ? only({rule::parallel_rows}) : options_t();
+      options.parallel_keep_larger = set != 1;
+      result_t result              = presolve(c.model, options);
+      oracle::verdict_t verdict    = oracle::check_result(c, options, result);
+      if (!verdict.ok && verdict.message.find("outside the oracle class") == std::string::npos) {
+        gprs::test::fail(__FILE__, __LINE__, verdict.message);
+      }
+      if (set == 1) { continue; }
+      for (const parallel_row_record_t& record : result.postsolve.parallel_rows) {
+        GPRS_CHECK(std::fabs(record.ratio) <= 1.);
+        kept_larger_index += record.kept_row > record.removed_row;
+        far_ratios += std::fabs(record.ratio) <= 1. / 1024.;
+      }
+    }
+    if (gprs::test::failure_count() != failures) {
+      std::printf("    seed %llu\n", (unsigned long long)seed);
+      return;
+    }
+  }
+  // The test is not vacuous.
+  GPRS_CHECK(powers > 300);
+  GPRS_CHECK(others > 300);
+  GPRS_CHECK(kept_larger_index > 100);
+  GPRS_CHECK(far_ratios > 100);
 }

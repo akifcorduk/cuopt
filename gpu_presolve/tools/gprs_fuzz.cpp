@@ -55,8 +55,18 @@
 // of disagreement. GPRS_FUZZ_OFF=<rule family> switches that family off for every seed, on top
 // of the options of the seed: with a family off the run can be compared, line by line, with
 // that of an engine that does not have it.
-// The profiles are those of tests/test_e2e_presolve.cpp and four more.
-// Exit code 1 when the oracle, the second presolve or the structure check failed on any model.
+// The profiles are those of tests/test_e2e_presolve.cpp and six more. Two of them are for
+// parallel rows of very different scale. parallel_scale: generated models whose multiples of a
+// row carry one more row factor up to 2^20 (oracle.hpp, p_parallel_scale); the three verdicts
+// judge them. scale_pair: the models of scale_pair_case, where a column leaves a row that took
+// the sides of such a multiple; they lie outside the class of the oracle, the profile options
+// do not change them, and they have a verdict of their own:
+//   sides      A point that satisfies the reduced model with violation 0, with one of its rows
+//              at a side, postsolves to a point that the model accepts (side_points). The line
+//              "sides" counts the results tested, the points, the results with a point that
+//              failed and the largest violation.
+// Exit code 1 when the oracle, the second presolve, the structure check or the side points
+// failed on any model.
 
 #include "../check/structure_check.hpp"
 #include "../tests/oracle.hpp"
@@ -80,6 +90,9 @@ struct profile_t {
   const char* name;
   generator_options_t options;
 };
+
+// The profile whose models come from scale_pair_case and not from the generator.
+constexpr const char* scale_pair_profile = "scale_pair";
 
 std::vector<profile_t> profiles()
 {
@@ -184,7 +197,143 @@ std::vector<profile_t> profiles()
   o.p_zero_cost          = 0.6;
   o.max_rows             = 6;
   list.push_back({"huge_equations", o});
+
+  // Parallel rows of very different scale: a multiple of an earlier row, or that row, with one
+  // more row factor up to 2^20, equations and ranged rows among them.
+  o                  = generator_options_t();
+  o.p_parallel_row   = 0.5;
+  o.p_parallel_scale = 0.8;
+  o.p_scaled         = 0.;
+  o.p_equation       = 0.3;
+  o.p_ranged_row     = 0.3;
+  o.max_rows         = 7;
+  list.push_back({"parallel_scale", o});
+
+  // The models of scale_pair_case, which no options of the generator make.
+  list.push_back({scale_pair_profile, generator_options_t()});
   return list;
+}
+
+// A model of the profile scale_pair: two or three ranged rows a_s s + a_y y + a_z z in
+// [lower, upper], multiples of one another by factors up to 2^20 (powers of two and other
+// integers, one row without a factor, at a random place), over a continuous column s without
+// cost that no other row holds, with a range up to 9e7 / a_s, a continuous y that reaches
+// -1e8 and a z in [0, 1]. The sides are tenths: lower less a_s times the range of s has no
+// double. Two more rows, y - z <= -1 and y - 2 z <= -3 / 2, hold y and z and are never
+// redundant, so that the only column that leaves through the multiples is s.
+// The row has two columns with a wide range and is outside the class of the oracle: the
+// verdict of these models is side_points.
+// What they are for: once the multiples have gone into one row, s is a singleton column of that
+// row and leaves it with its range in a side of the row, where its term fits the sides of that
+// row. The rounding of that side reaches a row that went times the ratio of the two rows: a
+// multiple that is kept takes it as it is, a row that was kept in place of a multiple 2^20
+// times as large hands on a million times as much.
+case_t scale_pair_case(uint64_t seed)
+{
+  static const double ranges[] = {9e7, 3e7, 12345678., 1e6, 65536., 1000.};
+  static const double others[] = {
+    3., 5., 6., 7., 10., 100., 1000., 12345., 65537., 999999., 1000003.};
+  oracle::rng_t rng(seed * 0x9e3779b97f4a7c15ull + 777);
+  int32_t multiples = rng.chance(0.3) ? 3 : 2;
+  double a_s = rng.uniform(1, 3), a_y = rng.uniform(1, 2), a_z = rng.uniform(1, 3);
+  if (rng.chance(0.3)) { a_z = -a_z; }
+  double lower = rng.uniform(1, 9) / 10.;
+  double upper = lower + rng.uniform(1, 60) / 10.;
+  model_t b;
+  b.ncols     = 3;
+  b.col_lower = {0., -1e8, 0.};
+  b.col_upper = {std::floor(ranges[rng.uniform(0, 5)] / a_s), 10., 1.};
+  b.cost      = {0., (double)rng.uniform(-1, 1), (double)rng.uniform(-1, 1)};
+  b.col_type  = {0, 0, (uint8_t)(rng.chance(0.5) ? 1 : 0)};
+  b.row_start.push_back(0);
+  std::vector<double> row_scale;
+  int32_t plain = rng.uniform(0, multiples - 1);
+  for (int32_t k = 0; k < multiples; ++k) {
+    // One multiple in five has the other sign.
+    double sign = k != plain && rng.chance(0.2) ? -1. : 1.;
+    b.col_index.insert(b.col_index.end(), {0, 1, 2});
+    b.value.insert(b.value.end(), {sign * a_s, sign * a_y, sign * a_z});
+    b.row_start.push_back(b.value.size());
+    b.row_lower.push_back(sign > 0 ? lower : -upper);
+    b.row_upper.push_back(sign > 0 ? upper : -lower);
+    double factor = 1.;
+    if (k != plain) {
+      factor = std::ldexp(1., rng.uniform(1, 20));
+      if (rng.chance(0.4)) { factor = others[rng.uniform(0, 10)]; }
+    }
+    row_scale.push_back(factor);
+  }
+  for (double a : {1., 2.}) {
+    b.col_index.insert(b.col_index.end(), {1, 2});
+    b.value.insert(b.value.end(), {1., -a});
+    b.row_start.push_back(b.value.size());
+    b.row_lower.push_back(-inf);
+    b.row_upper.push_back(-0.5 - a / 2.);
+    row_scale.push_back(1.);
+  }
+  b.nrows = multiples + 2;
+  return oracle::make_case(b, row_scale, {});
+}
+
+// What the verdict sides found on one result.
+struct sides_t {
+  int64_t points = 0;
+  int64_t failed = 0;
+  double worst   = 0.;
+};
+
+// The verdict of the profile scale_pair on a result with a reduced model: a point that
+// satisfies the reduced model with violation 0 postsolves to a point that the model accepts
+// (check_point, tol). Tested at the points with one row of the reduced model at one of its
+// sides: for every row, finite side and continuous column of the row, with the other columns
+// at their lower bounds and then at their upper bounds (0 for an infinite one), the column
+// takes what the side leaves it, moved by single doubles until the reduced point violates
+// nothing. `worst` is the largest violation of a row or a bound among the points that failed.
+sides_t side_points(const model_t& model, const result_t& result, const tolerances_t& tol)
+{
+  const model_t& q = result.reduced;
+  sides_t report;
+  std::vector<double> x(q.ncols), back;
+  auto clean = [&]() {
+    point_check_t c = check_point(q, x);
+    return c.row_violation == 0. && c.bound_violation == 0. && c.integrality_violation == 0.;
+  };
+  for (bool at_upper : {false, true}) {
+    for (int32_t i = 0; i < q.nrows; ++i) {
+      for (double side : {q.row_lower[i], q.row_upper[i]}) {
+        if (!std::isfinite(side)) { continue; }
+        for (int64_t e = q.row_start[i]; e < q.row_start[i + 1]; ++e) {
+          int32_t col = q.col_index[e];
+          if (q.col_type[col] != 0) { continue; }
+          for (int32_t j = 0; j < q.ncols; ++j) {
+            double bound = at_upper ? q.col_upper[j] : q.col_lower[j];
+            x[j]         = std::isfinite(bound) ? bound : 0.;
+          }
+          dd_t rest;
+          for (int64_t k = q.row_start[i]; k < q.row_start[i + 1]; ++k) {
+            if (k != e) { dd_add_product(rest, q.value[k], x[q.col_index[k]]); }
+          }
+          double value = dd_residual(side, rest) / q.value[e];
+          bool found   = false;
+          for (double towards : {inf, -inf}) {
+            x[col] = value;
+            for (int32_t step = 0; step < 4 && !(found = clean()); ++step) {
+              x[col] = std::nextafter(x[col], towards);
+            }
+            if (found) { break; }
+          }
+          if (!found) { continue; }
+          ++report.points;
+          result.postsolve.postsolve(x, back);
+          point_check_t c = check_point(model, back);
+          if (point_feasible(c, tol)) { continue; }
+          ++report.failed;
+          report.worst = std::fmax(report.worst, std::fmax(c.row_violation, c.bound_violation));
+        }
+      }
+    }
+  }
+  return report;
 }
 
 // Up to three new columns with one entry each, at the end of rows that have entries. A row that
@@ -407,6 +556,8 @@ int main(int argc, char** argv)
   int64_t box_tested = 0, snapshot_tested = 0, snapshot_untested = 0, limited_results = 0;
   int64_t probing_results = 0, probing_aliases = 0, probing_no_row = 0, probing_depth = 0;
   column_stats_t probing_sum;
+  int64_t side_results = 0, side_tested = 0, side_failed = 0;
+  double side_worst = 0.;
   std::map<std::string, int64_t> parts;
   int64_t show_missed =
     std::getenv("GPRS_FUZZ_SHOW") ? std::atoll(std::getenv("GPRS_FUZZ_SHOW")) : 0;
@@ -423,10 +574,11 @@ int main(int argc, char** argv)
   for (const profile_t& profile : profiles()) {
     if (only && std::strcmp(only, profile.name)) { continue; }
     generator_options_t generator = columns ? with_columns(profile.options) : profile.options;
+    bool pairs                    = !std::strcmp(profile.name, scale_pair_profile);
     if (probing) { generator = with_probing(generator, wide); }
     for (uint64_t seed = first; seed < first + count; ++seed) {
-      case_t c = oracle::generate(seed, generator);
-      if (singletons) {
+      case_t c = pairs ? scale_pair_case(seed) : oracle::generate(seed, generator);
+      if (singletons && !pairs) {
         case_t d = add_singletons(c, seed, profile.options);
         mutated += d.model.ncols != c.model.ncols;
         c = d;
@@ -470,6 +622,27 @@ int main(int argc, char** argv)
       probing_sum.probing_deep_batches += result.columns.probing_deep_batches;
       if (result.columns.alias_depth > probing_depth) {
         probing_depth = result.columns.alias_depth;
+      }
+      if (pairs && gprs_check::carries_model(result.status)) {
+        sides_t s = side_points(c.model, result, options.tol);
+        ++side_results;
+        side_tested += s.points;
+        if (s.failed > 0) {
+          if (s.worst > side_worst) { side_worst = s.worst; }
+          if (++side_failed <= show_missed + 3) {
+            std::printf(
+              "SIDES profile %s seed %llu variant %llu: %lld of %lld points of the reduced "
+              "model with a row at a side postsolve to a point that the model rejects, by up "
+              "to %g\n%s\n",
+              profile.name,
+              (unsigned long long)seed,
+              (unsigned long long)(seed % 10),
+              (long long)s.failed,
+              (long long)s.points,
+              s.worst,
+              side_failed <= show_missed + 1 ? oracle::to_code(c).c_str() : "");
+          }
+        }
       }
       if (v.ok && v.crushed_points > 0) {
         ++crush_results;
@@ -703,11 +876,18 @@ int main(int argc, char** argv)
     (long long)probing_sum.probing_size_refused,
     (long long)probing_sum.probing_deep_batches,
     (long long)probing_depth);
+  // The verdict sides: the results of the profile scale_pair with a reduced model, the points
+  // tested, the results with a point that failed, and the largest violation of such a point.
+  std::printf("sides results %lld points %lld failed %lld worst %g\n",
+              (long long)side_results,
+              (long long)side_tested,
+              (long long)side_failed,
+              side_worst);
   for (const auto& t : parts) {
     std::printf("  part %lld x%s\n", (long long)t.second, t.first.c_str());
   }
   for (const auto& t : tally) {
     std::printf("  %lld x %s\n", (long long)t.second, t.first.c_str());
   }
-  return failures != 0 || s_fail != 0 || second_changed != 0;
+  return failures != 0 || s_fail != 0 || second_changed != 0 || side_failed != 0;
 }
