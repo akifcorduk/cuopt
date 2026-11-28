@@ -342,15 +342,18 @@ GPRS_TEST(columns_probing_leaves_a_continuous_column_that_is_off_its_bound)
     GPRS_CHECK_EQ(c.result.findings, 0);
     GPRS_CHECK(c.st.row_alive[0]);
   }
-  // The same through the engine and the oracle. The second row holds a second column, so that
-  // no singleton row makes the bound of x1 explicit before the rule reads the row; q has a cost,
+  // The same through the engine and the oracle, with a side that is off by 4e-10: within the
+  // feasibility tolerance and small against the range of x1, so that only the forcing test
+  // stands between the row and the alias. The second row holds a second column, so that no
+  // singleton row makes the bound of x1 explicit before the rule reads the row; q has a cost,
   // so that the lock rule leaves it.
-  //   r0:  2 p + x1 + x2 = 2 + 2e-7
-  //   r1:  1000 x1 + q  >= 1 + 1.5e-4
-  // min -10 p + q. The only points have p = 1, x1 = 2e-7, x2 = 0 and q = 1.
-  model_t base        = rule_test::make_model({binary, unit, binary, binary},
-                                              {{{{0, 2.}, {1, 1.}, {2, 1.}}, 2. + 2e-7, 2. + 2e-7},
-                                               {{{1, 1000.}, {3, 1.}}, 1. + 1.5e-4, inf}});
+  //   r0:  2 p + x1 + x2 = 2 + 4e-10
+  //   r1:  1e7 x1 + q   >= 1 + 3e-3
+  // min -10 p + q. With p = 1 the first row gives x1 = 4e-10 and the second q = 1: -9. The
+  // alias x1 = 1 - p would leave p = 1 without a point.
+  model_t base = rule_test::make_model(
+    {binary, unit, binary, binary},
+    {{{{0, 2.}, {1, 1.}, {2, 1.}}, 2. + 4e-10, 2. + 4e-10}, {{{1, 1e7}, {3, 1.}}, 1. + 3e-3, inf}});
   base.cost           = {-10., 0., 0., 1.};
   oracle::case_t c    = oracle::make_case(base, {}, {});
   result_t result     = presolve(c.model, options_t());

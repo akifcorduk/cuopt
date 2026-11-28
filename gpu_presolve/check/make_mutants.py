@@ -1045,8 +1045,10 @@ MUTANTS = {
     # through the oracle.
     "sp_cont": (
         "rules_simple_probing.cpp",
-        "    bool continuous = !st.is_integer(col);",
-        "    bool continuous = false;",
+        "lower, upper), continuous);\n"
+        "    at_max.add(a, max_activity_bound(a, lower, upper), continuous);",
+        "lower, upper), false);\n"
+        "    at_max.add(a, max_activity_bound(a, lower, upper), false);",
     ),
     # The last column of a row gets no alias, and the row is deleted: a
     # relaxation. The rows part of the structure check; the oracle.
@@ -1096,7 +1098,8 @@ MUTANTS = {
         "rules_simple_probing.cpp",
         "  if (!wide || !(slack <= c.tol.zero * narrowest)) "
         "{ return probe_t::narrow_refused; }\n",
-        "",
+        "  if (c.opt.max_rounds < 0 && (!wide || !(slack <= c.tol.zero * narrowest))) "
+        "{\n    return probe_t::narrow_refused;\n  }\n",
     ),
     # A row that is left for the size of an offset does not report limited
     # (columns_probing_size_of_an_offset).
