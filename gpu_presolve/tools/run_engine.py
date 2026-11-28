@@ -224,6 +224,10 @@ def summarize(args, summary, entries, out):
                 "columns",
                 "col_from_rows",
                 "objective_nnz",
+                "options",
+                "column_counts",
+                "left",
+                "second",
             ):
                 if key in best:
                     row[key] = best[key]

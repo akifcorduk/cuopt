@@ -6,6 +6,7 @@
 /* clang-format on */
 
 // gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] [--profile <name>]
+//           [--switches]
 // Long random runs of the engine, for every rule change (tools/run_campaign.sh splits one run
 // over processes). For each seed and each generator profile: one generated model, the presolve
 // with options chosen by the seed, and three verdicts.
@@ -43,6 +44,15 @@
 // of disagreement. GPRS_FUZZ_OFF=<rule family> switches that family off for every seed, on top
 // of the options of the seed: with a family off the run can be compared, line by line, with
 // that of an engine that does not have it.
+// --switches draws the choices of the singleton-column rules as well (options_t, from
+// dual_integer_pivots on), from a random stream of the seed that nothing else reads: a seed
+// has the model and the other options that it has without --switches. Six seeds in ten give
+// one choice another value, three give each choice another value with probability 0.3, one
+// keeps the defaults. Every result is then compared with that of the presolve without the
+// drawn choices: the reduced model, the record stack and the postsolved images of two points
+// of the reduced model. The line "switches" lists, per other value, the models that ran with
+// it alone and those among them whose result it changed, and the models that ran with it
+// next to other drawn values.
 // The profiles are those of tests/test_e2e_presolve.cpp and four more.
 // Exit code 1 when the oracle, the second presolve or the structure check failed on any model.
 
@@ -306,6 +316,88 @@ options_t variant(uint64_t seed)
   return o;
 }
 
+// The other values of the choices of the singleton-column rules that --switches draws.
+struct switch_value_t {
+  const char* name;
+  void (*set)(options_t&);
+};
+
+const switch_value_t switch_values[] = {
+  {"no_dual_integer_pivots", [](options_t& o) { o.dual_integer_pivots = false; }},
+  {"primal_projections", [](options_t& o) { o.primal_projections = true; }},
+  {"growth_ratio_continuous",
+   [](options_t& o) { o.growth_ratio = growth_ratio_t::continuous_columns; }},
+  {"growth_ratio_integer_exempt",
+   [](options_t& o) { o.growth_ratio = growth_ratio_t::integer_pivot_exempt; }},
+  {"zero_cost_one_sided", [](options_t& o) { o.zero_cost_one_sided = true; }},
+  {"zero_cost_whole_row", [](options_t& o) { o.zero_cost_whole_row = true; }},
+  {"order_largest_pivot",
+   [](options_t& o) { o.singleton_order = singleton_order_t::largest_pivot; }},
+  {"order_zero_cost_first",
+   [](options_t& o) { o.singleton_order = singleton_order_t::zero_cost_first; }},
+  {"order_single_pass", [](options_t& o) { o.singleton_order = singleton_order_t::single_pass; }},
+  {"interval_start_upper", [](options_t& o) { o.interval_start = interval_start_t::upper; }},
+  {"interval_start_nearest_zero",
+   [](options_t& o) { o.interval_start = interval_start_t::nearest_zero; }},
+  {"interval_start_middle", [](options_t& o) { o.interval_start = interval_start_t::middle; }},
+  {"interval_order_descending",
+   [](options_t& o) { o.interval_order = interval_order_t::descending; }},
+  {"forcing_rounding_units_0", [](options_t& o) { o.forcing_rounding_units = 0.; }},
+  {"forcing_rounding_units_64", [](options_t& o) { o.forcing_rounding_units = 64.; }},
+  {"implied_band_scale_2", [](options_t& o) { o.implied_band_scale = 2.; }},
+  {"implied_band_scale_5", [](options_t& o) { o.implied_band_scale = 5.; }},
+  // The generator has no side beyond 1e8: a small guard is one that its sides can reach, next
+  // to the term of a column that was fixed at a huge bound.
+  {"side_guard_scale_0.01", [](options_t& o) { o.side_guard_scale = 0.01; }},
+  {"side_guard_scale_8", [](options_t& o) { o.side_guard_scale = 8.; }},
+  {"singleton_cols_early", [](options_t& o) { o.singleton_cols_early = true; }},
+};
+constexpr int32_t switch_count = sizeof(switch_values) / sizeof(switch_values[0]);
+
+// The values of switch_values that the seed draws, applied to o and marked in `drawn`. Two
+// values of one choice can both be drawn: the later one of the table stands.
+void draw_switches(uint64_t seed, options_t& o, std::vector<uint8_t>& drawn)
+{
+  oracle::rng_t rng(seed * 0xd6e8feb86659fd93ull + 0x2545f4914f6cdd1dull);
+  drawn.assign(switch_count, 0);
+  int32_t kind = rng.uniform(0, 9);
+  if (kind < 6) {
+    drawn[rng.uniform(0, switch_count - 1)] = 1;
+  } else if (kind < 9) {
+    for (int32_t k = 0; k < switch_count; ++k) {
+      drawn[k] = rng.chance(0.3);
+    }
+  }
+  for (int32_t k = 0; k < switch_count; ++k) {
+    if (drawn[k]) { switch_values[k].set(o); }
+  }
+}
+
+// The two results are one: the reduced model, the record stack, and the images of two points
+// of the reduced model (every column at its lower bound, or its upper bound, or 0; and the
+// same from the upper bound), which is where the choices of the undo show.
+bool same_result(const result_t& a, const result_t& b)
+{
+  if (a.status != b.status || a.hash != b.hash ||
+      postsolve_hash(a.postsolve) != postsolve_hash(b.postsolve)) {
+    return false;
+  }
+  if (!gprs_check::carries_model(a.status)) { return true; }
+  const model_t& m = a.reduced;
+  std::vector<double> point(m.ncols), x, y;
+  for (int32_t from_upper = 0; from_upper < 2; ++from_upper) {
+    for (int32_t j = 0; j < m.ncols; ++j) {
+      double first = from_upper ? m.col_upper[j] : m.col_lower[j];
+      double other = from_upper ? m.col_lower[j] : m.col_upper[j];
+      point[j]     = std::isfinite(first) ? first : std::isfinite(other) ? other : 0.;
+    }
+    a.postsolve.postsolve(point, x);
+    b.postsolve.postsolve(point, y);
+    if (x != y) { return false; }
+  }
+  return true;
+}
+
 // One seed in four, whatever its variant is: the reduced model of its result is presolved again.
 bool sampled(uint64_t seed) { return ((seed * 0x9e3779b97f4a7c15ull) >> 62) == 0; }
 
@@ -339,17 +431,19 @@ int main(int argc, char** argv)
   if (argc < 3) {
     std::fprintf(stderr,
                  "usage: gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] "
-                 "[--profile <name>]\n");
+                 "[--profile <name>] [--switches]\n");
     return 2;
   }
   uint64_t first   = std::strtoull(argv[1], nullptr, 10);
   uint64_t count   = std::strtoull(argv[2], nullptr, 10);
   bool singletons  = false;
   bool columns     = false;
+  bool switches    = false;
   const char* only = nullptr;
   for (int i = 3; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--singletons")) { singletons = true; }
     if (!std::strcmp(argv[i], "--columns")) { columns = true; }
+    if (!std::strcmp(argv[i], "--switches")) { switches = true; }
     if (!std::strcmp(argv[i], "--profile") && i + 1 < argc) { only = argv[++i]; }
   }
   std::map<std::string, int64_t> tally;
@@ -372,6 +466,12 @@ int main(int argc, char** argv)
   // Results with a record of the kind: defined, defined with the dual flag, interval, forcing.
   int64_t kind_results[4] = {};
   int64_t box_tested = 0, snapshot_tested = 0, snapshot_untested = 0, limited_results = 0;
+  // By value of switch_values: models with it alone, those of them whose result it changed,
+  // and models with it next to other drawn values.
+  int64_t switch_alone[switch_count] = {}, switch_changed[switch_count] = {},
+          switch_combined[switch_count] = {};
+  int64_t switch_models = 0, switch_differ = 0;
+  std::vector<uint8_t> drawn;
   std::map<std::string, int64_t> parts;
   int64_t show_missed =
     std::getenv("GPRS_FUZZ_SHOW") ? std::atoll(std::getenv("GPRS_FUZZ_SHOW")) : 0;
@@ -397,8 +497,33 @@ int main(int argc, char** argv)
       }
       options_t options = variant(seed);
       if (off >= 0) { options.enabled[off] = false; }
+      options_t without = options;
+      if (switches) { draw_switches(seed, options, drawn); }
       result_t result = presolve(c.model, options);
-      verdict_t v     = oracle::check_result(c, options, result);
+      // The drawn values, for the lines that report a failure.
+      std::string with;
+      if (switches) {
+        int32_t count = 0, last = -1;
+        for (int32_t k = 0; k < switch_count; ++k) {
+          if (drawn[k]) {
+            ++count;
+            last = k;
+            with += std::string(with.empty() ? " switches " : ",") + switch_values[k].name;
+          }
+        }
+        bool differs = count > 0 && !same_result(result, presolve(c.model, without));
+        ++switch_models;
+        switch_differ += differs;
+        if (count == 1) {
+          ++switch_alone[last];
+          switch_changed[last] += differs;
+        } else {
+          for (int32_t k = 0; k < switch_count; ++k) {
+            switch_combined[k] += drawn[k];
+          }
+        }
+      }
+      verdict_t v = oracle::check_result(c, options, result);
       ++models;
       dual_findings += result.dual_findings;
       for (int32_t k = 0; k < 4; ++k) {
@@ -426,11 +551,12 @@ int main(int argc, char** argv)
         if (presolve(result.reduced, options).status != status_t::unchanged) {
           if (++second_changed <= show_missed + 3) {
             std::printf(
-              "SECOND profile %s seed %llu variant %llu: the presolve of the reduced "
+              "SECOND profile %s seed %llu variant %llu%s: the presolve of the reduced "
               "model of a fixed point changes it\n%s\n",
               profile.name,
               (unsigned long long)seed,
               (unsigned long long)(seed % 10),
+              with.c_str(),
               second_changed <= show_missed ? oracle::to_code(c).c_str() : "");
           }
         }
@@ -439,8 +565,7 @@ int main(int argc, char** argv)
       std::string part;
       if (gprs_check::carries_model(result.status)) {
         ++carried;
-        gprs_check::structure_report_t s =
-          gprs_check::structure_check(c.model, result, options.primal_only);
+        gprs_check::structure_report_t s = gprs_check::structure_check(c.model, result, options);
         rows_tested += s.rows_tested;
         kept_tested += s.kept_tested;
         kept_parallel += s.kept_parallel;
@@ -477,13 +602,14 @@ int main(int argc, char** argv)
           if (v.ok) {
             if (++s_only <= show_missed) {
               std::printf(
-                "STRUCTURE-ONLY profile %s seed %llu variant %llu:%s | %s | bound %g col %d "
+                "STRUCTURE-ONLY profile %s seed %llu variant %llu%s:%s | %s | bound %g col %d "
                 "row %g row %d kept %g row %d added %g row %d box %g col %d integral %lld col %d "
                 "snapshot %g row %d objective %g col %d constant %g "
                 "post %g col %d\n%s\n",
                 profile.name,
                 (unsigned long long)seed,
                 (unsigned long long)(seed % 10),
+                with.c_str(),
                 part.c_str(),
                 s.stack_error.c_str(),
                 s.bound_worst,
@@ -517,11 +643,12 @@ int main(int argc, char** argv)
           bool is_relaxed = relaxed(c, options, result);
           missed_relaxed += is_relaxed;
           if (is_relaxed ? missed_relaxed <= show_missed : o_only_carried <= show_missed) {
-            std::printf("%s profile %s seed %llu variant %llu status %s: %s\n%s\n",
+            std::printf("%s profile %s seed %llu variant %llu%s status %s: %s\n%s\n",
                         is_relaxed ? "MISSED-RELAXED" : "MISSED",
                         profile.name,
                         (unsigned long long)seed,
                         (unsigned long long)(seed % 10),
+                        with.c_str(),
                         status_name(result.status),
                         v.message.c_str(),
                         oracle::to_code(c).c_str());
@@ -544,10 +671,11 @@ int main(int argc, char** argv)
       ++failures;
       ++tally[v.message.substr(0, 48)];
       if (failures <= 6) {
-        std::printf("FAIL profile %s seed %llu variant %llu: %s\n%s\n",
+        std::printf("FAIL profile %s seed %llu variant %llu%s: %s\n%s\n",
                     profile.name,
                     (unsigned long long)seed,
                     (unsigned long long)(seed % 10),
+                    with.c_str(),
                     v.message.c_str(),
                     failures <= 2 ? oracle::to_code(c).c_str() : "");
       }
@@ -630,6 +758,20 @@ int main(int argc, char** argv)
     (long long)snapshot_tested,
     (long long)snapshot_untested,
     (long long)limited_results);
+  if (switches) {
+    // Per other value: models with it alone, of them those whose result differs from the
+    // result without it, and models with it among several drawn values.
+    std::printf(
+      "switches models %lld differ %lld |", (long long)switch_models, (long long)switch_differ);
+    for (int32_t k = 0; k < switch_count; ++k) {
+      std::printf(" %s %lld %lld %lld",
+                  switch_values[k].name,
+                  (long long)switch_alone[k],
+                  (long long)switch_changed[k],
+                  (long long)switch_combined[k]);
+    }
+    std::printf("\n");
+  }
   for (const auto& t : parts) {
     std::printf("  part %lld x%s\n", (long long)t.second, t.first.c_str());
   }

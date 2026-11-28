@@ -634,15 +634,23 @@ MUTANTS = {
     # check; the oracle.
     "zs_cost": (
         "rules_singleton_cols.cpp",
-        "    if (st.is_integer(s.col) || st.cost[s.col] != 0.) { continue; }",
-        "    if (st.is_integer(s.col)) { continue; }",
+        "    if (st.cost[s.col] != 0.) {\n"
+        "      c.count(column_count::zero_cost_small_cost,\n"
+        "              std::fabs(st.cost[s.col]) <= small_cost && "
+        "!st.is_integer(s.col));\n"
+        "      continue;\n"
+        "    }\n",
+        "",
     ),
     # An integer column is taken. The stack part of the structure check;
     # the oracle.
     "zs_int": (
         "rules_singleton_cols.cpp",
-        "    if (st.is_integer(s.col) || st.cost[s.col] != 0.) { continue; }",
-        "    if (st.cost[s.col] != 0.) { continue; }",
+        "    if (st.is_integer(s.col)) {\n"
+        "      ++integers;\n"
+        "      continue;\n"
+        "    }\n",
+        "",
     ),
     # The undo leaves the columns at prefer whatever the row needs.
     # Requirement 3 of the crush check; the oracle.
@@ -735,12 +743,12 @@ MUTANTS = {
     "fs_band": [
         (
             "rules_singleton_cols.cpp",
-            "<= upper + implied_tolerance(c.tol, upper))) {",
+            "<= upper + implied_band(c, upper))) {",
             "<= upper + 1e-3)) {",
         ),
         (
             "rules_singleton_cols.cpp",
-            ">= lower - implied_tolerance(c.tol, lower))) {",
+            ">= lower - implied_band(c, lower))) {",
             ">= lower - 1e-3)) {",
         ),
     ],
@@ -912,8 +920,10 @@ MUTANTS = {
     "zs_guard": (
         "rules_singleton_cols.cpp",
         "      (new_upper < inf && !free_side_readable(c.tol, new_upper)) "
-        "||\n      !free_side_readable(c.tol, free_lower) || "
-        "!free_side_readable(c.tol, free_upper)) {",
+        "||\n      (free_lower > -inf && "
+        "!free_side_readable(c.tol, free_lower)) ||\n"
+        "      (free_upper < inf && "
+        "!free_side_readable(c.tol, free_upper))) {",
         "      (new_upper < inf && !free_side_readable(c.tol, new_upper))) {",
     ),
     "fc_guard": (
@@ -964,6 +974,144 @@ MUTANTS = {
         "rules_singleton_cols.cpp",
         "    if (!usable) { c.w.unreadable[row] = 1; }\n",
         "",
+    ),
+    # The choices of the singleton-column rules (sw_*; options_t from
+    # dual_integer_pivots on; tests/test_columns_switches.cpp). The campaign
+    # reaches them with --switches.
+    # dual_integer_pivots off is ignored: an integer column leaves on an
+    # inequality all the same (switches_dual_integer_pivots).
+    "sw_dual_integer": (
+        "rules_singleton_cols.cpp",
+        "    if (!c.opt.dual_integer_pivots && st.is_integer(s.col)) "
+        "{ return false; }\n",
+        "",
+    ),
+    # With primal_projections the dual pivot runs in primal-only mode as
+    # well. The stack part of the structure check (a dual record and dual
+    # findings in a primal-only result); the oracle's crush test.
+    "sw_primal_dual": (
+        "rules_singleton_cols.cpp",
+        "  if (scanned.free_entries >= 2 && sub_rule_active(c.opt, sub)) {",
+        "  if (scanned.free_entries >= 2 &&\n"
+        "      (sub_rule_active(c.opt, sub) ||\n"
+        "       (c.opt.primal_projections && c.opt.sub_enabled[sub]))) {",
+    ),
+    # growth_ratio continuous_columns reads the integer columns
+    # (switches_growth_ratio_of_a_continuous_column).
+    "sw_growth_continuous": (
+        "rules_singleton_cols.cpp",
+        "    if (!st.is_live(col) || st.is_integer(col)) { continue; }\n"
+        "    largest = ",
+        "    if (!st.is_live(col) || !st.is_integer(col)) { continue; }\n"
+        "    largest = ",
+    ),
+    # growth_ratio integer_pivot_exempt exempts the continuous pivot columns
+    # (switches_growth_ratio_of_a_continuous_column and _of_an_integer_column).
+    "sw_integer_exempt": (
+        "rules_singleton_cols.cpp",
+        "growth_ratio_t::integer_pivot_exempt && st.is_integer(s.col)) {",
+        "growth_ratio_t::integer_pivot_exempt && !st.is_integer(s.col)) {",
+    ),
+    # The undo of an interval record takes an infinite lower side as one
+    # that the row misses: the columns go to the bounds that raise the row.
+    # The oracle (a postsolved point outside the upper side) and the
+    # postsolve part of the structure check, with zero_cost_one_sided.
+    "sw_one_sided_undo": (
+        "postsolve.cpp",
+        "  double below = row.lower == -inf ? -inf : "
+        "dd_residual(row.lower, activity);",
+        "  double below = row.lower == -inf ? inf : "
+        "dd_residual(row.lower, activity);",
+    ),
+    # A row whose columns all leave (zero_cost_whole_row) is deleted whatever
+    # its new sides say, so the row rules never test them
+    # (switches_zero_cost_whole_row); the snapshot of the structure check
+    # and the oracle where the sides exclude the fixed terms.
+    "sw_whole_row": (
+        "rules_singleton_cols.cpp",
+        "  bool row_stays  = new_lower > -inf || new_upper < inf;\n"
+        "  int64_t entries = scanned.free_entries - taken;\n",
+        "  int64_t entries = scanned.free_entries - taken;\n"
+        "  bool row_stays  = (new_lower > -inf || new_upper < inf) && "
+        "entries > 0;\n",
+    ),
+    # singleton_order largest_pivot tries the smallest coefficient first
+    # (switches_order_largest_pivot).
+    "sw_largest_pivot": (
+        "rules_singleton_cols.cpp",
+        "    return std::fabs(singles[a].a) > std::fabs(singles[b].a);",
+        "    return std::fabs(singles[a].a) < std::fabs(singles[b].a);",
+    ),
+    # singleton_order zero_cost_first goes on with the pivot after the
+    # zero-cost columns left, on the scan of the row as it was. An assertion
+    # of the state; the oracle and the structure check.
+    "sw_order_stale": (
+        "rules_singleton_cols.cpp",
+        "  if (c.opt.singleton_order == singleton_order_t::zero_cost_first "
+        "&& projects && sided &&\n"
+        "      zero_cost(c, row, scanned)) {\n"
+        "    return;\n"
+        "  }\n",
+        "  if (c.opt.singleton_order == singleton_order_t::zero_cost_first "
+        "&& projects && sided) {\n"
+        "    zero_cost(c, row, scanned);\n"
+        "  }\n",
+    ),
+    # singleton_order single_pass drops what its pass listed: the presolve
+    # ends as a fixed point with reductions left. The second presolve of the
+    # campaign (switches_order_single_pass).
+    "sw_single_lost": (
+        "rules_singleton_cols.cpp",
+        "    if (opt.singleton_order == singleton_order_t::single_pass && "
+        "c.reductions > 0) { break; }\n",
+        "    if (opt.singleton_order == singleton_order_t::single_pass && "
+        "c.reductions > 0) {\n"
+        "      st.col_frontier.take(col_list::singleton_cols, w.cols);\n"
+        "      st.row_frontier.take(row_list::singleton_cols, w.rows);\n"
+        "      break;\n"
+        "    }\n",
+    ),
+    # interval_start middle is the sum of the bounds and not their midpoint:
+    # a start value outside the bounds. The stack part of the structure
+    # check; the oracle.
+    "sw_start_outside": (
+        "rules_singleton_cols.cpp",
+        ": 0.5 * lower + 0.5 * upper;",
+        ": lower + upper;",
+    ),
+    # interval_order descending moves a column with the coefficient of the
+    # column at its place in the ascending order. The oracle and the
+    # postsolve part of the structure check.
+    "sw_descending_coefficient": (
+        "postsolve.cpp",
+        "    double a              = ps.record_coefficients[r.coefficients + "
+        "(k - r.cols_begin)];",
+        "    double a              = ps.record_coefficients[r.coefficients + "
+        "(n - r.cols_begin)];",
+    ),
+    # The band of an integer forcing column is counted in thousandths and
+    # not in rounding units: the value is rounded out of its row. The oracle
+    # and the postsolve part of the structure check.
+    "sw_band_units": (
+        "postsolve.cpp",
+        "          ps.forcing_rounding_units * rounding_unit * "
+        "(std::fabs(side) + size) / std::fabs(a);",
+        "          ps.forcing_rounding_units * 1e-3 * "
+        "(std::fabs(side) + size) / std::fabs(a);",
+    ),
+    # The side guard of the family reads every side, whatever
+    # side_guard_scale is (switches_side_guard_scale and the tests of
+    # fs_guard, zs_guard and fc_guard).
+    "sw_guard_scale": (
+        "rules_singleton_cols.cpp",
+        "  tol.side_error   = opt.tol.side_error / opt.side_guard_scale;",
+        "  tol.side_error   = 0.;",
+    ),
+    # singleton_cols_early is ignored (switches_singleton_cols_early).
+    "sw_early": (
+        "presolve.cpp",
+        "      bool early = opt.singleton_cols_early;",
+        "      bool early = false;",
     ),
 }
 

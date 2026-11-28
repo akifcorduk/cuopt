@@ -84,7 +84,8 @@ struct saved_row_t {
 // what the row gives it at the values of the saved entries. The pivot row of a free singleton
 // column, which left the model; with `dual` it was an inequality, tight at that side by the
 // cost of the column.
-// interval: one saved row with two finite sides and one or more continuous columns with zero
+// interval: one saved row with two finite sides (one at least with
+// options_t::zero_cost_one_sided) and one or more continuous columns with zero
 // cost, in increasing index: the row stays in the model without them, its sides widened by the
 // ranges of their terms, and they take values inside their bounds with which the saved row
 // holds.
@@ -97,7 +98,9 @@ enum class col_from_rows_kind_t : uint8_t { defined, interval, forcing };
 
 // A column that a col_from_rows record removes, with its explicit bounds at the push.
 // prefer is the value an interval column starts from: its lower bound if finite, else its upper
-// bound if finite, else 0; the same value for a forcing column, which does not read it.
+// bound if finite, else 0; the same value for a forcing column, which does not read it. The
+// engine writes another finite value inside the bounds of an interval column with
+// options_t::interval_start; the undo reads the value and not how it was chosen.
 struct record_col_t {
   int32_t col;
   double lower;
@@ -120,12 +123,13 @@ struct record_col_t {
 //   the record) / coefficient, kept between prefer and the bound. Above its upper side the
 //   mirror. The value is the quotient and not prefer plus a step, which loses the digits that
 //   prefer is larger by. The columns stay inside their bounds, and the row holds when the rest
-//   lies inside the widened sides.
+//   lies inside the widened sides. With postsolve_t::interval_descending the columns are moved
+//   in the reverse order of the record. An infinite side of the saved row asks for nothing.
 // forcing: the column free to go down gets min(upper, the smallest of (side - rest) /
 //   coefficient over its rows), rounded down for an integer column; the column free to go up
 //   max(lower, the largest of them), rounded up. A value of a row that lies within the rounding
-//   of its computation of an integer (a few rounding units of the side and the terms of the
-//   rest, over the coefficient) is that integer.
+//   of its computation of an integer (postsolve_t::forcing_rounding_units rounding units of
+//   the side and the terms of the rest, over the coefficient) is that integer.
 struct col_from_rows_record_t {
   col_from_rows_kind_t kind;
   bool dual;
@@ -165,7 +169,20 @@ struct postsolve_t {
   // 1 once a fixed_col, alias or col_from_rows record has removed the column.
   std::vector<uint8_t> col_removed;
 
-  // Empties the stack and takes sizes and column types from the original model.
+  // How the undo chooses among the values that the saved rows of a col_from_rows record leave
+  // its columns. The presolve writes them from options_t::interval_order and
+  // options_t::forcing_rounding_units; a point that is restored with other values of them is as
+  // feasible. They are no part of postsolve_hash.
+  // The columns of an interval record are moved in the reverse order of the record.
+  bool interval_descending = false;
+  // The value that a row leaves an integer forcing column is rounded into the row, and one
+  // that lies within this many rounding units of the terms it was computed from of an integer
+  // counts as that integer: 9 - 3 * (7 / 3) is 1.9999999999999996 and stands for 2. With 0 the
+  // value hangs on the last bit of a sum, which another summation order gives otherwise.
+  double forcing_rounding_units = 8.;
+
+  // Empties the stack, takes sizes and column types from the original model and sets the two
+  // choices of the undo to their defaults.
   void init(const model_t& original);
 
   // The type of a column at a position of the stack (before record `position` of order; at
@@ -198,7 +215,8 @@ struct postsolve_t {
   // The three kinds of col_from_rows. Each removes its columns. The saved rows are the last
   // ones written to saved_entries (save_row, src/saved_row.hpp), in the order given, and name
   // columns that no record has removed and none of the record's own. Coefficients are finite
-  // and not zero, bounds satisfy lower <= upper and prefer is as record_col_t says.
+  // and not zero, bounds satisfy lower <= upper and prefer is as record_col_t says (for an
+  // interval column a finite value inside its bounds).
   // O(entries of the saved rows) in a build with assertions, else O(columns and rows of the
   // record).
   // defined: the saved row is an equation with a finite side; an integer column has integer
@@ -206,7 +224,7 @@ struct postsolve_t {
   void push_defined_col(
     int32_t col, double coefficient, double lower, double upper, const saved_row_t& row, bool dual);
   // interval: the columns are continuous and in increasing index, cols[k] with coefficients[k];
-  // the sides of the saved row are finite with lower <= upper.
+  // the saved row has lower <= upper and a finite side.
   void push_interval_cols(const std::vector<record_col_t>& cols,
                           const std::vector<double>& coefficients,
                           const saved_row_t& row);

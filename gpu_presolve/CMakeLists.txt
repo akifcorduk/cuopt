@@ -59,5 +59,15 @@ add_executable(gprs_fuzz tools/gprs_fuzz.cpp tests/oracle.cpp)
 target_compile_options(gprs_fuzz PRIVATE ${GPRS_WARNINGS})
 target_link_libraries(gprs_fuzz PRIVATE gprs_host)
 
+# The numbers of a reduced model (analysis/quality_compare.py).
+add_executable(gprs_quality tools/gprs_quality.cpp)
+target_compile_options(gprs_quality PRIVATE ${GPRS_WARNINGS})
+target_link_libraries(gprs_quality PRIVATE gprs_host)
+
+# What a presolve result holds, model by model, to compare two builds (tools/run_ident.sh).
+add_executable(gprs_ident tools/gprs_ident.cpp tests/oracle.cpp)
+target_compile_options(gprs_ident PRIVATE ${GPRS_WARNINGS})
+target_link_libraries(gprs_ident PRIVATE gprs_host)
+
 enable_testing()
 add_test(NAME gprs_tests COMMAND gprs_tests)

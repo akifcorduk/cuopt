@@ -26,6 +26,9 @@ that is killed or ends with an error leaves no summary of other results.
 With --require-points an instance that has a solution, according to the
 testbed, and no usable point is a failure: without a solver its check is
 the presolve status and the structure check alone.
+
+--tool-arg passes one more argument to the tool, for example a flag of
+tools/option_flags.hpp (--tool-arg=--primal-projections).
 """
 
 import argparse
@@ -70,6 +73,7 @@ def parse_args():
     parser.add_argument(
         "--testbed", default=str(PROJECT_DIR / "testbed" / "testbed.json")
     )
+    parser.add_argument("--tool-arg", action="append", default=[])
     args = parser.parse_args()
     if args.make_solutions and not args.solutions_dir:
         parser.error("--make-solutions needs a --solutions-dir")
@@ -177,6 +181,7 @@ def command_of(args, entry, out, dump):
     ]
     if args.primal_only:
         command.append("--primal-only")
+    command += args.tool_arg
     arguments, error = known(entry, args.stats_dir)
     if error:
         return command, error

@@ -69,6 +69,56 @@ const char* rule_name(int32_t rule);
 // always: every pair whose merged values leave no hole, as a general integer column.
 enum class merge_integers_t : uint8_t { never, range_kept, always };
 
+// The choices of the singleton-column rules (rules.hpp (h)) that have more than one right form.
+// The first value of each is what (h) describes; next to every other value stands why a result
+// with it is right.
+
+// What the growth ratio of a free singleton column reads (options_t::pivot_growth_limit).
+// all_columns: the largest coefficient among the other free entries of the pivot row.
+// continuous_columns: the largest among those in continuous columns. The limit bounds what a
+// restored value can multiply a deviation of the reduced point by, and an integer column
+// brings none: the postsolve rounds it to an integer, which lies inside its integral bounds
+// when the reduced point is within the tolerance. An integer pivot column has integer columns
+// only next to it, so its ratio is 0.
+// integer_pivot_exempt: all_columns for a continuous pivot column, no limit for an integer
+// one, for the same reason: its row holds integer columns only and its own value is rounded.
+// The factor that a substitution gives the columns of its saved row is that of (h) in every
+// form, and column_stats_t::max_growth is taken over the ratios that the form read.
+enum class growth_ratio_t : uint8_t { all_columns, continuous_columns, integer_pivot_exempt };
+
+// The order in which the singleton-column rules take what several of their reductions could
+// take. Every reduction is tested on the state as it is when it is applied, so each order
+// gives a right result; the reduced models differ.
+// smallest_index: (h). In a visit the free singleton column with the smallest index that
+// passes, else the zero-cost singleton columns; a call serves its lists until they stay empty.
+// largest_pivot: the singleton columns of the row are tried by decreasing absolute coefficient,
+// which is the smallest growth ratio first, equal ones by increasing index.
+// zero_cost_first: the zero-cost singleton columns of the row leave first. When they did, the
+// visit ends (the row is listed again by its own change and visited in the next pass);
+// otherwise it goes on with the free singleton column.
+// single_pass: smallest_index, but a call ends after the first pass over its lists that makes a
+// reduction. What the reductions of that pass list waits for the call of the next round: a
+// chain advances by one link per round, and a presolve that max_rounds ends with a list left
+// is no fixed point.
+enum class singleton_order_t : uint8_t {
+  smallest_index,
+  largest_pivot,
+  zero_cost_first,
+  single_pass
+};
+
+// The value at which the undo of an interval record starts a column (record_col_t::prefer).
+// Every value inside the bounds is right: the undo moves the columns from there until the row
+// holds, and reaches every value that their bounds allow.
+// lower: the lower bound if finite, else the upper bound, else 0. upper: the upper bound if
+// finite, else the lower bound, else 0. nearest_zero: the point of the bounds nearest to 0.
+// middle: the midpoint of two finite bounds, else the finite bound, else 0.
+enum class interval_start_t : uint8_t { lower, upper, nearest_zero, middle };
+
+// The order in which the undo of an interval record moves its columns: by increasing index
+// (the order of the record) or by decreasing index. Either fills what the row misses.
+enum class interval_order_t : uint8_t { ascending, descending };
+
 template <size_t n>
 inline std::array<bool, n> all_on()
 {
@@ -165,17 +215,117 @@ struct options_t {
 
   // Record a hash of state and postsolve stack after every phase in result_t::phase_hash.
   bool phase_hashes = false;
+
+  // The choices of the singleton-column rules, rules.hpp (h). Each default is the rule as (h)
+  // describes it.
+
+  // free_singleton_dual takes integer columns under the integrality conditions of (h). Off: it
+  // takes continuous columns only, which leaves reductions undone and is right for that reason
+  // alone. It is what HiGHS does with the one sign that this rule reads, that of the cost of
+  // the pivot column: HiGHS takes no sign of a row dual from an integer singleton column, and
+  // substitutes an integer column only on an equation or with a sign from another column.
+  bool dual_integer_pivots = true;
+
+  // zero_cost_singleton and forcing_column are tried in primal-only mode as well
+  // (sub_rule_active). Both are exact projections of the feasible set onto the columns that
+  // stay: the rows that the reduced model has in place of theirs are what those columns must
+  // meet for values of the removed columns to exist, and the removed columns cost nothing. So
+  // primal-only mode keeps what primal_only promises: every feasible point crushes, by
+  // dropping the columns, to a feasible point of the reduced model with the same objective
+  // value, and result_t::dual_findings is 0. What the two read of a cost and of the locks is
+  // no optimality argument: the cost must be exactly zero, so that a dropped column leaves the
+  // objective as it is, and the lock counts of a forcing column say only that each of its rows
+  // has one finite side and holds the column from the same end. What the mode loses with it:
+  // crush is no longer one to one. Several feasible points have one image, the postsolve gives
+  // back one of them, and the columns of interval and forcing records (and those restored from
+  // them) can differ from the point that was crushed. A reader of a primal-only stack then has
+  // to know these two record kinds.
+  bool primal_projections = false;
+
+  growth_ratio_t growth_ratio = growth_ratio_t::all_columns;
+
+  // zero_cost_singleton also visits a row with one finite side. The projection is the same
+  // with one side: for L <= a * x + g, the values g of the other entries for which a value of
+  // x inside its bounds exists are those with L - (largest a * x) <= g, and nothing else is
+  // asked of g; the infinite side stays infinite. The interval record then has a saved row
+  // with one finite side.
+  bool zero_cost_one_sided = false;
+
+  // zero_cost_singleton also takes the columns of a row all of whose free entries are such
+  // columns. The row is left without a free entry and with the sides that the terms of its
+  // fixed columns must meet for values of the removed columns to exist: the row rules delete
+  // it or report infeasible, which is then the truth about the model.
+  bool zero_cost_whole_row = false;
+
+  singleton_order_t singleton_order = singleton_order_t::smallest_index;
+
+  interval_start_t interval_start = interval_start_t::lower;
+  interval_order_t interval_order = interval_order_t::ascending;
+
+  // The undo of a forcing record takes the value that a row leaves an integer column as an
+  // integer when it lies within this many rounding units, of the side and of the terms it was
+  // computed from, of one (postsolve_t::forcing_rounding_units). With 0 the value is rounded
+  // into the row as it was computed, which is always inside the row and can be one unit short
+  // of what the exact value allows. A larger band can take the value past its row by that many
+  // rounding units of the terms; it must satisfy
+  // forcing_rounding_units * rounding_unit <= tol.side_error, the relative rounding that a
+  // readable side may carry.
+  double forcing_rounding_units = 8.;
+
+  // Factor on the band within which the pivot row of a free singleton column implies a bound
+  // of the column (implied_tolerance, src/implied.hpp). The restored value can pass the bound
+  // by the band, so the factor must keep the band within the feasibility tolerance:
+  // 2 * implied_band_scale * tol.activity_error_share <= 1 (at most 5 with the defaults). It is
+  // at least 1: the band is what two candidates of one bound can differ by, and a narrower one
+  // would let a bound that is the candidate of the row itself fail the test in one presolve
+  // and pass it in the next.
+  double implied_band_scale = 1.;
+
+  // Factor on the size of a side that the singleton-column rules read: they take a side, a
+  // side less the fixed terms, a new side and the term of a zero-cost column at a bound up to
+  // side_guard_scale * tol.feasibility / tol.side_error in absolute value. The guard keeps the
+  // rounding of the operations on such a side below the tolerance; with the factor, a rounding
+  // unit of the largest side read is side_guard_scale * tol.feasibility * rounding_unit /
+  // tol.side_error (1.1e-8 at 1 with the defaults), and it must leave room for eight of them:
+  // 8 * side_guard_scale * rounding_unit <= tol.side_error (at most 11 with the defaults).
+  // Without the guard a side that holds an absorbed term of 1e20 would be read as if it still
+  // held its own value. It has a smallest value as well: the terms of fixed columns leave a row
+  // without an event when the sides and the terms are at most 1e5
+  // (state_t::absorb_fixed_terms), so a side of that size must be readable with and without
+  // them, or the reduced model of a fixed point would not be one:
+  // side_guard_scale * tol.feasibility >= 1e5 * tol.side_error (at least 1e-3 with the
+  // defaults).
+  double side_guard_scale = 1.;
+
+  // The singleton columns are the first phase after the cascade, before the parallel rows and
+  // the doubleton equations, and not the phase after simple probing. The same reductions on
+  // another state; the entries of result_t::phase_hash follow the phases as they run.
+  bool singleton_cols_early = false;
 };
+
+// The ranges that the contracts of forcing_rounding_units, implied_band_scale and
+// side_guard_scale name. presolve() and the singleton-column rules require them.
+inline bool choices_in_range(const options_t& opt)
+{
+  return opt.forcing_rounding_units >= 0. &&
+         opt.forcing_rounding_units * rounding_unit <= opt.tol.side_error &&
+         opt.implied_band_scale >= 1. &&
+         2. * opt.implied_band_scale * opt.tol.activity_error_share <= 1. &&
+         opt.side_guard_scale * opt.tol.feasibility >= 1e5 * opt.tol.side_error &&
+         8. * opt.side_guard_scale * rounding_unit <= opt.tol.side_error;
+}
 
 // A reduction of the column rules is tried when its switch is on and, in primal-only mode, when
 // it keeps every feasible point with its objective value: free_singleton and parallel_merge.
 // zero_cost_singleton and forcing_column are exact projections of the feasible set that the
 // plan counts among the dual rules; they are off in that mode like the four that rest on a lock
-// or cost argument.
+// or cost argument, unless opt.primal_projections switches them on there.
 inline bool sub_rule_active(const options_t& opt, int32_t sub)
 {
-  bool primal = sub == sub_rule::free_singleton || sub == sub_rule::parallel_merge;
-  return opt.sub_enabled[sub] && (primal || !opt.primal_only);
+  bool primal     = sub == sub_rule::free_singleton || sub == sub_rule::parallel_merge;
+  bool projection = sub == sub_rule::zero_cost_singleton || sub == sub_rule::forcing_column;
+  return opt.sub_enabled[sub] &&
+         (primal || !opt.primal_only || (projection && opt.primal_projections));
 }
 
 // reduced, unchanged, reduced_to_empty and limit carry a valid reduced model and postsolve stack.
@@ -273,7 +423,8 @@ struct result_t {
 // max_cascade_passes is reached; (2) parallel rows on the state the cascade leaves; (3) doubleton
 // equations; (4) the column rules, each as a phase of its own: simple probing, singleton
 // columns, dual columns, parallel columns (rules.hpp, (g) to (j)). They come after the row
-// phases, so that the first round does on the input model what it did without them.
+// phases, so that the first round does on the input model what it did without them. With
+// opt.singleton_cols_early the singleton columns are the phase between (1) and (2) instead.
 // Rounds repeat until one changes nothing or max_rounds is reached. Between phases
 // the state compacts sparse lines and rebuilds by the two fractions above; it rebuilds only
 // when every row can take the terms of its fixed columns (state_t::fixed_terms_absorbable), so

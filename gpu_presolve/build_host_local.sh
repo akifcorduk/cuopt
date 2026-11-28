@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Builds libgprs_host.a, gprs_tests, gprs_presolve and gprs_fuzz with the system compiler, without CMake,
+# Builds libgprs_host.a, gprs_tests and the tools of tools/*.cpp (gprs_presolve, gprs_fuzz,
+# gprs_quality, gprs_ident) with the system compiler, without CMake,
 # once with assertions (-DGPRS_ASSERT=1) and once without, and runs the tests of both builds.
 #
 #   ./build_host_local.sh [test name filter]
@@ -55,7 +56,11 @@ build() {
   "$cxx" "${flags[@]}" "$dir/obj/tools_gprs_presolve.o" "$dir/libgprs_host.a" -o "$dir/gprs_presolve"
   "$cxx" "${flags[@]}" "$dir/obj/tools_gprs_fuzz.o" "$dir/obj/tests_oracle.o" "$dir/libgprs_host.a" \
     -o "$dir/gprs_fuzz"
-  echo "== $name: built $dir/libgprs_host.a, gprs_tests, gprs_presolve, gprs_fuzz"
+  "$cxx" "${flags[@]}" "$dir/obj/tools_gprs_quality.o" "$dir/libgprs_host.a" -o "$dir/gprs_quality"
+  "$cxx" "${flags[@]}" "$dir/obj/tools_gprs_ident.o" "$dir/obj/tests_oracle.o" "$dir/libgprs_host.a" \
+    -o "$dir/gprs_ident"
+  echo "== $name: built $dir/libgprs_host.a, gprs_tests, gprs_presolve, gprs_fuzz, gprs_quality," \
+    "gprs_ident"
   if [[ -n "$filter" ]]; then
     "$dir/gprs_tests" "$filter"
   else

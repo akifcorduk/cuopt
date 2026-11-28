@@ -59,7 +59,11 @@ bool from_rows_consistent(const postsolve_t& ps,
   }
   for (int32_t k = r.cols_begin; k < r.cols_end; ++k) {
     const record_col_t& c = ps.record_cols[k];
-    if (!(c.lower <= c.upper) || c.prefer != preferred(c.lower, c.upper)) { return false; }
+    if (!(c.lower <= c.upper)) { return false; }
+    if (interval ? !(std::isfinite(c.prefer) && c.lower <= c.prefer && c.prefer <= c.upper)
+                 : c.prefer != preferred(c.lower, c.upper)) {
+      return false;
+    }
     if (interval && ps.integer_at(c.col, position)) { return false; }
     if (k > r.cols_begin && ps.record_cols[k - 1].col >= c.col) { return false; }
   }
@@ -74,7 +78,7 @@ bool from_rows_consistent(const postsolve_t& ps,
       return false;
     }
     if (defined && !(row.lower == row.upper && std::isfinite(row.upper))) { return false; }
-    if (interval && !(std::isfinite(row.lower) && std::isfinite(row.upper))) { return false; }
+    if (interval && !(std::isfinite(row.lower) || std::isfinite(row.upper))) { return false; }
     if (forcing) {
       double a   = ps.record_coefficients[r.coefficients + (k - r.rows_begin)];
       bool upper = from_above == (a > 0);
@@ -231,12 +235,6 @@ dd_t rest_of(const postsolve_t& ps, const saved_row_t& row, const std::vector<do
   return rest_of(ps, row, x, size);
 }
 
-// The value that a row leaves an integer forcing column is rounded into the row, and one that
-// lies within this many rounding units of the terms it was computed from of an integer counts
-// as that integer: 9 - 3 * (7 / 3) is 1.9999999999999996 and stands for 2. Without it the
-// value would hang on the last bit of a sum, which another summation order gives otherwise.
-constexpr double forcing_rounding_units = 8.;
-
 // The columns of an interval record at prefer, then moved until the row is inside its sides or
 // every column that can help is at its bound. The column that ends between prefer and its bound
 // gets (side - the other terms) / a and not prefer plus a step: a step from a prefer of 1e9
@@ -250,13 +248,14 @@ void undo_interval(const postsolve_t& ps, const col_from_rows_record_t& r, std::
     x[c.col]              = c.prefer;
     dd_add_product(activity, ps.record_coefficients[r.coefficients + (k - r.cols_begin)], c.prefer);
   }
-  double below = dd_residual(row.lower, activity);
-  double above = -dd_residual(row.upper, activity);
+  double below = row.lower == -inf ? -inf : dd_residual(row.lower, activity);
+  double above = row.upper == inf ? -inf : -dd_residual(row.upper, activity);
   if (!(below > 0) && !(above > 0)) { return; }
   bool raise  = below > 0;
   double side = raise ? row.lower : row.upper;
   double need = raise ? below : above;
-  for (int32_t k = r.cols_begin; k < r.cols_end && need > 0; ++k) {
+  for (int32_t n = r.cols_begin; n < r.cols_end && need > 0; ++n) {
+    int32_t k             = ps.interval_descending ? r.cols_begin + (r.cols_end - 1 - n) : n;
     const record_col_t& c = ps.record_cols[k];
     double a              = ps.record_coefficients[r.coefficients + (k - r.cols_begin)];
     bool up               = (a > 0) == raise;
@@ -302,8 +301,9 @@ void undo_from_rows(const postsolve_t& ps,
       double size;
       double limit = dd_residual(side, rest_of(ps, row, x, size)) / a;
       if (from_above ? limit < value : limit > value) {
-        value    = limit;
-        rounding = forcing_rounding_units * rounding_unit * (std::fabs(side) + size) / std::fabs(a);
+        value = limit;
+        rounding =
+          ps.forcing_rounding_units * rounding_unit * (std::fabs(side) + size) / std::fabs(a);
       }
     }
     if (ps.integer_at(c.col, position)) {
@@ -355,6 +355,8 @@ void postsolve_t::init(const model_t& original)
   record_coefficients.clear();
   saved_entries = row_pool_t();
   col_removed.assign(ncols, 0);
+  interval_descending    = false;
+  forcing_rounding_units = 8.;
 }
 
 void postsolve_t::push_fixed_col(int32_t col, double value)

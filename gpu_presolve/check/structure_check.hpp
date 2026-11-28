@@ -35,7 +35,10 @@
 //              whatever the other columns are, which is all that such a record claims.
 //              A result of primal-only mode has no dual finding (result_t::dual_findings), no
 //              alias of origin lock, no defined record with the dual flag and no interval or
-//              forcing record.
+//              forcing record; with options_t::primal_projections it may have interval and
+//              forcing records, which are projections and no dual reductions. The saved row
+//              of an interval record has two finite sides; with
+//              options_t::zero_cost_one_sided it may have one.
 //   types      A column that is integer in the original model is integer in the reduced model.
 //   The check variables are the reduced columns and, each with the bounds of its record as its
 //   box, the columns of the col_from_rows records: their values at a postsolved point are not
@@ -137,10 +140,18 @@
 //              of its kind (postsolve.hpp), at these points of the reduced model: every column
 //              at its lower bound, at its upper bound and between them, and for up to
 //              max_replay_points interval records a point at which the undo has to move the
-//              record's columns. At each of them every saved row of a defined or a forcing
-//              record holds at the postsolved point, that of an interval record where the rest
-//              of the row lies inside the sides of its snapshot, and the columns of interval
-//              and forcing records are inside their bounds.
+//              record's columns. The second computation follows the two choices that the
+//              stack carries for its undo (postsolve_t::interval_descending,
+//              forcing_rounding_units). The value of an integer forcing column is a rounded
+//              sum, and the two computations sum in another order. With the band of 8 rounding
+//              units, which is also what the two sums can differ by, they must agree. With
+//              another band of the stack they can give neighbouring integers: where they do
+//              and the sum lies within forcing_rounding (or that band, if wider) of the
+//              integer between them, the value of postsolve() stands, and the rows and the
+//              bounds are tested with it. At each of the points every saved row of a defined
+//              or a forcing record holds at the postsolved point, that of an interval record
+//              where the rest of the row lies inside the sides of its snapshot, and the
+//              columns of interval and forcing records are inside their bounds.
 //
 // Why bounds, rows, kept_rows, added_rows and columns hold, in both modes. No rule relaxes a
 // bound of a column that stays, and the bounds of a substituted column are transferred to its
@@ -243,9 +254,19 @@ constexpr double underflow_size = std::numeric_limits<double>::min();
 constexpr double integral_ratio = 1e-7;
 // Interval records that get a point of their own in the postsolve part.
 constexpr size_t max_replay_points = 8;
-// The value that a row leaves an integer forcing column counts as an integer when it lies
-// within this share of the terms it is computed from of one (postsolve.hpp).
+// What the value that a row leaves an integer forcing column can differ by between two
+// summations, as a share of the terms it is computed from. The band of the undo itself is
+// postsolve_t::forcing_rounding_units, 8 rounding units as well by default.
 constexpr double forcing_rounding = 8 * 0x1p-53;
+
+// The larger absolute value of the finite sides of an anchor; 0 without one.
+inline double side_size(double low, double high)
+{
+  double size = 0.;
+  if (std::isfinite(low)) { size = std::fabs(low); }
+  if (std::isfinite(high)) { size = std::fmax(size, std::fabs(high)); }
+  return size;
+}
 
 // x[original column] = scale * v[root] + offset over the check variables; root -1 for a
 // constant.
@@ -397,9 +418,14 @@ inline bool forcing_from_above(const gprs::postsolve_t& ps, const gprs::col_from
 
 // Tests the contract of the stack, for a result of the given mode, and composes its records. On
 // a broken contract `error` says which part, with the index of the record or column.
+// `projections`: a result of primal-only mode may hold interval and forcing records
+// (options_t::primal_projections). `one_sided`: the saved row of an interval record may have
+// one finite side (options_t::zero_cost_one_sided).
 inline bool compose_records(const gprs::model_t& model,
                             const gprs::result_t& result,
                             bool primal_only,
+                            bool projections,
+                            bool one_sided,
                             system_t& sys,
                             std::string& error)
 {
@@ -528,7 +554,7 @@ inline bool compose_records(const gprs::model_t& model,
         return fail("kind or counts of col_from_rows record", k);
       }
       if (primal_only && r.dual) { return fail("dual record in a primal-only result at", k); }
-      if (primal_only && !defined) {
+      if (primal_only && !defined && !projections) {
         return fail("interval or forcing record in a primal-only result at", k);
       }
       for (int64_t n = 0; n < count; ++n) {
@@ -541,7 +567,9 @@ inline bool compose_records(const gprs::model_t& model,
             (n > r.cols_begin && ps.record_cols[n - 1].col >= c.col)) {
           return fail("column of col_from_rows record", k);
         }
-        if (!(c.lower <= c.upper) || std::isnan(c.prefer)) {
+        if (!(c.lower <= c.upper) || std::isnan(c.prefer) ||
+            (interval &&
+             !(std::isfinite(c.prefer) && c.lower <= c.prefer && c.prefer <= c.upper))) {
           return fail("bounds of col_from_rows record", k);
         }
         if (interval && ps.integer_at(c.col, k)) {
@@ -567,7 +595,8 @@ inline bool compose_records(const gprs::model_t& model,
         if (defined && !(row.lower == row.upper && std::isfinite(row.upper))) {
           return fail("side of defined record", k);
         }
-        if (interval && !(std::isfinite(row.lower) && std::isfinite(row.upper))) {
+        if (interval && !(one_sided ? std::isfinite(row.lower) || std::isfinite(row.upper)
+                                    : std::isfinite(row.lower) && std::isfinite(row.upper))) {
           return fail("sides of interval record", k);
         }
         if (forcing) {
@@ -1544,8 +1573,7 @@ inline void columns_check(const gprs::result_t& result,
         continue;
       }
       proof_rows(sys, ps, sys.row[anchor], sys.position[n], with);
-      double size =
-        std::fmax(1., std::fmax(std::fabs(sys.low[anchor]), std::fabs(sys.high[anchor])));
+      double size   = std::fmax(1., side_size(sys.low[anchor], sys.high[anchor]));
       proof_t proof = prover.prove(lower, upper, sum_t(), size, with);
       if (!proof.tested) {
         ++s.snapshot_untested;
@@ -1733,10 +1761,14 @@ inline double anchor_rest(const system_t& sys,
   return rest.value();
 }
 
+// `engine` is the point that postsolve() gave for `point`, or null: an integer forcing column
+// whose value hangs on the last bit of its sum takes the value of the engine (the postsolve
+// part at the head of this file).
 inline void replay(const gprs::result_t& result,
                    const system_t& sys,
                    const std::vector<double>& point,
-                   replay_t& at)
+                   replay_t& at,
+                   const std::vector<double>* engine = nullptr)
 {
   const gprs::postsolve_t& ps = result.postsolve;
   at.value.assign(sys.nvars(), 0.);
@@ -1758,7 +1790,7 @@ inline void replay(const gprs::result_t& result,
       at.value[own]  = ps.integer_at(col.col, sys.position[n]) ? std::round(value) : value;
       at.size[own]   = std::fmax(std::fabs(at.value[own]), largest / std::fabs(a));
     } else if (r.kind == gprs::col_from_rows_kind_t::interval) {
-      double largest = std::fmax(std::fabs(sys.low[anchor]), std::fabs(sys.high[anchor]));
+      double largest = side_size(sys.low[anchor], sys.high[anchor]);
       double rest    = anchor_rest(sys, at, anchor, own, ncols, largest);
       sum_t activity;
       activity.add(rest, 1.);
@@ -1774,7 +1806,8 @@ inline void replay(const gprs::result_t& result,
       bool raise   = below > 0;
       double side  = raise ? sys.low[anchor] : sys.high[anchor];
       double need  = raise ? below : above;
-      for (int32_t c = 0; c < ncols && need > 0; ++c) {
+      for (int32_t k = 0; k < ncols && need > 0; ++k) {
+        int32_t c                       = ps.interval_descending ? ncols - 1 - k : k;
         const gprs::record_col_t& taken = ps.record_cols[r.cols_begin + c];
         double a                        = ps.record_coefficients[r.coefficients + c];
         bool up                         = (a > 0) == raise;
@@ -1801,8 +1834,9 @@ inline void replay(const gprs::result_t& result,
       bool from_above = forcing_from_above(ps, r);
       double value    = from_above ? col.upper : col.lower;
       double size     = 0.;
-      // What the value of the row that gives it can be off by; none for the bound.
-      double rounding = 0.;
+      // What the value of the row that gives it can be off by; none for the bound. `rounding`
+      // is the band of the undo, `band` what two summations can differ by.
+      double rounding = 0., band = 0.;
       for (int32_t j = 0; j < r.rows_end - r.rows_begin; ++j) {
         double a       = ps.record_coefficients[r.coefficients + j];
         double side    = from_above == (a > 0) ? sys.high[anchor + j] : sys.low[anchor + j];
@@ -1815,11 +1849,21 @@ inline void replay(const gprs::result_t& result,
             if (sys.var[e] != own) { terms += std::fabs(sys.value[e] * at.value[sys.var[e]]); }
           }
           value    = limit;
-          rounding = forcing_rounding * terms / std::fabs(a);
+          rounding = ps.forcing_rounding_units * 0x1p-53 * terms / std::fabs(a);
+          // The two computations take the terms of the band from other sums as well.
+          band = std::fmax(forcing_rounding * terms / std::fabs(a), rounding);
         }
       }
       if (ps.integer_at(col.col, sys.position[n])) {
-        value = from_above ? std::floor(value + rounding) : std::ceil(value - rounding);
+        double sum    = from_above ? value + rounding : value - rounding;
+        value         = from_above ? std::floor(sum) : std::ceil(sum);
+        bool own_band = ps.forcing_rounding_units * 0x1p-53 == forcing_rounding;
+        if (engine && !own_band && std::fabs((*engine)[col.col] - value) == 1.) {
+          // The integer at which the rounding of the sum turns from one value to the other.
+          double other = (*engine)[col.col];
+          double turn  = from_above ? std::fmax(value, other) : std::fmin(value, other);
+          if (std::fabs(sum - turn) <= band) { value = other; }
+        }
       }
       at.value[own] = value;
       at.size[own]  = std::fmax(std::fabs(value), size);
@@ -1838,7 +1882,7 @@ inline void postsolve_at(const gprs::model_t& model,
 {
   const gprs::postsolve_t& ps = result.postsolve;
   ps.postsolve(point, z);
-  replay(result, sys, point, at);
+  replay(result, sys, point, at, &z);
   auto failure = [&](double scaled, int32_t col) {
     if (!(scaled <= s.postsolve_worst)) { s.postsolve_worst_col = col; }
     raise_to(s.postsolve_worst, scaled);
@@ -1961,9 +2005,9 @@ inline void postsolve_check(const gprs::model_t& model,
     double up          = range.most_infinite ? gprs::inf : range.most.value() - preferred;
     double down        = range.least_infinite ? gprs::inf : preferred - range.least.value();
     double target;
-    if (up > 0) {
+    if (up > 0 && std::isfinite(sys.low[anchor])) {
       target = sys.low[anchor] - preferred - (std::isfinite(up) ? 0.5 * up : 1.);
-    } else if (down > 0) {
+    } else if (down > 0 && std::isfinite(sys.high[anchor])) {
       target = sys.high[anchor] - preferred + (std::isfinite(down) ? 0.5 * down : 1.);
     } else {
       continue;
@@ -1982,15 +2026,20 @@ inline void postsolve_check(const gprs::model_t& model,
   }
 }
 
-// The check of one result of a presolve in the given mode (options_t::primal_only).
+// The check of one result of a presolve in the given mode (options_t::primal_only);
+// `projections` and `one_sided` as in compose_records.
 inline structure_report_t structure_check(const gprs::model_t& model,
                                           const gprs::result_t& result,
-                                          bool primal_only)
+                                          bool primal_only,
+                                          bool projections = false,
+                                          bool one_sided   = false)
 {
   structure_report_t s;
   s.ran = true;
   system_t sys;
-  if (!compose_records(model, result, primal_only, sys, s.stack_error)) { return s; }
+  if (!compose_records(model, result, primal_only, projections, one_sided, sys, s.stack_error)) {
+    return s;
+  }
   s.composed                   = true;
   const gprs::postsolve_t& ps  = result.postsolve;
   const gprs::model_t& reduced = result.reduced;
@@ -2071,6 +2120,15 @@ inline structure_report_t structure_check(const gprs::model_t& model,
 
   postsolve_check(model, result, sys, s);
   return s;
+}
+
+// The check of a result of presolve(model, options).
+inline structure_report_t structure_check(const gprs::model_t& model,
+                                          const gprs::result_t& result,
+                                          const gprs::options_t& options)
+{
+  return structure_check(
+    model, result, options.primal_only, options.primal_projections, options.zero_cost_one_sided);
 }
 
 }  // namespace gprs_check
