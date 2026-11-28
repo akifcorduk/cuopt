@@ -3415,3 +3415,39 @@ None since Entry 51.
   values that do change something. A summary row needs a check against every row it stands
   for.
 
+
+## Entry 57 — 2026-11-28 — The switches on the node: identical at the defaults, time unchanged; a campaign with random option values started on slot b
+
+### The owner's messages (verbatim)
+
+None since Entry 51.
+
+### The node chain (tag `s1c_m1sw`, commit `5611b07df`, base `s1c_m1`, node ipp2-0043, 74 minutes)
+
+- Identity at the defaults against the engine before: 240 of 240 benchmark instances, 31 of
+  31 and 9 of 9 testbed instances equal in status, sizes, hash and every count.
+- Assertion build: clean on the 240, the 31 and the 4 status instances.
+- Structure and crush check: clean on the 240, the 31, the 3 status instances and 8 of the 9
+  large instances (hawaiiv10-130 has no usable stored point, as in every chain so far). The
+  check with a solver: clean on the 31.
+- Time, three alternating passes: +0.06% on the 240 (19.508 to 19.521 s), +0.04% on the
+  testbed below 1e7 nonzeros (4.987 to 4.989 s), +0.34% on the 9 above (87.886 to 88.183 s).
+  The counters cost the singleton family +0.024 s on the 240 and +0.199 s on the nine.
+- Results committed and pushed: `d0b01d5e8` on `feat/gpu-presolve`.
+
+### Started
+
+- The cuOpt adapter and the device state build against this engine
+  (`cuopt_runs/build_against_engine.sh s1c_m1sw`, slot a).
+- A campaign with the option drawing on slot b (`node_campaign.sh s1c_m1sw sw1
+  2000000000000 100000000 24 --switches`): 1.2 billion models per kind in the release
+  build and 0.6 billion in the assertion build, as for `big1`. Reason: the campaigns of the
+  switches' authors had about 100 million models, and the last node campaign showed that a
+  class of one failure in 300 million exists.
+
+### State of the other work (16:40)
+
+- M2 workflow: integration of simple probing running; then the attack on the parallel-row
+  repair, the triage, the merge.
+- GPU plan: with the owner (Entry 55); no answer yet.
+- Register: at Entry 54 plus the campaign (Entry 56); this entry and Entry 55 are not in it.
