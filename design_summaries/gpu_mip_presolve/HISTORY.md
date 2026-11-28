@@ -3161,3 +3161,84 @@ state 2 without implementing a complete GPU acceleration for stage 1."
 - A design with a prototype beats a design with better rules on paper: the only measured
   reductions of the round came from 700 patch lines, and the validity critic could break
   and repair it because it ran.
+
+## Entry 54 — 2026-11-28 — The switches of the singleton-column rules are built, reviewed, verified on the Mac and merged; the node chain for them is running
+
+### The owner's messages (verbatim)
+
+None since Entry 51.
+
+### What returned
+
+- Workflow `wf_e509c798-6d7` (implementer, then an adversarial reviewer; 4.3 hours). Reports:
+  `stage1c_reports/m1_switches/impl_switches.json` and `attack_switches.json`.
+- The implementer took over the first agent's cut work, reran everything and gave every
+  listed choice of the singleton-column rules an engine option whose default is the rule as
+  it was (12 options, 21 other values), the review counters as engine statistics, the review
+  tools in the repository and one stored run per value on the 240 local dumps.
+- The reviewer's verdict: merge, but with two repairs on top.
+  - `forcing_rounding_units` above 8 gives a wrong result (model k + y <= 1e8: the row is
+    missed by 1.05e-6 at 64 units); the range is now 0 to 8.
+  - `implied_band_scale` above 1 gives a wrong result (chain model: a postsolved point
+    9.5e-4 outside a bound); the option is removed.
+  - The range test of the options refused the defaults next to non-default tolerances in an
+    assertion build; repaired.
+- Left: 11 options with 17 other values. 502 tests, 119 wrong engines apply.
+
+### Findings that are not about the switches
+
+- The base engine at the defaults: on the reviewer's chain model (x + 1000 y + w = 500,
+  y + 0.5 z + 0.5 v = 1, y in [1.5e-7, 1]) the only reduced point postsolves to x = 500,
+  1.5e-4 above its bound. It is the implied-bound band (AS-088) times the growth limit
+  (AS-094), which the M1 validity review listed as remaining by design. No check of the
+  project sees it. Not repaired; a repair changes results at the defaults.
+- The structure check cannot see a forcing band that is too wide (silent at 64 and 90 units).
+- A claim in AS-339 and AS-027 is wrong: the lead on roi5alpha10n8 over the HiGHS reference
+  does not come from integer pivot columns; those are on exactly 10 instances.
+- One campaign failure of the implementer (seed 5100094942) could not be reproduced in five
+  reruns, two of them built to expose uninitialised reads.
+
+### The table for the owner's decisions (240 benchmark instances as local dumps on the Mac; default size over size with the other value, nonzeros / rows / columns, 237 instances)
+
+| Choice (entry) | Other value | Effect |
+|---|---|---|
+| Integer pivot columns on an inequality (AS-339) | off, as HiGHS | 0.9998 / 0.9996 / 0.9994; 10 instances larger, 8 of them then equal to the HiGHS reference |
+| The two projections in primal-only mode (AS-004) | on | 1.0017 / 1.0005 / 1.0073 in that mode; 22 instances smaller, none larger |
+| Growth ratio (AS-318) | continuous columns only | 1.0003 / 1.0005 / 1.0003; 6 instances smaller |
+| Growth ratio (AS-318) | integer pivots exempt | 1.0002 / 1.0004 / 1.0001; 5 instances smaller |
+| Growth limit (AS-094) | 2000 | 1.0003 / 1.0004 / 1.0004; 7 instances smaller |
+| Growth limit (AS-094) | none | 1.0005 / 1.0007 / 1.0007; 9 instances smaller |
+| Zero-cost singleton on one-sided rows (AS-028) | on | default mode: no change; primal-only with projections 1.0004 / 1.0005 / 1.0008, 12 instances |
+| Order, undo start and order, forcing band, side guard, phase place | all values | no reduced model changes in size (the early phase changes 10 hashes at equal size) |
+
+Not built, with the reason: the test of the bound ahead only (not valid, model in the
+header), integer columns in the zero-cost singleton rule (not valid as the rule stands;
+50,771 such columns stand in integral rows on 23 instances), bounds implied by other rows
+(a new mechanism).
+
+### What I did
+
+- Built the reviewed commit `f05d48e31` from a clean export: 502 tests pass in both builds.
+- 240 local dumps: at the defaults equal to the stored run of the engine before, 240 of 240
+  in default and in primal-only mode; three option values reproduce the stored runs.
+- Campaign slice with the option drawing: 21.6 million release and 9.0 million assertion
+  models over the three kinds, no failure. (My first loop passed no profile option and ran
+  the plain kind three times; rerun.)
+- Pushed `f05d48e31` as the work branch `stage1c-m1-switches`. Cherry-picked the four commits
+  onto `feat/gpu-presolve` in a temporary worktree: `5611b07df`, pushed. The engine sources
+  of the merged tree equal the reviewed ones. The main worktree is not moved to it yet: the
+  verifiers of the GPU plan read the code there.
+- Node chain on slot a: tag `s1c_m1sw`, base `s1c_m1` (identity at the defaults, assertion
+  build, checks, time).
+- Register: a writer and a critic are bringing it up to the switches and the campaign
+  (workflow `wf_25ad2527-9f3`).
+
+### Lessons
+
+- A job detached as the last command of a `cuopt exec` can be lost without a trace; the same
+  command followed by a short sleep starts. I also typed a commit hash from memory once.
+  Both are now a note in my memory: sleep after the start, confirm the start line, take the
+  hash from git.
+- "Every other value of an option is valid" needs an attack of its own: the implementer's
+  campaign drew the two wrong values 8 million times without a failure, because the
+  generator cannot reach the models that break them.
