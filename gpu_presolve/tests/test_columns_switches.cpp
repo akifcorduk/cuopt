@@ -523,6 +523,41 @@ GPRS_TEST(switches_interval_start_and_order)
   GPRS_CHECK_EQ(open.ps.record_cols[0].prefer, 0.);
 }
 
+// s + 2 t + 2 y + 3 z in [4, 9] with s in [0, 1] and t in [0, 3], so that each column moves
+// with a coefficient of its own. At y = z = 0 the row misses 4: in ascending order s gives 1
+// and t the rest, in descending order t gives all of it. At y = z = 1, from the upper bounds,
+// the row is 3 above its side: s gives 1 and t the rest, or t all of it.
+GPRS_TEST(switches_interval_order_with_two_coefficients)
+{
+  std::vector<row_t> rows = {{{{0, 1.}, {1, 2.}, {2, 2.}, {3, 3.}}, 4., 9.},
+                             {{{2, 1.}, {3, 1.}}, -inf, 2.},
+                             {{{2, 1.}, {3, -1.}}, -1., inf}};
+  std::vector<col_t> cols = {{0., 1., false}, {0., 3., false}, unit, unit};
+  call_t low(cols, rows);
+  low.run();
+  GPRS_CHECK_EQ(low.result.sub_findings[sub_rule::zero_cost_singleton], 2);
+  std::vector<double> x = low.postsolved({{2, 0.}, {3, 0.}});
+  GPRS_CHECK_EQ(x[0], 1.);
+  GPRS_CHECK_EQ(x[1], 1.5);
+  low.ps.interval_descending = true;
+  x                          = low.postsolved({{2, 0.}, {3, 0.}});
+  GPRS_CHECK_EQ(x[0], 0.);
+  GPRS_CHECK_EQ(x[1], 2.);
+  GPRS_CHECK(silent(low.structure()));
+
+  call_t high(cols, rows);
+  high.opt.interval_start = interval_start_t::upper;
+  high.run();
+  x = high.postsolved({{2, 1.}, {3, 1.}});
+  GPRS_CHECK_EQ(x[0], 0.);
+  GPRS_CHECK_EQ(x[1], 2.);
+  high.ps.interval_descending = true;
+  x                           = high.postsolved({{2, 1.}, {3, 1.}});
+  GPRS_CHECK_EQ(x[0], 1.);
+  GPRS_CHECK_EQ(x[1], 1.5);
+  GPRS_CHECK(silent(high.structure()));
+}
+
 // The presolve writes the two choices of the undo to the stack.
 GPRS_TEST(switches_undo_choices_reach_the_stack)
 {
