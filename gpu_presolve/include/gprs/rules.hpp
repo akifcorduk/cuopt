@@ -113,7 +113,8 @@ struct rule_result_t {
   // when a bound of a continuous column has had its steps (see (b)); the parallel rows, when
   // they leave a pair alone only because the presolve has changed one of its rows, end the
   // comparisons of a row on opt.parallel_bucket_limit with rows of its bucket left, or leave a
-  // merge to the bounds of the columns or to a fixed term of the kept row (see (e));
+  // merge or a subtraction to the bounds of the columns, or a merge to a fixed term of the kept
+  // row (see (e));
   // the singleton columns, when only the growth factor of earlier substitutions keeps a free
   // singleton column in the model or opt.saved_row_factor the zero-cost singleton columns of a
   // row (see (h)).
@@ -369,9 +370,13 @@ struct doubleton_t {
 // read); when g_E > 1 and the presolve has changed the equation, or g_T > 1 and it has changed
 // the target (row_version != 0): such a row holds the rounding of those changes, which keeps
 // the tolerance in that row only (a side that was scaled next to a fixed term of 1e7 is off by
-// 1e-9), and no limit on a size bounds it; or when max |a| / min |a| over the free entries of
-// the target would end above 1e6 and above its value before. That last test and the step read
-// the target once more and spend its used slots.
+// 1e-9), and no limit on a size bounds it; when the two cores are parallel within tol.zero and
+// not exactly and the target differs from f times the equation by more than
+// opt.parallel_drift_share of the feasibility tolerance over the explicit bounds of the core
+// columns, measured as for a merge (above), which the call reports as limited, since a bound
+// can move without an event of the two rows; or when max |a| / min |a| over the free entries
+// of the target would end above 1e6 and above its value before. That last test and the step
+// read the target once more and spend its used slots.
 // Every test but the one on row_version reads the two rows as they are, so the pair is tested
 // again when it can end otherwise: a change of an entry, of a side or of the core lists the
 // row, and with g_E and g_T at most 1000 the terms of fixed columns that leave a row without

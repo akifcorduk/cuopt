@@ -568,7 +568,17 @@ enum class subtraction_t : uint8_t {
   left,
   // Nothing changed, for the one reason that the presolve has changed a row whose error the
   // step would multiply: a presolve that is given these rows as its model makes the step.
-  left_to_a_changed_row
+  left_to_a_changed_row,
+  // Nothing changed, because the two cores are no exact multiples and differ by too much over
+  // the bounds of their columns, which can move without an event of the two rows.
+  left_to_the_bounds
+};
+
+// The cores of a pair as compare() left them, for core_drift.
+struct cores_t {
+  const std::vector<double>& scattered;
+  int32_t other;
+  bool identical;
 };
 
 // target -= factor * equation with factor * core of equation = core of target: the core
@@ -579,14 +589,19 @@ enum class subtraction_t : uint8_t {
 // error of the target.
 // Nothing is changed when a value involved is too large to hold the tolerance where the step
 // takes it, or the step would multiply the error of a row by more than max_growth or that of a
-// row that the presolve has changed.
+// row that the presolve has changed, or the two cores are no exact multiples and the target
+// differs from factor times the equation by more than drift_limit over the bounds of the core
+// columns (core_drift).
 subtraction_t subtract(state_t& st,
                        postsolve_t& ps,
                        const tolerances_t& tol,
                        work_budget_t& budget,
                        const near_row_t& equation,
                        const near_row_t& target,
-                       std::vector<int64_t>& slots)
+                       std::vector<int64_t>& slots,
+                       const cores_t& cores,
+                       bool equation_is_scattered,
+                       double drift_limit)
 {
   constexpr subtraction_t left = subtraction_t::left;
   gprs_assert(may_subtract(st, equation, target));
@@ -627,6 +642,15 @@ subtraction_t subtract(state_t& st,
   }
   double value = equation.singles == 1 ? -factor * equation.single_value : 0.;
   if (equation.singles == 1 && (!std::isfinite(value) || value == 0.)) { return left; }
+  // The target is the equation times the factor only as far as the two cores are multiples of
+  // each other: what the target differs by over the bounds of the core columns, in its own
+  // units, has the limit that it has for a merge.
+  if (!cores.identical) {
+    budget.spend(csr.used[cores.other]);
+    double drift = core_drift(
+      st, cores.scattered, cores.other, equation_is_scattered, equation.first, target.first);
+    if (!(drift <= drift_limit)) { return subtraction_t::left_to_the_bounds; }
+  }
   // An error of unknown size must not grow: the row has to be as the model gave it. The one
   // test that reads what the presolve has done and not the rows as they are; it comes after
   // those that the same two rows fail as the model of another presolve.
@@ -1011,9 +1035,18 @@ rule_result_t parallel_rows_t::run(state_t& st,
                                            (s.self.singles == other.singles && row < other.row));
       const near_row_t& equation = mine_is_equation ? s.self : other;
       const near_row_t& target   = mine_is_equation ? other : s.self;
-      subtraction_t step         = subtract(st, ps, tol, budget, equation, target, w.slots);
+      subtraction_t step         = subtract(st,
+                                    ps,
+                                    tol,
+                                    budget,
+                                    equation,
+                                    target,
+                                    w.slots,
+                                    cores_t{w.coefficient, other.row, c.identical},
+                                    mine_is_equation,
+                                    opt.parallel_drift_share * tol.feasibility);
       if (step != subtraction_t::made) {
-        result.limited = result.limited || step == subtraction_t::left_to_a_changed_row;
+        result.limited = result.limited || step != subtraction_t::left;
         return false;
       }
       w.drop(target.row);
