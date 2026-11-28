@@ -6,7 +6,7 @@
 /* clang-format on */
 
 // gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] [--profile <name>]
-//           [--switches]
+//           [--switches] [--pin <value>]
 // Long random runs of the engine, for every rule change (tools/run_campaign.sh splits one run
 // over processes). For each seed and each generator profile: one generated model, the presolve
 // with options chosen by the seed, and three verdicts.
@@ -53,6 +53,8 @@
 // of the reduced model. The line "switches" lists, per other value, the models that ran with
 // it alone and those among them whose result it changed, and the models that ran with it
 // next to other drawn values.
+// --pin <value> gives every seed that one other value (a name of the line "switches") and
+// draws nothing: the run of one value on every model, compared with the defaults as above.
 // The profiles are those of tests/test_e2e_presolve.cpp and four more.
 // Exit code 1 when the oracle, the second presolve or the structure check failed on any model.
 
@@ -343,9 +345,6 @@ const switch_value_t switch_values[] = {
   {"interval_order_descending",
    [](options_t& o) { o.interval_order = interval_order_t::descending; }},
   {"forcing_rounding_units_0", [](options_t& o) { o.forcing_rounding_units = 0.; }},
-  {"forcing_rounding_units_64", [](options_t& o) { o.forcing_rounding_units = 64.; }},
-  {"implied_band_scale_2", [](options_t& o) { o.implied_band_scale = 2.; }},
-  {"implied_band_scale_5", [](options_t& o) { o.implied_band_scale = 5.; }},
   // The generator has no side beyond 1e8: a small guard is one that its sides can reach, next
   // to the term of a column that was fixed at a huge bound.
   {"side_guard_scale_0.01", [](options_t& o) { o.side_guard_scale = 0.01; }},
@@ -431,7 +430,7 @@ int main(int argc, char** argv)
   if (argc < 3) {
     std::fprintf(stderr,
                  "usage: gprs_fuzz <first seed> <seeds per profile> [--singletons] [--columns] "
-                 "[--profile <name>] [--switches]\n");
+                 "[--profile <name>] [--switches] [--pin <value>]\n");
     return 2;
   }
   uint64_t first   = std::strtoull(argv[1], nullptr, 10);
@@ -439,12 +438,24 @@ int main(int argc, char** argv)
   bool singletons  = false;
   bool columns     = false;
   bool switches    = false;
+  int32_t pin      = -1;
   const char* only = nullptr;
   for (int i = 3; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--singletons")) { singletons = true; }
     if (!std::strcmp(argv[i], "--columns")) { columns = true; }
     if (!std::strcmp(argv[i], "--switches")) { switches = true; }
     if (!std::strcmp(argv[i], "--profile") && i + 1 < argc) { only = argv[++i]; }
+    if (!std::strcmp(argv[i], "--pin") && i + 1 < argc) {
+      ++i;
+      for (int32_t k = 0; k < switch_count; ++k) {
+        if (!std::strcmp(argv[i], switch_values[k].name)) { pin = k; }
+      }
+      if (pin < 0) {
+        std::fprintf(stderr, "gprs_fuzz: %s is no value of --pin\n", argv[i]);
+        return 2;
+      }
+      switches = true;
+    }
   }
   std::map<std::string, int64_t> tally;
   int64_t models = 0, outside = 0, base_outside = 0, failures = 0, reduced = 0, mutated = 0;
@@ -498,7 +509,13 @@ int main(int argc, char** argv)
       options_t options = variant(seed);
       if (off >= 0) { options.enabled[off] = false; }
       options_t without = options;
-      if (switches) { draw_switches(seed, options, drawn); }
+      if (pin >= 0) {
+        drawn.assign(switch_count, 0);
+        drawn[pin] = 1;
+        switch_values[pin].set(options);
+      } else if (switches) {
+        draw_switches(seed, options, drawn);
+      }
       result_t result = presolve(c.model, options);
       // The drawn values, for the lines that report a failure.
       std::string with;

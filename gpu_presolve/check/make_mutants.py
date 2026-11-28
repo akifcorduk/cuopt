@@ -743,12 +743,12 @@ MUTANTS = {
     "fs_band": [
         (
             "rules_singleton_cols.cpp",
-            "<= upper + implied_band(c, upper))) {",
+            "<= upper + implied_tolerance(c.tol, upper))) {",
             "<= upper + 1e-3)) {",
         ),
         (
             "rules_singleton_cols.cpp",
-            ">= lower - implied_band(c, lower))) {",
+            ">= lower - implied_tolerance(c.tol, lower))) {",
             ">= lower - 1e-3)) {",
         ),
     ],
@@ -1113,6 +1113,69 @@ MUTANTS = {
         "      bool early = opt.singleton_cols_early;",
         "      bool early = false;",
     ),
+    # zero_cost_one_sided is ignored: a row with one finite side keeps its
+    # zero-cost singleton columns (switches_zero_cost_one_sided).
+    "sw_one_sided_off": (
+        "rules_singleton_cols.cpp",
+        "    c.opt.zero_cost_one_sided ? lower > -inf || upper < inf : "
+        "lower > -inf && upper < inf;",
+        "    lower > -inf && upper < inf;",
+    ),
+    # The saved row of an interval record gets an upper side of 0 where the
+    # row has none (zero_cost_one_sided): the undo moves the columns down
+    # to it. The oracle and the structure check;
+    # switches_zero_cost_one_sided_undo.
+    "sw_one_sided_saved": (
+        "rules_singleton_cols.cpp",
+        "  double free_upper = upper == inf ? inf : "
+        "dd_residual(upper, scanned.fixed_terms);",
+        "  double free_upper = upper == inf ? 0. : "
+        "dd_residual(upper, scanned.fixed_terms);",
+    ),
+    # singleton_order single_pass ends a call after any pass: a pass without
+    # a reduction that listed columns leaves them, and the presolve ends as
+    # a fixed point with a list (switches_order_single_pass_without_a_reduction).
+    "sw_single_any_pass": (
+        "rules_singleton_cols.cpp",
+        "    if (opt.singleton_order == singleton_order_t::single_pass && "
+        "c.reductions > 0) { break; }\n",
+        "    if (opt.singleton_order == singleton_order_t::single_pass) "
+        "{ break; }\n",
+    ),
+    # interval_start nearest_zero is 0 whatever the bounds are: a start
+    # value outside them. The stack part of the structure check; the
+    # assertion of the push; switches_interval_start_and_order.
+    "sw_start_zero": (
+        "rules_singleton_cols.cpp",
+        "    case interval_start_t::nearest_zero: "
+        "return lower > 0. ? lower : upper < 0. ? upper : 0.;",
+        "    case interval_start_t::nearest_zero: return 0.;",
+    ),
+    # interval_start upper is the upper bound also where it is infinite.
+    # The stack part of the structure check; the assertion of the push;
+    # switches_interval_start_and_order.
+    "sw_start_infinite": (
+        "rules_singleton_cols.cpp",
+        "    case interval_start_t::upper: "
+        "return upper < inf ? upper : lower > -inf ? lower : 0.;",
+        "    case interval_start_t::upper: return upper;",
+    ),
+    # The engine does not write the two choices of the undo to the stack
+    # (switches_undo_choices_reach_the_stack).
+    "sw_stack_choices": [
+        (
+            "presolve.cpp",
+            "  result.postsolve.interval_descending    = "
+            "options.interval_order == interval_order_t::descending;\n",
+            "",
+        ),
+        (
+            "presolve.cpp",
+            "  result.postsolve.forcing_rounding_units = "
+            "options.forcing_rounding_units;\n",
+            "",
+        ),
+    ],
 }
 
 

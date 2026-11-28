@@ -77,13 +77,19 @@ enum class merge_integers_t : uint8_t { never, range_kept, always };
 // all_columns: the largest coefficient among the other free entries of the pivot row.
 // continuous_columns: the largest among those in continuous columns. The limit bounds what a
 // restored value can multiply a deviation of the reduced point by, and an integer column
-// brings none: the postsolve rounds it to an integer, which lies inside its integral bounds
-// when the reduced point is within the tolerance. An integer pivot column has integer columns
-// only next to it, so its ratio is 0.
+// brings none, because every record gives an integer column an integer inside its bounds: the
+// postsolve rounds the integer columns of the reduced point, which then lie inside their
+// integral bounds when the point is within the tolerance; a fixed column has an integral
+// value; an alias between two integer columns has an integral scale and offset (the drift of
+// its row stays in the row); a defined and a forcing record round. An integer pivot column
+// has integer columns only next to it, so its ratio is 0.
 // integer_pivot_exempt: all_columns for a continuous pivot column, no limit for an integer
 // one, for the same reason: its row holds integer columns only and its own value is rounded.
 // The factor that a substitution gives the columns of its saved row is that of (h) in every
 // form, and column_stats_t::max_growth is taken over the ratios that the form read.
+// Neither form changes what the limit leaves open in every form: the band of the
+// implied-bound test is no deviation of the reduced point, and a column that passes its bound
+// by the band takes a column restored after it past its bound by the band times their ratio.
 enum class growth_ratio_t : uint8_t { all_columns, continuous_columns, integer_pivot_exempt };
 
 // The order in which the singleton-column rules take what several of their reductions could
@@ -223,7 +229,8 @@ struct options_t {
   // takes continuous columns only, which leaves reductions undone and is right for that reason
   // alone. It is what HiGHS does with the one sign that this rule reads, that of the cost of
   // the pivot column: HiGHS takes no sign of a row dual from an integer singleton column, and
-  // substitutes an integer column only on an equation or with a sign from another column.
+  // substitutes an integer column only on an equation or with a sign from another column, and
+  // then only when the column is implied integral (HPresolve.cpp, singletonCol).
   bool dual_integer_pivots = true;
 
   // zero_cost_singleton and forcing_column are tried in primal-only mode as well
@@ -266,20 +273,24 @@ struct options_t {
   // integer when it lies within this many rounding units, of the side and of the terms it was
   // computed from, of one (postsolve_t::forcing_rounding_units). With 0 the value is rounded
   // into the row as it was computed, which is always inside the row and can be one unit short
-  // of what the exact value allows. A larger band can take the value past its row by that many
-  // rounding units of the terms; it must satisfy
-  // forcing_rounding_units * rounding_unit <= tol.side_error, the relative rounding that a
-  // readable side may carry.
+  // of what the exact value allows. From 0 to 8: the band takes the value past its row by up
+  // to that many rounding units of the side and the terms, and a wider one than the 8 of the
+  // rule leaves the tolerance. k + y <= 1e8 with y = 49999999.00000105 leaves k the value
+  // 50000000.99999895; with 64 units that counts as 50000001, and the row is missed by
+  // 1.05e-6.
   double forcing_rounding_units = 8.;
 
-  // Factor on the band within which the pivot row of a free singleton column implies a bound
-  // of the column (implied_tolerance, src/implied.hpp). The restored value can pass the bound
-  // by the band, so the factor must keep the band within the feasibility tolerance:
-  // 2 * implied_band_scale * tol.activity_error_share <= 1 (at most 5 with the defaults). It is
-  // at least 1: the band is what two candidates of one bound can differ by, and a narrower one
-  // would let a bound that is the candidate of the row itself fail the test in one presolve
-  // and pass it in the next.
-  double implied_band_scale = 1.;
+  // The band within which the pivot row of a free singleton column implies a bound of the
+  // column (implied_tolerance, src/implied.hpp) has no option. A wider band is not right: the
+  // restored value passes its bound by the band, and a column restored after it by the band
+  // times their ratio, up to opt.pivot_growth_limit. x + 1000 y + w = 500 and
+  // y + 0.5 z + 0.5 v = 1 with y in [9.5e-7, 1], x in [-501, 499.99905], w in [0, 1] and
+  // binaries z, v: with five times the band both x and y leave, and z = v = 1 gives y = 0 and
+  // x = 500, which is 9.5e-4 above its bound. With the band of the rule y stays (the bound is
+  // not within 2e-7 of what the row gives), and the same chain is at most 2e-4. A narrower
+  // band would be right for every result and would break the fixed point: the band is what
+  // two candidates of one bound can differ by, and a bound that is the candidate of the row
+  // itself could fail the test in one presolve and pass it in the next.
 
   // Factor on the size of a side that the singleton-column rules read: they take a side, a
   // side less the fixed terms, a new side and the term of a zero-cost column at a bound up to
@@ -288,6 +299,10 @@ struct options_t {
   // unit of the largest side read is side_guard_scale * tol.feasibility * rounding_unit /
   // tol.side_error (1.1e-8 at 1 with the defaults), and it must leave room for eight of them:
   // 8 * side_guard_scale * rounding_unit <= tol.side_error (at most 11 with the defaults).
+  // Eight is the room for one record on a row. A factor above 1 loosens the guard in
+  // proportion: a row that the zero-cost singleton columns leave in several visits collects a
+  // rounding unit of its sides per visit, in every setting, and reaches the tolerance after
+  // 90 / side_guard_scale visits that all round the same way.
   // Without the guard a side that holds an absorbed term of 1e20 would be read as if it still
   // held its own value. It has a smallest value as well: the terms of fixed columns leave a row
   // without an event when the sides and the terms are at most 1e5
@@ -303,16 +318,16 @@ struct options_t {
   bool singleton_cols_early = false;
 };
 
-// The ranges that the contracts of forcing_rounding_units, implied_band_scale and
-// side_guard_scale name. presolve() and the singleton-column rules require them.
+// The ranges that the contracts of forcing_rounding_units and side_guard_scale name.
+// presolve() and the singleton-column rules require them. The defaults are in range with
+// every tolerance: a factor of 1 is the rule as it is, whatever tol.side_error and
+// tol.feasibility are.
 inline bool choices_in_range(const options_t& opt)
 {
-  return opt.forcing_rounding_units >= 0. &&
-         opt.forcing_rounding_units * rounding_unit <= opt.tol.side_error &&
-         opt.implied_band_scale >= 1. &&
-         2. * opt.implied_band_scale * opt.tol.activity_error_share <= 1. &&
-         opt.side_guard_scale * opt.tol.feasibility >= 1e5 * opt.tol.side_error &&
-         8. * opt.side_guard_scale * rounding_unit <= opt.tol.side_error;
+  return opt.forcing_rounding_units >= 0. && opt.forcing_rounding_units <= 8. &&
+         (opt.side_guard_scale == 1. ||
+          (opt.side_guard_scale * opt.tol.feasibility >= 1e5 * opt.tol.side_error &&
+           8. * opt.side_guard_scale * rounding_unit <= opt.tol.side_error));
 }
 
 // A reduction of the column rules is tried when its switch is on and, in primal-only mode, when

@@ -171,14 +171,16 @@ struct postsolve_t {
 
   // How the undo chooses among the values that the saved rows of a col_from_rows record leave
   // its columns. The presolve writes them from options_t::interval_order and
-  // options_t::forcing_rounding_units; a point that is restored with other values of them is as
-  // feasible. They are no part of postsolve_hash.
+  // options_t::forcing_rounding_units; a point that is restored with the other order, or with
+  // a band from 0 to 8, is as feasible. They are no part of postsolve_hash.
   // The columns of an interval record are moved in the reverse order of the record.
   bool interval_descending = false;
   // The value that a row leaves an integer forcing column is rounded into the row, and one
   // that lies within this many rounding units of the terms it was computed from of an integer
   // counts as that integer: 9 - 3 * (7 / 3) is 1.9999999999999996 and stands for 2. With 0 the
-  // value hangs on the last bit of a sum, which another summation order gives otherwise.
+  // value hangs on the last bit of a sum, which another summation order gives otherwise. A
+  // band above 8 takes the value past its row by more than the rounding of its computation
+  // (options_t::forcing_rounding_units has the model).
   double forcing_rounding_units = 8.;
 
   // Empties the stack, takes sizes and column types from the original model and sets the two

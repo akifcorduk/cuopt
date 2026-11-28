@@ -580,7 +580,7 @@ GPRS_TEST(switches_undo_choices_reach_the_stack)
 }
 
 // k + (7/3) y <= 9 with an integer k that is free to go down: at y = 3 the row leaves k the
-// value 1.9999999999999996, which the band takes as 2 and no band rounds down to 1. Both are
+// value 1.9999999999999996, which a band takes as 2 and no band rounds down to 1. Both are
 // values of the row, and the structure check follows either.
 GPRS_TEST(switches_forcing_rounding_units)
 {
@@ -596,35 +596,14 @@ GPRS_TEST(switches_forcing_rounding_units)
   c.ps.forcing_rounding_units = 0.;
   GPRS_CHECK_EQ(c.postsolved({{1, 3.}, {2, 2.}})[0], 1.);
   GPRS_CHECK(silent(c.structure()));
-  c.ps.forcing_rounding_units = 64.;
+  c.ps.forcing_rounding_units = 4.;
   GPRS_CHECK_EQ(c.postsolved({{1, 3.}, {2, 2.}})[0], 2.);
   GPRS_CHECK(silent(c.structure()));
   // A value that is no integer within any band is rounded into the row with each setting.
-  for (double units : {0., 8., 64.}) {
+  for (double units : {0., 4., 8.}) {
     c.ps.forcing_rounding_units = units;
     GPRS_CHECK_EQ(c.postsolved({{1, 1.5}, {2, 2.}})[0], 5.);
     GPRS_CHECK_EQ(c.postsolved({{1, 2.5}, {2, 2.}})[0], 3.);
-  }
-}
-
-// k + 2 y + 3 z = 6 gives k the range [1, 6]; an upper bound of 6 - 3e-7 is implied within
-// twice the band and not within the band.
-GPRS_TEST(switches_implied_band_scale)
-{
-  for (double scale : {1., 2., 5.}) {
-    call_t c({{1., 6. - 3e-7, false}, unit, unit}, rows_with(1., 6., 6.), {1., 0., 0.});
-    c.opt.implied_band_scale = scale;
-    c.run();
-    GPRS_CHECK_EQ(c.result.findings, scale > 1. ? 1 : 0);
-    GPRS_CHECK_EQ(counted(c, column_count::refused_bound), scale > 1. ? 0 : 1);
-    GPRS_CHECK(silent(c.structure()));
-  }
-  // 6 - 6e-7 is beyond twice the band and within five times.
-  for (double scale : {2., 5.}) {
-    call_t c({{1., 6. - 6e-7, false}, unit, unit}, rows_with(1., 6., 6.), {1., 0., 0.});
-    c.opt.implied_band_scale = scale;
-    c.run();
-    GPRS_CHECK_EQ(c.result.findings, scale > 2. ? 1 : 0);
   }
 }
 
@@ -667,21 +646,12 @@ GPRS_TEST(switches_ranges_of_the_choices)
 {
   options_t o;
   GPRS_CHECK(choices_in_range(o));
-  for (double units : {0., 64., 90.}) {
+  for (double units : {0., 4., 8.}) {
     o.forcing_rounding_units = units;
     GPRS_CHECK(choices_in_range(o));
   }
-  for (double units : {-1., 100., inf, std::nan("")}) {
+  for (double units : {-1., 8.5, 64., inf, std::nan("")}) {
     o.forcing_rounding_units = units;
-    GPRS_CHECK(!choices_in_range(o));
-  }
-  o = options_t();
-  for (double scale : {1., 2., 5.}) {
-    o.implied_band_scale = scale;
-    GPRS_CHECK(choices_in_range(o));
-  }
-  for (double scale : {0., 0.5, 5.5, 1000., std::nan("")}) {
-    o.implied_band_scale = scale;
     GPRS_CHECK(!choices_in_range(o));
   }
   o = options_t();

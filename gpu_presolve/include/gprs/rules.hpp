@@ -606,8 +606,8 @@ struct simple_probing_t {
 // stays), opt.singleton_order (the order of a visit, and one pass per call),
 // opt.interval_start (record_col_t::prefer of the columns of an interval record),
 // opt.interval_order and opt.forcing_rounding_units (which the engine writes to the stack for
-// the undo), opt.implied_band_scale (a factor on implied_tolerance in the test above),
-// opt.side_guard_scale (a factor on the size of a readable side in every test of the family).
+// the undo), opt.side_guard_scale (a factor on the size of a readable side in every test of
+// the family). The band of implied_tolerance has no option (presolve.hpp says why).
 // Every one of them is a function of the options, so none reports limited.
 // What the family counts of its visits and refusals: column_count::.
 struct singleton_cols_t {
