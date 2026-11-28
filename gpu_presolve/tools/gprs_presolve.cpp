@@ -7,7 +7,8 @@
 
 // gprs_presolve <model.csr> [--json <file>] [--primal-only] [--time-limit <seconds>]
 //               [--off <rule>]... [--exact-parallel-rows] [--pivot-growth-limit <x>]
-//               [--saved-row-factor <x>] [--integral-drift-share <x>]
+//               [--saved-row-factor <x>] [--integral-drift-share <x>] [--left]
+//               [the flags of option_flags.hpp]
 // Reads a GPRSCSR1 dump, runs the presolve, prints sizes before and after, seconds and the
 // determinism hash of the reduced model, and writes the same as JSON.
 // --off takes the name of a rule family (rule_name) or of a reduction of the column rules
@@ -16,7 +17,18 @@
 // (options_t::near_parallel_rows off).
 // --pivot-growth-limit, --saved-row-factor: the two limits of the singleton-column rules
 // (options_t). --integral-drift-share: tolerances_t::integral_drift_share.
+// The choices of the singleton-column rules have the flags of option_flags.hpp. The report
+// holds the options of the run ("options") and the counters of the singleton-column rules
+// ("column_counts", column_count:: in rules.hpp).
+// --left: what the singleton-column rules leave. The reduced model is presolved once more with
+// the same options and one round, in which the family is called once and serves every column:
+// "left" holds the counters of that call, so its refusals are the singleton columns of the
+// reduced model by the first test that keeps them, and "second" the status and the sizes of
+// that presolve. It runs after the report of the first presolve is complete and is not part
+// of its seconds.
 // Exit code 0 when the presolve ran, 1 when the dump cannot be read, 2 on a usage error.
+
+#include "option_flags.hpp"
 
 #include <gprs/io.hpp>
 #include <gprs/presolve.hpp>
@@ -46,10 +58,26 @@ void write_stats(FILE* out, const gprs::rule_stats_t& s)
                (long long)s.nnz_removed);
 }
 
+void write_counts(FILE* out, const gprs::column_stats_t& columns)
+{
+  std::fprintf(out, "{");
+  for (int32_t k = 0; k < gprs::column_count::count; ++k) {
+    std::fprintf(out,
+                 "%s\"%s\": %lld",
+                 k > 0 ? ", " : "",
+                 gprs::column_count_name(k),
+                 (long long)columns.counts[k]);
+  }
+  std::fprintf(out, "}");
+}
+
+// `again` is the presolve of the reduced model of --left, or null.
 void write_report(FILE* out,
                   const std::string& path,
                   const gprs::model_t& model,
-                  const gprs::result_t& result)
+                  const gprs::options_t& options,
+                  const gprs::result_t& result,
+                  const gprs::result_t* again)
 {
   std::string escaped;
   for (char c : path) {
@@ -111,6 +139,23 @@ void write_report(FILE* out,
                (long long)result.columns.saved_row_refused,
                result.columns.alias_depth,
                (long long)result.columns.free_singleton_rejected_explicit);
+  std::fprintf(out, "  \"options\": ");
+  gprs_tools::write_options(out, options);
+  std::fprintf(out, ",\n  \"column_counts\": ");
+  write_counts(out, result.columns);
+  std::fprintf(out, ",\n");
+  if (again) {
+    std::fprintf(out, "  \"left\": ");
+    write_counts(out, again->columns);
+    std::fprintf(out,
+                 ",\n  \"second\": {\"status\": \"%s\", \"rows\": %d, \"cols\": %d, "
+                 "\"nnz\": %lld, \"calls\": %lld},\n",
+                 gprs::status_name(again->status),
+                 again->reduced.nrows,
+                 again->reduced.ncols,
+                 (long long)again->reduced.nnz(),
+                 (long long)again->stats[gprs::rule::singleton_cols].calls);
+  }
   int64_t kinds[4] = {}, interval_columns = 0, forcing_rows = 0;
   for (const gprs::col_from_rows_record_t& r : result.postsolve.col_from_rows) {
     int32_t kind = r.kind == gprs::col_from_rows_kind_t::defined    ? (r.dual ? 1 : 0)
@@ -158,7 +203,8 @@ int usage()
                "usage: gprs_presolve <model.csr> [--json <file>] [--primal-only] "
                "[--time-limit <seconds>] [--off <rule>]... [--exact-parallel-rows] "
                "[--pivot-growth-limit <x>] [--saved-row-factor <x>] "
-               "[--integral-drift-share <x>]\n");
+               "[--integral-drift-share <x>] [--left] %s\n",
+               gprs_tools::switch_usage);
   return 2;
 }
 
@@ -168,9 +214,15 @@ int main(int argc, char** argv)
 {
   std::string path, json_path;
   gprs::options_t options;
+  bool left = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg == "--json" && i + 1 < argc) {
+    int taken       = gprs_tools::take_switch(argc, argv, i, options);
+    if (taken != 0) {
+      if (taken < 0) { return usage(); }
+    } else if (arg == "--left") {
+      left = true;
+    } else if (arg == "--json" && i + 1 < argc) {
       json_path = argv[++i];
     } else if (arg == "--primal-only") {
       options.primal_only = true;
@@ -216,7 +268,15 @@ int main(int argc, char** argv)
   }
 
   gprs::result_t result = gprs::presolve(model, options);
-  write_report(stdout, path, model, result);
+  gprs::result_t again;
+  left = left &&
+         (result.status == gprs::status_t::reduced || result.status == gprs::status_t::unchanged);
+  if (left) {
+    gprs::options_t one_round = options;
+    one_round.max_rounds      = 1;
+    again                     = gprs::presolve(result.reduced, one_round);
+  }
+  write_report(stdout, path, model, options, result, left ? &again : nullptr);
   if (!json_path.empty()) {
     std::string tmp = json_path + ".tmp";
     FILE* out       = std::fopen(tmp.c_str(), "w");
@@ -224,7 +284,7 @@ int main(int argc, char** argv)
       std::fprintf(stderr, "cannot open %s\n", tmp.c_str());
       return 1;
     }
-    write_report(out, path, model, result);
+    write_report(out, path, model, options, result, left ? &again : nullptr);
     if (std::fclose(out) != 0 || std::rename(tmp.c_str(), json_path.c_str()) != 0) {
       std::fprintf(stderr, "cannot write %s\n", json_path.c_str());
       return 1;

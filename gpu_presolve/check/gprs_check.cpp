@@ -10,7 +10,9 @@
 // gprs_check <model.csr> <out.json> [--solutions <file>]... [--lp-time-limit <s>]
 //            [--mip-time-limit <s>] [--known-objective <value>] [--known-is-bound]
 //            [--expect infeasible|unbounded] [--primal-only] [--threads <n>]
-//            [--cost-variants <n>] [--push-points <n>]
+//            [--cost-variants <n>] [--push-points <n>] [the flags of tools/option_flags.hpp]
+//   The flags of tools/option_flags.hpp set the choices of the singleton-column rules for every
+//   presolve of the run, in both modes and on the cost variants.
 //   Presolve status. A status without a reduced model fails when the instance has a known
 //     objective value or a usable point of a solution file; limit and failed always fail.
 //   Structure check (structure_check.hpp), in default and in primal-only mode: the postsolve
@@ -54,6 +56,8 @@
 #include "crush_check.hpp"
 #include "solution_file.hpp"
 #include "structure_check.hpp"
+
+#include "../tools/option_flags.hpp"
 
 #include <gprs/io.hpp>
 #include <gprs/presolve.hpp>
@@ -405,15 +409,17 @@ struct mode_report_t {
 
 mode_report_t solver_free_checks(const gprs::model_t& model,
                                  const gprs::result_t& result,
-                                 bool primal_only,
+                                 const gprs::options_t& options,
                                  const point_set_t& points)
 {
   mode_report_t r;
   r.status      = gprs::status_name(result.status);
   r.has_reduced = gprs_check::carries_model(result.status);
   r.hash        = result.hash;
-  if (r.has_reduced) { r.structure = gprs_check::structure_check(model, result, primal_only); }
-  if (!points.empty()) { r.crush = gprs_check::crush_check(model, result, primal_only, points); }
+  if (r.has_reduced) { r.structure = gprs_check::structure_check(model, result, options); }
+  if (!points.empty()) {
+    r.crush = gprs_check::crush_check(model, result, options.primal_only, points);
+  }
   return r;
 }
 
@@ -479,6 +485,7 @@ struct variant_report_t {
 
 // Structure and crush check of both modes on the cost variants.
 std::vector<variant_report_t> check_cost_variants(const gprs::model_t& model,
+                                                  const gprs::options_t& base,
                                                   const point_set_t& points,
                                                   int count)
 {
@@ -488,10 +495,10 @@ std::vector<variant_report_t> check_cost_variants(const gprs::model_t& model,
     report.number            = v + 1;
     gprs::model_t variant    = cost_variant(model, report.number);
     for (int mode = 0; mode < 2; ++mode) {
-      gprs::options_t options;
-      options.primal_only = mode == 1;
+      gprs::options_t options = base;
+      options.primal_only     = mode == 1;
       report.in_mode[mode] =
-        solver_free_checks(variant, gprs::presolve(variant, options), mode == 1, points);
+        solver_free_checks(variant, gprs::presolve(variant, options), options, points);
       std::vector<named_verdict_t> verdicts;
       mode_verdicts(report.in_mode[mode], mode == 1, verdicts);
       for (const named_verdict_t& check : verdicts) {
@@ -524,6 +531,8 @@ struct arguments_t {
   int max_points    = 20;
   int cost_variants = 0;
   int push_points   = 0;
+  // The choices of the singleton-column rules; the mode is primal_only above.
+  gprs::options_t options;
 };
 
 int usage()
@@ -532,9 +541,10 @@ int usage()
                "usage: gprs_check <model.csr> <out.json> [--solutions <file>]... "
                "[--lp-time-limit <s>] [--mip-time-limit <s>] [--known-objective <value>] "
                "[--known-is-bound] [--expect infeasible|unbounded] [--primal-only] "
-               "[--threads <n>] [--cost-variants <n>] [--push-points <n>]\n"
+               "[--threads <n>] [--cost-variants <n>] [--push-points <n>] %s\n"
                "       gprs_check --solve <model.csr> <solutions file> [--mip-time-limit <s>] "
-               "[--threads <n>] [--max-points <n>]\n");
+               "[--threads <n>] [--max-points <n>]\n",
+               gprs_tools::switch_usage);
   return 1;
 }
 
@@ -542,7 +552,10 @@ bool parse(int argc, char** argv, arguments_t& a)
 {
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
-    bool value      = i + 1 < argc;
+    int taken       = gprs_tools::take_switch(argc, argv, i, a.options);
+    if (taken < 0) { return false; }
+    if (taken > 0) { continue; }
+    bool value = i + 1 < argc;
     if (arg == "--solve") {
       a.solve_mode = true;
     } else if (arg == "--solutions" && value) {
@@ -782,17 +795,18 @@ int main(int argc, char** argv)
   // What needs no solver, in both modes. The presolve of the mode that is not solved, and those
   // of the cost variants, are dropped before a solve.
   mode_report_t in_mode[2];  // default, primal-only
-  gprs::options_t options;
-  options.primal_only = !a.primal_only;
+  gprs::options_t options = a.options;
+  options.primal_only     = !a.primal_only;
   in_mode[!a.primal_only] =
-    solver_free_checks(model, gprs::presolve(model, options), !a.primal_only, points);
-  std::vector<variant_report_t> variants = check_cost_variants(model, points, a.cost_variants);
-  options.primal_only                    = a.primal_only;
-  gprs::result_t result                  = gprs::presolve(model, options);
-  bool has_reduced                       = gprs_check::carries_model(result.status);
-  in_mode[a.primal_only]                 = solver_free_checks(model, result, a.primal_only, points);
-  const crush_report_t& crush_default    = in_mode[0].crush;
-  const crush_report_t& crush_primal     = in_mode[1].crush;
+    solver_free_checks(model, gprs::presolve(model, options), options, points);
+  std::vector<variant_report_t> variants =
+    check_cost_variants(model, a.options, points, a.cost_variants);
+  options.primal_only                 = a.primal_only;
+  gprs::result_t result               = gprs::presolve(model, options);
+  bool has_reduced                    = gprs_check::carries_model(result.status);
+  in_mode[a.primal_only]              = solver_free_checks(model, result, options, points);
+  const crush_report_t& crush_default = in_mode[0].crush;
+  const crush_report_t& crush_primal  = in_mode[1].crush;
 
   solve_t lp_original, lp_reduced, mip_reduced;
   if (a.lp_limit > 0) { lp_original = solve(model, true, a.lp_limit, a.threads); }
@@ -902,6 +916,9 @@ int main(int argc, char** argv)
   std::fprintf(out, "{\n  \"instance\": %s,\n", quoted(a.path).c_str());
   put_highs(out);
   std::fprintf(out, "  \"presolve_mode\": \"%s\",\n", a.primal_only ? "primal_only" : "default");
+  std::fprintf(out, "  \"options\": ");
+  gprs_tools::write_options(out, options);
+  std::fprintf(out, ",\n");
   std::fprintf(out, "  \"presolve_status\": \"%s\",\n", gprs::status_name(result.status));
   std::fprintf(out, "  \"presolve_seconds\": %.6f,\n", result.seconds);
   std::fprintf(out, "  \"hash\": \"%016llx\",\n", (unsigned long long)result.hash);

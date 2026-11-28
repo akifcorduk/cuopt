@@ -62,6 +62,108 @@ constexpr int32_t count          = 8;
 
 const char* sub_rule_name(int32_t sub);
 
+// What the singleton-column rules (h) count of their work (column_stats_t::counts): visits,
+// every refusal by its cause, and what the choices of options_t decide. A singleton column
+// that is tested as a free singleton column and stays counts once per visit of its row, at the
+// first test of (h) that it fails, in the order of the tests. Counting reads the state and
+// spends no work; rows_visited and pivots_tried are sums of other counters, taken at the end
+// of a call. With the presolve of a reduced model stopped after one round, the refusals
+// are the singleton columns that are left, by the test that keeps them
+// (tools/gprs_presolve.cpp, --left).
+namespace column_count {
+// Calls that stopped on their budget, calls that reported limited, passes over the lists.
+constexpr int32_t calls_stopped = 0;
+constexpr int32_t calls_limited = 1;
+constexpr int32_t passes        = 2;
+// Rows visited; of them, those without a singleton column, which cost no scan.
+constexpr int32_t rows_visited           = 3;
+constexpr int32_t rows_without_singleton = 4;
+// Rows scanned and their used slots; of them, the scans of a row that the same call scanned
+// before with no reduction of the call in between.
+constexpr int32_t rows_scanned    = 5;
+constexpr int32_t scanned_slots   = 6;
+constexpr int32_t rows_rescanned  = 7;
+constexpr int32_t rescanned_slots = 8;
+// Scanned rows with one free entry, where no free singleton column is tried.
+constexpr int32_t single_entry_rows = 9;
+// Singleton columns tested as a free singleton column.
+constexpr int32_t pivots_tried = 10;
+// Refused on an inequality: the cost is zero; an integer column with
+// opt.dual_integer_pivots off; the side that would stop the column is infinite.
+constexpr int32_t refused_zero_cost     = 11;
+constexpr int32_t refused_integer       = 12;
+constexpr int32_t refused_side_infinite = 13;
+// Refused: the pivot side is not readable; the side less the fixed terms is not; the cost
+// cannot be moved (cost / a not finite, or zero for a cost that is not, or its product with
+// the side not finite).
+constexpr int32_t refused_side      = 14;
+constexpr int32_t refused_free_side = 15;
+constexpr int32_t refused_cost      = 16;
+// Refused by "the row implies the bounds": an end of the range has an infinite term; the
+// error guard drops it; it passes its bound. On an inequality each of these counts once more:
+// refused_ahead when the bound towards which the column moves is not implied, refused_behind
+// when only the bound behind the move is not (an end that would need a fresh sum to be decided
+// counts as not implied).
+constexpr int32_t refused_infinite_rest = 17;
+constexpr int32_t refused_guard         = 18;
+constexpr int32_t refused_bound         = 19;
+constexpr int32_t refused_ahead         = 20;
+constexpr int32_t refused_behind        = 21;
+// Refused: the row is not integral for an integer column; its drift is too large.
+constexpr int32_t refused_integral = 22;
+constexpr int32_t refused_drift    = 23;
+// Refused by opt.pivot_growth_limit, per visit (column_stats_t::growth_refused_row and
+// growth_refused count each column once): by the ratio of the row, by the factor of earlier
+// substitutions.
+constexpr int32_t refused_growth_row     = 24;
+constexpr int32_t refused_growth_history = 25;
+// Refused: a new cost of another column would not be finite.
+constexpr int32_t refused_new_cost = 26;
+// Substituted integer columns, on an equation and on an inequality; substitutions in a row
+// with two or more singleton columns, where the order of the visit chose the column.
+constexpr int32_t integer_pivots       = 27;
+constexpr int32_t integer_pivots_dual  = 28;
+constexpr int32_t pivots_among_several = 29;
+// Moved costs that tol.cancellation set to zero although the sum was not, and moved costs
+// within 1e-9, relative, of zero that stayed.
+constexpr int32_t costs_cancelled      = 30;
+constexpr int32_t costs_near_cancelled = 31;
+// The zero-cost singleton columns, per visit of a row that the rule reads. Singleton columns
+// with a cost of zero that it passes over because they are integer; of them, those whose
+// coefficient is the smallest of the row in absolute value and divides every other one, all
+// other free columns being integer (the row is integral for them, by its ratios). Continuous
+// singleton columns that it passes over for a cost of at most 1e-7 that is not zero, and for
+// a term at a bound that is not readable.
+constexpr int32_t zero_cost_integer          = 32;
+constexpr int32_t zero_cost_integer_integral = 33;
+constexpr int32_t zero_cost_small_cost       = 34;
+constexpr int32_t zero_cost_term             = 35;
+// Continuous zero-cost singleton columns of scanned rows that the rule does not read because
+// the row has fewer than two finite sides (fewer than one with opt.zero_cost_one_sided).
+constexpr int32_t zero_cost_one_sided = 36;
+// Visits that leave the columns because no other free entry would stay, and their columns
+// (none with opt.zero_cost_whole_row); because a side is not readable; because the new sides
+// cross.
+constexpr int32_t zero_cost_whole_row         = 37;
+constexpr int32_t zero_cost_whole_row_columns = 38;
+constexpr int32_t zero_cost_side              = 39;
+constexpr int32_t zero_cost_crossing          = 40;
+// Interval records, and those of them in a row where the growth limit refused a free singleton
+// column in the same visit.
+constexpr int32_t zero_cost_records     = 41;
+constexpr int32_t growth_then_zero_cost = 42;
+// Columns with the cost and the locks of a forcing column; columns with its locks and a cost
+// of at most 1e-7 that is not zero; columns left for the budget of the call; columns left for
+// a side that is not readable.
+constexpr int32_t forcing_tested     = 43;
+constexpr int32_t forcing_small_cost = 44;
+constexpr int32_t forcing_budget     = 45;
+constexpr int32_t forcing_side       = 46;
+constexpr int32_t count              = 47;
+}  // namespace column_count
+
+const char* column_count_name(int32_t counter);
+
 // What the column rules count besides their findings, for one call (rule_result_t) and summed
 // or, for the two largest values, taken over the calls of a presolve (result_t).
 struct column_stats_t {
@@ -90,6 +192,8 @@ struct column_stats_t {
   // which the test fails: what reading explicit bounds only still costs the free singleton
   // column once every implied bound has become explicit.
   int64_t free_singleton_rejected_explicit = 0;
+  // The counters of the singleton-column rules (column_count::).
+  std::array<int64_t, column_count::count> counts = {};
 };
 
 struct rule_result_t {
@@ -459,6 +563,12 @@ struct simple_probing_t {
 //   An equation gives the column its value at every feasible point. With an inequality a
 //   feasible point moves the column to lower cost until the row is tight, which passes no bound
 //   by the end tests: an optimal point is kept, and the finding is a dual finding.
+//   The inequality needs the end at the bound behind that move as much as the one ahead, and
+//   there is no option without it. The move does not pass that bound, but the row leaves the
+//   model, and with it what the bound asks of the other columns through the row. min -x - 3 y
+//   with x + y <= 5 and x, y in [0, 10] has the optimum -15 at (0, 5); the row implies x <= 10
+//   and not x >= 0, and without the row the reduced model min -5 - 2 y takes y = 10, which
+//   gives x = -5.
 // - zero_cost_singleton, the row with two finite sides: all its continuous singleton columns
 //   with a cost of exactly zero leave it together, unless no other free entry would be left. A
 //   column whose term at a finite bound is beyond the size of a readable side is not taken. The
@@ -486,6 +596,20 @@ struct simple_probing_t {
 // reduction of a call is never left for that. No dual finding either.
 // Tests of one visit read the state as it is; what depends on history (the growth factor, the
 // saved entries) reports limited when it alone refuses a reduction.
+// The above is the rule with the defaults. Where it has a choice, an option of options_t names
+// the other forms and why each is right (presolve.hpp): opt.dual_integer_pivots (off:
+// free_singleton_dual leaves integer columns), opt.primal_projections (zero_cost_singleton and
+// forcing_column in primal-only mode), opt.growth_ratio (the coefficients that the growth
+// ratio reads), opt.zero_cost_one_sided (zero_cost_singleton reads a row with one finite side:
+// the infinite side stays, and no side less the fixed terms is read where the side is
+// infinite), opt.zero_cost_whole_row (it takes the columns although no other free entry
+// stays), opt.singleton_order (the order of a visit, and one pass per call),
+// opt.interval_start (record_col_t::prefer of the columns of an interval record),
+// opt.interval_order and opt.forcing_rounding_units (which the engine writes to the stack for
+// the undo), opt.implied_band_scale (a factor on implied_tolerance in the test above),
+// opt.side_guard_scale (a factor on the size of a readable side in every test of the family).
+// Every one of them is a function of the options, so none reports limited.
+// What the family counts of its visits and refusals: column_count::.
 struct singleton_cols_t {
   struct work_t;
   singleton_cols_t();

@@ -99,7 +99,7 @@ struct call_t {
     r.reduced       = reduced;
     r.postsolve     = ps;
     r.dual_findings = result.dual_findings;
-    return gprs_check::structure_check(model, r, opt.primal_only);
+    return gprs_check::structure_check(model, r, opt);
   }
 };
 

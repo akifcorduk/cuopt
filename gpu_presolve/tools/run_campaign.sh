@@ -77,5 +77,19 @@ grep -h "^columns " "$out"/part.*.txt |
             print "results with a record: defined", i, "defined by a dual rule", j,
                   "interval", k, "forcing", l, "| boxes tested", m, "snapshots tested", n,
                   "not tested", o, "results with limited", p}'
+# With --switches: per other value of a choice of the singleton-column rules the models that
+# ran with it alone, those of them whose result it changed, and the models that ran with it
+# among several drawn values.
+grep -h "^switches " "$out"/part.*.txt |
+  awk '{m += $3; d += $5;
+        for (i = 7; i + 3 <= NF; i += 4) {
+          if (!($i in a)) order[++n] = $i;
+          a[$i] += $(i + 1); c[$i] += $(i + 2); s[$i] += $(i + 3)
+        }}
+       END {if (m > 0) {
+              print "switches: models", m, "with a result that the drawn values changed", d;
+              for (k = 1; k <= n; ++k)
+                print "  " order[k] ": alone", a[order[k]], "changed", c[order[k]],
+                      "among several", s[order[k]]}}'
 grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND" "$out"/part.*.txt | cut -c1-200 | head -20
 exit $bad

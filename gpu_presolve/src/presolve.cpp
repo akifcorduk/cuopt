@@ -42,6 +42,59 @@ const char* sub_rule_name(int32_t sub)
   return names[sub];
 }
 
+const char* column_count_name(int32_t counter)
+{
+  static const char* const names[column_count::count] = {"calls_stopped",
+                                                         "calls_limited",
+                                                         "passes",
+                                                         "rows_visited",
+                                                         "rows_without_singleton",
+                                                         "rows_scanned",
+                                                         "scanned_slots",
+                                                         "rows_rescanned",
+                                                         "rescanned_slots",
+                                                         "single_entry_rows",
+                                                         "pivots_tried",
+                                                         "refused_zero_cost",
+                                                         "refused_integer",
+                                                         "refused_side_infinite",
+                                                         "refused_side",
+                                                         "refused_free_side",
+                                                         "refused_cost",
+                                                         "refused_infinite_rest",
+                                                         "refused_guard",
+                                                         "refused_bound",
+                                                         "refused_ahead",
+                                                         "refused_behind",
+                                                         "refused_integral",
+                                                         "refused_drift",
+                                                         "refused_growth_row",
+                                                         "refused_growth_history",
+                                                         "refused_new_cost",
+                                                         "integer_pivots",
+                                                         "integer_pivots_dual",
+                                                         "pivots_among_several",
+                                                         "costs_cancelled",
+                                                         "costs_near_cancelled",
+                                                         "zero_cost_integer",
+                                                         "zero_cost_integer_integral",
+                                                         "zero_cost_small_cost",
+                                                         "zero_cost_term",
+                                                         "zero_cost_one_sided",
+                                                         "zero_cost_whole_row",
+                                                         "zero_cost_whole_row_columns",
+                                                         "zero_cost_side",
+                                                         "zero_cost_crossing",
+                                                         "zero_cost_records",
+                                                         "growth_then_zero_cost",
+                                                         "forcing_tested",
+                                                         "forcing_small_cost",
+                                                         "forcing_budget",
+                                                         "forcing_side"};
+  gprs_assert(counter >= 0 && counter < column_count::count);
+  return names[counter];
+}
+
 const char* status_name(status_t status)
 {
   switch (status) {
@@ -225,6 +278,9 @@ struct engine_t {
     columns.growth_refused += r.columns.growth_refused;
     columns.growth_refused_row += r.columns.growth_refused_row;
     columns.saved_row_refused += r.columns.saved_row_refused;
+    for (int32_t k = 0; k < column_count::count; ++k) {
+      columns.counts[k] += r.columns.counts[k];
+    }
     if (r.outcome != rule_outcome_t::ok) {
       outcome = r.outcome;
       return false;
@@ -346,12 +402,14 @@ struct engine_t {
       if (!cascade()) { return; }
       bool served = !cascade_pending();
       end_phase();
+      bool early = opt.singleton_cols_early;
+      if (early && !column_phase(rule::singleton_cols, singleton_cols)) { return; }
       if (!call(rule::parallel_rows, parallel_rows)) { return; }
       end_phase();
       if (!call(rule::doubleton, doubleton)) { return; }
       end_phase();
       if (!column_phase(rule::simple_probing, simple_probing) ||
-          !column_phase(rule::singleton_cols, singleton_cols) ||
+          (!early && !column_phase(rule::singleton_cols, singleton_cols)) ||
           !column_phase(rule::dual_cols, dual_cols) ||
           !column_phase(rule::parallel_cols, parallel_cols)) {
         return;
@@ -501,6 +559,9 @@ result_t presolve(const model_t& model, const options_t& options)
   engine_clock_t::time_point start = engine_clock_t::now();
   result_t result;
   result.postsolve.init(model);
+  gprs_assert(choices_in_range(options));
+  result.postsolve.interval_descending    = options.interval_order == interval_order_t::descending;
+  result.postsolve.forcing_rounding_units = options.forcing_rounding_units;
   state_t st(model, options.tol);
   result.seconds_state = seconds_since(start);
   engine_t engine(options, st, result, start);
