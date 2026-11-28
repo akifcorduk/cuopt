@@ -77,5 +77,9 @@ grep -h "^columns " "$out"/part.*.txt |
             print "results with a record: defined", i, "defined by a dual rule", j,
                   "interval", k, "forcing", l, "| boxes tested", m, "snapshots tested", n,
                   "not tested", o, "results with limited", p}'
-grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND" "$out"/part.*.txt | cut -c1-200 | head -20
+grep -h "^sides " "$out"/part.*.txt |
+  awk '{r += $3; p += $5; f += $7; if ($9 + 0 > w) w = $9 + 0}
+       END {print "side points (profile scale_pair): results", r, "points", p,
+                  "results with a point that failed", f, "largest violation", w + 0}'
+grep -h "^FAIL\|^STRUCTURE-ONLY\|^MISSED\|^SECOND\|^SIDES" "$out"/part.*.txt | cut -c1-200 | head -20
 exit $bad

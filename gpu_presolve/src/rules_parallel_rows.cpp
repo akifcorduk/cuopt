@@ -261,6 +261,8 @@ struct comparison_t {
   bool parallel = false;
   // larger row = ratio * smaller row, on the core.
   double ratio = 0.;
+  // The cores are equal entry by entry, or one is the negative of the other.
+  bool identical = false;
   near_row_t other;
 };
 
@@ -294,13 +296,17 @@ comparison_t compare(const state_t& st,
   result.ratio =
     scattered_is_smaller ? result.other.first / s.self.first : s.self.first / result.other.first;
   if (!std::isfinite(result.ratio) || result.ratio == 0.) { return result; }
+  bool identical = std::fabs(result.ratio) == 1.;
   for (int64_t e = csr.begin(other); e < csr.end(other); ++e) {
     if (!csr.live(e) || coefficient[csr.index[e]] == 0.) { continue; }
     double a = coefficient[csr.index[e]], b = csr.value[e];
     if (!scattered_is_smaller) { std::swap(a, b); }
-    if (!(std::fabs(b - result.ratio * a) <= tol.zero * std::fabs(b))) { return result; }
+    double off = std::fabs(b - result.ratio * a);
+    if (!(off <= tol.zero * std::fabs(b))) { return result; }
+    identical = identical && off == 0.;
   }
-  result.parallel = true;
+  result.parallel  = true;
+  result.identical = identical;
   return result;
 }
 
@@ -319,41 +325,216 @@ inline bool keeps_sides(dd_t fixed_terms, const tolerances_t& tol)
   return holds_tolerance(std::fabs(dd_value(fixed_terms)), tol);
 }
 
-// removed = ratio * kept on the free entries: the sides of `removed` become sides of `kept`.
-// The caller has tested keeps_sides(kept_fixed).
-rule_outcome_t merge(state_t& st,
-                     postsolve_t& ps,
-                     const tolerances_t& tol,
-                     int32_t kept,
-                     dd_t kept_fixed,
-                     int32_t removed,
-                     dd_t removed_fixed,
-                     double ratio)
+// Of two parallel rows without singleton columns the one with the larger coefficients is kept,
+// read from the smallest core column, and the one with the smaller index when the two are equal
+// in size: the other row is then the kept one times a ratio of at most 1 in size, and what a
+// later rule or the postsolve rounds in the kept row reaches it no larger. With keep_larger off
+// the row with the smaller index is kept whatever the sizes.
+inline bool first_is_kept(const near_row_t& a, const near_row_t& b, bool keep_larger)
 {
-  gprs_assert(keeps_sides(kept_fixed, tol));
-  auto image = [&](double side) {
-    double free_side = std::isfinite(side) ? dd_residual(side, removed_fixed) : side;
-    return free_side / ratio + dd_value(kept_fixed);
+  double size_a = std::fabs(a.first), size_b = std::fabs(b.first);
+  if (keep_larger && size_a != size_b) { return size_a > size_b; }
+  return a.row < b.row;
+}
+
+// value = mantissa * 2^exponent with 1/2 <= |mantissa| < 1: a product of two mantissas neither
+// overflows nor underflows, whatever the sizes of the values are.
+struct parts_t {
+  double mantissa;
+  int exponent;
+};
+
+inline parts_t parts_of(double value)
+{
+  parts_t parts;
+  parts.mantissa = std::frexp(value, &parts.exponent);
+  return parts;
+}
+
+// What the removed row can differ by from its multiple of the kept row, in its own units, over
+// the explicit bounds of the core columns. With a and b the core coefficients of the kept and
+// of the removed row, and af and bf those of the smallest core column, the removed row is the
+// kept one times bf / af plus the differences b - a * bf / af, each of which is read without
+// rounding from the two products b * af and a * bf. The drift is the sum of their sizes times
+// max(|lower|, |upper|) of their columns: zero for two rows that are multiples of each other
+// as they are stored, infinite when a difference belongs to a column without a finite bound.
+// `scattered` holds the core of one of the two rows by column; `other` is the other row.
+double core_drift(const state_t& st,
+                  const std::vector<double>& scattered,
+                  int32_t other,
+                  bool scattered_is_kept,
+                  double kept_first,
+                  double removed_first)
+{
+  const line_store_t& csr = st.csr;
+  parts_t af = parts_of(kept_first), bf = parts_of(removed_first);
+  double drift = 0.;
+  for (int64_t e = csr.begin(other); e < csr.end(other); ++e) {
+    int32_t col = csr.index[e];
+    if (!csr.live(e) || scattered[col] == 0.) { continue; }
+    parts_t a = parts_of(scattered[col]), b = parts_of(csr.value[e]);
+    if (!scattered_is_kept) { std::swap(a, b); }
+    // b * af - a * bf = (of_removed * 2^shift - of_kept) * 2^(a.exponent + bf.exponent), with
+    // the errors of the two products: 0 exactly when the two are equal.
+    double removed_error, kept_error;
+    double of_removed = two_prod(b.mantissa, af.mantissa, removed_error);
+    double of_kept    = two_prod(a.mantissa, bf.mantissa, kept_error);
+    int shift         = b.exponent + af.exponent - a.exponent - bf.exponent;
+    double difference =
+      (std::ldexp(of_removed, shift) - of_kept) + (std::ldexp(removed_error, shift) - kept_error);
+    if (difference == 0.) { continue; }
+    double size = std::ldexp(difference / af.mantissa, a.exponent + bf.exponent - af.exponent);
+    drift +=
+      std::fabs(size) * std::fmax(std::fabs(st.col_lower[col]), std::fabs(st.col_upper[col]));
+  }
+  return drift;
+}
+
+// A side of the removed row as a side of the kept row.
+struct image_t {
+  double value = 0.;
+  // What the value can be off by, in the units of the kept row; 0 for a value without rounding.
+  double error = 0.;
+  // False for a value that is not finite, and for one that is rounded at a size at which a
+  // double does not hold the tolerance of the removed row.
+  bool usable = true;
+  // The only rounding is that of the fixed terms of the kept row, which can leave that row
+  // without an event (state_t::absorb_fixed_terms).
+  bool rounded_by_fixed_terms = false;
+};
+
+// Rounding units of its size that a rounded image can be off by: the side less the fixed
+// terms, the product, the quotient with its correction, the fixed terms of the kept row as one
+// double, and the sum.
+constexpr double image_error_units = 8.;
+
+// A side below this, other than zero, has a product with a mantissa whose error is no double.
+constexpr double min_scaled_side = 0x1p-960;
+
+// The side less removed_fixed, times kept_first / removed_first, plus kept_fixed. The quotient
+// takes the error of the product, so that the image is exact wherever it is a double (a side
+// times 3, a side of a row that is 7 / 3 of the other) and is the side itself for two rows
+// with equal coefficients: a quotient by the rounded ratio of the two rows would be off the
+// integer by a rounding unit there, and that reads as a crossing of two sides that meet.
+image_t image_of(double side,
+                 dd_t removed_fixed,
+                 dd_t kept_fixed,
+                 double kept_first,
+                 double removed_first,
+                 const tolerances_t& tol)
+{
+  image_t image;
+  if (!std::isfinite(side)) {
+    image.value = (kept_first < 0) == (removed_first < 0) ? side : -side;
+    return image;
+  }
+  double residual_error;
+  double difference = two_sum(side, -removed_fixed.hi, residual_error);
+  double rest       = residual_error - removed_fixed.lo;
+  double free_side  = difference + rest;
+  double scaled     = kept_first == removed_first ? free_side : -free_side;
+  bool exact        = rest == 0.;
+  if (std::fabs(kept_first) != std::fabs(removed_first)) {
+    if (free_side != 0. && std::fabs(free_side) < min_scaled_side) {
+      image.usable = false;
+      return image;
+    }
+    parts_t numerator = parts_of(kept_first), denominator = parts_of(removed_first);
+    double product_error, back_error;
+    double product   = two_prod(free_side, numerator.mantissa, product_error);
+    double quotient  = product / denominator.mantissa;
+    double remainder = std::fma(-quotient, denominator.mantissa, product) + product_error;
+    double mantissa  = quotient + remainder / denominator.mantissa;
+    int exponent     = numerator.exponent - denominator.exponent;
+    scaled           = std::ldexp(mantissa, exponent);
+    double back      = two_prod(mantissa, denominator.mantissa, back_error);
+    exact            = exact && back == product && back_error == product_error &&
+            std::ldexp(scaled, -exponent) == mantissa;
+  }
+  double fixed = dd_value(kept_fixed);
+  double sum_error;
+  image.value = two_sum(scaled, fixed, sum_error);
+  if (!std::isfinite(image.value)) {
+    image.usable = false;
+    return image;
+  }
+  bool exact_sum = sum_error == 0. && kept_fixed.lo == 0.;
+  if (exact && exact_sum) { return image; }
+  image.error  = image_error_units * rounding_unit * std::fmax(std::fabs(scaled), std::fabs(fixed));
+  image.usable = holds_tolerance(std::fabs(free_side), tol);
+  image.rounded_by_fixed_terms = exact;
+  return image;
+}
+
+// What became of two parallel rows without singleton columns.
+enum class merge_t : uint8_t {
+  made,
+  infeasible,
+  // Nothing changed, and nothing would with the same rows in another presolve.
+  left,
+  // Nothing changed, by a test that can pass later without an event of the two rows: a bound
+  // of a core column that moves, a fixed term that leaves the kept row.
+  left_for_now
+};
+
+// removed = ratio * kept on the free entries, up to `drift` (core_drift): the sides of
+// `removed` become sides of `kept`. The caller has tested keeps_sides(kept.fixed_terms).
+// Where two sides cross, the removed row is off by the crossing times |ratio|, in its own
+// units, when the kept row holds at its side, and by the drift on top. That is the measure:
+// infeasible when it is above the tolerance whatever the rounding of the image and the drift
+// do, a merge with the new side at the opposite side of the kept row when it is within the
+// tolerance whatever they do, and no merge between the two.
+merge_t merge(state_t& st,
+              postsolve_t& ps,
+              const tolerances_t& tol,
+              const near_row_t& kept,
+              const near_row_t& removed,
+              double drift)
+{
+  gprs_assert(keeps_sides(kept.fixed_terms, tol));
+  double ratio = removed.first / kept.first;
+  if (!std::isfinite(ratio) || ratio == 0.) { return merge_t::left; }
+  double scale = std::fabs(ratio);
+  auto image   = [&](double side) {
+    return image_of(side, removed.fixed_terms, kept.fixed_terms, kept.first, removed.first, tol);
   };
-  double lower = image(st.row_lower[removed]), upper = image(st.row_upper[removed]);
+  image_t lower = image(st.row_lower[removed.row]), upper = image(st.row_upper[removed.row]);
   if (ratio < 0) { std::swap(lower, upper); }
-  double kept_lower = st.row_lower[kept], kept_upper = st.row_upper[kept];
-  if (lower > kept_lower) {
-    if (lower - kept_upper > tol.feasibility) { return infeasible; }
-    if (lower > kept_upper) { lower = kept_upper; }
-    if (lower != kept_lower) {
-      st.set_row_lower(kept, lower);
-      kept_lower = lower;
+  if (!lower.usable || !upper.usable) {
+    bool for_now = (!lower.usable && lower.rounded_by_fixed_terms) ||
+                   (!upper.usable && upper.rounded_by_fixed_terms);
+    return for_now ? merge_t::left_for_now : merge_t::left;
+  }
+  gprs_assert(lower.value <= upper.value);
+  double kept_lower = st.row_lower[kept.row], kept_upper = st.row_upper[kept.row];
+  // What is done with two sides that cross by `crossing`, in the units of the kept row.
+  auto closes = [&](double crossing, double error) {
+    if (scale * (crossing - error) - drift > tol.feasibility) { return merge_t::infeasible; }
+    if (scale * (crossing + error) + drift <= tol.feasibility) { return merge_t::made; }
+    return merge_t::left_for_now;
+  };
+  double new_lower = kept_lower, new_upper = kept_upper;
+  if (lower.value > kept_lower) {
+    new_lower = lower.value;
+    if (lower.value > kept_upper) {
+      merge_t step = closes(lower.value - kept_upper, lower.error);
+      if (step != merge_t::made) { return step; }
+      new_lower = kept_upper;
     }
   }
-  if (upper < kept_upper) {
-    if (kept_lower - upper > tol.feasibility) { return infeasible; }
-    if (upper < kept_lower) { upper = kept_lower; }
-    if (upper != kept_upper) { st.set_row_upper(kept, upper); }
+  if (upper.value < kept_upper) {
+    new_upper = upper.value;
+    if (upper.value < new_lower) {
+      merge_t step = closes(new_lower - upper.value, upper.error);
+      if (step != merge_t::made) { return step; }
+      new_upper = new_lower;
+    }
   }
-  st.delete_row(removed);
-  ps.push_parallel_row(removed, kept, ratio);
-  return ok;
+  if (new_lower != kept_lower) { st.set_row_lower(kept.row, new_lower); }
+  if (new_upper != kept_upper) { st.set_row_upper(kept.row, new_upper); }
+  st.delete_row(removed.row);
+  ps.push_parallel_row(removed.row, kept.row, ratio);
+  return merge_t::made;
 }
 
 inline bool is_equation(const state_t& st, int32_t row)
@@ -793,12 +974,28 @@ rule_result_t parallel_rows_t::run(state_t& st,
     auto reduce = [&](const comparison_t& c) {
       const near_row_t& other = c.other;
       if (s.self.singles == 0 && other.singles == 0) {
-        const near_row_t& kept    = row < other.row ? s.self : other;
-        const near_row_t& removed = row < other.row ? other : s.self;
+        bool keep_listed          = first_is_kept(s.self, other, opt.parallel_keep_larger);
+        const near_row_t& kept    = keep_listed ? s.self : other;
+        const near_row_t& removed = keep_listed ? other : s.self;
         if (!keeps_sides(kept.fixed_terms, tol)) { return false; }
-        result.outcome =
-          merge(st, ps, tol, kept.row, kept.fixed_terms, removed.row, removed.fixed_terms, c.ratio);
-        if (result.outcome != ok) { return true; }
+        double drift = 0.;
+        if (!c.identical) {
+          budget.spend(st.csr.used[other.row]);
+          drift = core_drift(st, w.coefficient, other.row, keep_listed, kept.first, removed.first);
+          if (!(drift <= opt.parallel_drift_share * tol.feasibility)) {
+            result.limited = true;
+            return false;
+          }
+        }
+        merge_t step = merge(st, ps, tol, kept, removed, drift);
+        if (step == merge_t::infeasible) {
+          result.outcome = infeasible;
+          return true;
+        }
+        if (step != merge_t::made) {
+          result.limited = result.limited || step == merge_t::left_for_now;
+          return false;
+        }
         w.drop(removed.row);
         // A column that only the two rows held is a singleton column of the kept row now.
         if (core_changed(kept.row)) { w.drop(kept.row); }
@@ -827,7 +1024,8 @@ rule_result_t parallel_rows_t::run(state_t& st,
       return true;
     };
 
-    // Rows above first: they are merged into this row, whose sides then go to a row below.
+    // Rows above first: those that this row keeps are merged into it before its sides go to a
+    // row below.
     int32_t unlike = 0;
     int32_t other  = w.above[row];
     while (other != no_row && !done &&

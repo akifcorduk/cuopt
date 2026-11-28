@@ -480,6 +480,24 @@ case_t generate(uint64_t seed, const generator_options_t& o)
       col_scale[j] = std::ldexp(1., rng.uniform(-o.max_scale_exp2, o.max_scale_exp2));
     }
   }
+  if (o.p_parallel_scale > 0.) {
+    gprs_assert(o.max_parallel_scale_exp2 >= 2 && o.max_parallel_scale_exp2 <= 20);
+    static const double others[] = {
+      3., 5., 6., 7., 10., 100., 1000., 12345., 65537., 999999., 1000003.};
+    std::vector<uint8_t> has_factor(nrows, 0);
+    for (int32_t i = 0; i < nrows; ++i) {
+      if (rows[i].kind != row_kind_t::parallel || !rng.chance(o.p_parallel_scale)) { continue; }
+      int32_t target = rng.chance(0.5) ? i : rows[i].source;
+      double factor  = std::ldexp(1., rng.uniform(1, o.max_parallel_scale_exp2));
+      if (rng.chance(0.5)) {
+        double other = others[rng.uniform(0, 10)];
+        factor       = other <= std::ldexp(1., o.max_parallel_scale_exp2) ? other : 3.;
+      }
+      if (has_factor[target]) { continue; }
+      has_factor[target] = 1;
+      row_scale[target] *= factor;
+    }
+  }
   case_t c = make_case(base, row_scale, col_scale);
   gprs_assert(classify(c.base, o.max_width, line));
   return c;

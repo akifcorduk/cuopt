@@ -42,9 +42,9 @@
 // that the row gives the column is one rounding step off the end of an integer row.
 // An end of the interval of a line column is exact when it is a bound that is a multiple of 1/2
 // or comes from a row of the first kind; any other end gets solve_tolerance * max(1, |end|). A
-// scaled case (factors that are powers of two) gets the tolerance in its scaled rows and is
-// still decided as its base model, because distinct values of its data are much further apart
-// than the tolerance.
+// scaled case (factors that are powers of two, or integer row factors above 1) gets the
+// tolerance in its scaled rows where its data are no integers and is still decided as its base
+// model, because distinct values of its data are much further apart than the tolerance.
 
 #include <gprs/presolve.hpp>
 #include <gprs/state.hpp>
@@ -145,6 +145,18 @@ struct generator_options_t {
   // is no such column. With p_forcing_col == 0 nothing is drawn.
   double p_forcing_col     = 0.;
   int32_t max_forcing_cols = 2;
+
+  // Parallel rows of very different scale. Per row that is a multiple of an earlier row, with
+  // this probability, that row or the row it copies (one in two) gets one more row factor, at
+  // most one per row: a power of two from 2 to 2^max_parallel_scale_exp2, or another integer
+  // up to it (3, 5, 6, 7, 10, 100, 1000, 12345, 65537, 999999, 1000003). The factor is an
+  // integer above 1, so the scaled row is the base row in exact arithmetic and its values
+  // stay as far apart as those of the base row. A profile that sets it keeps p_scaled at 0:
+  // with both, a row can be 2^30 times its base row, where a third of a small integer misses
+  // the row by more than the tolerance of a tested point. With 0 nothing is drawn for it and
+  // the cases are those of before.
+  double p_parallel_scale         = 0.;
+  int32_t max_parallel_scale_exp2 = 20;
 };
 
 // A model for the presolve and the integer-data model it was scaled from.
@@ -178,7 +190,8 @@ struct case_t {
 case_t generate(uint64_t seed, const generator_options_t& options);
 
 // base with row i multiplied by row_scale[i] > 0 and column j divided by col_scale[j] > 0
-// (coefficients and cost times col_scale[j], bounds divided by it). Exact for powers of two.
+// (coefficients and cost times col_scale[j], bounds divided by it). Exact for powers of two,
+// and for an integer row factor on a row of integers.
 model_t scale_model(const model_t& base,
                     const std::vector<double>& row_scale,
                     const std::vector<double>& col_scale);

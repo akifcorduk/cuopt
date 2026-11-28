@@ -125,23 +125,27 @@ MUTANTS = {
     # A wrong side after a parallel-row merge: the sides of a row with a
     # negative ratio are not swapped.
     "m_parallel_swap": ("rules_parallel_rows.cpp", MERGE_SWAP, ""),
-    # ... the side is multiplied by the ratio instead of divided.
+    # ... the side is multiplied by the ratio instead of divided: the
+    # quotient of the two rows is taken the wrong way round.
     "m_parallel_ratio": (
         "rules_parallel_rows.cpp",
-        "return free_side / ratio + dd_value(kept_fixed);",
-        "return free_side * ratio + dd_value(kept_fixed);",
+        "    parts_t numerator = parts_of(kept_first), "
+        "denominator = parts_of(removed_first);",
+        "    parts_t numerator = parts_of(removed_first), "
+        "denominator = parts_of(kept_first);",
     ),
     # ... the upper side taken from the removed row is one unit too small.
     "m_parallel_tight": (
         "rules_parallel_rows.cpp",
         MERGE_SWAP,
-        MERGE_SWAP + "\n  upper -= 1.;",
+        MERGE_SWAP + "\n  upper.value -= 1.;",
     ),
     # ... the sides of the removed row are dropped.
     "m_parallel_loose": (
         "rules_parallel_rows.cpp",
         MERGE_SWAP,
-        "lower = -inf;\n  upper = inf;",
+        "lower       = image_t();\n  lower.value = -inf;\n"
+        "  upper       = image_t();\n  upper.value = inf;",
     ),
     # Dual fixing left on in primal-only mode.
     "m_primal": (
@@ -233,8 +237,8 @@ MUTANTS = {
     # A parallel-row merge forgets the fixed terms of the kept row.
     "r_parallel_fixed": (
         "rules_parallel_rows.cpp",
-        "return free_side / ratio + dd_value(kept_fixed);",
-        "return free_side / ratio;",
+        "  double fixed = dd_value(kept_fixed);",
+        "  double fixed = 0.;",
     ),
     # Wrong substitutions. The sides of the rows of a substituted column
     # move the wrong way.
@@ -964,6 +968,59 @@ MUTANTS = {
         "rules_singleton_cols.cpp",
         "    if (!usable) { c.w.unreadable[row] = 1; }\n",
         "",
+    ),
+    # Which of two parallel rows is kept. The row with the smaller index
+    # stays whatever the sizes, as before the larger row was kept: what a
+    # later rule rounds in the kept row reaches a row that is a multiple of
+    # it times the ratio of the two (the verdict sides of the campaign
+    # profile scale_pair;
+    # parallel_larger_row_is_kept_before_a_singleton_column_leaves).
+    "pr_keep_index": (
+        "rules_parallel_rows.cpp",
+        "  if (keep_larger && size_a != size_b) { return size_a > size_b; }",
+        "  if (keep_larger && size_a != size_b && false) "
+        "{ return size_a > size_b; }",
+    ),
+    # The fixed terms of the two rows change places in the image of a
+    # side: those of the kept row are taken off the side of the removed
+    # row, and those of the removed row are added.
+    "pr_fixed_roles": (
+        "rules_parallel_rows.cpp",
+        "    return image_of(side, removed.fixed_terms, kept.fixed_terms, "
+        "kept.first, removed.first, tol);",
+        "    return image_of(side, kept.fixed_terms, removed.fixed_terms, "
+        "kept.first, removed.first, tol);",
+    ),
+    # Sides that cross are measured in the units of the kept row: a pair
+    # whose removed row holds within its tolerance at the side of the kept
+    # row is reported infeasible
+    # (parallel_crossing_in_the_units_of_the_removed_row). The generated
+    # models have no crossing below one unit of the smaller row, so no
+    # campaign check sees it.
+    "pr_cross_kept": [
+        (
+            "rules_parallel_rows.cpp",
+            "    if (scale * (crossing - error) - drift > tol.feasibility) "
+            "{ return merge_t::infeasible; }",
+            "    if ((crossing - error) - drift > tol.feasibility) "
+            "{ return merge_t::infeasible; }",
+        ),
+        (
+            "rules_parallel_rows.cpp",
+            "    if (scale * (crossing + error) + drift <= tol.feasibility) "
+            "{ return merge_t::made; }",
+            "    if ((crossing + error) + drift <= tol.feasibility) "
+            "{ return merge_t::made; }\n    (void)scale;",
+        ),
+    ],
+    # Rows that are parallel within tol.zero are merged whatever they
+    # differ by over the bounds of their columns
+    # (parallel_rows_that_are_not_exact_multiples). The generated rows are
+    # exact multiples, so no campaign check sees it.
+    "pr_no_drift": (
+        "rules_parallel_rows.cpp",
+        "          if (!(drift <= opt.parallel_drift_share * tol.feasibility)) {",
+        "          if (false) {",
     ),
 }
 

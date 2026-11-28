@@ -111,8 +111,9 @@ struct rule_result_t {
   bool stopped = false;
   // The call left undone a reduction that no list holds, or cannot tell: bound propagation,
   // when a bound of a continuous column has had its steps (see (b)); the parallel rows, when
-  // they leave a pair alone only because the presolve has changed one of its rows, or end the
-  // comparisons of a row on opt.parallel_bucket_limit with rows of its bucket left (see (e));
+  // they leave a pair alone only because the presolve has changed one of its rows, end the
+  // comparisons of a row on opt.parallel_bucket_limit with rows of its bucket left, or leave a
+  // merge to the bounds of the columns or to a fixed term of the kept row (see (e));
   // the singleton columns, when only the growth factor of earlier substitutions keeps a free
   // singleton column in the model or opt.saved_row_factor the zero-cost singleton columns of a
   // row (see (h)).
@@ -296,14 +297,43 @@ struct doubleton_t {
 // entries): only a presolve of the reduced model compares them. The call reports limited
 // (rule_result_t::limited). While no call has, every two rows of a bucket have been compared
 // since the last change of either.
-// Two parallel rows without a singleton column: the one with the smaller index is kept: the
-// other row's sides, less its fixed terms, divided by the ratio, plus the fixed terms of the
-// kept row, are intersected with the kept row's sides (set_row_lower / set_row_upper;
-// infeasible when they cross by more than the feasibility tolerance, a smaller crossing sets
-// the new side to the opposite one), and the other row is deleted and recorded.
-// A pair whose kept row has fixed terms f with |f| * tol.side_error > tol.feasibility is left
-// alone and counts as not parallel towards the limit: a side of that row is stored with f in it,
-// as one double, and would lose more than the tolerance (a column fixed at a huge bound).
+// Two parallel rows without a singleton column: the row with the larger coefficients is kept,
+// read from the coefficients of the smallest core column, and of two rows with coefficients of
+// one size the one with the smaller index (opt.parallel_keep_larger; off, the smaller index
+// whatever the sizes). The other row is then the kept one times a ratio r with |r| <= 1, so
+// that what a later rule or the postsolve rounds in the kept row, within the limits that the
+// rules set on the sizes in that row, reaches the other row no larger. With the smaller row
+// kept it arrives times 1 / |r|: a side that is rounded by 6e-9 next to a term of 9e7 leaves a
+// row that is 2^18 times as large off by 1.6e-3.
+// The other row's sides, less its fixed terms, times the quotient of the two coefficients,
+// plus the fixed terms of the kept row, are intersected with the kept row's sides
+// (set_row_lower / set_row_upper), and the other row is deleted and recorded with r. The
+// image of a side is exact wherever it is a double, and the side itself for two rows with
+// coefficients of one size.
+// Sides that cross leave the removed row off by the crossing times |r|, in its own units, when
+// the kept row holds at its side: infeasible when that is above the feasibility tolerance,
+// else the new side is set to the opposite side of the kept row.
+// The pair is left alone, and counts as not parallel towards the limit,
+// - when the kept row has fixed terms f with |f| * tol.side_error > tol.feasibility: a side of
+//   that row is stored with f in it, as one double, and would lose more than the tolerance (a
+//   column fixed at a huge bound);
+// - when the image of a finite side is not finite, or the side less the fixed terms is below
+//   2^-960 and not zero;
+// - when the image of a side s, less the fixed terms, is rounded and
+//   |s| * tol.side_error > tol.feasibility: the kept row would hold that side with an error
+//   that the removed row does not tolerate;
+// - when the two rows are parallel within tol.zero and not exactly, and the removed row
+//   differs from r times the kept row by more than opt.parallel_drift_share of the
+//   feasibility tolerance over the explicit bounds of the core columns: the sum of
+//   |b - a * r| * max(|lower|, |upper|) over the core coefficients a of the kept and b of the
+//   removed row, with the differences read without rounding (infinite when one belongs to a
+//   column without a finite bound; zero for rows that are multiples of each other as stored);
+// - when two sides cross and the crossing times |r|, with that difference and the rounding of
+//   the image added and taken off, lies on both sides of the tolerance.
+// The last two read the bounds of the columns, and the third reads the fixed terms of the kept
+// row when theirs is the only rounding; both can change without an event of the two rows (a
+// fixed term can leave its row plainly, state_t::absorb_fixed_terms). The call then reports
+// limited (rule_result_t::limited), and the presolve does not end at a fixed point.
 // Two parallel rows with a singleton column in one of them at least: an equation of the pair is
 // subtracted from the other row, the target. The equation qualifies when it has no singleton
 // column, or one while the target has at most one; of two equations that qualify, the one with

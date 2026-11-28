@@ -436,6 +436,10 @@ GPRS_TEST(e2e_case_integer_singleton_column_needs_an_integral_row)
 // Found by the campaign (profile dense, seed 200045869, variant 9): the zero-cost singleton
 // column x0 with a lower bound of -1.28e9 after scaling, whose undo stepped from that bound to
 // 597.33 and lost the digits that row 6, parallel to its row at 2^18 times the scale, reads.
+// With the smaller of the two parallel rows kept, as it was then, the case is that of the
+// undo. With the larger one kept and the options of the campaign the column stays, since its
+// term does not fit that row; with the default options it leaves once its bounds have become
+// small.
 GPRS_TEST(e2e_case_interval_undo_far_from_prefer)
 {
   model_t base;
@@ -457,11 +461,16 @@ GPRS_TEST(e2e_case_interval_undo_far_from_prefer)
   options.max_rounds            = 1;
   options.max_cascade_passes    = 2;
   options.parallel_bucket_limit = 1;
-  for (const options_t& o : {options, options_t()}) {
-    result_t result = presolve(c.model, o);
-    GPRS_CHECK_EQ(result.sub_findings[sub_rule::zero_cost_singleton], 1);
-    oracle::verdict_t verdict = oracle::check_result(c, o, result);
-    if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+  for (bool of_the_campaign : {true, false}) {
+    for (bool keep_larger : {false, true}) {
+      options_t o            = of_the_campaign ? options : options_t();
+      o.parallel_keep_larger = keep_larger;
+      result_t result        = presolve(c.model, o);
+      GPRS_CHECK_EQ(result.sub_findings[sub_rule::zero_cost_singleton],
+                    of_the_campaign && keep_larger ? 0 : 1);
+      oracle::verdict_t verdict = oracle::check_result(c, o, result);
+      if (!verdict.ok) { test::fail(__FILE__, __LINE__, verdict.message); }
+    }
   }
 }
 

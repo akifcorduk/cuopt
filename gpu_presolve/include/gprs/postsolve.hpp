@@ -46,6 +46,7 @@ struct alias_record_t {
 };
 
 // removed_row = ratio * kept_row, entry by entry; the sides of the kept row were intersected.
+// The kept row is the larger one, |ratio| <= 1, unless options_t::parallel_keep_larger is off.
 // The primal postsolve ignores it.
 struct parallel_row_record_t {
   int32_t removed_row;
