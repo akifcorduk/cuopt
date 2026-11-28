@@ -186,12 +186,6 @@ bool range_end(context_t& c, int32_t row, int64_t e, double side, bool minimum, 
   return false;
 }
 
-// The band around a bound of a column within which its row implies it.
-double implied_band(const context_t& c, double bound)
-{
-  return c.opt.implied_band_scale * implied_tolerance(c.tol, bound);
-}
-
 // The test of implied_free on the end at the lower bound alone, read from the state as it is
 // and without a fresh sum: an end whose error bound would ask for one counts as not implied.
 // For the counters refused_ahead and refused_behind only.
@@ -206,14 +200,15 @@ bool lower_end_implied(const context_t& c, int32_t row, const single_t& s, doubl
     return false;
   }
   candidate_t k{dd_residual(side, rest.sum) / s.a, side, rest.sum, s.a, rest.error};
-  return std::isfinite(k.bound) && k.bound - candidate_slack(k) >= lower - implied_band(c, lower);
+  return std::isfinite(k.bound) &&
+         k.bound - candidate_slack(k) >= lower - implied_tolerance(c.tol, lower);
 }
 
 // The row with `side` as its right-hand side gives the column of the singleton a value inside
 // its explicit bounds whatever the other columns are inside theirs: each end of the range of
-// (side - rest) / a, moved outward by its rounding, is within implied_band of the bound it must
-// not pass; an infinite bound needs nothing. When it fails, c.cause and c.upper_end say why and
-// at which end.
+// (side - rest) / a, moved outward by its rounding, is within implied_tolerance of the bound it
+// must not pass; an infinite bound needs nothing. When it fails, c.cause and c.upper_end say why
+// and at which end.
 bool implied_free(context_t& c, int32_t row, const single_t& s, double side)
 {
   const state_t& st = c.st;
@@ -222,12 +217,16 @@ bool implied_free(context_t& c, int32_t row, const single_t& s, double side)
   c.upper_end = true;
   if (upper < inf) {
     if (!range_end(c, row, s.slot, side, s.a > 0, k)) { return false; }
-    if (!(k.bound + candidate_slack(k) <= upper + implied_band(c, upper))) { return false; }
+    if (!(k.bound + candidate_slack(k) <= upper + implied_tolerance(c.tol, upper))) {
+      return false;
+    }
   }
   c.upper_end = false;
   if (lower > -inf) {
     if (!range_end(c, row, s.slot, side, s.a < 0, k)) { return false; }
-    if (!(k.bound - candidate_slack(k) >= lower - implied_band(c, lower))) { return false; }
+    if (!(k.bound - candidate_slack(k) >= lower - implied_tolerance(c.tol, lower))) {
+      return false;
+    }
   }
   return true;
 }

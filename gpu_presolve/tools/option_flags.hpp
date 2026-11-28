@@ -19,7 +19,6 @@
 //   --interval-start <lower|upper|nearest-zero|middle>
 //   --interval-order <ascending|descending>
 //   --forcing-rounding-units <x>
-//   --implied-band-scale <x>
 //   --side-guard-scale <x>
 //   --singleton-cols-early              singleton_cols_early on
 
@@ -37,7 +36,7 @@ constexpr const char* switch_usage =
   "[--growth-ratio <all|continuous|integer-exempt>] [--zero-cost-one-sided] "
   "[--zero-cost-whole-row] [--singleton-order <index|largest-pivot|zero-cost-first|single-pass>] "
   "[--interval-start <lower|upper|nearest-zero|middle>] [--interval-order <ascending|descending>] "
-  "[--forcing-rounding-units <x>] [--implied-band-scale <x>] [--side-guard-scale <x>] "
+  "[--forcing-rounding-units <x>] [--side-guard-scale <x>] "
   "[--singleton-cols-early]";
 
 constexpr const char* growth_ratio_names[]    = {"all", "continuous", "integer-exempt"};
@@ -85,8 +84,7 @@ inline int take_switch(int argc, char** argv, int& i, gprs::options_t& o)
   }
   bool named = flag("--growth-ratio") || flag("--singleton-order") || flag("--interval-start") ||
                flag("--interval-order");
-  bool number =
-    flag("--forcing-rounding-units") || flag("--implied-band-scale") || flag("--side-guard-scale");
+  bool number = flag("--forcing-rounding-units") || flag("--side-guard-scale");
   if (!named && !number) { return 0; }
   if (i + 1 >= argc) { return -1; }
   const char* value = argv[++i];
@@ -108,8 +106,6 @@ inline int take_switch(int argc, char** argv, int& i, gprs::options_t& o)
     o.interval_order = (gprs::interval_order_t)k;
   } else if (flag("--forcing-rounding-units")) {
     o.forcing_rounding_units = std::atof(value);
-  } else if (flag("--implied-band-scale")) {
-    o.implied_band_scale = std::atof(value);
   } else {
     o.side_guard_scale = std::atof(value);
   }
@@ -163,7 +159,6 @@ inline void write_options(FILE* out, const gprs::options_t& o)
   name("interval_start", interval_start_names[(int)o.interval_start]);
   name("interval_order", interval_order_names[(int)o.interval_order]);
   number("forcing_rounding_units", o.forcing_rounding_units);
-  number("implied_band_scale", o.implied_band_scale);
   number("side_guard_scale", o.side_guard_scale);
   flag("singleton_cols_early", o.singleton_cols_early);
   std::fprintf(out, "}");
