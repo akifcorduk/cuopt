@@ -4,8 +4,11 @@ Status on 2026-11-28: proposed, not approved, nothing implemented. It answers th
 directive of 2026-11-28 (DESIGN.md amendment A11, HISTORY Entry 51). It is the synthesis of a
 design round with ten agents: an inventory of the code, a measurement of how much work is
 available at once, a research step, three competing designs, three critiques, one synthesis.
-An independent check of this plan is running (HISTORY Entry 53); its findings are added as
-`verification.json` and `PLAN_AMENDMENTS.md`.
+An independent check of this plan ran on the same day (HISTORY Entry 55): six verifiers and
+one step that tried to refute each finding. Verdict: the plan stands with 39 amendments, which
+are appended at the end of this file and override the text above where they differ. In
+particular section 14 (decisions for the owner) is replaced by amendment AM-39 and milestone
+M0 by AM-33. The reports of the check are in `verification.json`.
 
 Files beside this one: `inventory`, `measured`, `research`, `design_one_algorithm`,
 `design_bulk_first`, `design_device_native`, `critique_validity_determinism`,
@@ -190,3 +193,253 @@ The nvcc bit test; no measured cost of a real device step; nothing measured on t
 FILES OF THIS ROUND THAT THE PLAN USES
 R/design_one-algorithm/batch_prototype.patch and analyse_240_final.txt (batch prototype and its result); R/critique_validity-determinism/t_cross.cpp, t_zero.cpp and fix (the crossing models, the signed-zero model, the repaired prototype); R/critique_completeness-migration/critique_probe.patch, probe_results.txt and hybrid_sim.txt (activities as values, least-common-multiple scale, hybrid simulation); R/critique_performance/model.py and the scripts next to it (the time model); R/measure/instrumentation.patch and the bench240 tables (width, depth, tail). The plan itself exists only in this result; I wrote no file. The entry in P/HISTORY.md and the new entries of P/ASSUMPTIONS.md are left to the session that owns the round, because this step was read-only.
 ```
+
+## Amendments after the independent check (2026-11-28)
+
+Six verifiers checked the plan from six sides: statements about the code, figures, validity of the batch rules, identity of host and device, performance and the hybrid rule, the owner's constraints. A seventh step tried to refute every finding of weight. Only findings that survived are amended here. Verdict: the plan stands with these amendments. No finding is fatal. Nothing is implemented and no device step of the plan has been run; that is unchanged.
+
+Work files of the check: V = /private/tmp/claude-502/-Users-acoerduek--claude-spares-spare-bsnTJo/c660eb6b-7edc-4afc-bf62-0442cb32d870/scratchpad/gpu_s1_verify (a scratch directory; a model that an amendment names has to be copied into the tests when it is adopted). Every figure names its instance set. 'Measured' means run in the check, 'recomputed' means from stored files, 'read' means taken from a document. 'The 17' are the 17 local dumps.
+
+### A. The rules of a step
+
+**AM-1. A crossing between two candidates of the row rules gives no infeasible verdict.**
+Changes: section 2 (K1), PER_PART 3 (conflict_rule, same_result_as_today), DEFECTS_TAKEN 2, ASSUMPTIONS 7.
+Old: 'A lower bound above the upper by more than the tolerance is infeasible; a smaller crossing gives the column the upper candidate.'
+New: For candidates of the row rules (singleton rows, forcing rows) a crossing between candidates of one step gives no infeasible verdict, whatever its size. The column takes the upper candidate. Every row whose candidate was cut stays, is listed again, and its next visit decides with today's tests in its own units (rules_rows.cpp:212 and :107-115). The verdict in column units stays for propagation, where today's test is in column units too (rules_bounds.cpp). New unit tests: the four models of V/code/t_clamp2.cpp. New campaign profile: coefficients below 1e-3 and bounds that cross by less than the tolerance over the coefficient.
+Reason: Measured on four hand-made models. Today's engine ends reduced_to_empty with a row violation of at most 5e-7 (tolerance 1e-6). The designer's prototype and the repaired prototype end infeasible on all four. The unit test rows_singleton_row_small_coefficient fixes today's convention. The critic's repair covered only the other direction.
+
+**AM-2. Integer rounding is done per candidate, before the reduction.**
+Changes: section 2 (K1), PER_PART 8 (bound transfer), M1 precondition.
+Old: 'Integer rounding comes after the reduction.' and 'deleted in the step only when the bounds written to its columns are at least as tight as its own candidates'.
+New: Each candidate is rounded by its own value function before the reduction; the slack of that rounding may depend on the source (the map of a transfer, the coefficient of a row). The reduction runs on the rounded values under (value, source index). 'At least as tight' compares the written bound with the rounded candidate. The loop wording holds for rounded candidates.
+Reason: (a) It is today's order: tighten_lower rounds each candidate. (b) For a transfer to an integer root the other order gives r >= 2 where today gives 3, and a child then lies 4e-4 below its bound (exact model). (c) The two orders differ in the sign of a zero bound (bits 0000000000000000 against 8000000000000000, rerun). (d) Under the literal old text the row 1e4 x >= 20000.004 with x integer is never deleted: its candidate 2.0000004 is above the written bound 2 in every step, and the call ends on its budget.
+Defect of today's engine, found on the way: for that model today's engine and the repaired batch prototype return x = 2 with a row violation of 0.004 (measured, one integer column). The exact answer is 3. The rounding slack is in column units while the row is deleted. It goes to the triage list as a precondition of M1, with the model. The form the engine already uses elsewhere (slack = feasibility / max(1, |a|), transfer_bounds and the R7 text) is the candidate repair, behind its own switch.
+
+**AM-3. K1 against existing bounds; NaN; sort keys.**
+Changes: section 2 (K1), PER_PART 11 and 16 (sort keys).
+New: The reduced pair is applied against the existing bounds by the rule of tighten_lower and tighten_upper: a candidate that crosses the existing opposite bound within the tolerance fixes the column at the existing bound, so a column never leaves the box of the step's start. A NaN candidate is an error in every build, never a value of the reduction. A sort key gets +0.0 added before its integer image is taken, on both executors.
+Reason: The old sentence was not defined against an existing bound; read literally a column moves to -5e-7 and a row deleted earlier is off by 5e-3 (exact model). With a NaN, 16 of 804 small reductions differ from the loop (rerun). The ordered image puts every -0 before every +0, a double comparison does not.
+
+**AM-4. A map whose transferred bound was cut is not applied in the step.**
+Changes: PER_PART 8, section 3.8.
+Old: 'Bound transfer to the roots by the combine rule; the children of a root that the transfer fixes are fixed at their image.'
+New: A map whose transferred bound was cut by the combine rule (the bound written to the root is less tight than the map's candidate) is not applied in the step. Its row and its column stay, and the row is tested in its own units in the next step. The maps below it keep their composition, which the kept row still implies. Unit test: the three-column model of V/validity/t_alias.cpp in both row orders.
+Reason: Model: r in [-1,1], c1 in [5e-3,1], c2 in [-1,0], rows 1e4 r - c1 = 0 and r - c2 = 0. Today's engine gives a row violation of 5e-7 with the big row first and 0.005 with the big row second (measured). The batch form as written gives 0.005 in every order (derived; the alias batch is not prototyped). The defect of today's order goes to the triage list.
+
+**AM-5. Parallel rows: the kept row, a cut removed row, one pivot per target.**
+Changes: PER_PART 7 (device_algorithm, same_result_as_today, conflict_rule), section 3.7.
+Old: 'in a class without singleton columns the smallest row is kept ... the other rows are deleted' and 'merged into their smallest row'.
+New: The kept row of a class is the one the repair in review defines (commit 5b87457a5: the row with the larger coefficients, read at the smallest core column; the smaller index among equals), found as a reduction over the class after the leader rounds. A removed row whose side image was cut by a crossing stays for the next step. In the subtraction step a target takes one pivot per step (fewest singleton columns, then the smallest index, among the rows the merge kept). 'No reduction of today reads what another wrote in the same call' holds per row visit, not per reduction: a merge reads the sides that an earlier merge of the same visit wrote.
+Reason: Model: x + y <= 5 and 1e6 x + 1e6 y >= 5e6 + 0.4. Today's order ends reduced_to_empty with a row violation of 0.4 (measured); with the rows swapped it is infeasible. The plan made the repair a precondition of M1 and then specified the unrepaired rule. Two equations subtracted from one target in one step leave a row that a feasible point violates (exact model).
+
+**AM-6. The reservation is a subset of the ascending loop, not the loop.**
+Changes: section 2 (K3), UNSURE, DEFECTS_OPEN, M11 gate.
+Old: 'The applied set is what a loop in ascending key gives when every premise is tested at application.'
+New: The applied set is a subset of that loop's set. It equals the loop in which every earlier candidate blocks, applied or not. Both executors compute it in two phases over all candidates of the step, so the claims of losers count. APPLY reads only what FIND stored, because an applied unit with a larger key may write a cell that an applied unit read. The gates 'batch against sequential' compare reductions, not sets, and count the units lost per step. New tests: the chain of three units with write claims {a}, {a,b}, {b} as a step-equality test; 'a loser's claim ignored' as a wrong host step.
+Reason: Rerun of V/determinism_identity/k3.py: 2 of 27 exhaustive systems and 48,341 of 200,000 random systems differ from the loop; none is outside a subset.
+
+**AM-7. Single-lock alias (R8): the reservation is on the aliased column.**
+Changes: PER_PART 13 (conflict_rule).
+Old: 'reservation (K3) on the binary, then the forest and the ordered fold'.
+New: Reservation on the aliased column with the row index as the key: one lock edge per column per step. The binary needs no reservation. The model below goes into the cell table and the review of the rule.
+Reason: min p1 + p2, x - p1 >= 0, x + p2 <= 1, three binaries, cost of x zero. Both rows pass R8 for x on the state of the step. Two lock aliases of one column cannot be composed: the optimum 0 becomes 1 (exact model; the R8 text read).
+
+**AM-8. Implied equation (A): the unit read-claims every row of its column.**
+Changes: PER_PART 14 (device_algorithm, conflict_rule).
+Old: 'reservation (K3) on the row with the column index as the key'.
+New: The unit write-claims its lock row and read-claims every row that holds its column, because its lock count reads their sides.
+Reason: min -x1 - x2, x1 - 2 x2 <= 0, x2 - 2 x1 <= 0, x >= 0. The model is unbounded. Both columns pass on the state of the step and claim different rows; with both rows as equations only (0,0) is left (exact model; the rule text read).
+
+**AM-9. Merge of parallel columns (R9): the merged bounds are a sum of intervals.**
+Changes: PER_PART 11 (device_algorithm, conflict_rule).
+Old: 'its bounds are the minimum and maximum of the scaled bounds' and 'merges inside one class combine by minimum and maximum'.
+New: The merged bounds are l_kept + min(sigma l, sigma u) and u_kept + max(sigma l, sigma u) of the removed column, as in stage1c_design/v2_design.txt (R9). For a class of three or more they are the ordered fold (K2) of the interval ends, or the merge is one pair per kept column per step. The bound of the kept column gets wider: that is a named exception to K1, and the rows of the kept column are folded again.
+Reason: Three parallel columns in [0,1] with one row: the exact merged column has the range [0,3]; minimum and maximum give [0,2] or [0,1] (exact model).
+
+**AM-10. Singleton-column family: what the prefix covers; a folded cost that is not finite.**
+Changes: PER_PART 9.
+New: The saved-entry prefix is taken over the zero-cost units whose row stays; every other unit is accepted, as today (rules_singleton_cols.cpp:354-360). The finite-cost guard is tested on the folded cost: units that feed a column whose folded cost is not finite are not applied, from the largest row down until the sum is finite, and stay listed.
+Reason: Today's limit counts only the entries saved of rows that stay. Two pivot rows can each pass the guard alone and fold to infinity (derived).
+
+**AM-11. Row tightening: a row scaled in a step is strengthened in the next step.**
+Changes: PER_PART 5, section 3.5.
+Old: 'coefficient strengthening per entry from the stored activity'.
+New: A row that the step scales, or whose sides it rounds, is not strengthened in that step. It is listed again and is strengthened in the next step from the fold of its new coefficients. Step equality is tested on a row that is scaled and strengthened.
+Reason: Today's visit sums the scaled row again before it strengthens (rules_tightening.cpp:204 and :265; read). The activity stored at the start of the step belongs to the unscaled coefficients. 2,530 visits do both on the 17, 2,525 of them on bnatt500 (the code verifier's counters, read).
+
+**AM-12. The order of record kinds is written down before M5.**
+Changes: section 2 (state item 6), PER_PART 21, M11.
+New: The kind order is fixed with at least these constraints: parallel_fix before merge before dual_bound; col_scale before implied_integer. A family that pushes a transaction orders by unit first inside a step. The crush check runs per step, next to the stack check.
+Reason: The forward replay of the designed records needs these orders (read by the validity verifier in two design paragraphs; not checked against the crush code by me).
+
+### B. Identity of host and device
+
+**AM-13. Every sum over a line gets a stated form; two new switches.**
+Changes: IDENTITY_RULE ('one fold order for every floating-point sum'), PER_PART 5 and 20, section 11, M0, M3, M5.
+New: The plan carries a table of every floating-point sum over a line that is not an activity (fixed terms, drift, size, the new side of the strengthening, saved entries; at least 14 loops today are running sums in storage order). Each has one of two forms: a running sum by one owner thread, with a length cap under H5, or a lane fold by slot position. Switch row_sums = running | lanes (result-changing, M3). Switch storage_order (rows: slot reuse | sorted; columns: append | merge; result-changing, M5). Each has an entry in ASSUMPTIONS.md and its own hash gate on the 240 and the 40; both are probed on the host in M0. 'The arithmetic of the fixed terms is today's' (PER_PART 20) holds only in the position running.
+Reason: PER_PART 5 and PER_PART 20 contradict each other. Measured on random rows: a running compensated sum and a lane fold differ in (hi, lo) on 11,525 of 11,960 rows and in hi + lo on none; plain sums differ on 9,330. On the 17, rows are out of column order at the output on 7 instances (code verifier, read). Sorted rows are a result change that no listed switch covers.
+
+**AM-14. The work of a step is one integer function; the stall rule is defined on steps.**
+Changes: section 4 ('today's unit'), section 5 ('work, first_work ... keep their meaning'), section 2 (status record), IDENTITY_RULE.
+New: Per step type one integer function in the shared headers: work = f(list, sizes of the listed lines, findings of the step). It charges nothing for a fold and does not read the used slots of a column. The stall rule reads the work at the end of the last step with a finding. Work and first_work change their meaning and are listed as such. The status record also carries 'limited' and the per-call counters (dual findings, sub-rule findings, column statistics). Section 5 adds the statistics that depend on the order of visits: records, the refusal counts of the singleton columns, rebuilds. Step equality compares the work and the stop decision in both candidate forms. Identity is claimed for time_limit = infinity; a finite limit is tested between steps.
+Reason: Today's charges depend on findings, on a refresh and on used slots (read). Budgets decide which steps exist, so two executors that count differently end with different models.
+
+**AM-15. Versions, change counters and activities at a step boundary.**
+Changes: section 2 ('The state holds no history'), section 6, IDENTITY_RULE.
+New: After a step, row_version is +1 per row changed in the step; bound changes, side changes and findings count cells written, not candidates. Activities and their marks are derived values: the step hash and the array comparison leave them out and assertion builds compare the fold of every row; or both executors fold exactly the marked rows in UPDATE. M3 states which. A step that finds infeasible applies nothing and counts nothing.
+Reason: The state hash holds row_version, the change counters and the activity arrays (hash.cpp:140-177, read). A loop that writes twice and a reduction that writes once store the same bound and different counters.
+
+**AM-16. Masks and counts of infinite terms.**
+Changes: PER_PART 4 ('marks are stores of a constant'), state item 1 ('two uint16 arrays that saturate'), PER_PART 1, ASSUMPTIONS 25, section 7 items 3 and 9.
+New: A mask is one byte array per list, or a 32-bit word with atomicOr on both sides; never a plain store into a shared 16-bit word. Counts of infinite terms are capped at 2, as the review of cuOpt PR 2372 asks; the thread group that owns the row reduces and clamps; where a scan counts across rows it uses a 32-bit scratch that is clamped. No 16-bit atomic add is assumed. The count type follows the activities switch: exact int32 counts in the position incremental. New step-equality cases: 65,535, 65,536 and 65,537 infinite terms; two different events on one row in one step.
+Reason: list_mask_t is one uint16 word with 11 row lists, and two events of one step carry different bit sets (state.hpp, read). The cap was left out only because a capped count cannot be decremented; with activities as values nothing is decremented. In the incremental position counts are decremented, so assumption 25 is false there. Which 16-bit atomics exist is from memory; M0 compiles a two-line kernel (AM-33).
+
+**AM-17. Contraction is tested inside the libraries; preconditions of the identity rule.**
+Changes: section 2 ('Two executors'), M0 item 1, M12, ACCEPTANCE 3, IDENTITY_RULE.
+New: Both libraries carry a self-test with stored result bits (dd_add_product, the candidate, the fused multiply-add of candidate_slack, the alias offset). It runs at the first host call and at device context creation and fails hard. The nvcc bit test is run once with contraction on, on purpose, and must fail. Criterion 3 adds: the step hashes of cuOpt's own build of host and device equal the standalone ones on the 240 and the 40. Preconditions of the identity rule: the calling thread rounds to nearest and does not flush to zero (the entry checks, or saves, sets and restores); time_limit = infinity. 'The one explicit fused multiply-add' is corrected: there are two (numerics.hpp:60, implied.hpp:176).
+Reason: cuOpt globs the engine sources into its own library and sets -ffp-contract=off per source; its CUDA flags hold no --fmad=false (read). Nothing sets or tests the floating-point mode in gprs or in cuOpt (grep).
+
+**AM-18. The hash and the array comparison run over live slots.**
+Changes: PER_PART 23, M3 (e), section 6.
+New: Hash and comparison cover live slots only, with position = (line, rank in line). Layout arrays are compared only between executors that claim an equal layout.
+Reason: Dead slots, free capacity and unfilled device arrays have no defined content.
+
+**AM-19. The rank of the single infinite entry is an output of the fold.**
+Changes: section 2 (state item 1), PER_PART 1.
+Old: 'the position of a single infinite entry is not stored, the entry recognises its own term'.
+New: The fold gives, per side, the rank of the single infinite entry; it is valid when the count is 1. It is a value of the fold, not history.
+Reason: Propagation jumps to that entry for one work unit today. 327,001 sides are served that way in 1,966,644 propagation row visits on the 17; on rd-rplusc-21 266,200 in 276,874 (code verifier's counters, read).
+
+**AM-20. M1 defines the unit of each family; the audit is reworded.**
+Changes: MILESTONES M1 (content, gate), section 7 item 2, M0 item 1.
+Old: 'an evaluation changes nothing (no counter, list, record, activity, statistic), and evaluation followed by application equals the old visit'.
+New: M1 first defines the unit per family: the entry for propagation, three stages for row tightening, the pair for the parallel rows, the map for the alias application, the row unit and the column unit for the singleton family. The activity refresh is a step of its own before the evaluation. Records, marks, step counters and refusal counts are outputs of the evaluation that the application books. The audit says: an evaluation writes nothing but its outputs, and evaluation followed by application of one unit equals the old unit. M0 item 1: the functions of implied.hpp and integral.hpp that take state_t are split first, or their bit test moves behind M1; forcing.hpp exists only at edd147a7e.
+Reason: A propagation row visit applies between its entries and between its two sides, and its candidate path writes records, marks and counters (rules_propagation.cpp:96-185, read).
+
+### C. Figures
+
+**AM-21. Criterion 7: the pessimistic brackets.**
+Changes: ACCEPTANCE 7, UNSURE ('sit below its pessimistic setting').
+Old: 'the 67 from 2e5 to 1e6 at least 1.5 times (model 2.8 to 4.0, pessimistic 1.7 to 2.3)'.
+New: In the critic's pessimistic setting (fixed costs times 3, 0.5 ns per work unit, host path 25% slower) the class 2e5 to 1e6 gives 1.5 to 1.9, and 1.46 with the host copy created in the call. The proposed 1.5 is at that value, not below it. 'Not slower in the sum' between device_min_nnz and 2e5 fails in that setting (0.82 for the plan's own rule). The bracket of the nine (4.9 and 5.9) uses a harsher setting (fixed costs times 3, 1.0 ns per unit, 10 device steps per cascade call); under it the class 1e6 to 1e7 gives 4.2 and 2e5 to 1e6 gives 1.4. Every bracket names its inputs. No factor is set before AM-33 (a), (b) and (h) are in.
+Reason: Rerun of the critic's model (a model on the 240: node host seconds, Mac trace, H200 costs). The old '2.3' is the figure for fixed costs doubled.
+
+**AM-22. The model figures of the plan's own hybrid rule.**
+Changes: HYBRID_RULE H3 and H4, ACCEPTANCE 6 and 7.
+New: The plan's rule (device from 1e5 nonzeros, hand-back only up to 16 MiB after two low steps, copy created in the call) in the critic's model, today over model for the classes 1e5 to 2e5, 2e5 to 1e6 and 1e6 to 1e7: 1.65, 3.65, 10.80 at base; 1.12, 2.21, 8.17 with fixed costs doubled; 0.85, 1.58, 6.57 at three times; 0.82, 1.51, 5.51 pessimistic. Criterion 6 is broken by 0, 7, 26 and 22 instances of the 240. Below 1e6 nonzeros the result hangs on the fixed cost of a step, above on the device cost per work unit. Neither is measured.
+Reason: No script of the round held the plan's rule. Rerun of the figures verifier's copy of the model; it is a model on a model.
+
+**AM-23. The ladder figures on both sets.**
+Changes: section 10, ORDER_WITH_REMAINING_RULES (Order 2).
+Old: '1.7% of the nonzeros ... are still missing after simple probing: 0.9826 on the HiGHS ladder, 237 of the 240' and 'about 0.983'.
+New: Remaining nonzeros against all cheap rules, ladder of HiGHS (read): on 237 of the 240, 0.9726 with the merged rule set and 0.9826 with simple probing; on the 40, 0.9233 and 0.9377. The gate of Stage 1c covers both sets. On the 40 the worth sits in dual bound strengthening and the single-lock alias (0.9396 to 0.9974). These are figures of HiGHS's rule sets, not of the engine.
+
+**AM-24. The thresholds that were simulated.**
+Changes: HYBRID_RULE H3 ('the ones the critics simulated'), section 4 last paragraph, ACCEPTANCE 4.
+New: The 98.7% and 2.2 switches belong to T_down = 20,000 for every family and a cap of 128 MiB (114 instances of the 240). With the values H3 states and the 16 MiB cap (recomputed on the recorded host steps of the Mac trace): 94.8% of the rule work on the device in the class 1e5 to 2e5 and 99.4% in 2e5 to 1e6; lowest ns1830653 67.8%, momentum1 72.5%, n2seq36q 79.1%; 42 instances can hand back.
+
+**AM-25. The reason of H4 on the instances it covers.**
+Changes: HYBRID_RULE H4, 'Not known'.
+New: H4 covers 84 of the 240: the 30 and 54 instances below 1e6 nonzeros. The 0.3% holds for the 30. For the 54, calls below one fixed step are 4.1% of the Mac engine seconds, and all their recorded steps at the plan's own step costs (200 microseconds per cascade round, 1.5 ms per structural step) cost 0.94 s, 21% of their 4.47 node seconds, against 2.9% for the 30 (recomputed). The instances that lose most on small steps in the performance verifier's model (not rerun by me) are atlanta-ip, irish-electricity, neos-3555904-turama, snp-02-004-104, neos-5093327-huahum and neos-2987310-joes. They are named in M0 (AM-33) and in the gates of M7. Whether the cap is a state size or needs a way down for long narrow chains is decided on that measurement.
+
+**AM-26. Corrections.**
+- H3: unitcal_7 has 1,398 family calls in 33 ms on the node; at one device step per call that is about 3.6 times its node time. The 6.9 times is against the 17 ms of the Mac trace (recomputed).
+- Section 6 and PER_PART 9: dlr2 saves 55.4 million entries (0.66 GB). 71.0 million (0.85 GB) is the sum over the nine (recomputed).
+- Section 5 and REDUCTIONS_LOST: the crossing rule kept no row on any of the 240 (its counter is 0 in all 240 result files), so '0 of 240 differ' shows that it is neutral where no crossing occurs; its effect is measured on hand-made models only. With it the row-rule rounds are 2,420 against 2,263 today, +6.9%, not +5.7% (recomputed).
+- REDUCTIONS_LOST and DEFECTS_OPEN: '31 further instances' is 35 (32 with an equal hash). On neos-1122047 ascending lists alone take the tightening findings from 71,994 to 14,092; batch rounds take them to 7,238 (recomputed).
+- Section 0: the last register entry is AS-339.
+- H5: the plan's own two figures (about a millisecond of launches, 37 ns per alias on the Mac) put the break-even of the forest near 27,000 edges, not 100,000. The value comes from the measurement at M9.
+- Section 2: a column gets a new entry through two mechanisms in four rules (doubleton, simple probing, the lock alias, the parallel-row subtraction).
+- Section 3.3: the row rules also scan an empty row and every row that passes the O(1) forcing pre-test.
+
+**AM-27. The host path of the batch prototype per size class.**
+Changes: OPEN_FOR_OWNER 5, DEFECTS_TAKEN 17, DEFECTS_OPEN, M4 gate, ACCEPTANCE 7.
+New: The 1.12 is a sum. Per size class (recomputed twice; 240 dumps, Mac, smallest of five passes, two of seven families converted): below 5e4 1.14; 5e4 to 1e5 1.07; 1e5 to 2e5 1.23; 2e5 to 1e6 1.12; 1e6 to 1e7 1.13; above 1.05. 134 of 240 instances are above 1.10. neos-1122047 is 1.51 times slower. On the paired node run it used 0.75 of its HiGHS allowance, so the batch form is projected at 1.13 of it (a Mac ratio on node seconds). The question on the ceiling is asked after AM-33 (c). The M4 gate names neos-1122047 for time as well as for strength.
+
+### D. Hybrid rule, memory, acceptance
+
+**AM-28. Criteria 4 and 6: which one gives way.**
+Changes: ACCEPTANCE 4 and 6, HYBRID_RULE H3 and 'How the values are fixed'.
+New: Criterion 6 is the hard one. Criterion 4 becomes: no threshold (T_down, T_up, mirror_max_bytes, the forest thresholds) lies above the break-even of its family measured on the finished engine (device step time against host step time at that work, same node) by more than a factor the owner sets (proposal: 2); the share of the rule work on the device is reported per size class, with every instance below 80% listed. The 95% and 90% are targets, not conditions. Nothing is fixed before real steps are timed (AM-33).
+Reason: In the model the criteria hold together only at the critic's base step cost: criterion 6 is broken by 0 instances of the 240 at base, 7 with fixed costs doubled and 26 at three times (AM-22). The designers and the critic differ by 1.5 to 2 on that cost, and Stage 0 measured 77 to 93 microseconds for a step without kernel work (read). A bound by break-even also keeps 'complete' from being reached by raising a threshold. The owner decides (AM-39, D6).
+
+**AM-29. The memory fallback is on the closed list, with a bound; the memory plan is completed.**
+Changes: HYBRID_RULE H7, section 1 (closed list), ACCEPTANCE 1, section 6, state item 3, PER_PART 20.
+New: The closed list gets 'the memory plan exceeds the byte budget'. Bound: on the node of the acceptance no instance of the 240 and the 40 falls back, standalone and inside cuOpt with its heuristic memory counted. The smallest GPU memory for which the criteria are claimed is stated. plan_memory adds: the uploaded input that the output step compares against (12 bytes per nonzero plus row and column arrays), the reduced model next to the state, the record arrays and the saved-entry pool, fold and candidate buffers, and a reserve for the column store. The rebuild counter counts the holes that moved columns leave, or the column store is compacted when its tail is full; the plan says what a full tail does inside a step.
+Reason: H7 was in no criterion and the byte budget had no value. Recomputed from the stored sizes of the nine: the plan's formula peaks at 18.6 GB on neos-4535459-waipa, 21.7 GB with the uploaded input, 52.6 GB next to the 120 bytes per nonzero of cuOpt's heuristics (hawaiiv10-130: 37.6 GB). On a 24 GB GPU inside cuOpt these two would run on the host: 33.2 of the 88.3 node seconds of the nine. A moved column takes twice its capacity and leaves its old slots (state_ops.cpp:167-197, read); the store reached 1.61 times the input nonzeros on uccase9 (17, code verifier, not rerun). Whether a failed allocation falls back or is an error is the owner's (AS-288 says error; AM-39, D7).
+
+**AM-30. Wording of the acceptance criteria.**
+Changes: ACCEPTANCE preamble and criteria 4, 5, 7, 8, 9, 10; gates of M1 and M3 to M5.
+New:
+- Preamble: every criterion is evaluated at the shipped defaults. A family whose shipped default is apply_order = sequential fails criterion 1.
+- Criterion 4 counts the rules in work units. State build, storage, output and hash have no work count (46.9% of the node seconds on the 240, recomputed); they are covered by criterion 5 in seconds.
+- Criterion 5: hand-over seconds are host seconds. With delivery to host memory the landing is inside the bound, not beside it. The adapter's seconds are reported with it.
+- Criterion 7 names the timed scope: the hash kind and the delivery of the timed run.
+- Criterion 8, narrow reading: the gate of Stage 1c (0.99) cannot be met by the built rule set (ladder 0.9826 on 237 of the 240, 0.9377 on the 40). Under the narrow reading the criterion is 'not below the engine's own ratio before the change'.
+- Criterion 9 and the gates of M1 and M3 to M5: host campaigns of at least 1e9 models per kind and build. The device volume is sized from the campaign rate measured at M6, or the criterion says that the device is covered through criterion 3.
+- Criterion 10 adds the adapter's seconds (conversions in and out, the reductions of mode 3) from the first milestone that runs inside cuOpt.
+Reason: The last campaign found one failure in 300 million models (read); 1e8 models see such a class with probability 0.28, 1e9 with 0.96, and a billion models take about 20 minutes on a node with 24 processes (read). Inside cuOpt the presolve call takes 94 s against 18 s for the engine on the 240 (read, not timed in one run).
+
+**AM-31. No Grace Hopper node in the gate.**
+Changes: ACCEPTANCE 3, M12, section 7 item 7.
+Old: 'on a Grace Hopper node. Zero differences.'
+New: The managed path is tested by forcing it on x86. A run on a Grace Hopper node is not a condition for the go to Stage 2, unless the owner asks for a hash-only run there.
+Reason: The owner's word of Entry 45 ('leave the benchmarking and perf optimization there to the end'), A10 and AS-308 ('outside every gate'). The plan's own question 11 recommended keeping A10.
+
+**AM-32. M7: cuOpt's load-balanced code is a pattern for thread groups only.**
+Changes: MILESTONES M7 (content), DEFECTS_OPEN (last item).
+New: The code is not built in this worktree (no CMake file names it). It sums with plain block and warp reductions, has no list and sweeps the whole model per round, uses the candidate form that numerics.hpp forbids, and orders a bin by atomics. Only the layout of thread groups is taken. Every kernel of M7 is new. The CUDA graph variant is priced only after the cost of new node parameters per step is measured.
+Reason: The files were read by the performance verifier; I checked the CMake files and the cited kernel lines.
+
+### E. Milestones
+
+**AM-33. M0 measures real device steps and the node run of the prototype, first.**
+Changes: MILESTONES M0 (content, gate), DEFECTS_OPEN, section 8.
+New, in this order, and reported before the owner confirms M3 to M5:
+(a) Real device steps outside the engine: one propagation step in both candidate forms and one row-rule step (a list-restricted candidate kernel and the apply, mask and status kernels added to the Stage 0 benchmark), on states dumped at recorded steps, compared bit for bit with the host batch prototype. By name: unitcal_7, momentum1, neos-827175, atlanta-ip, irish-electricity, snp-02-004-104, neos-3555904-turama, neos-5093327-huahum, neos-2987310-joes, neos-1122047, and the class 5e4 to 1e5. The host is timed on the same node. Result: the fixed cost of a step and of a hand-over per size class.
+(b) One real kernel per family kind (fold, candidates, tightening scan, key and sort) on index-order storage with scheduling lists, on the 31 and the nine: the device cost per work unit. The instrumented host run on the nine comes first.
+(c) The batch prototype on the node: three alternating passes against the base on the 240 and the 31, per size class, per family and per instance, with the HiGHS allowance beside it.
+(d) Host probes: the lazy fold (time per size class); row_sums running against lanes; the storage order; the largest column store on the 240 and the nine.
+(e) The mock steps also carry the parts whose cost grows with the model: the mask scan over all lines, the reductions behind the status record, the column merge with its partition; with the line counts of the nine.
+(f) Compile checks: which 16-bit atomics exist; the nvcc bit test once with contraction on, which must fail; the fused multiply-add of candidate_slack in the bit test.
+(g) Undo and crush seconds on the 240 and the nine.
+(h) The time model is redone with the plan's own rule and these numbers before any threshold or factor is set.
+Reason: As planned, M3 to M5 change about 6,200 engine lines on the numbers of mock steps, and the first real step is timed at M6. The mock steps retire the fixed cost, not the cost per work unit, which carries every factor from 1e6 nonzeros up (0.25 ns assumed against 4.5 to 5.0 ns on the host).
+
+**AM-34. A check inside cuOpt before M12; the cluster.**
+Changes: gates of M4 and M5, M5 ('Then the owner decides').
+New: The gates of M4 and M5 add the presolve-only report inside cuOpt (adapter modes 2 and 3) on the 240. The plan says where cluster run 1 of the Stage 1 gate runs (DESIGN.md section 13: no wrong status, every postsolved solution feasible; prepared and never submitted). The owner decides whether a standard cluster pair on apply_order (sequential against batch) runs after M5 and before the kernels of M7 (AM-39, D9).
+Reason: The batch order changes reduced models (6 of 240 hashes on the prototype). The end test over solution quality can prefer the sequential order for a family, and that family then runs on the host on every machine: the kernels of M6 to M10 for it would be lost.
+
+**AM-35. Every gate carries the owner's working rules.**
+Changes: all gates of MILESTONES; ASSUMPTIONS 24 and 25; section 11.
+New: Every gate adds: one commit, pushed; the register entries of the milestone with their switches; the history entry. Device campaigns run under restartable drivers. Assumptions 24 and 25 get a switch or a stated reason why none can exist. Entered as assumptions: ties to the smaller source index in K1; records ordered by step, kind and unit; children of a fixed root without an alias record; the loss allowed against today's engine (1.001 and 1.005); screened unions; the byte limit of a record flush; the share of nonzeros that triggers a full re-sort of the column store; the length cap of a sequential test in a row; crossing_value and offset_sum in section 11. The time gates of M9 and M10 give a figure per size class on the 240 next to the named instances.
+
+**AM-36. Parts without an executor or a rule; the postsolve; cuSPARSE.**
+Changes: PER_PART (new entries), PER_PART 21 (why_host), ACCEPTANCE 1, section 3.1.
+New: PER_PART gets entries for the time limit (tested between steps), the stall stop (defined on steps, AM-14), row_version (AM-15), the record hash, the family data that outlives a call (parallel rows, singleton columns), and the primal-only and sub-rule switches. The reason for undo and crush on the host is 'not measured': DESIGN.md section 9 says that GPU batches are parallel loops in the undo, and the records of one step are independent. They are classified after AM-33 (g). Section 3.1 gets one line: cuSPARSE was measured in Entry 32 (csr2csc and the radix sort within 1% end to end; its order inside a column is only observed; SpMV cannot give the lane fold); csr2csc stays a benchmarked variant.
+
+### F. Scope
+
+**AM-37. New section 15: re-entry from later phases.**
+Changes: new section; section 2 (state item 4), REJECTED 15, H1.
+New: At run time the stages are phases of one loop (DESIGN.md A7, the owner's question at HISTORY.md:1562). The plan has to hold when a later phase hands the state back to Stage 1. Required: (1) what a later phase leaves: rows in column order without dead entries, counters, activity marks, list masks, a status record; (2) one storage step for rows that were added or grew (clique extension, fill-in of the aggregator, appended indicator rows): a rebuild from the state into new stores, on both executors; (3) a host-to-device copy of a reduced state, for a model below device_min_nnz that a wide phase wants on the device; (4) whether the identity rule binds later phases, decided when they are designed. 'No rule of Stage 1 lets a row grow' stays true for Stage 1 only. Before M5 fixes the storage, the state changes of Stage 2 and of A8 steps 2 and 3 are checked against state item 4. None of this is designed or costed here.
+
+**AM-38. cuOpt's own reductions.**
+Changes: section 3.11, DEFECTS_OPEN (adapter), OPEN_FOR_OWNER 2.
+New, one line per reduction (DESIGN.md A6, the owner's message at HISTORY.md:1566): single-lock dual aggregation is part 13 (R8), on the device through the alias pipeline, M11. BHW coefficient reduction is a map over rows next to row tightening, on both executors; A8 puts it after the gate of Stage 1c; its milestone follows the owner's answer to D2. Indicator strengthening (it appends rows) and GF2 come with A8 step 2 and need the storage step of section 15; they are in no milestone of this plan. Block BVE is a wide phase of Stage 2. Until the ports exist, adapter mode 3 runs the four on a host model inside the PaPILO framework, and mode 3 is the arm of every end test. So 'delivered as device arrays' needs a download for mode 3 or the ports; M12 says which.
+
+**AM-39. Section 14 (decisions for the owner) is replaced.**
+Asked now:
+- D1 (was 1): may the order of application change. Unchanged.
+- D2 (was 2): which reading closes the stage; and where A8 steps 2 and 3 (sparsify, aggregator, pairwise dominated columns), GF2, indicator strengthening and BHW stand against 'state 2' of the directive. The stage loop needs the storage step of section 15 whatever the answer.
+- D3 (was 3): the order with the remaining rules, which reverses A9; with the ladder figures of both sets (AM-23).
+- D4 (new): activities recomputed instead of updated. It reverses AS-291, which the register books as set by the owner. Asked with the host time of the lazy fold from M0; both positions stay until the end test.
+- D5 (new): today's engine returns points outside the tolerance on three hand-made models (row violations 5e-3, 4e-3 and 0.4 against 1e-6; the third has a repair in review). Recommendation: repair them with the triage before M1.
+- D6 (was 9, changed): the acceptance numbers stay provisional. Which of criteria 4 and 6 gives way (recommendation: AM-28). The loss allowed against today's engine (1.001 in the mean, 1.005 per instance). The factor 1.5 for 2e5 to 1e6 nonzeros is at the pessimistic model value. At a size threshold of 200,000, 50 of the 147 benchmark instances from 5e4 nonzeros never use the device; at 100,000, 21.
+- D7 (new): memory. Fallback to the host or a hard error (AS-288 says error); the smallest GPU memory for which 'complete' is claimed, standalone and inside cuOpt.
+- D8 (was 10, extended): the adapter with device arrays and the warm call; and whether the adapter's conversions (94 s against 18 s for the engine on the 240, read) and the postsolve are inside 'the whole presolve suite'.
+- D9 (new): a standard cluster pair on apply_order after M5 and before the kernels, or the owner accepts that the end test can send a family back to the host; and where cluster run 1 of the Stage 1 gate runs.
+Asked after M0, with node figures: D10 (was 5): the ceiling of the host path.
+No longer questions: 4 (a standing rule: unreviewed code is not merged); 6 (the hash follows from D1); 7 and 8 (the owner's rule of Entry 45 and the register's closing rule decide: every result-changing switch keeps both positions until its entry is closed by 240 of 240 equal hashes or by the cluster pair at the end; the recommendation to remove old forms after their gate is withdrawn); 11 (Grace Hopper is answered, AM-31; the second GPU type is named at M6); 12 (a measurement of M0); 13 (the plan does not need it).
+Missing for the decision and not supplied by the check: a rough duration per milestone.

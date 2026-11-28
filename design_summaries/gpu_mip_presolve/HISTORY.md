@@ -3242,3 +3242,120 @@ header), integer columns in the zero-cost singleton rule (not valid as the rule 
 - "Every other value of an option is valid" needs an attack of its own: the implementer's
   campaign drew the two wrong values 8 million times without a failure, because the
   generator cannot reach the models that break them.
+
+## Entry 55 — 2026-11-28 — The independent check of the GPU plan: it stands with 39 amendments; three more constructed models on which today's engine leaves the tolerance; the reviews of simple probing are back
+
+### The owner's messages (verbatim)
+
+None since Entry 51.
+
+### The check of the plan (workflow `wf_4cdf1efd-6b2`, 7 agents, 54 minutes, read-only)
+
+- Six verifiers: statements about the code (10 findings), figures (15), validity of the
+  batch steps (12), identity of host and device (10), performance and the hybrid rule (12),
+  the owner's constraints (17). One more agent tried to refute the 44 findings of weight and
+  refuted none; a few were narrowed.
+- Verdict: the plan stands with 39 amendments (AM-1 to AM-39), no finding is fatal. They are
+  appended to `stage1_gpu_design/PLAN.md`; the reports are in
+  `stage1_gpu_design/verification.json`.
+
+### What the amendments change
+
+- Rules of a step (AM-1 to AM-12). Six rules were wrong as written, each shown on a small
+  model: the combine rule reports infeasible on four models that today's row rules reduce
+  within 5e-7; the alias bound transfer and the parallel-row merge delete a row next to a cut
+  value; integer rounding after the reduction; and three proposals for unbuilt rules (the
+  single-lock alias loses an optimum, the implied equation bounds an unbounded model, the
+  merge of parallel columns cuts feasible points). The reservation in one pass is a subset
+  of the ascending loop, not the loop.
+- Identity (AM-13 to AM-20). At least 14 running sums along a row have no stated device
+  form; the work of a step must be one integer function, because budgets decide which steps
+  exist; versions and change counters are in the state hash; a shared 16-bit mask word;
+  compiler flags that nothing enforces (cuOpt compiles the engine sources itself).
+- Figures (AM-21 to AM-27). The pessimistic model bracket for 2e5 to 1e6 nonzeros is 1.5 to
+  1.9, not 1.7 to 2.3. The plan's own hybrid rule had never been run in the model: today over
+  model for 1e5 to 2e5, 2e5 to 1e6 and 1e6 to 1e7 nonzeros is 1.65 / 3.65 / 10.80 at the
+  base step cost and 0.82 / 1.51 / 5.51 in the pessimistic setting. The batch prototype's
+  host time is 1.07 to 1.23 times today's per size class (240 dumps, Mac, two of seven
+  families); neos-1122047 is 1.51 times slower.
+- Acceptance (AM-28 to AM-32). "Nothing slower than the host path" and "95% of the work on
+  the device" hold together only at the base step cost (0, 7 and 26 instances of the 240
+  break the first at one, two and three times that cost); the first stays hard, the second
+  becomes a bound on thresholds by measured break-even. The memory fallback goes on the
+  closed list with a bound. No Grace Hopper node in the gate (the owner's word of Entry 45).
+  cuOpt's load-balanced kernels are a pattern for thread groups only: they sweep the whole
+  model per round, sum with plain reductions and order a bin by atomics.
+- Milestones (AM-33 to AM-36). M0 now measures real device steps (one propagation step in
+  both forms, one row-rule step, on states dumped at recorded steps) and runs the batch
+  prototype on the node, before the host engine is rewritten.
+- Scope (AM-37 to AM-39). A new section on re-entry from later phases (the stage loop needs
+  a storage step for rows that grow or are added); where cuOpt's own reductions go; the list
+  of decisions for the owner is replaced (D1 to D9 now, D10 after M0).
+
+### Today's engine on three constructed models (measured by the verifiers, rerun by the last agent)
+
+All three have coefficients of 1e4 to 1e6 and a margin below the tolerance of 1e-6 in the
+units of a column or of the kept row; the deleted row is then off by far more in its own units.
+
+- Alias bound transfer: r in [-1, 1], c1 in [5e-3, 1], c2 in [-1, 0], rows 1e4 r - c1 = 0 and
+  r - c2 = 0 (infeasible in exact arithmetic by 5e-7). With the big row second the engine
+  ends reduced_to_empty with a row violation of 0.005; with it first, 5e-7.
+- Integer singleton row: 1e4 x >= 20000.004 with x integer in [0, 10]. The engine returns
+  x = 2 (row violation 0.004); the exact answer is 3.
+- Parallel rows: x + y <= 5 and 1e6 x + 1e6 y >= 5e6 + 0.4. The engine ends reduced_to_empty
+  with a row violation of 0.4; with the rows swapped it reports infeasible. The repair in
+  review (kept row = larger coefficients) addresses this one.
+
+### Open defects of the base engine, in one list (2026-11-28, 16:00)
+
+1. Lost optimum at a column bound of -3e19 (campaign seed 1000213883241; Entry 52). With the
+   triage agent of the M2 workflow, which has not started.
+2. The 17 other campaign failures (6 near 1e-9, 11 at huge points). Same triage.
+3. Forcing row reports a feasible constructed model infeasible (found by the validity review
+   of simple probing; repaired in its commit `458a03aef`, Stage 1 code; not merged yet).
+4. Implied-bound band times the growth limit: a restored point 1.5e-4 outside a bound
+   (Entry 54; not repaired).
+5. Alias bound transfer in root units (above; not repaired).
+6. Integer rounding of a singleton row's bound in column units (above; not repaired).
+7. Parallel-row merge in kept-row units (above; repair in review, attack running).
+8. Budget charge of the doubleton rule grows with the square of the rows on star-shaped
+   equalities (found by the worth review of simple probing; repaired on its own branch
+   `review-stage1c-m2-worth-2-doubleton`, `a072b69c5`; not merged).
+
+### The two reviews of simple probing (M2 workflow, still running: integration, then the parallel-row attack, the triage, the merge)
+
+- Validity: merge only with three commits on top (`458a03aef`). As delivered the rule
+  returned a wrong reduced model at default options on two constructed models and on 178 of
+  a family of 1,500: the forcing test it shares with the forcing row allowed a gap measured
+  in units of the sum of the row's terms. Repaired with a per-column slack test (option
+  `probing_slack`); nothing lost on the 240 and the 17 local dumps.
+- Worth: merge (`f0fc8b2cd`). On the 240 local dumps the rule changes the same eight
+  instances as HiGHS's rule, by the same sizes; the engine stands at 1.0021 / 1.0023 / 1.0023
+  of the reference; +1.8% time. One budget defect repaired (item 8 is its Stage 1 twin).
+- Reports: `stage1c_reports/m2/attack_validity.json`, `attack_worth.json`.
+
+### What I did
+
+- Saved the check, appended the amendments to `PLAN.md`.
+- Moved the main worktree to the merged switches commit `5611b07df` (fast-forward; the
+  verifiers had finished reading the code).
+- Nothing of the GPU plan is implemented. The register is not touched by this entry: a
+  writer and a critic are working in it for the switches (Entry 54); the plan's assumptions
+  enter when the owner approves the plan.
+
+### What I intend, unless the owner says otherwise
+
+- When the M2 workflow has merged: one repair work for items 4 to 6 (tolerances applied in
+  the units of the row that is deleted), each with a failing test first, a switch, the loss
+  on the 240 measured, and an attack before the merge. They are preconditions of the GPU
+  plan's milestone M1 either way.
+
+### Lessons
+
+- A synthesis needs its own check as much as a design does: six of its step rules were
+  wrong on small models, and its own hybrid rule had never been run through the time model.
+- The first real measurement must come before the large rewrite. The plan had five host
+  milestones before the first timed device step; the check moved real steps into M0.
+- "Today's engine" is not a clean reference. Every review of the last two days found a
+  constructed model on which a tolerance is applied in the wrong units. They are one class
+  and want one repair work, not five.
