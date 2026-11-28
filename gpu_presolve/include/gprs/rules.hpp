@@ -400,7 +400,8 @@ struct dual_fixing_t {
 // it has not served. A reduction that it leaves undone for a reason that is no function of the
 // state reports limited.
 // A family whose reductions are not built takes its lists and reports nothing: (g), (i) and
-// (j). The singleton columns (h) are built.
+// (j). The singleton columns (h) are built, and do the same when none of their reductions is
+// active (sub_rule_active).
 
 // Largest range upper - lower of a column that simple probing or the lock alias replaces by a
 // binary: it is the scale of the alias, which multiplies every coefficient of the column into
@@ -444,9 +445,11 @@ struct simple_probing_t {
 //   substitutions gave the column (a column that this factor alone refuses and that the visit
 //   leaves in the model reports limited);
 //   an integer column has only integer columns next to it, with ratios and a side that are
-//   integral for it and a drift below tol.integral_drift_share in the units of the row
-//   (integral_for, src/integral.hpp);
-//   cost / a, its product with S' and every new cost are finite.
+//   integral for it, a drift below tol.integral_drift_share in the units of the row, and the
+//   deviation of the side and the drift together within tol.feasibility (integral_for and
+//   drift_within, src/integral.hpp);
+//   cost / a, its product with S' and every new cost are finite, and cost / a is zero only for
+//   a cost of zero (a quotient that underflows would leave the cost behind).
 //   Then the row is saved without the column and deleted, every other free column of it gets
 //   cost - (cost of the column / a) * its coefficient (zero when that cancels within
 //   tol.cancellation), the offset gets (cost of the column / a) * S', and the column is removed
@@ -475,9 +478,12 @@ struct simple_probing_t {
 // are, a value of the column meets all its rows and its bound, so the rows restrict nothing:
 // each is saved without the column and deleted (a row without a finite side is deleted and not
 // saved), and the column is removed and recorded (push_forcing_col). The column is left when
-// the finite side of one of its rows, or that side less the fixed terms, is not readable. When
-// the rows do not fit the rest of the budget the call stops and the column waits for the next
-// one; the first reduction of a call is never left for that. No dual finding either.
+// the finite side of one of its rows, or that side less the fixed terms, is not readable. That
+// is the one test of the family which a change without an event of the column can turn (a
+// side, the terms of the fixed columns): such a row is marked, and when it is listed its live
+// columns go on the column list, at the cost of one scan of the row. When the rows do not fit
+// the rest of the budget the call stops and the column waits for the next one; the first
+// reduction of a call is never left for that. No dual finding either.
 // Tests of one visit read the state as it is; what depends on history (the growth factor, the
 // saved entries) reports limited when it alone refuses a reduction.
 struct singleton_cols_t {

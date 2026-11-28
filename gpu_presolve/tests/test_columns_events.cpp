@@ -124,11 +124,12 @@ struct driver_t {
   dual_fixing_t dual_fixing;
   singleton_cols_t singleton_cols;
   std::string failure;
-  bool ended                 = false;
-  int64_t row_changes        = 0;
-  int64_t col_changes        = 0;
-  int64_t rebuilds           = 0;
-  int64_t singleton_findings = 0;
+  bool ended                     = false;
+  int64_t row_changes            = 0;
+  int64_t col_changes            = 0;
+  int64_t rebuilds               = 0;
+  int64_t singleton_findings     = 0;
+  int64_t singleton_second_calls = 0;
 
   explicit driver_t(const model_t& m) : st(m, opt.tol) { ps.init(m); }
 
@@ -283,6 +284,19 @@ struct driver_t {
         if (!served && !result.stopped) {
           failure = "singleton columns left a list and did not stop";
         }
+        // What the call changed was on its lists and has been served: with every column listed
+        // again it finds nothing, unless it stopped or left a reduction to its history.
+        if (result.outcome == rule_outcome_t::ok && !result.stopped && !result.limited) {
+          for (int32_t j = 0; j < st.ncols; ++j) {
+            if (st.is_live(j)) { st.col_frontier.push(list_bit(col_list::singleton_cols), j); }
+          }
+          budget              = make_budget(opt.budget[rule::singleton_cols], st);
+          rule_result_t again = singleton_cols.run(st, budget, ps, opt);
+          ++singleton_second_calls;
+          if (again.findings != 0 && !again.stopped) {
+            failure = "singleton columns found a reduction that no list of the call before held";
+          }
+        }
         return result.outcome;
       },
       list_bit(row_list::singleton_cols),
@@ -339,7 +353,7 @@ GPRS_TEST(columns_events_follow_every_family)
   shapes[4].p_infinite_bound      = 0.25;
   shapes[4].p_forcing_side        = 0.25;
   int64_t models = 0, row_changes = 0, col_changes = 0, rebuilds = 0, aliases = 0, fixed = 0;
-  int64_t additions = 0, failures = 0, singleton_findings = 0, from_rows = 0;
+  int64_t additions = 0, failures = 0, singleton_findings = 0, from_rows = 0, second_calls = 0;
   for (size_t shape = 0; shape < shapes.size(); ++shape) {
     for (uint64_t seed = 7400000; seed < 7402500 && failures < 3; ++seed) {
       driver_t d(oracle::generate(seed, shapes[shape]).model);
@@ -352,6 +366,7 @@ GPRS_TEST(columns_events_follow_every_family)
       fixed += d.ps.fixed_cols.size();
       additions += d.ps.row_additions.size();
       singleton_findings += d.singleton_findings;
+      second_calls += d.singleton_second_calls;
       from_rows += d.ps.col_from_rows.size();
       if (d.failure.empty()) { continue; }
       ++failures;
@@ -370,7 +385,7 @@ GPRS_TEST(columns_events_follow_every_family)
                 (long long)singleton_findings,
                 (long long)from_rows);
   }
-  GPRS_CHECK(singleton_findings > 400 && from_rows > 400);
+  GPRS_CHECK(singleton_findings > 400 && from_rows > 400 && second_calls > 50000);
 }
 
 // A list_mask_t has a bit for sixteen lists, and every one of them works as a list.

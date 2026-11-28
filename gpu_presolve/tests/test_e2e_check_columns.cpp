@@ -386,6 +386,37 @@ GPRS_TEST(e2e_columns_crush_allows_what_the_saved_row_asks_for)
   GPRS_CHECK(c.moved_continuous <= 1e-15);
 }
 
+// Requirement 5 of the crush check, the part of the allowance that the saved columns give
+// (review item 4): xk + 1000 y - 1000 y2 = 0 defines xk, and y is then substituted by
+// y = 3 - w. The point w = 1, y = y2 = 2 + 1e-7, xk = 0 misses y + w = 3 by 1e-7, inside the
+// tolerance of a point. The postsolve gives y = 2 and with it xk = 1e-4: what y moved by,
+// times 1000. The residual of the point in the saved row is zero and allows nothing.
+GPRS_TEST(e2e_columns_crush_allows_what_the_saved_columns_moved_by)
+{
+  constexpr int32_t k = 0, y = 1, y2 = 2, w = 3;
+  model_t m = build({{{{k, 1.}, {y, 1000.}, {y2, -1000.}}, 0., 0.}, {{{y, 1.}, {w, 1.}}, 3., 3.}},
+                    {-inf, 0., 0., 0.},
+                    {inf, 3., 3., 3.});
+  result_t result = reduced_to(m, {y2, w}, {}, {});
+  result.postsolve.push_defined_col(
+    k, 1., -inf, inf, save(result.postsolve, 0, {{y, 1000.}, {y2, -1000.}}, 0., 0.), false);
+  result.postsolve.push_alias(y, w, 1, -1., 3.);
+  GPRS_CHECK(silent(structure_check(m, result, true)));
+  point_set_t set;
+  set.add(m, {0., 2. + 1e-7, 2. + 1e-7, 1.});
+  GPRS_REQUIRE(set.points.size() == 1);
+  crush_report_t c = crush_check(m, result, true, set);
+  GPRS_CHECK(c.exact);
+  GPRS_CHECK_EQ(c.failed_reduced + c.failed_postsolved + c.failed_objective, 0);
+  GPRS_CHECK_EQ(c.failed_round_trip, 0);
+  GPRS_CHECK_EQ(c.moved_columns, 0);
+  std::vector<double> crushed, z;
+  result.postsolve.crush(set.points[0], crushed);
+  result.postsolve.postsolve(crushed, z);
+  GPRS_CHECK_EQ(z[y], 2.);
+  GPRS_CHECK(std::fabs(z[k] - 1e-4) < 1e-9);
+}
+
 // The columns of interval and forcing records, and the aliases of such columns, are not held
 // to the round trip; an alias of a defined column is allowed what its rep is, times its scale.
 GPRS_TEST(e2e_columns_crush_exempts_the_columns_with_a_range)

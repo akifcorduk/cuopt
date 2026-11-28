@@ -411,6 +411,15 @@ GPRS_TEST(alias_integer_edge_needs_integral_scale_and_offset)
   review.set_col_upper(1, 100.);
   check_maps(frozen(review, {alias_edge_t{0, 0, 1, 1., -1.0000000005, 0.}}),
              {alias_map_t{0, 1, 0, 1., 0.}});
+  // The offset that is taken as an integer and the drift move the same row and share its
+  // tolerance: 1000 x0 + (1000 - 9e-10) x1 = 1000 + 9.9e-7 with x1 in [0, 100] would leave the
+  // row off by 9.9e-7 + 9e-8.
+  state_t shared = column_state({1, 1}, {1, 1});
+  shared.set_col_lower(1, 0.);
+  shared.set_col_upper(1, 100.);
+  GPRS_CHECK(frozen(shared, {alias_edge_t{0, 0, 1, 1000., 1000. - 9e-10, 1000. + 9.9e-7}}).empty());
+  check_maps(frozen(shared, {alias_edge_t{0, 0, 1, 1000., 1000. - 9e-10, 1000. + 5e-7}}),
+             {alias_map_t{0, 1, 0, -1., 1.}});
 
   // A scale that rounds to zero is no map: x0 = 1e-10 x1 is refused, x1 = 1e10 x0 is taken,
   // also when the entries speak for column 1 as the root.
