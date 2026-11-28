@@ -1,0 +1,323 @@
+{
+ "write:switch-entries": {
+  "summary": "The register /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/design_summaries/gpu_mip_presolve/ASSUMPTIONS.md is brought up to HISTORY Entry 54 and commit f05d48e31 (the switches of milestone M1) and to the node campaign of Entry 52. It now holds 358 entries: 19 new (AS-340 to AS-358) and 27 changed. No other file was changed, and no git, build or cuopt command was run beyond `git show <ref>:<path>` to compare files.\n\nWhat the update does:\n- **Entries that now have a switch:** each has its Switch as the code of f05d48e31 has it, the other values that exist and those that are not valid, a new State, places under \"At commit `f05d48e31`\", and a sentence that begins \"Measured with the switches of milestone M1\" with its instance set (the 240 as local dumps on the Mac).\n- **AS-338:** says what is closed (11 options with 17 other values, the counters, the tools) and which six choices remain without a switch, each with its reason.\n- **Corrections, each marked \"corrected on 2026-11-28\":** the lead on roi5alpha10n8 in AS-027 and AS-339 (the integer pivot columns are on exactly 10 instances); the 12 differing models in AS-114 (10); and in AS-317 the design's sentence that the exchange needs only the bound ahead.\n- **Campaign:** AS-259 and AS-333 carry the 6 and 11 failures of the node campaign with their seeds; AS-358 is the lost optimum at a bound of -3e19, counted apart.\n- **Base-engine defect:** the implied-bound band times the growth limit (1.5e-4 outside a bound at the defaults) is its own entry, AS-353; AS-088 and AS-094 point to it.\n- **Opening:** version line, the new \"Added on 2026-11-28 from the switches of milestone M1 and the node campaign\" paragraph, the per-section counts, the line-number rule for f05d48e31, and the new marker \"no switch: not built\".\n\nHow it was checked:\n- All 21 engine, tool, check and test files I cite are byte-identical in f05d48e31, in 5611b07df, in the clean export and in the worktree as it stands now.\n- Every Switch and every place I wrote was opened in that code.\n- A script asserted that the 339 old entries keep their numbers, places and headings, that entries I did not change are identical line for line, that every entry has its eight fields, and that the overview has 358 rows in order with intact columns.\n\nHISTORY Entry 54 did not exist when I started. I read it once it appeared and wrote the Set by lines from what it actually says; it has no message of the owner.",
+  "new_entries": [
+   {
+    "id": "AS-340",
+    "title": "The widest forcing band is the default: `forcing_rounding_units` takes 0 to 8, and a band above 8 misses the row",
+    "section": "3. Tolerances, limits and numerical guards",
+    "source": "reviewer wrong_results[0], options_removed_or_restricted[1], assumptions[0], switches row 8; implementer assumptions[0]"
+   },
+   {
+    "id": "AS-341",
+    "title": "The implied-bound band has no option: a band above the rule's gives a postsolved point 9.5e-4 outside a bound",
+    "section": "3. Tolerances, limits and numerical guards",
+    "source": "reviewer wrong_results[1], options_removed_or_restricted[0], switches row 9; implementer assumptions[1], unsure[3]"
+   },
+   {
+    "id": "AS-342",
+    "title": "The ranges of the options are contracts that presolve() asserts; the defaults are in range with every tolerance",
+    "section": "3. Tolerances, limits and numerical guards",
+    "source": "reviewer wrong_results[2], assumptions[1]; implementer not_done[5]"
+   },
+   {
+    "id": "AS-343",
+    "title": "The range of `side_guard_scale`: the lower end copies a private constant, the upper end counts one record per row",
+    "section": "3. Tolerances, limits and numerical guards",
+    "source": "reviewer assumptions[2] and [3], switches row 10, open[9]; implementer assumptions[2], unsure[3]"
+   },
+   {
+    "id": "AS-344",
+    "title": "The two narrower growth forms rest on integer columns being restored exactly",
+    "section": "3. Tolerances, limits and numerical guards",
+    "source": "reviewer other_defects[0], assumptions[4], switches row 3; implementer unsure[2]"
+   },
+   {
+    "id": "AS-345",
+    "title": "What the other orders of the singleton family fix: the end of a single-pass call, ties of the largest pivot, the end of a zero-cost-first visit",
+    "section": "4. Order of the rules, rounds, budgets, stopping",
+    "source": "implementer assumptions[3] and [4], summary; reviewer switches row 6"
+   },
+   {
+    "id": "AS-346",
+    "title": "What a caller of primal-only mode relies on: the crush of feasible points with equal objective",
+    "section": "5. Use inside cuOpt",
+    "source": "reviewer assumptions[9], switches row 2, open[1]; implementer unsure[4]"
+   },
+   {
+    "id": "AS-347",
+    "title": "The counters of the singleton family are always on: what a counter counts, and what counting costs",
+    "section": "6. Measurement conventions and references",
+    "source": "implementer counters, timing, assumptions[6] and [7], unsure[1]; reviewer evidence (time), assumptions[6]"
+   },
+   {
+    "id": "AS-348",
+    "title": "The campaign draws the options from a stream of its own: `--switches`, `--pin`, and a table that is append-only",
+    "section": "6. Measurement conventions and references",
+    "source": "implementer assumptions[8], for_merge[7]; reviewer assumptions[8], evidence, for_merge[7]"
+   },
+   {
+    "id": "AS-349",
+    "title": "The identity tool holds copies of the campaign's tables",
+    "section": "6. Measurement conventions and references",
+    "source": "reviewer other_defects[8], identity, for_merge[8]; implementer unsure[6], for_merge[8]"
+   },
+   {
+    "id": "AS-350",
+    "title": "The stored runs of the switches are reduced summaries; which values were measured",
+    "section": "6. Measurement conventions and references",
+    "source": "implementer assumptions[11] and [12], tools; reviewer evidence, for_merge[10]; the task's statement of what was rebuilt and reproduced"
+   },
+   {
+    "id": "AS-351",
+    "title": "The structure check accepts the records of the projections in a primal-only result only with the options of the presolve",
+    "section": "6. Measurement conventions and references",
+    "source": "implementer assumptions[10], for_merge[5]"
+   },
+   {
+    "id": "AS-352",
+    "title": "Finding: 50,771 zero-cost integer singleton columns on 23 of the 240 stand in rows that are integral for them",
+    "section": "7. Findings that later choices rest on",
+    "source": "implementer counters, switches row 5; reviewer evidence, switches row 5, open[4]"
+   },
+   {
+    "id": "AS-353",
+    "title": "The implied-bound band times the growth limit: at the defaults a restored value passes its bound by 1.5e-4 at an exactly feasible reduced point",
+    "section": "8. Known defects and blind spots accepted for now",
+    "source": "reviewer wrong_results[3], switches row 3 (validity), open[3], verdict; HISTORY Entry 54"
+   },
+   {
+    "id": "AS-354",
+    "title": "The structure check follows the forcing band of the stack and cannot see a band that is too wide",
+    "section": "8. Known defects and blind spots accepted for now",
+    "source": "reviewer other_defects[3] and [6], assumptions[7]; implementer assumptions[9]"
+   },
+   {
+    "id": "AS-355",
+    "title": "Option values that the campaign generator never reaches rest on unit tests, the dump checks and an exact enumeration outside the repository",
+    "section": "8. Known defects and blind spots accepted for now",
+    "source": "implementer not_done[1], evidence; reviewer other_defects[4], wrong_results[5], evidence, open[10]"
+   },
+   {
+    "id": "AS-356",
+    "title": "One oracle failure of the switches' campaign could not be reproduced (seed 5100094942)",
+    "section": "8. Known defects and blind spots accepted for now",
+    "source": "implementer evidence, unsure[0]; reviewer wrong_results[4], open[5]"
+   },
+   {
+    "id": "AS-357",
+    "title": "The switches of milestone M1 are verified on the Mac only: no node, no solver, no testbed",
+    "section": "8. Known defects and blind spots accepted for now",
+    "source": "implementer not_done[2], [3], [4]; reviewer verdict, open[6], [7], [8], [9]; the task's verification statement; HISTORY Entry 54"
+   },
+   {
+    "id": "AS-358",
+    "title": "A lost optimum of the node campaign at an ordinary point: it depends on a finite column bound of -3e19",
+    "section": "8. Known defects and blind spots accepted for now",
+    "source": "HISTORY Entry 52; campaign files release_columns.failures.txt and release_columns/part.3.txt"
+   }
+  ],
+  "updated_entries": [
+   {
+    "id": "AS-004",
+    "change": "Switch is now `options_t::primal_projections` (default false; `--primal-projections` with `--primal-only`). Alternatives, State, Where and Set by updated. Measured sentence: 1.0017 / 1.0005 / 1.0073, 22 instances, and the crush check now run for the setting. Overview row updated."
+   },
+   {
+    "id": "AS-022",
+    "change": "Switch is now \"no switch: not built\" (needs recorded implied bounds with their sources). Measured sentence from the engine's counters (365,265 refusals, 216,683 left). State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-023",
+    "change": "Switch is now \"no switch: not built\" (as AS-022). Measured sentence, State, Set by and overview row updated."
+   },
+   {
+    "id": "AS-024",
+    "change": "Switch names the one guard that now has a switch (`dual_integer_pivots` = false). Measured sentence and overview row added."
+   },
+   {
+    "id": "AS-027",
+    "change": "Corrected: roi5alpha10n8 removed from the instances ahead through integer pivot columns, and \"that alone\" dropped (part of seymour1's lead stays without them). Measured sentence: 271 of 2,685 findings on exactly 10 instances. Where and Set by updated."
+   },
+   {
+    "id": "AS-028",
+    "change": "Switch now names `zero_cost_one_sided` and `zero_cost_whole_row` with their flags. Alternatives, State, Where and Set by updated. Measured sentence includes unitcal_7 ending on the round limit. Overview row updated."
+   },
+   {
+    "id": "AS-029",
+    "change": "Switch is now \"no switch: not built\" with the model 2 x + y = 1. Measured sentence: the count is made and is not zero (50,771 on 23 instances). Alternatives, State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-057",
+    "change": "Switch is now `interval_start` and `interval_order` with their values and flags. Alternatives, State, Where, Set by, measured sentence and overview row updated."
+   },
+   {
+    "id": "AS-076",
+    "change": "Switch gains `side_guard_scale` (default 1; 1e-3 to 11) and says that guards off is not valid. Alternatives, State, Where, Set by, measured sentence and overview row updated."
+   },
+   {
+    "id": "AS-088",
+    "change": "Switch is now \"no switch: not built\": the option `implied_band_scale` was removed, with the chain model; a narrower band breaks the fixed point. Alternatives, State, Where and Set by updated. Measured sentence points to AS-353. Overview row updated."
+   },
+   {
+    "id": "AS-094",
+    "change": "Switch notes that `inf` is no limit and that `growth_ratio` decides what the ratio reads. Measured sentence: the limit at 2000 and without a limit, from stored runs, and the refusal counters; points to AS-353. Where and Set by updated."
+   },
+   {
+    "id": "AS-114",
+    "change": "Switch is now `singleton_cols_early`. The figure \"12 reduced models\" is corrected in place to 10, and the 10 instances are named. Alternatives, State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-116",
+    "change": "Switch is now `singleton_order` with its four values. Measured sentence for `zero_cost_first`. Set by says where the table of HISTORY Entry 54 does not hold for the order. Alternatives, State, Where and overview row updated."
+   },
+   {
+    "id": "AS-127",
+    "change": "Switch is now `singleton_order` = `largest_pivot` or `single_pass`. Measured sentence: 0 of 240 for the largest pivot; snp-02-004-104 larger with a single pass. Alternatives, State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-259",
+    "change": "Measured sentence with the 6 objective differences of the node campaign and their seeds, and the known seeds on the engine of the switches. State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-317",
+    "change": "Switch is now \"no switch: not built\", because the other value is not valid, with the model min -x - 3 y. Alternatives and State rewritten; May change and Test at the end each have a correction appended. Measured sentence, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-318",
+    "change": "Switch is now `growth_ratio` with three values; how the factor is carried stays not built. Measured sentence: both forms at the limits 1000 and 2000 and in primal-only mode, what the forms leave unchanged, and the extra scan of the continuous form. Alternatives, State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-319",
+    "change": "Switch is now `forcing_rounding_units` (default 8; 0 to 8). Alternatives say that a band above 8 is not valid. Measured sentence notes that the structure check now follows the band of the stack. State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-320",
+    "change": "Switch corrected: three options now reach the undo, and none changes the quotient form. Measured sentence and overview row added."
+   },
+   {
+    "id": "AS-326",
+    "change": "Switch now names `primal_projections` beside `sub_enabled` and `primal_only`. Measured sentence, Where and overview row added."
+   },
+   {
+    "id": "AS-328",
+    "change": "Switch: the counts are now counters of the engine plus `--left`. Measured sentence reproduces the figures and adds the 50,771. State, Where and overview row updated."
+   },
+   {
+    "id": "AS-330",
+    "change": "Measured sentence: four more structures that the generator lacks, and 18 of 119 wrong engines caught by unit tests only; points to AS-355."
+   },
+   {
+    "id": "AS-333",
+    "change": "Measured sentence with the 11 failures at huge points of the node campaign and their seeds; says they are counted apart from AS-358. State, Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-334",
+    "change": "Measured sentence: the repeats are now engine counters and give the same figures. Where added."
+   },
+   {
+    "id": "AS-336",
+    "change": "Overview row only: its State now matches the State of the entry, which was already closed."
+   },
+   {
+    "id": "AS-338",
+    "change": "Assumption says what is closed and what remains without a switch. Switch lists the 11 options with defaults, values and flags. State is now \"closed in part\". Where, Set by and overview row updated."
+   },
+   {
+    "id": "AS-339",
+    "change": "Switch is now `dual_integer_pivots` (default true; `--no-dual-integer-pivots`). The roi5alpha10n8 claim is corrected in place. Measured sentence: 271 findings on exactly 10 instances; with the option off 0.9998 / 0.9996 / 0.9994 and equal to m1_a on 8 of the 10. Alternatives, May change (10, not seven), State, Where, Set by and overview row updated."
+   }
+  ],
+  "not_entered": [
+   "Reviewer other_defects item 6 (the implementer's stored table of wrong engines predates its second commit): it lives in a scratch directory only, is harmless, and nothing in the repository rests on it.",
+   "Reviewer other_defects item 8 (the sentence in postsolve.hpp that a point restored with another band 'is as feasible'): corrected in the code; no entry of its own, the corrected contract is cited in AS-340.",
+   "The for_merge lists of both reports (cherry-pick order, files touched, signatures, how to rerun make_mutants.py): merge instructions, not choices. Only what a later milestone must keep was entered: the append-only table (AS-348), the copies in the identity tool (AS-349), the stored runs (AS-350), and the check's overload (AS-351).",
+   "The implementer's per-value counts from its own campaign (models with a value alone, and changed): the reviewer's pinned runs on the final engine are used instead, because the reviewer's holds and the draw changed with the table.",
+   "The per-engine campaign counts of the 20 new wrong engines: only what bears on a blind spot was entered (AS-345, AS-354, AS-355); the rest is in the reports.",
+   "The quality tool's figures on the 240 (objective nonzeros, equations, ranged rows, cost and coefficient ranges): they reproduce figures that existing entries already hold from the M1 worth report; AS-338 only says the tool is now in the repository.",
+   "The result files of the node chain with the tag s1c_m1sw, which arrived in the worktree while I worked: not read. No HISTORY entry reads them yet, and the task states that nothing of the switches has run on the node. AS-357 says they exist and are not read.",
+   "HISTORY Entry 55 (three more constructed models, the list of eight open base-engine defects, the worktree moved to 5611b07df, the intended repair work): it comes after the entry the register is brought up to.",
+   "Scratch-directory paths, the host field of the stored summaries and node names: left out by the rule against host names and by the file's convention of paths relative to the worktree.",
+   "AS-025, AS-152, AS-228, AS-331, AS-335 and AS-337 were left unchanged although the switches touch them at the edge. AS-338 says in one place that their scratch figures now reproduce from the engine's counters; AS-152 already states that the adapter passes no engine option."
+  ],
+  "counts": "358 entries in all (339 before). Per section 1 to 9: 43, 27, 55, 25, 39, 67, 27, 45, 30 (before: 43, 27, 50, 24, 38, 62, 26, 39, 30). The overview has 358 rows. Switch lines: 142 name a switch (127 before); 216 do not (212 before). Of the 216: 173 begin \"no switch yet\" (186 before); 6 begin \"no switch: not built\" (AS-022, AS-023, AS-029, AS-088, AS-317, AS-341); 30 begin \"no switch of its own\" (findings, conventions, contracts; 24 before); 7 have another form (AS-245, AS-252, AS-347, AS-349, AS-355, AS-356, AS-358). 184 Switch lines contain the words \"no switch yet\" anywhere (199 before).",
+  "unsure": [
+   "HISTORY Entry 54's table says of 'Order, undo start and order, forcing band, side guard, phase place' that no reduced model changes in size. Both reports say otherwise for two order values: `single_pass` makes snp-02-004-104 larger (354,940 to 355,027 nonzeros, fixed-point flag lost), and `zero_cost_first` changes 5 instances in primal-only mode with the projections, 4 of them larger. I wrote the reports' figures and noted the difference in the Set by lines of AS-116 and AS-127. HISTORY.md is not mine to change.",
+   "HISTORY Entry 54 says the campaign failure of seed 5100094942 was not reproduced 'in five reruns'. The reports give four reruns of the part, one of the whole run and the seed alone (implementer), then four more (reviewer). AS-356 follows the reports.",
+   "Report against code, where the code holds: the reviewer cites the campaign table at gprs_fuzz.cpp:327-349, the code has it at 327-353 (I cite 321-354 with its comment and count); range_end and implied_free are 161-232, not 160-232; the defined record rounds at postsolve.cpp:285-289, not 286-290; the structure-check overload is 2125-2131. The implementer's line numbers are those of its own commit 55b639503 and are a few lines off throughout; I used f05d48e31.",
+   "Result directories of the node chain s1c_m1sw exist in the worktree (bench240/s1c_m1sw with release_all, assert_all and check_all; stage1/host/s1c_m1sw; stage1c/timing/s1c_m1sw). I did not read them. Every 'not run on the node' statement is worded as 'when the reports were written' or 'not read here'. Once the chain is read, AS-357, AS-347, AS-350 and the opening paragraph need one more update.",
+   "AS-357 lists the build of the cuOpt adapter and of the device code against this engine as not run. That is my inference from 'nothing ran on the node'; neither report says it in those words. That the adapter passes none of the 11 options I did check (cpp/src/presolve/gprs_presolve.cpp:243-244 sets only primal_only and time_limit).",
+   "Both reports name 'the two instances above 1e7 nonzeros' as not run without saying which runs, while the identity and size runs cover 240 of 240 local dumps. AS-357 repeats the phrase with that caveat.",
+   "The HiGHS source lines (commit 283bfc8, singletonCol, lines 2450-2469) in AS-339 are copied from the reviewer; I did not open the HiGHS source.",
+   "AS-353 is a new entry, not an update of AS-088 or AS-094. Their existing text described the stacking for a reduced point that uses the full tolerance; the reviewer's model shows it at an exactly feasible reduced point, which no entry held. Both now point to AS-353. If one entry is preferred, AS-353 could be folded into AS-088.",
+   "AS-317: I rewrote Switch, Alternatives and State and appended corrections to May change and Test at the end, because the reports show the other value is not valid, and the entry's original text said the opposite. I did not mark the entry closed.",
+   "AS-336: the task says its closure was already done in the file. The body was; the overview row still said 'open', so I changed that row to match.",
+   "In the opening I corrected two stale statements beyond what step 7 names: the paths bullet said commit fa8430e24 was 'not yet verified on the node' (verified since, Entry 51), and the instance-set bullet said no figure of the milestone had been repeated on the node (AS-336 says the node gives the same on 240 of 240).",
+   "Six changed entries are not in the task's list: AS-024, AS-320, AS-326, AS-328, AS-330 and AS-334. Each holds the same choice or a figure that the switches change. Most pressing was AS-320, whose Switch line said 'no option reaches the undo'; three options now do.",
+   "AS-357 is not in the task's list of new entries. I added it on the model of AS-336, to hold the not-run items of both reports in one place.",
+   "Section choices that could go the other way: AS-344 (what the two growth forms rest on) is in section 3 next to AS-318, not in section 7; AS-347 (the counters and their cost) is in section 6, not section 9.",
+   "The reviewer gives the figures 'at the limit 2000' for the two growth forms without naming the denominator. I read them like the rest of that row, as default size over size with the value, and wrote 'with the limit at 2000 as well' in AS-318.",
+   "map10 and map16715-04 appear with identical sizes (180,619 / 84,932 / 46,053 to 175,791 / 82,763 / 43,878) in both reports; copied as given, not checked against the stored run.",
+   "The class counts of the node campaign (6 objective differences, 11 failures at huge points, 1 lost optimum) are HISTORY Entry 52's reading, which the failure files confirm line by line; the triage has no verdict yet. One of the 11 is in profile 'equations' and one runs in primal-only mode (option variant 3), so 'profiles with huge values' does not describe the class exactly; the entries describe it by the points."
+  ]
+ },
+ "check:switch-entries": {
+  "verdict": "After my repairs the register is right and complete for the switches of milestone M1 (A) and for the node campaign (B), as far as this can be shown without a build: /Users/acoerduek/Documents/workspace/cuopt-wt/gpu-presolve/design_summaries/gpu_mip_presolve/ASSUMPTIONS.md now has 360 entries (21 new, AS-340 to AS-360; 36 changed). It was the only file I changed; no git beyond `git show`, no build, no cuopt command, no network.\n\nThe writer's work was mostly sound. What I checked and found right:\n- Every code place cited by the new and changed entries, opened in the export of f05d48e31. The 23 files I compared are byte-identical in the worktree. Five line ranges were a few lines short.\n- All 11 options with defaults, values and flags (presolve.hpp:228-318, choices_in_range 325-331, sub_rule_active 338-344, option_flags.hpp). No entry names implied_band_scale or a band above 8 as available.\n- Every figure of the switch table, recomputed from the 41 stored summaries under gpu_presolve/results/bench240/s1c_m1_switches: the means over 237, changed and larger instances, fixed-point flags, rounds, counter sums, and what is left.\n- The 18 campaign failures with seeds, profiles and option variants against the failure files, and the printed model of the lost optimum.\n\nWhat was wrong or missing, all repaired:\n- One unasked edit of old text (AS-027).\n- \"an owner's decision\" in five State lines, which reads as a decision that exists.\n- Test at the end without arm values in 11 entries that now have a switch; two still began \"Needs the switch\".\n- Two items of the reports without an entry (now AS-359, AS-360), and the campaign as a whole missing from the entry on campaign size (AS-227).\n- Seven older entries that still called the counters or tools scratch-only.\n\nNot verifiable here: I did not rerun the models of the wrong results or the 502 tests; they stand on the reviewer's report, the tests in the repository and the session owner's rebuild.",
+  "fixed": [
+   "AS-027 (unasked edit, restored): the writer had deleted 'alone' and 'roi5alpha10n8' from the original sentence. The sentence is back verbatim; the correction follows it and names both points (roi5alpha10n8 has no integer pivot on an inequality; 'that alone' does not hold for seymour1, 33,292 / 4,795 / 1,245 with the option off).",
+   "AS-004, AS-029, AS-318, AS-339, AS-353 State lines and the AS-353 overview row said 'an owner's decision' (AS-353: 'an owner's decision (HISTORY Entry 54)'), which reads as a decision that exists. Each now says what is open and that the owner has not decided; AS-353 adds that Entry 54 has no message of the owner.",
+   "Test at the end named no option values in 11 entries that now have a switch or a further measured value; AS-339 and AS-318 still began 'Needs the switch'. AS-004, AS-028, AS-057, AS-076, AS-094, AS-114, AS-116, AS-127, AS-318, AS-319, AS-339 each got a closing sentence 'Since commit f05d48e31 ...' with the option values of the two arms, the instances the pair is read on, and what the closing rule says. Old text kept.",
+   "AS-127 Switch: the writer had turned 'no switch yet' for the rule of the new costs into 'no switch of its own'. Now 'no switch yet', with tol.cancellation (AS-080) and AS-321 for a cost that is not finite.",
+   "AS-259, AS-333, AS-358 said the structure check 'carries no objective test'; the check has an objective part for costs and offsets. Now: it compares no optimal values; by the campaign's own count it missed 18 and none is a relaxation; a restriction is what it cannot see (AS-277).",
+   "AS-358: Switch said 'the first one of gprs_fuzz'; now the model for seed 1000213883241 with `--columns --profile huge_parallel` (one model per seed and profile). The '168 million models ... on the Mac' is now attributed to HISTORY Entry 52, because AS-227 gives other sizes for the milestone's campaigns.",
+   "AS-357 listed the build of the cuOpt adapter and of the device code as 'not run' as if a report said so; now marked as an inference.",
+   "Line ranges corrected against f05d48e31: structure_check.hpp 2125-2132 (AS-004, AS-351); DESIGN.md 722-724 (AS-346); test_columns_switches.cpp 698-819 (AS-347); make_mutants.py 983-1180 (AS-355); run_campaign.sh 80-93 (AS-348).",
+   "AS-346 lacked the implementer's point that the campaign's crush test has no round trip. Added, with what does test clause 5: the check tool on 13 dumps (344 points) and one unit test on 4,000 generated models.",
+   "AS-347: with dual_integer_pivots off only an integer column with a cost other than zero counts in refused_integer; one with zero cost counts in refused_zero_cost first (rules_singleton_cols.cpp:327-330). Stated.",
+   "AS-349 said the identity tool prints 'every statistic'. It prints only what the engine before has: none of the 11 options, the 47 counters or the two undo fields of the stack (gprs_ident.cpp:26-29, 70-220). Stated.",
+   "AS-345: added that the four orders are values of one option and cannot be combined. AS-057 Alternatives: added the implementer's argument why every start value is right. AS-348: added that the first seeds of the switches' campaigns are not in the reports (AS-227 asks for them).",
+   "AS-028: added a recount from the stored run: with one-sided rows in primal-only mode with the projections 154 visits meet a row made only of such columns, and the two options together were not measured on the 240.",
+   "New AS-359 (section 4): the continuous form of the growth ratio scans the pivot row once more on the call's budget (reviewer assumption 6). It was only a sentence inside AS-318, without its alternative. Recounted from the stored runs: 127,200,179 against 126,751,280 work units, 63 instances with another work count, 57 of them with the same hash, no call stopped. AS-318 points to it.",
+   "New AS-360 (section 8): the order of the interval undo and the forcing band are carried by the stack and are no part of postsolve_hash (postsolve.hpp:172-175, hash.cpp:182-247; a unit test asserts the equal hash). The identity tool does not print them, and the wrong engine sw_stack_choices fails one unit test only. No entry held it.",
+   "AS-227 (campaign size) did not hold the node campaign. Added: the six runs with sizes and first seeds, 18 failures by class, no assertion, 617,372,720 second presolves unchanged, and that the rule of tens of millions excludes no rarer rate. Its Switch now names `--switches` and `--pin`.",
+   "Older entries that still called the counters or tools scratch-only, or whose test waits for an engine statistic, got a 'Measured with the switches of milestone M1' sentence: AS-025, AS-080, AS-096, AS-323, AS-266, AS-324, AS-335. AS-025 also holds a count no entry had: 519 integer columns substituted on an equation, on 19 instances. AS-056 Switch now names primal_projections.",
+   "Opening: 360 entries; 21 new and 36 changed, listed; sections 43, 27, 55, 26, 39, 67, 27, 46, 30; the citation rule covers AS-340 to AS-360; the rules for the 'Since commit' sentence and for 'recounted' figures are stated. Two overview rows added (AS-359, AS-360)."
+  ],
+  "remaining": [
+   "HISTORY Entry 54, table for the owner, row 'Order, undo start and order, forcing band, side guard, phase place | all values | no reduced model changes in size' is not right for two order values. With single_pass snp-02-004-104 is larger in both modes and loses its fixed-point flag; with zero_cost_first in primal-only mode with the projections 5 instances change, 4 of them larger. I confirmed both from the stored runs. The register states this in AS-116 and AS-127; HISTORY.md is for the session owner to correct, and the owner was told the inexact line.",
+   "HISTORY Entry 54 says seed 5100094942 was not reproduced 'in five reruns'. The reports give four reruns of the part, one of the whole run and the seed alone (implementer), then four more (reviewer). AS-356 follows the reports.",
+   "Result files of the node chain s1c_m1sw are already in the worktree (gpu_presolve/results/bench240/s1c_m1sw and others). No HISTORY entry reads them, so the register does not either. Once read, AS-357, AS-347, AS-350 and the opening need one more update.",
+   "HISTORY Entry 55 came after the entry the register is brought up to and is not entered. It holds three more constructed models on which the base engine leaves the tolerance, and the intent to repair the band-times-growth defect (AS-353) with two others 'unless the owner says otherwise'. These need entries when the register is brought up to Entry 55.",
+   "AS-259, AS-333 and AS-358 say the seeds are 'with the triage', as Entry 52 and the task say. Entry 55 says the triage agent has not started.",
+   "The HiGHS source lines in AS-339 (commit 283bfc8, singletonCol, lines 2450-2469) are the reviewer's; I did not open the HiGHS source.",
+   "Both reports name 'the two instances above 1e7 nonzeros' as not run, while their identity and size runs cover 240 of 240 local dumps. AS-357 repeats the phrase; which runs left them out is not known.",
+   "Two older entries outside this update still hold node names (the timing entry near the end of section 7, and the State of AS-336). I left them.",
+   "Owner only: the decisions listed in owner_decisions, and whether taking the switches into the project branch on Mac results alone (AS-357, taken as recommended) stands."
+  ],
+  "mapping": "Implementer, 13 assumptions:\n1. Range of forcing_rounding_units: AS-340 (and AS-319).\n2. Range of implied_band_scale: AS-341 (and AS-088).\n3. Range of side_guard_scale: AS-343 (and AS-076).\n4. When a single-pass call ends: AS-345.\n5. Details of the other orders: AS-345.\n6. What the growth forms leave as it is: AS-318.\n7. What a counter counts: AS-347.\n8. What --left measures: AS-347 (and AS-328).\n9. How the campaign draws the options: AS-348.\n10. Structure check with a band other than 8: AS-354.\n11. Primal-only stacks with projections: AS-351.\n12. What a stored summary holds: AS-350.\n13. Which values were measured: AS-350.\n\nReviewer, 10 assumptions:\n1. The widest forcing band is the default: AS-340.\n2. Defaults in range with every tolerance: AS-342.\n3. Lower end of side_guard_scale copies a private constant: AS-343.\n4. Eight rounding units count one record on a row: AS-343.\n5. Integer columns restored exactly: AS-344.\n6. The continuous form costs a scan on the budget: AS-359 (new).\n7. Where an integer column is counted with dual_integer_pivots off: AS-347.\n8. Structure check follows the forcing band of the stack: AS-354.\n9. The option draw changed with the table: AS-348.\n10. What a caller of primal-only mode relies on: AS-346.\n\nFinal switch table, 12 rows:\n1. dual_integer_pivots: AS-339 (also AS-024, AS-027).\n2. primal_projections: AS-004 (also AS-346, AS-326, AS-056).\n3. growth_ratio next to the limit: AS-318 and AS-094 (also AS-344, AS-359).\n4. Bound ahead only, not built: AS-317.\n5. zero_cost_one_sided, zero_cost_whole_row, integer columns not built: AS-028 and AS-029 (also AS-352).\n6. singleton_order: AS-116 and AS-127 (also AS-345).\n7. interval_start, interval_order: AS-057 (also AS-320, AS-360).\n8. forcing_rounding_units 0 to 8: AS-319 (also AS-340, AS-354).\n9. Implied-bound band, option removed: AS-088 (also AS-341).\n10. side_guard_scale: AS-076 (also AS-343).\n11. singleton_cols_early: AS-114.\n12. Explicit bounds from the pivot row only, not built: AS-022 and AS-023.\n\nOther fields:\n- wrong_results 1 to 6: AS-340, AS-341, AS-342, AS-353, AS-356, AS-355.\n- options_removed_or_restricted: AS-341 with AS-088; AS-340 with AS-319.\n- other_defects 1 to 9: AS-344; AS-339; AS-339 with AS-027; AS-354; AS-355; not entered (a stale table in a scratch directory, harmless); AS-354; AS-340 (the corrected contract); AS-349.\n- not_done and unsure of the implementer: AS-338 (six choices without a switch), AS-355, AS-357, AS-342, AS-319, AS-356, AS-347, AS-344, AS-343, AS-346, AS-028 (unitcal_7 on the round limit), AS-349.\n- open of the reviewer: the owner's decisions in AS-339, AS-004, AS-318 with AS-094, AS-353, AS-029 with AS-352; the rest in AS-356, AS-357, AS-343, AS-355.\n- From for_merge of both reports: AS-360 (new), AS-348, AS-349, AS-350, AS-351.\n- Campaign (B): AS-227 (the whole), AS-259 (6), AS-333 (11), AS-358 (1).\n\nNo raw assumption and no row of the table is without an entry.",
+  "counts": "Recounted by script on the final file.\n- Entries: 360 (339 in git, 358 after the writer). Numbers AS-001 to AS-360, unique and without a gap; every entry has its eight fields in order.\n- Per section 1 to 9: 43, 27, 55, 26, 39, 67, 27, 46, 30.\n- Overview: 360 rows, one per entry, in numeric order, each with the entry's title.\n- Old entries: all 339 keep number, place, heading and section; 36 are changed against git, the writer's 27 and 9 of mine. In every changed Assumption, Set by, Where, May change and Test at the end field the old text is fully kept (insertions only).\n- Switch lines: 143 name a switch; 217 do not. Of the 217: 173 begin 'no switch yet'; 6 begin 'no switch: not built' (AS-022, AS-023, AS-029, AS-088, AS-317, AS-341); 31 begin 'no switch of its own'; 7 have another form (AS-245, AS-252, AS-347, AS-349, AS-355, AS-356, AS-358).\n- Set by, from the overview: design 222, code 66, the owner 24, taken as recommended 20, mixed 28 (design / code 11, the owner / design 4, code / design 4, code / taken as recommended 2, the owner (for now) 2, the owner / taken as recommended 2, design / the owner 2, the owner / code 1).\n- The 21 new entries: 19 code, 1 design (AS-352), 1 taken as recommended (AS-357); none names the owner.",
+  "damaged": [
+   "AS-027 Assumption: the writer deleted 'alone' and 'roi5alpha10n8' from the original sentence. Restored verbatim; the correction now follows the sentence.",
+   "AS-127 Switch: 'no switch yet: needs one' for the rule of the new costs had become 'no switch of its own'. Restored to 'no switch yet', with the tolerance that exists.",
+   "AS-317 May change and Test at the end, AS-339 May change: the writer appended corrections in fields the task does not list. Kept: the old text is intact, the reviewer names both corrections, and the test of AS-317 cannot be run.",
+   "Set by of 22 old entries: the writer appended what HISTORY Entry 52 or 54 says. Kept: the rules ask for it, and I checked each sentence against the two entries.",
+   "AS-114 and AS-339 Assumption: a bracket 'corrected on 2026-11-28' inserted inside the old sentence. Kept: the old words are intact and the reviewer names both corrections.",
+   "Opening: the writer also corrected two stale statements (fa8430e24 'not yet verified on the node'; 'no such figure has been repeated on the node'). Kept: both are true since HISTORY Entry 51 and AS-336.",
+   "My own additions to old entries beyond the writer's list. Test at the end of AS-004, AS-028, AS-057, AS-076, AS-094, AS-114, AS-116, AS-127, AS-318, AS-319, AS-339: one appended sentence each. AS-025, AS-080, AS-096, AS-227, AS-266, AS-323, AS-324, AS-335: one appended 'Measured with ...' sentence each. AS-056: one clause in the Switch line. AS-227 also has appended sentences in Set by, Where, Switch and Alternatives. No old text was removed.",
+   "No other change to AS-001 to AS-339: the 303 other old entries are identical to git line for line."
+  ],
+  "owner_decisions": [
+   "AS-339, `dual_integer_pivots` (default true; `--no-dual-integer-pivots`). Off, on the 240 as local dumps on the Mac, default mode: 0.9998 / 0.9996 / 0.9994 in nonzeros / rows / columns (default size over size with it off, 237 instances). 10 instances get larger (academictimetablesmall, brazil3, co-100, comp07-2idx, fast0507, mcsched, momentum1, savsched1, seymour, seymour1); 8 then equal the HiGHS reference m1_a, momentum1 and seymour1 stay smaller. m1_a over engine 1.0018 / 1.0018 / 1.0017 off, 1.0020 / 1.0022 / 1.0022 on. No effect in primal-only mode.",
+   "AS-004 with AS-346, `primal_projections` (default false; `--primal-projections` with `--primal-only`). On, the 240 as local dumps on the Mac, primal-only mode: 1.0017 / 1.0005 / 1.0073 (237 instances); 22 instances smaller, none larger; 233 fixed-point flags with both values. The crush of feasible points holds. The mode then no longer returns the crushed point itself in the projected columns; cuOpt's callback path is not read.",
+   "AS-318 (with AS-344, AS-359), `growth_ratio` (default all_columns), the 240 as local dumps on the Mac, default mode, 237 instances, none larger. continuous_columns: 1.0003 / 1.0005 / 1.0003, 6 instances smaller. integer_pivot_exempt: 1.0002 / 1.0004 / 1.0001, 5 instances. With the limit at 2000: 1.0004 / 1.0006 / 1.0005 and 1.0004 / 1.0005 / 1.0004, 9 instances each. Primal-only mode at 1000: the same means, 6 and 5 instances. Both narrower forms rest on integer columns being restored exactly.",
+   "AS-094, `pivot_growth_limit` (default 1000), the 240 as local dumps on the Mac, default mode. 2000: 1.0003 / 1.0004 / 1.0004, 7 instances smaller. No limit: 1.0005 / 1.0007 / 1.0007, 9 instances smaller. None larger.",
+   "AS-353 (AS-088 with AS-094), no option: repair or leave. At the defaults, on the reviewer's chain model, an exactly feasible reduced point postsolves to x = 500, 1.5e-4 above its bound (the implied-bound band times the growth limit). No check of the project sees it. A repair changes results at the defaults. How often it can occur on the 240 was not counted.",
+   "AS-029 with AS-352, no option (not valid as the rule stands; the valid form is a new mechanism): whether the integer extension of the zero-cost singleton rule is built. On the 240 as local dumps on the Mac 50,771 zero-cost integer singleton columns on 23 instances stand in rows that are integral for them (66,676 on 35 instances in all). The size gain is not measured.",
+   "AS-028, `zero_cost_one_sided` (default false), the 240 as local dumps on the Mac. Default mode: 0 of 240 reduced models change. Primal-only mode with the projections: 1.0004 / 1.0005 / 1.0008, 12 instances smaller, none larger; unitcal_7 ends on the round limit and loses its fixed-point flag. `zero_cost_whole_row` (default false): 0 of 240 in either mode.",
+   "AS-116 and AS-127 (with AS-345), `singleton_order` (default smallest_index), the 240 as local dumps on the Mac. largest_pivot: 0 of 240 in either mode. zero_cost_first: 0 of 240 in default mode; in primal-only mode with the projections 0.9982 / 1.0000 / 1.0005, 5 instances change, 4 larger in nonzeros and rows (swath1, swath3, physiciansched6-2, physiciansched3-3). single_pass: snp-02-004-104 is larger in both modes and loses its fixed-point flag.",
+   "AS-114, `singleton_cols_early` (default false), the 240 as local dumps on the Mac: sizes equal on all 240; 10 reduced models differ in hash at equal size in each mode; two instances need one more round; work of the family 138,654,330 against 126,751,280 units.",
+   "AS-057 (with AS-360), `interval_start` (upper, nearest_zero, middle) and `interval_order` (descending): 0 of 240 reduced models change on the Mac, in default mode and in primal-only mode with the projections. Only the postsolved values differ.",
+   "AS-319 with AS-340, `forcing_rounding_units` (default 8; 0 to 8): with 0 units 0 of 240 reduced models change on the Mac (undo only). A band above 8 is not valid.",
+   "AS-076 with AS-343, `side_guard_scale` (default 1; 1e-3 to 11): 0.01, 2 and 8 change 0 of 240 reduced models in default mode on the Mac; 0.01 and 8 also 0 in primal-only mode. The guards refuse nothing there. Off is not valid."
+  ]
+ }
+}

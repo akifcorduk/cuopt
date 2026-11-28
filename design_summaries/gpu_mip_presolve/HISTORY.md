@@ -3195,8 +3195,10 @@ None since Entry 51.
 - The structure check cannot see a forcing band that is too wide (silent at 64 and 90 units).
 - A claim in AS-339 and AS-027 is wrong: the lead on roi5alpha10n8 over the HiGHS reference
   does not come from integer pivot columns; those are on exactly 10 instances.
-- One campaign failure of the implementer (seed 5100094942) could not be reproduced in five
-  reruns, two of them built to expose uninitialised reads.
+- One campaign failure of the implementer (seed 5100094942) could not be reproduced: by the
+  implementer in four reruns of the part, one of the whole run and the seed alone; by the
+  reviewer in four more reruns, two of them built to expose uninitialised reads. (Counts
+  corrected in Entry 56.)
 
 ### The table for the owner's decisions (240 benchmark instances as local dumps on the Mac; default size over size with the other value, nonzeros / rows / columns, 237 instances)
 
@@ -3209,7 +3211,13 @@ None since Entry 51.
 | Growth limit (AS-094) | 2000 | 1.0003 / 1.0004 / 1.0004; 7 instances smaller |
 | Growth limit (AS-094) | none | 1.0005 / 1.0007 / 1.0007; 9 instances smaller |
 | Zero-cost singleton on one-sided rows (AS-028) | on | default mode: no change; primal-only with projections 1.0004 / 1.0005 / 1.0008, 12 instances |
-| Order, undo start and order, forcing band, side guard, phase place | all values | no reduced model changes in size (the early phase changes 10 hashes at equal size) |
+| Order of the family: single pass | on | snp-02-004-104 larger in both modes, and it loses its fixed-point flag |
+| Order of the family: zero-cost first | on | default mode: no change; primal-only with projections 0.9982 / 1.0000 / 1.0005, 5 instances change, 4 of them larger |
+| Largest pivot, undo start and order, forcing band, side guard, phase place | all values | no reduced model changes in size (the early phase changes 10 hashes at equal size) |
+
+(Corrected in Entry 56: the first version of this table had one row "Order, undo start and
+order, forcing band, side guard, phase place: no reduced model changes in size", which is
+wrong for the two order values above. The owner was told the wrong row.)
 
 Not built, with the reason: the test of the bound ahead only (not valid, model in the
 header), integer columns in the zero-cost singleton rule (not valid as the rule stands;
@@ -3359,3 +3367,51 @@ units of a column or of the kept row; the deleted row is then off by far more in
 - "Today's engine" is not a clean reference. Every review of the last two days found a
   constructed model on which a tolerance is applied in the wrong units. They are one class
   and want one repair work, not five.
+
+## Entry 56 — 2026-11-28 — The register is brought up to the switches and the campaign (360 entries); two corrections of what I told the owner
+
+### The owner's messages (verbatim)
+
+None since Entry 51.
+
+### What returned
+
+- Workflow `wf_25ad2527-9f3` (a writer, then a critic; 64 minutes). The register has 360
+  entries: 21 new (AS-340 to AS-360), 36 changed. Reports:
+  `stage1c_reports/m1_switches/register_update.json`.
+- New entries, among them: the forcing band above 8 units (AS-340) and the implied-bound
+  band above the rule's (AS-341) as values that give wrong results; the option ranges as
+  contracts (AS-342); the band times the growth limit, 1.5e-4 at the defaults (AS-353); the
+  structure check blind to a forcing band that is too wide (AS-354); option values the
+  campaign generator never reaches (AS-355); the campaign failure that could not be
+  reproduced (AS-356); the switches verified on the Mac only (AS-357); the lost optimum at a
+  bound of -3e19 (AS-358).
+- 143 entries name a switch now; 173 still say "no switch yet"; 6 say "not built" with the
+  reason.
+- The critic repaired 18 points of the writer, among them five State lines that said "an
+  owner's decision" as if one existed, and eleven tests at the end without option values.
+- My own check by script: 360 entries, numbers unique and without a gap, eight fields each,
+  360 overview rows.
+
+### Corrections of what I told the owner (found by the critic, confirmed from the stored runs)
+
+- In my report on the switches I wrote that every value of the order options changes no
+  size. Two do: with `singleton_order = single_pass` snp-02-004-104 gets larger in both
+  modes and loses its fixed-point flag; with `zero_cost_first` in primal-only mode with the
+  projections 5 instances change, 4 of them larger (swath1, swath3, physiciansched6-2,
+  physiciansched3-3). The table of Entry 54 is corrected in place.
+- The failure with seed 5100094942 had more reruns than the "five" I wrote; corrected in
+  Entry 54.
+
+### Not in the register yet
+
+- Entry 55 (the three constructed models on which the base engine leaves the tolerance, the
+  check of the GPU plan) and the node chain `s1c_m1sw`, which is still running. They enter
+  with the next update.
+
+### Lesson
+
+- I compressed twelve rows of a measured table into one line for the owner and lost the two
+  values that do change something. A summary row needs a check against every row it stands
+  for.
+
