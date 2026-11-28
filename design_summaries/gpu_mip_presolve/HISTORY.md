@@ -2720,3 +2720,78 @@ had ended.
 - The node reservation ended while the workflow ran. Nothing was lost (the node results
   are on the scratch, the engine work is local and pushed), but a node step can only be
   planned after `cuopt ctx` and a first `cuopt exec` at the time of the step.
+
+## Entry 49 — 2026-11-28 — The register holds milestone M1 (339 entries); the M1 choices without a switch are being built; one figure of Entry 48 corrected
+
+No new user message. The turn started with the notification that workflow `wf_40ac19cf-0d9`
+(the register entries of M1) had ended.
+
+### What came back
+
+- Two agents, 62 min (1.05 million tokens, 183 tool calls): a writer and a critic that
+  checked every added entry against the code, the three M1 reports and the stored run.
+- ASSUMPTIONS.md: 339 entries (316 before). 23 new ones, AS-317 to AS-339 (the writer's 21
+  and two that the critic added), and 68 older entries changed. Sections now: 43, 27, 50,
+  24, 38, 62, 26, 39, 30. 186 entries say "no switch yet" (171 before).
+- All 45 assumptions that the three M1 agents returned are held by an entry (the critic's
+  mapping is in the workflow journal).
+- The critic repaired 25 points of the writer: one State line that had lost information
+  (AS-205), eight factual errors, two Set by lines, three figures marked "recounted" that
+  were not, five older entries that M1 touches and the writer had left, and the two missing
+  entries.
+
+### The two entries the critic added
+
+- **AS-338.** Milestone M1 built about ten choices without a switch, against the register's
+  own rule: the order inside a visit, the three restrictions of the zero-cost singleton
+  rule, what the growth ratio reads, explicit bounds only, the test of the bound behind the
+  move, integer pivot columns of the inequality pivot, the interval undo, the rounding band
+  of an integer forcing column, and the two rules left out of primal-only mode. The worth
+  reviewer measured most of them with switches and counters in a scratch build, so the
+  figures of 24 entries could not be repeated from the repository. Entry 48 did not say
+  this.
+- **AS-339.** The free singleton column on an inequality takes integer columns (when the
+  row is integral for the column). By the worth reviewer's reading HiGHS does not, and the
+  plan's guard (AS-024: dual arguments use continuous columns only) is not kept. It is the
+  reason given for the lead on seymour, seymour1 and five more instances. No run without
+  them exists. Entry 48 did not tell the owner; the reading of HiGHS is not checked in its
+  source.
+
+### What I did
+
+- Checked the file: 339 entries, numbers unique and without a gap; no host name of the
+  jump-host kind, no address, no key (node names are allowed in the notes).
+- Recomputed the one figure the critic questioned. Remaining over input nonzeros of HiGHS
+  with all cheap rules on the 240 (237 instances) is **0.754** (0.7540 from both
+  `highs_cheap_all` and `stage1c_refs/d3_cheap`), not 0.753 as Entry 48 and my message to
+  the owner say. The engine's 0.774 and the ratio 0.9746 reproduce.
+- Saved the scripts and probe sources of the three M1 agents from the scratch directories
+  as `stage1c_reports/m1/review_tools/` (105 files, 676 KB, with a README): the instrument
+  scripts, the quality tool, the exact-arithmetic frame, the identity tools, the timing
+  script. Source trees, builds and wrong engines are not copied.
+- Started workflow `wf_d0fdbed0-0ae` (task `wzwauskpv`) from `fa8430e24`, beside M2 and the
+  parallel-row repair, at most 2 jobs: an engine option for each choice of AS-338 and
+  AS-339 whose other value is valid (not built where it is not, with the model), the
+  review counters as engine statistics, the tools into the repository, campaign variants
+  drawn from a stream of their own so that old seeds stay, and every other value measured
+  on the 240 local dumps; then an adversarial review (identity at the defaults, exact
+  arithmetic on every other value, campaign). Branch `stage1c-m1-switches`; I cherry-pick
+  it onto the merged M2 when both are back.
+
+### Open, for the owner (beyond Entry 48)
+
+- Integer columns in the inequality pivot (AS-339): beyond HiGHS and against the plan's
+  guard; a switch and a run without them are being built.
+- M1 was accepted with irish-electricity below 0.95 in rows and columns; the cause is the
+  growth limit, which the design's criterion does not name as an allowed exception (AS-206).
+- The reviewers' reports say "the 44 testbed instances"; `testbed.json` has 40 in `main`
+  (plus 4 under `status`). The node chain covers what the script has always run.
+
+### Lessons
+
+- The instruction "every choice gets a switch" was in the M1 task, and the author still
+  left ten choices without one, with a reason. A reviewer's scratch switch is not a switch.
+  The check that every listed assumption has a built option belongs in the done criteria,
+  not in the rules paragraph.
+- A writer that marks a figure "recounted" must be checked on exactly those figures: three
+  were not recounted.
