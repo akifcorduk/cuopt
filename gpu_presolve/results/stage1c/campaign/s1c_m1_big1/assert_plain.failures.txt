@@ -1,0 +1,1 @@
+FAIL profile huge_parallel seed 1000342975398 variant 8: feasible point {5., -1e+22, -11., -3., 1e+22, 0., 0.} of the model has objective 16., its crushed point the higher 26.

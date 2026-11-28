@@ -1,0 +1,24 @@
+FAIL profile huge_equations seed 1000149468558 variant 8: feasible point {-3., 0., 4e+19, 0., 4e+19, -1.} of the model has objective -8., its crushed point the higher -2.
+  model_t base;
+  base.nrows = 2;
+  base.ncols = 6;
+  base.row_start = {0, 0, 3};
+  base.col_index = {0, 3, 5};
+  base.value = {-2., 2., 3.};
+  base.row_lower = {-inf, 3.};
+  base.row_upper = {0., 3.};
+  base.col_lower = {-inf, 0., -10000000., 0., -inf, -1.};
+  base.col_upper = {1000000000000000., 1., 4e+19, 2., 4e+19, 0.};
+  base.cost = {0., 0., -2., 0., 2., 2.};
+  base.col_type = {1, 1, 1, 1, 0, 1};
+  base.objective_offset = -6.;
+  oracle::case_t c = oracle::make_case(
+    base,
+    {1., 1.},
+    {1., 1., 1., 1., 1., 1.});
+
+models 49999992 mutated 34477502 reduced 22816468 failures 1 reduced-outside-class 183 base-outside-class 5367 | findings row_rules 85060412 propagation 32071228 tightening 11577194 doubleton 2640277 parallel_rows 1556289 dual_fixing 54669822 simple_probing 0 singleton_cols 3016435 dual_cols 0 parallel_cols 0
+structure carried 24303331 failed 0 alone 0 missed 1 missed_no_model 0 worst 5.54668e-10 both 0 undecided 0 rows 37392458 kept 11450621 parallel 410252 untested 223500 subtracted 313675 added 353721 added_tested 268647 added_untested 437 multiplier 262144 missed_relaxed 0
+crush results 23936799 with_dual 15382769 points 853005024 skipped 0 dual_findings 55633350 second 5582885 changed 0
+columns free_singleton 1160090 1200296 free_singleton_dual 921097 963528 zero_cost_singleton 225016 226800 forcing_column 610184 625811 | records defined 1160090 defined_dual 921097 interval 225016 forcing 610184 | box_tested 2688290 snapshot_tested 215536 snapshot_untested 355 limited 13293
+  1 x feasible point {-3., 0., 4e+19, 0., 4e+19, -1.} 

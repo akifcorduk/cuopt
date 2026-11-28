@@ -1,0 +1,4 @@
+FAIL profile equations seed 1000118664898 variant 8: feasible point {0., 4e+19, 0., 0., 3., 4e+19, 0., 3.} of the model has objective 2., its crushed point the higher 3.
+FAIL profile huge_equations seed 1000149468558 variant 8: feasible point {-3., 0., 4e+19, 0., 4e+19, -1.} of the model has objective -8., its crushed point the higher -2.
+FAIL profile huge_parallel seed 1000130321033 variant 3: feasible point {-2., 0., -1.023e+23, 0., 1., -3., -1.023e+23, -0.33333333333333331, -1., 0.} of the model has objective 0.33333333333333331, its crushed point 0.3333333358168602
+FAIL profile open_ends seed 1000110929538 variant 8: feasible point {-1e+20, -4., 0., 1e+20, 0.} of the model has objective -16., its crushed point the higher -4.

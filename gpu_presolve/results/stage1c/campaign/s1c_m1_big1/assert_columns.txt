@@ -1,0 +1,6 @@
+models 599999904 reduced 293571275 oracle failures 0 reduced outside the oracle class 2858 base outside 5736
+structure check: results with a reduced model 311130506 failed 0 failed alone 0 missed with a reduced model 0 of them relaxed 0 missed without one 0 largest passing violation 1.10934e-09
+rows: left the model 473529231 kept 185577220 kept and not tested 2635726 | results with a subtraction 2926130 rows made of equations 3294256 tested with an equation 2226244 not tested 3216 largest multiplier of an equation 1048580
+crush test: results 306796485 of them with a dual finding 198944935 points crushed 11306880349 points left out 0 dual findings 780490348 | second presolves of a fixed point 71154699 changed 0
+singleton columns, results and findings: free_singleton 20663534 21745474 free_singleton_dual 14211226 14927568 zero_cost_singleton 3481693 3516274 forcing_column 24087707 27324325
+results with a record: defined 20663534 defined by a dual rule 14211226 interval 3481693 forcing 24087707 | boxes tested 42501658 snapshots tested 3359100 not tested 4936 results with limited 162853

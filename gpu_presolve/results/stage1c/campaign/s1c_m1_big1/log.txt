@@ -1,0 +1,8 @@
+2026-11-28 09:49:33 584ae08ba07e start: tag s1c_m1 commit daa4f5d68e9c450f74b5cb1f1aaf86b7d7f4974c, first seed 1000000000000, seeds per profile 100000000, processes 24, options: , load 26.30 22.92 23.03
+2026-11-28 10:15:08 release_plain: exit 1 in 1535 s, first seed 1000000000000, seeds per profile 100000000, models 1199999808
+2026-11-28 10:57:20 release_singletons: exit 1 in 2532 s, first seed 1000100000000, seeds per profile 100000000, models 1199999808
+2026-11-28 11:35:52 release_columns: exit 1 in 2312 s, first seed 1000200000000, seeds per profile 100000000, models 1199999808
+2026-11-28 11:50:04 assert_plain: exit 1 in 852 s, first seed 1000300000000, seeds per profile 50000000, models 599999904
+2026-11-28 12:12:10 assert_singletons: exit 1 in 1326 s, first seed 1000400000000, seeds per profile 50000000, models 599999904
+2026-11-28 12:34:58 assert_columns: exit 0 in 1368 s, first seed 1000500000000, seeds per profile 50000000, models 599999904
+2026-11-28 12:34:58 end; runs that did not exit with 0: release_plain release_singletons release_columns assert_plain assert_singletons

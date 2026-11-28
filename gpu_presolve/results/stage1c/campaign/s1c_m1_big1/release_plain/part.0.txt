@@ -1,0 +1,24 @@
+FAIL profile dense seed 1000003670828 variant 8: the reduced optimum is 0.33333333210073723, the base optimum 0.33333333333333348
+  model_t base;
+  base.nrows = 2;
+  base.ncols = 5;
+  base.row_start = {0, 5, 9};
+  base.col_index = {0, 1, 2, 3, 4, 0, 2, 3, 4};
+  base.value = {-3., 1., -1., -3., 3., 3., -1., 2., -3.};
+  base.row_lower = {-3., -inf};
+  base.row_upper = {inf, 3.};
+  base.col_lower = {0., 0., 0., 0., -1e+22};
+  base.col_upper = {2., 2., 1., 2., 1e+22};
+  base.cost = {1., -1., -3., 3., 2.};
+  base.col_type = {1, 1, 1, 1, 0};
+  base.objective_offset = 8.;
+  oracle::case_t c = oracle::make_case(
+    base,
+    {0.0625, 0.001953125},
+    {1., 1., 1., 1., 16.});
+
+models 49999992 mutated 0 reduced 22889128 failures 1 reduced-outside-class 0 base-outside-class 0 | findings row_rules 101675774 propagation 23290497 tightening 8556655 doubleton 2244025 parallel_rows 1798382 dual_fixing 41589220 simple_probing 0 singleton_cols 1468845 dual_cols 0 parallel_cols 0
+structure carried 24325960 failed 0 alone 0 missed 1 missed_no_model 0 worst 1.15556e-10 both 0 undecided 0 rows 40902015 kept 7739258 parallel 917673 untested 400280 subtracted 10012 added 10585 added_tested 4749 added_untested 3 multiplier 3072 missed_relaxed 0
+crush results 23961689 with_dual 13690565 points 589506057 skipped 0 dual_findings 42164302 second 5638534 changed 0
+columns free_singleton 463866 469853 free_singleton_dual 557898 575082 zero_cost_singleton 92919 93208 forcing_column 323894 330702 | records defined 463866 defined_dual 557898 interval 92919 forcing 323894 | box_tested 1369896 snapshot_tested 90487 snapshot_untested 71 limited 3360
+  1 x the reduced optimum is 0.33333333210073723, the 

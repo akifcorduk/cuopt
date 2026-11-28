@@ -1,0 +1,7 @@
+models 599999904 reduced 274642787 oracle failures 1 reduced outside the oracle class 0 base outside 0
+structure check: results with a reduced model 291947364 failed 0 failed alone 0 missed with a reduced model 1 of them relaxed 0 missed without one 0 largest passing violation 6.16298e-10
+rows: left the model 490700198 kept 92870809 kept and not tested 4788368 | results with a subtraction 120491 rows made of equations 127152 tested with an equation 56464 not tested 83 largest multiplier of an equation 65536
+crush test: results 287578626 of them with a dual finding 164283541 points crushed 7080574026 points left out 0 dual findings 506174077 | second presolves of a fixed point 67674310 changed 0
+singleton columns, results and findings: free_singleton 5579053 5652806 free_singleton_dual 6701131 6907547 zero_cost_singleton 1113626 1117055 forcing_column 3891498 3971051
+results with a record: defined 5579053 defined by a dual rule 6701131 interval 1113626 forcing 3891498 | boxes tested 16456953 snapshots tested 1083652 not tested 871 results with limited 39595
+FAIL profile huge_parallel seed 1000342975398 variant 8: feasible point {5., -1e+22, -11., -3., 1e+22, 0., 0.} of the model has objective 16., its crushed point the higher 26.

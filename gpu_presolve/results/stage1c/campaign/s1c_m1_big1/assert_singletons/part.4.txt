@@ -1,0 +1,43 @@
+FAIL profile huge_parallel seed 1000409012258 variant 8: feasible point {-2., -2e+20, -2., -3., 1., 2e+20, 1.} of the model has objective -16., its crushed point the higher -6.
+  model_t base;
+  base.nrows = 1;
+  base.ncols = 7;
+  base.row_start = {0, 5};
+  base.col_index = {0, 2, 3, 4, 6};
+  base.value = {-3., 1., 2., 2., -3.};
+  base.row_lower = {-3.};
+  base.row_upper = {-3.};
+  base.col_lower = {-10000000000., -2e+20, -2., -3., 0., -inf, 1.};
+  base.col_upper = {1e+20, 10000000000., 1., -0.5, 1., 2e+20, 3.};
+  base.cost = {0., 1., 0., 2., 0., 1., 0.};
+  base.col_type = {1, 1, 1, 1, 1, 1, 1};
+  base.objective_offset = -10.;
+  oracle::case_t c = oracle::make_case(
+    base,
+    {1.},
+    {1., 1., 1., 1., 1., 1., 1.});
+
+FAIL profile huge_equations seed 1000409012258 variant 8: feasible point {-2., -2e+20, -2., -3., 1., 2e+20, 1.} of the model has objective -16., its crushed point the higher -6.
+  model_t base;
+  base.nrows = 1;
+  base.ncols = 7;
+  base.row_start = {0, 5};
+  base.col_index = {0, 2, 3, 4, 6};
+  base.value = {-3., 1., 2., 2., -3.};
+  base.row_lower = {-3.};
+  base.row_upper = {-3.};
+  base.col_lower = {-10000000000., -2e+20, -2., -3., 0., -inf, 1.};
+  base.col_upper = {1e+20, 10000000000., 1., -0.5, 1., 2e+20, 3.};
+  base.cost = {0., 1., 0., 2., 0., 1., 0.};
+  base.col_type = {1, 1, 1, 1, 1, 1, 1};
+  base.objective_offset = -10.;
+  oracle::case_t c = oracle::make_case(
+    base,
+    {1.},
+    {1., 1., 1., 1., 1., 1., 1.});
+
+models 24999996 mutated 17237451 reduced 11408962 failures 2 reduced-outside-class 89 base-outside-class 2610 | findings row_rules 42516081 propagation 16052938 tightening 5792646 doubleton 1315509 parallel_rows 776893 dual_fixing 27326311 simple_probing 0 singleton_cols 1507329 dual_cols 0 parallel_cols 0
+structure carried 12152374 failed 0 alone 0 missed 2 missed_no_model 0 worst 2.01701e-11 both 0 undecided 0 rows 18686768 kept 5742778 parallel 206113 untested 110957 subtracted 156574 added 176812 added_tested 134133 added_untested 225 multiplier 524288 missed_relaxed 0
+crush results 11969249 with_dual 7691713 points 426647033 skipped 0 dual_findings 27808284 second 2790141 changed 0
+columns free_singleton 578776 598820 free_singleton_dual 461168 481973 zero_cost_singleton 112309 113246 forcing_column 305577 313290 | records defined 578776 defined_dual 461168 interval 112309 forcing 305577 | box_tested 1343335 snapshot_tested 107518 snapshot_untested 232 limited 6487
+  2 x feasible point {-2., -2e+20, -2., -3., 1., 2e+20

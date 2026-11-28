@@ -1,0 +1,5 @@
+FAIL profile dense seed 1000003670828 variant 8: the reduced optimum is 0.33333333210073723, the base optimum 0.33333333333333348
+FAIL profile dense seed 1000070054017 variant 7: the reduced optimum is -1.8488932607141351e-09, the base optimum 0.
+FAIL profile huge_equations seed 1000052005627 variant 7: the reduced optimum is -1.0000000011093362, the base optimum -1.
+FAIL profile huge_parallel seed 1000052005627 variant 7: the reduced optimum is -1.0000000011093362, the base optimum -1.
+FAIL profile huge_parallel seed 1000074524938 variant 8: feasible point {0., 1e+21, 17., -10., 1e+21, -0.} of the model has objective -39., its crushed point the higher -30.

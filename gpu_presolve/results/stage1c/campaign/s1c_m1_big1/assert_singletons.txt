@@ -1,0 +1,10 @@
+models 599999904 reduced 273747182 oracle failures 4 reduced outside the oracle class 2169 base outside 64358
+structure check: results with a reduced model 291659286 failed 0 failed alone 0 missed with a reduced model 4 of them relaxed 0 missed without one 0 largest passing violation 7.39558e-10
+rows: left the model 448401060 kept 137530118 kept and not tested 2665977 | results with a subtraction 3749748 rows made of equations 4232654 tested with an equation 3212513 not tested 5804 largest multiplier of an equation 1048580
+crush test: results 287265170 of them with a dual finding 184546290 points crushed 10233074864 points left out 0 dual findings 667112208 | second presolves of a fixed point 66968632 changed 0
+singleton columns, results and findings: free_singleton 13876631 14358388 free_singleton_dual 11066023 11572599 zero_cost_singleton 2699886 2722261 forcing_column 7327818 7514909
+results with a record: defined 13876631 defined by a dual rule 11066023 interval 2699886 forcing 7327818 | boxes tested 32240777 snapshots tested 2587945 not tested 4747 results with limited 155350
+FAIL profile bounded_continuous seed 1000427998608 variant 8: the reduced optimum is 1.999999997781327, the base optimum 2.
+FAIL profile open_ends seed 1000407955258 variant 8: feasible point {-1., -2., 11., -29296875000000000., 0., 0., 3e+19, -2., 2.} of the model has objective -7., its crushed point the higher 4.
+FAIL profile huge_parallel seed 1000409012258 variant 8: feasible point {-2., -2e+20, -2., -3., 1., 2e+20, 1.} of the model has objective -16., its crushed point the higher -6.
+FAIL profile huge_equations seed 1000409012258 variant 8: feasible point {-2., -2e+20, -2., -3., 1., 2e+20, 1.} of the model has objective -16., its crushed point the higher -6.

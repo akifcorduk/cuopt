@@ -1,0 +1,4 @@
+FAIL profile huge_parallel seed 1000209869848 variant 8: feasible point {-3., -2e+20, 0., 0., 0., 2., -1e+20, 1.} of the model has objective -1., its crushed point the higher 4.
+FAIL profile huge_parallel seed 1000213883241 variant 1: the reduced optimum is -8., the base optimum -10.
+FAIL profile huge_parallel seed 1000242124018 variant 8: feasible point {0., 0., 2., 2e+20, 0., -1., 2e+20} of the model has objective -3., its crushed point the higher -1.
+FAIL profile open_ends seed 1000294564032 variant 2: the reduced optimum is -1.4791147195936105e-09, the base optimum 0.

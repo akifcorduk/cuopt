@@ -1,0 +1,24 @@
+FAIL profile huge_parallel seed 1000130321033 variant 3: feasible point {-2., 0., -1.023e+23, 0., 1., -3., -1.023e+23, -0.33333333333333331, -1., 0.} of the model has objective 0.33333333333333331, its crushed point 0.3333333358168602
+  model_t base;
+  base.nrows = 3;
+  base.ncols = 10;
+  base.row_start = {0, 3, 6, 9};
+  base.col_index = {1, 5, 7, 1, 4, 8, 0, 4, 9};
+  base.value = {-1., 2., -3., 3., 2., -2., -2., -3., -1.};
+  base.row_lower = {-5., 4., -inf};
+  base.row_upper = {-5., 4., inf};
+  base.col_lower = {-2., 0., -inf, 0., -1e+21, -3., -inf, -3., -1., 0.};
+  base.col_upper = {0.5, 1., 1e+20, 1., 1000000000000000., -2., 1e+20, 2., 1., 2.};
+  base.cost = {0., -3., 3., 0., 0., 0., -3., -1., 0., 1.};
+  base.col_type = {1, 1, 0, 1, 0, 1, 1, 0, 1, 1};
+  base.objective_offset = 0.;
+  oracle::case_t c = oracle::make_case(
+    base,
+    {1., 1., 1.},
+    {1., 1., 1., 1., 1., 1., 1., 1., 1., 1.});
+
+models 49999992 mutated 34467157 reduced 22813972 failures 1 reduced-outside-class 205 base-outside-class 5367 | findings row_rules 85049996 propagation 32067895 tightening 11574233 doubleton 2638362 parallel_rows 1556592 dual_fixing 54660001 simple_probing 0 singleton_cols 3018404 dual_cols 0 parallel_cols 0
+structure carried 24305820 failed 0 alone 0 missed 1 missed_no_model 0 worst 9.24449e-11 both 0 undecided 0 rows 37388187 kept 11471429 parallel 412827 untested 222862 subtracted 312614 added 352801 added_tested 267686 added_untested 522 multiplier 262144 missed_relaxed 0
+crush results 23939519 with_dual 15382293 points 852967530 skipped 0 dual_findings 55625024 second 5582608 changed 0
+columns free_singleton 1157245 1197213 free_singleton_dual 922653 965023 zero_cost_singleton 225813 227683 forcing_column 612600 628485 | records defined 1157245 defined_dual 922653 interval 225813 forcing 612600 | box_tested 2683978 snapshot_tested 216646 snapshot_untested 415 limited 13050
+  1 x feasible point {-2., 0., -1.023e+23, 0., 1., -3.
