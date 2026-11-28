@@ -1,0 +1,7 @@
+the 240 benchmark instances: 240 compared, 240 equal, 0 differ, 0 only in one version
+testbed below 1e7 nonzeros: 31 compared, 31 equal, 0 differ, 0 only in one version
+testbed above 1e7 nonzeros: 9 compared, 9 equal, 0 differ, 0 only in one version
+s1c_m0 against s1c_m1_off, sizes, hash and fixed-point flag: identical
+
+With all counts the versions differ in one statistic only, singleton_cols.calls (59 named, the rest elided by the script): the family of the groundwork counted one call that did nothing, the family that is switched off is not called (register entry AS-326).
+s1c_m0 against s1c_m1_off, all counts: DIFFERENT

@@ -1,0 +1,24 @@
+the 240 benchmark instances: 240 instances in every side, passes base 3, new 3, off 3
+  base    19.158 s   +0.00%   rules    9.941 s, outside    9.198 s, work of the shared families 1901179984
+  new     19.498 s   +1.78%   rules   10.324 s, outside    9.155 s, work of the shared families 2041111657
+       largest changes: singleton_cols +0.254 s, row_rules +0.051 s, parallel_rows +0.032 s, tightening +0.030 s, dual_fixing +0.028 s, finish -0.024 s
+       above +3% among the 139 instances of at least 10 ms: 23 (blp-ic98 +70.1%, blp-ar98 +69.2%, germanrr +41.4%, neos-3402294-bobin +35.8%, thor50dday +19.0%, mushroom-best +14.2%, neos-873061 +11.6%, supportcase12 +7.7%)
+  off     19.118 s   -0.20%   rules    9.910 s, outside    9.189 s, work of the shared families 1901179984
+       largest changes: row_rules -0.015 s, doubleton -0.013 s, tightening +0.012 s, storage -0.009 s, singleton_cols -0.008 s, state -0.006 s
+       above +3% among the 139 instances of at least 10 ms: 0
+testbed below 1e7 nonzeros: 31 instances in every side, passes base 3, new 3, off 3
+  base     4.896 s   +0.00%   rules    2.660 s, outside    2.235 s, work of the shared families 517937560
+  new      4.996 s   +2.04%   rules    2.761 s, outside    2.234 s, work of the shared families 569723620
+       largest changes: singleton_cols +0.092 s, parallel_rows +0.008 s, finish -0.004 s, propagation +0.003 s, state +0.002 s, doubleton -0.001 s
+       above +3% among the 28 instances of at least 10 ms: 5 (supportcase12 +8.4%, triptim1 +6.5%, savsched1 +6.4%, supportcase42 +4.7%, neos-4306827-ravan +3.1%)
+  off      4.890 s   -0.13%   rules    2.650 s, outside    2.239 s, work of the shared families 517937560
+       largest changes: row_rules -0.004 s, singleton_cols -0.003 s, propagation -0.003 s, state +0.003 s, parallel_rows +0.003 s, dual_fixing -0.002 s
+       above +3% among the 28 instances of at least 10 ms: 0
+testbed above 1e7 nonzeros: 9 instances in every side, passes base 3, new 3, off 3
+  base    81.812 s   +0.00%   rules   37.657 s, outside   43.915 s, work of the shared families 7510740657
+  new     87.769 s   +7.28%   rules   45.466 s, outside   42.089 s, work of the shared families 9131992889
+       largest changes: singleton_cols +5.228 s, dual_fixing +2.079 s, hash -1.653 s, finish -1.600 s, storage +1.352 s, row_rules +0.887 s
+       above +3% among the 9 instances of at least 10 ms: 3 (dlr2 +30.9%, t11nonreg +9.8%, neos-4332810-sesia +5.8%)
+  off     81.916 s   +0.13%   rules   37.670 s, outside   44.006 s, work of the shared families 7510740657
+       largest changes: state +0.064 s, tightening +0.055 s, singleton_cols -0.038 s, dual_fixing -0.025 s, doubleton +0.022 s, finish +0.017 s
+       above +3% among the 9 instances of at least 10 ms: 0
