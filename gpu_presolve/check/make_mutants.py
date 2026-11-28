@@ -1090,8 +1090,10 @@ MUTANTS = {
         "(n - r.cols_begin)];",
     ),
     # The band of an integer forcing column is counted in thousandths and
-    # not in rounding units: the value is rounded out of its row. The oracle
-    # and the postsolve part of the structure check.
+    # not in rounding units: the value is rounded out of its row. The
+    # postsolve part of the structure check (the campaign draws no band
+    # above the default, so its oracle sees few of them);
+    # switches_review_forcing_band_above_the_rule_misses_the_row.
     "sw_band_units": (
         "postsolve.cpp",
         "          ps.forcing_rounding_units * rounding_unit * "
